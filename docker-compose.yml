@@ -7,7 +7,9 @@ services:
       dockerfile: docker/webapi.Dockerfile
       args:
         VTS_VERSION: ${VTS_VERSION:-0.0.0}
-    image: ${REGISTRY:-docker.io}/${NAMESPACE:-yourdockerhub}/vts-webapi:${VTS_VERSION:-0.0.0}
+        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}-webapi
     env_file:
       - .env
     ports:
@@ -27,7 +29,9 @@ services:
       dockerfile: docker/worker.Dockerfile
       args:
         VTS_VERSION: ${VTS_VERSION:-0.0.0}
-    image: ${REGISTRY:-docker.io}/${NAMESPACE:-yourdockerhub}/vts-worker:${VTS_VERSION:-0.0.0}
+        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
+        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}-worker
     env_file:
       - .env
     volumes:
@@ -80,4 +84,3 @@ volumes:
   pg_data:
   redis_data:
   vts_data:
-

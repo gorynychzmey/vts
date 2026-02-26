@@ -96,13 +96,25 @@ Each step is restart-safe: persisted in DB, idempotent by output checks, and log
 
 1. Copy env:
    - `cp .env.example .env`
-2. Adjust registry/namespace and service URLs.
-3. Start stack:
-   - `podman compose up -d --build`
-4. Apply DB migrations:
+2. Use `config.yaml` as primary runtime config. In `systemd/vts.env` keep only image tags active; leave `VTS_*` commented unless override is needed.
+3. Start infrastructure:
+   - `podman compose up -d postgres redis`
+4. Prepare Postgres role/database:
+   - `CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh`
+5. Apply DB migrations:
    - `alembic upgrade head`
-5. Open UI:
+6. Start app services and open UI:
    - `http://localhost:8080`
+
+## Build performance
+
+- Dockerfiles use multi-stage build: compiler toolchain is used only in builder stage, runtime image stays lean.
+- BuildKit caches are enabled for apt and pip wheel building.
+- Runtime image no longer installs test tooling (`pytest`).
+- For local testing tooling, install `requirements-dev.txt`.
+- You can set build-time mirror overrides:
+  - `APT_MIRROR=http://ftp.de.debian.org/debian` (often better near Munich)
+  - `APT_SECURITY_MIRROR=http://deb.debian.org/debian-security`
 
 ## Versioning policy (strict semver)
 

@@ -30,42 +30,47 @@ cp systemd/vts.env.example /etc/vts/vts.env
 
 Edit `.env` and `/etc/vts/vts.env`:
 
-- `VTS_DATABASE_URL`
-- `VTS_REDIS_URL`
-- `VTS_WHISPER_URL`
-- `VTS_LLAMA_URL`
-- `VTS_ADMIN_EMAILS`
-- trusted proxy CIDRs
+- set image tags (`WEBAPI_IMAGE`, `WORKER_IMAGE`) in `/etc/vts/vts.env`
+- keep `VTS_*` values in `/etc/vts/vts.env` commented by default (use only as explicit overrides)
 
 Edit `config.yaml` and `prompts/*.md` if needed.
 
-## 3. Build and run stack for first migration
+## 3. Prepare Postgres and run migrations
 
 ```bash
 cd /opt/vts
-podman compose up -d --build postgres redis
+podman compose up -d postgres redis
+CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 ```
 
-Run migrations:
+The script creates/updates role and database (defaults: `vts`/`vts`) in idempotent mode.
+
+Run migrations after DB prep:
 
 ```bash
 podman compose run --rm webapi alembic upgrade head
 ```
 
-## 4. Build and publish application images
+## 4. Image source (Docker Hub `gorynychzmey/vts`)
 
-On build host:
+Application images are stored in a single repo:
+
+- `docker.io/gorynychzmey/vts:<version>-webapi`
+- `docker.io/gorynychzmey/vts:<version>-worker`
+- `docker.io/gorynychzmey/vts:latest-webapi`
+- `docker.io/gorynychzmey/vts:latest-worker`
+
+If you need to rebuild and push from build host:
 
 ```bash
-export REGISTRY=docker.io
-export NAMESPACE=<your_dockerhub_namespace>
+export CONTAINER_ENGINE=docker
+export IMAGE_REPO=docker.io/gorynychzmey/vts
+# Optional: use a Germany mirror for faster apt downloads in/near Munich
+export APT_MIRROR=http://ftp.de.debian.org/debian
+# Keep security updates on official mirror
+export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ./build.sh
 ```
-
-This builds and pushes:
-
-- `vts-webapi:<version>` and `:latest`
-- `vts-worker:<version>` and `:latest`
 
 ## 5. Configure systemd units
 
@@ -79,8 +84,8 @@ sudo cp systemd/vts-worker.service /etc/systemd/system/
 Update image tags in `/etc/vts/vts.env`:
 
 ```bash
-WEBAPI_IMAGE=docker.io/<your_dockerhub_namespace>/vts-webapi:<version>
-WORKER_IMAGE=docker.io/<your_dockerhub_namespace>/vts-worker:<version>
+WEBAPI_IMAGE=docker.io/gorynychzmey/vts:<version>-webapi
+WORKER_IMAGE=docker.io/gorynychzmey/vts:<version>-worker
 ```
 
 Reload and enable:
@@ -118,4 +123,3 @@ Always before deployment:
 3. commit and push bump
 4. `./build.sh`
 5. `./deploy.sh`
-
