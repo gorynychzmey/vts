@@ -39,5 +39,3 @@ sudo systemctl status "${WORKER_SERVICE}" --no-pager
 EOF
 
 echo "Deployment complete"
-
-

@@ -8,7 +8,6 @@ Type=simple
 EnvironmentFile=/opt/vts/config/vts.env
 ExecStartPre=/usr/bin/podman pull ${WORKER_IMAGE}
 ExecStart=/usr/bin/podman run --rm --name vts-worker \
-  --network vts-net \
   --env-file /opt/vts/config/vts.env \
   -v /opt/vts/config/config.yaml:/opt/vts/config/config.yaml:ro \
   -v /opt/vts/prompts:/opt/vts/prompts:ro \

@@ -102,24 +102,10 @@ If local host cannot run tests because of platform-specific dependency builds (f
 docker compose run --rm -v "$(pwd)":/app webapi sh -lc "pip install pytest==8.4.2 && python -m pytest -q tests"
 ```
 
-## 5. Run DB migrations
+## 5. DB migrations on webapi startup
 
-```bash
-set -a
-source /opt/vts/config/vts.env
-set +a
-podman pull "${WEBAPI_IMAGE}"
-podman run --rm \
-  --network vts_default \
-  --env-file /opt/vts/config/vts.env \
-  -v /opt/vts/config/config.yaml:/opt/vts/config/config.yaml:ro \
-  -v /opt/vts/prompts:/opt/vts/prompts:ro \
-  -v /srv/vts-data:/srv/vts-data \
-  "${WEBAPI_IMAGE}" \
-  alembic upgrade head
-```
-
-`vts_default` is the network name for compose project `vts` (default when repository is located in `/opt/vts`). If you use another compose project name, replace network name accordingly.
+`webapi` container runs `alembic upgrade head` in its entrypoint before starting `uvicorn`.
+No separate migration container is required.
 
 ## 6. Install and start systemd units
 

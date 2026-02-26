@@ -58,8 +58,10 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-index --find-links=/wheels -r /app/requirements.txt && rm -rf /wheels
 
 COPY . /app
+RUN chmod +x /app/docker/webapi-entrypoint.sh
 ARG VTS_VERSION=0.0.0
 LABEL org.opencontainers.image.version="${VTS_VERSION}"
 
 EXPOSE 8080
+ENTRYPOINT ["/app/docker/webapi-entrypoint.sh"]
 CMD ["uvicorn", "vts.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
