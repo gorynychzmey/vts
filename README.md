@@ -92,7 +92,10 @@ Example:
 docker login
 export CONTAINER_ENGINE=docker
 export IMAGE_REPO=docker.io/gorynychzmey/vts
-export APT_MIRROR=http://ftp.de.debian.org/debian
+export USE_BUILDX=auto
+export BUILDX_CACHE_REPO=docker.io/gorynychzmey/vts
+export BUILDX_CACHE_MODE=max
+export APT_MIRROR=http://deb.debian.org/debian
 export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ./build.sh
 ```
@@ -101,8 +104,11 @@ export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 
 - Dockerfiles are multi-stage.
 - BuildKit caches are used for `apt` and `pip wheel`.
+- `build.sh` supports `docker buildx` registry cache (`cache-from` / `cache-to`).
+- Image version label is applied at the end of runtime stage, so version bumps do not invalidate heavy `apt`/`pip` layers.
 - Runtime images do not include test tooling.
 - Local test tooling is in `requirements-dev.txt`.
+- On Windows, fastest builds are typically from WSL2 with repository stored in Linux FS (`/home/<user>/...`), not under `C:\...`.
 
 ## API summary
 

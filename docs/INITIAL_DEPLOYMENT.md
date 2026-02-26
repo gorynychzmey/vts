@@ -84,11 +84,17 @@ python -m pytest -q tests
 docker login
 export CONTAINER_ENGINE=docker
 export IMAGE_REPO=docker.io/gorynychzmey/vts
-# Optional mirror near Munich
-export APT_MIRROR=http://ftp.de.debian.org/debian
+export USE_BUILDX=auto
+export BUILDX_CACHE_REPO=docker.io/gorynychzmey/vts
+export BUILDX_CACHE_MODE=max
+export APT_MIRROR=http://deb.debian.org/debian
 export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ./build.sh
 ```
+
+Windows build host note:
+
+- prefer running this from WSL2 with repository located in Linux filesystem (`/home/<user>/...`) for faster Docker build I/O.
 
 If local host cannot run tests because of platform-specific dependency builds (for example Windows + `asyncpg`), run checks inside Linux container:
 
