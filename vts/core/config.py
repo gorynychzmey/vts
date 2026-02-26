@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from ipaddress import ip_address, ip_network
+from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="VTS_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "vts"
+    environment: str = "dev"
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+    database_url: str = Field(
+        default="postgresql+asyncpg://vts:vts@postgres:5432/vts",
+        description="Async SQLAlchemy DSN.",
+    )
+    redis_url: str = "redis://redis:6379/0"
+    redis_prefix: str = "vts:"
+
+    config_dir: Path = Path("/opt/vts")
+    prompts_dir: Path = Path("/opt/vts/prompts")
+    artifacts_root: Path = Path("/srv/vts-data")
+
+    trusted_proxy_cidrs: list[str] = [
+        "127.0.0.1/32",
+        "::1/128",
+        "172.16.0.0/12",
+        "10.0.0.0/8",
+    ]
+    admin_emails: list[str] = []
+
+    whisper_url: str = "http://whisper:9000"
+    llama_url: str = "http://llama:8000/v1"
+    llama_model: str = "Qwen2.5-7B-Instruct-Q4"
+
+    segment_target_seconds: int = 300
+    segment_search_window_seconds: int = 30
+    segment_overlap_seconds: int = 3
+
+    transcribe_parallel_per_task: int = 2
+    heavy_slot_limit: int = 1
+    event_throttle_hz: int = 4
+    db_write_throttle_ms: int = 150
+
+    night_mode_enabled: bool = False
+    night_mode_start_hour: int = 22
+    night_mode_end_hour: int = 7
+
+    media_ttl_hours: int = 72
+
+    @property
+    def config_yaml_path(self) -> Path:
+        return self.config_dir / "config.yaml"
+
+    def is_trusted_proxy(self, host: str) -> bool:
+        remote = ip_address(host)
+        return any(remote in ip_network(cidr) for cidr in self.trusted_proxy_cidrs)
+
+    def is_admin(self, email: str) -> bool:
+        normalized = email.strip().lower()
+        return normalized in {item.strip().lower() for item in self.admin_emails}
+
+
+def _load_yaml_overrides() -> dict[str, Any]:
+    default_path = Path("/opt/vts/config.yaml")
+    local_path = Path("config.yaml")
+    path = default_path if default_path.exists() else local_path
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file) or {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    overrides = _load_yaml_overrides()
+    return Settings(**overrides)

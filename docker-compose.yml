@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+  webapi:
+    build:
+      context: .
+      dockerfile: docker/webapi.Dockerfile
+      args:
+        VTS_VERSION: ${VTS_VERSION:-0.0.0}
+    image: ${REGISTRY:-docker.io}/${NAMESPACE:-yourdockerhub}/vts-webapi:${VTS_VERSION:-0.0.0}
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/opt/vts/config.yaml:ro
+      - ./prompts:/opt/vts/prompts:ro
+      - vts_data:/srv/vts-data
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        VTS_VERSION: ${VTS_VERSION:-0.0.0}
+    image: ${REGISTRY:-docker.io}/${NAMESPACE:-yourdockerhub}/vts-worker:${VTS_VERSION:-0.0.0}
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/opt/vts/config.yaml:ro
+      - ./prompts:/opt/vts/prompts:ro
+      - vts_data:/srv/vts-data
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: vts
+      POSTGRES_PASSWORD: vts
+      POSTGRES_DB: vts
+    command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_size=2GB"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:8
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  whisper:
+    image: ghcr.io/ahmetoner/whisper-asr-webservice:latest
+    profiles: ["external"]
+    environment:
+      - ASR_MODEL=medium
+    restart: unless-stopped
+
+  llama:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    profiles: ["external"]
+    command: [
+      "-m", "/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "--host", "0.0.0.0",
+      "--port", "8000"
+    ]
+    volumes:
+      - ./models:/models
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  vts_data:
+

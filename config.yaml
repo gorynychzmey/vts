@@ -1,0 +1,39 @@
+app_name: vts
+environment: prod
+host: 0.0.0.0
+port: 8080
+
+database_url: postgresql+asyncpg://vts:vts@postgres:5432/vts
+redis_url: redis://redis:6379/0
+redis_prefix: "vts:"
+
+trusted_proxy_cidrs:
+  - 127.0.0.1/32
+  - ::1/128
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+admin_emails:
+  - admin@example.com
+
+artifacts_root: /srv/vts-data
+config_dir: /opt/vts
+prompts_dir: /opt/vts/prompts
+
+whisper_url: http://whisper:9000
+llama_url: http://llama:8000/v1
+llama_model: Qwen2.5-7B-Instruct-Q4
+
+segment_target_seconds: 300
+segment_search_window_seconds: 30
+segment_overlap_seconds: 3
+
+transcribe_parallel_per_task: 2
+heavy_slot_limit: 1
+event_throttle_hz: 4
+db_write_throttle_ms: 150
+
+night_mode_enabled: false
+night_mode_start_hour: 22
+night_mode_end_hour: 7
+
+media_ttl_hours: 72

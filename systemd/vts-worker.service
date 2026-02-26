@@ -1,0 +1,23 @@
+[Unit]
+Description=VTS Worker Container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/vts/vts.env
+ExecStartPre=/usr/bin/podman pull ${WORKER_IMAGE}
+ExecStart=/usr/bin/podman run --rm --name vts-worker \
+  --network vts-net \
+  --env-file /etc/vts/vts.env \
+  -v /opt/vts/config.yaml:/opt/vts/config.yaml:ro \
+  -v /opt/vts/prompts:/opt/vts/prompts:ro \
+  -v /srv/vts-data:/srv/vts-data \
+  ${WORKER_IMAGE}
+ExecStop=/usr/bin/podman stop -t 20 vts-worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
