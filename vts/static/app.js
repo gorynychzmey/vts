@@ -74,6 +74,30 @@ function startVersionWatcher() {
   state.versionTimer = window.setInterval(checkServerVersion, VERSION_CHECK_INTERVAL_MS);
 }
 
+function findRunningStep(steps) {
+  if (!Array.isArray(steps)) {
+    return "";
+  }
+  const running = steps.find((step) => step.status === "running");
+  return running ? String(running.name || "") : "";
+}
+
+function renderTaskRuntime(taskEl) {
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  let statusText = runtime.baseStatus || "";
+  if (runtime.currentStep) {
+    statusText = `${statusText} · ${runtime.currentStep}`;
+  }
+  if (runtime.llamaStatus === "loading") {
+    statusText = `${statusText} · LLM loading`;
+  }
+  taskEl._elements.statusEl.textContent = statusText;
+  taskEl._elements.llamaLoading.classList.toggle("hidden", runtime.llamaStatus !== "loading");
+}
+
 function renderTasks(tasks) {
   taskList.innerHTML = "";
   tasks.forEach((task) => {
@@ -85,13 +109,14 @@ function renderTasks(tasks) {
     const statusEl = node.querySelector(".task-status");
     const videoProgress = node.querySelector(".video-progress");
     const audioProgress = node.querySelector(".audio-progress");
+    const llamaLoading = node.querySelector(".llama-loading");
     const transcriptPre = node.querySelector(".transcript");
     const summaryPre = node.querySelector(".summary");
     const logPre = node.querySelector(".log");
+    const currentStep = findRunningStep(task.steps);
 
     root.dataset.taskId = task.id;
     urlEl.textContent = task.source_url;
-    statusEl.textContent = task.status;
     transcriptPre.textContent = "Select tab to load transcript";
     summaryPre.textContent = "Select tab to load summary";
     logPre.textContent = "Select tab to load task log";
@@ -120,7 +145,13 @@ function renderTasks(tasks) {
       });
     });
 
-    root._elements = { statusEl, videoProgress, audioProgress };
+    root._elements = { statusEl, videoProgress, audioProgress, llamaLoading };
+    root._runtime = {
+      baseStatus: task.status,
+      currentStep,
+      llamaStatus: currentStep === "prepare_llama_model" ? "loading" : "idle"
+    };
+    renderTaskRuntime(root);
     taskList.appendChild(node);
   });
 }
@@ -163,10 +194,45 @@ async function removeTask(taskId) {
 
 function patchTaskStatus(taskId, status) {
   const taskEl = document.querySelector(`[data-task-id="${taskId}"]`);
-  if (!taskEl || !taskEl._elements) {
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
     return;
   }
-  taskEl._elements.statusEl.textContent = status;
+  taskEl._runtime.baseStatus = status;
+  if (status !== "running") {
+    taskEl._runtime.currentStep = "";
+    taskEl._runtime.llamaStatus = "idle";
+  }
+  renderTaskRuntime(taskEl);
+}
+
+function patchTaskStep(taskId, name, status) {
+  const taskEl = document.querySelector(`[data-task-id="${taskId}"]`);
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+    return;
+  }
+  if (status === "running") {
+    taskEl._runtime.currentStep = name;
+  } else if (status === "completed" && taskEl._runtime.currentStep === name) {
+    taskEl._runtime.currentStep = "";
+  } else if (status === "failed") {
+    taskEl._runtime.currentStep = `${name} failed`;
+  }
+  if (name === "prepare_llama_model" && status !== "running") {
+    taskEl._runtime.llamaStatus = "idle";
+  }
+  renderTaskRuntime(taskEl);
+}
+
+function patchLlamaModelProgress(taskId, status) {
+  const taskEl = document.querySelector(`[data-task-id="${taskId}"]`);
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+    return;
+  }
+  taskEl._runtime.llamaStatus = status === "loading" ? "loading" : "idle";
+  if (status === "failed") {
+    taskEl._runtime.currentStep = "prepare_llama_model failed";
+  }
+  renderTaskRuntime(taskEl);
 }
 
 function patchTaskProgress(taskId, video, audio) {
@@ -204,6 +270,14 @@ function connectEvents() {
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
     patchTaskStatus(payload.task_id, payload.data.status);
+  });
+  state.eventSource.addEventListener("step", (event) => {
+    const payload = JSON.parse(event.data);
+    patchTaskStep(payload.task_id, payload.data.name, payload.data.status);
+  });
+  state.eventSource.addEventListener("llama_model_progress", (event) => {
+    const payload = JSON.parse(event.data);
+    patchLlamaModelProgress(payload.task_id, payload.data.status);
   });
   state.eventSource.onerror = () => {
     if (state.eventSource) {

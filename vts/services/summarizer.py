@@ -38,6 +38,7 @@ async def llama_chat_completion(
     system_prompt: str,
     user_prompt: str,
     timeout_seconds: int = 600,
+    max_tokens: int | None = None,
 ) -> str:
     endpoint = llama_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -49,6 +50,8 @@ async def llama_chat_completion(
         ],
         "temperature": 0.2,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         response = await client.post(endpoint, json=payload)
     response.raise_for_status()
@@ -68,4 +71,3 @@ def parse_json_response(raw: str) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     return {"raw": raw, "summary": str(payload)}
-

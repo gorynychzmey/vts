@@ -9,7 +9,7 @@ DAG_STEPS: Final[list[str]] = [
     "segment_audio",
     "transcribe_segments",
     "merge_transcript",
+    "prepare_llama_model",
     "summarize_windows",
     "summarize_final",
 ]
-

@@ -419,6 +419,70 @@ class TaskProcessor:
         )
         return True
 
+    async def step_prepare_llama_model(
+        self,
+        task_id: uuid.UUID,
+        user_id: str,
+        dirs: dict[str, Path],
+        logger: logging.Logger,
+        dry_run: bool,
+    ) -> bool:
+        marker = dirs["outputs"] / "llama_model_ready.json"
+        target_model = self.settings.llama_model
+        if marker.exists():
+            try:
+                payload = json.loads(marker.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict) and str(payload.get("model", "")) == target_model:
+                return True
+        if dry_run:
+            return False
+
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="llama_model_progress",
+            data={"status": "loading", "model": target_model},
+        )
+        logger.info("warming llama model: %s", target_model)
+        try:
+            async with self.heavy_slot:
+                raw = await llama_chat_completion(
+                    llama_url=self.settings.llama_url,
+                    model=target_model,
+                    system_prompt='Return compact JSON: {"status":"ready"}.',
+                    user_prompt="Warm up model for upcoming summarization.",
+                    timeout_seconds=1200,
+                    max_tokens=32,
+                )
+        except Exception as exc:
+            await self.bus.publish_event(
+                user_id=user_id,
+                task_id=str(task_id),
+                event="llama_model_progress",
+                data={"status": "failed", "model": target_model, "error": str(exc)},
+            )
+            raise
+
+        parsed = parse_json_response(raw)
+        write_json(
+            marker,
+            {
+                "model": target_model,
+                "ready_at": utcnow().isoformat(),
+                "response": parsed,
+            },
+        )
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="llama_model_progress",
+            data={"status": "ready", "model": target_model},
+        )
+        logger.info("llama model is ready: %s", target_model)
+        return True
+
     async def step_summarize_windows(
         self,
         task_id: uuid.UUID,

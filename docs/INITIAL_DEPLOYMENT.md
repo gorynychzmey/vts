@@ -9,33 +9,49 @@ Install:
 - `git`
 - `podman`
 - `podman-compose` (or `podman compose` plugin)
-- `python3` (for local helper scripts if needed)
+- `python3`
 - `systemd`
 
 Create directories:
 
 ```bash
-sudo mkdir -p /opt/vts /etc/vts /srv/vts-data /opt/vts/prompts
+sudo mkdir -p /opt/vts /opt/vts/config /srv/vts-data /opt/vts/prompts
 sudo chown -R "$USER":"$USER" /opt/vts /srv/vts-data
 ```
 
-## 2. Clone and prepare repository
+## 1.1 External AI services (required)
+
+Deploy these services separately (they are not built in this repository):
+
+- Whisper ASR webservice
+  - image: `ghcr.io/ahmetoner/whisper-asr-webservice:latest`
+  - docs: `https://github.com/ahmetoner/whisper-asr-webservice`
+- llama.cpp OpenAI-compatible server
+  - image: `ghcr.io/ggerganov/llama.cpp:server`
+  - docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
+
+`vts` worker calls llama via OpenAI-compatible API and includes a `prepare_llama_model` DAG step to warm up the configured model before summarization.
+
+## 2. Clone and prepare production config
 
 ```bash
 cd /opt/vts
 git clone <YOUR_GITHUB_REPO_URL> .
-cp .env.example .env
-cp systemd/vts.env.example /etc/vts/vts.env
+cp config.yaml /opt/vts/config/config.yaml
+cp systemd/vts.env.example /opt/vts/config/vts.env
 ```
 
-Edit `.env` and `/etc/vts/vts.env`:
+Edit:
 
-- set image tags (`WEBAPI_IMAGE`, `WORKER_IMAGE`) in `/etc/vts/vts.env`
-- keep `VTS_*` values in `/etc/vts/vts.env` commented by default (use only as explicit overrides)
+- `/opt/vts/config/config.yaml` as the primary runtime config
+- `/opt/vts/prompts/*.md` as prompt sources
+- `/opt/vts/config/vts.env` only for container image tags and optional explicit overrides
 
-Edit `config.yaml` and `prompts/*.md` if needed.
+Production note:
 
-## 3. Prepare Postgres and run migrations
+- `.env` / `.env.example` are for local `docker/podman compose` usage only and are not required by systemd deployment.
+
+## 3. Bring up Postgres/Redis and initialize DB
 
 ```bash
 cd /opt/vts
@@ -43,83 +59,86 @@ podman compose up -d postgres redis
 CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 ```
 
-The script creates/updates role and database (defaults: `vts`/`vts`) in idempotent mode.
+`scripts/setup_postgres.sh` is idempotent and creates/updates role/database (defaults: `vts` / `vts`).
 
-Run migrations after DB prep:
+## 4. Image source: Docker Hub `gorynychzmey/vts`
 
-```bash
-podman compose run --rm webapi alembic upgrade head
-```
-
-## 4. Image source (Docker Hub `gorynychzmey/vts`)
-
-Application images are stored in a single repo:
+Published tags:
 
 - `docker.io/gorynychzmey/vts:<version>-webapi`
 - `docker.io/gorynychzmey/vts:<version>-worker`
 - `docker.io/gorynychzmey/vts:latest-webapi`
 - `docker.io/gorynychzmey/vts:latest-worker`
 
-If you need to rebuild and push from build host:
-
-```bash
-export CONTAINER_ENGINE=docker
-export IMAGE_REPO=docker.io/gorynychzmey/vts
-# Optional: use a Germany mirror for faster apt downloads in/near Munich
-export APT_MIRROR=http://ftp.de.debian.org/debian
-# Keep security updates on official mirror
-export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
-./build.sh
-```
-
-## 5. Configure systemd units
-
-Copy unit files:
-
-```bash
-sudo cp systemd/vts-webapi.service /etc/systemd/system/
-sudo cp systemd/vts-worker.service /etc/systemd/system/
-```
-
-Update image tags in `/etc/vts/vts.env`:
+Set `/opt/vts/config/vts.env`:
 
 ```bash
 WEBAPI_IMAGE=docker.io/gorynychzmey/vts:<version>-webapi
 WORKER_IMAGE=docker.io/gorynychzmey/vts:<version>-worker
 ```
 
-Reload and enable:
+If you need to rebuild and push images from a build host:
 
 ```bash
+python -m pytest -q tests
+docker login
+export CONTAINER_ENGINE=docker
+export IMAGE_REPO=docker.io/gorynychzmey/vts
+# Optional mirror near Munich
+export APT_MIRROR=http://ftp.de.debian.org/debian
+export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
+./build.sh
+```
+
+If local host cannot run tests because of platform-specific dependency builds (for example Windows + `asyncpg`), run checks inside Linux container:
+
+```bash
+docker compose run --rm -v "$(pwd)":/app webapi sh -lc "pip install pytest==8.4.2 && python -m pytest -q tests"
+```
+
+## 5. Run DB migrations
+
+```bash
+set -a
+source /opt/vts/config/vts.env
+set +a
+podman pull "${WEBAPI_IMAGE}"
+podman run --rm \
+  --network vts_default \
+  --env-file /opt/vts/config/vts.env \
+  -v /opt/vts/config/config.yaml:/opt/vts/config/config.yaml:ro \
+  -v /opt/vts/prompts:/opt/vts/prompts:ro \
+  -v /srv/vts-data:/srv/vts-data \
+  "${WEBAPI_IMAGE}" \
+  alembic upgrade head
+```
+
+`vts_default` is the network name for compose project `vts` (default when repository is located in `/opt/vts`). If you use another compose project name, replace network name accordingly.
+
+## 6. Install and start systemd units
+
+```bash
+sudo cp systemd/vts-webapi.service /etc/systemd/system/
+sudo cp systemd/vts-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now vts-webapi.service
 sudo systemctl enable --now vts-worker.service
 ```
 
-## 6. Verify deployment
-
-Check service state:
+## 7. Verify deployment
 
 ```bash
 sudo systemctl status vts-webapi.service --no-pager
 sudo systemctl status vts-worker.service --no-pager
-```
-
-Health/version check:
-
-```bash
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/api/version
 ```
 
-Open UI and create a test task through reverse proxy that sets `X-Forwarded-User`.
+Open UI via reverse proxy that injects `X-Forwarded-User`.
 
-## 7. First deployment update flow (next releases)
+## 8. Next releases
 
-Always before deployment:
+For commit/deploy rules and release sequence, follow:
 
-1. bump MINOR (`python scripts/bump_version.py minor`)
-2. run tests
-3. commit and push bump
-4. `./build.sh`
-5. `./deploy.sh`
+- `PROJECT_RULES.md`
+- `README.md` (workflow index)

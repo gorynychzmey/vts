@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/vts/vts.env
+EnvironmentFile=/opt/vts/config/vts.env
 ExecStartPre=/usr/bin/podman pull ${WEBAPI_IMAGE}
 ExecStart=/usr/bin/podman run --rm --name vts-webapi \
   --network vts-net \
-  --env-file /etc/vts/vts.env \
-  -v /opt/vts/config.yaml:/opt/vts/config.yaml:ro \
+  --env-file /opt/vts/config/vts.env \
+  -v /opt/vts/config/config.yaml:/opt/vts/config/config.yaml:ro \
   -v /opt/vts/prompts:/opt/vts/prompts:ro \
   -v /srv/vts-data:/srv/vts-data \
   -p 8080:8080 \
@@ -21,4 +21,3 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-

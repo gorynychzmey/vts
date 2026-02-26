@@ -16,7 +16,7 @@ admin_emails:
   - admin@example.com
 
 artifacts_root: /srv/vts-data
-config_dir: /opt/vts
+config_dir: /opt/vts/config
 prompts_dir: /opt/vts/prompts
 
 whisper_url: http://whisper:9000

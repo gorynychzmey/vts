@@ -2,6 +2,13 @@
 
 Production-ready self-hosted service for video transcription and summarization.
 
+## Documentation map
+
+- Production first-time setup: `docs/INITIAL_DEPLOYMENT.md`
+- Workflow and release contract: `PROJECT_RULES.md`
+- Runtime example config: `config.yaml`
+- systemd runtime env template: `systemd/vts.env.example`
+
 ## Stack
 
 - Python 3.14+
@@ -11,7 +18,7 @@ Production-ready self-hosted service for video transcription and summarization.
 - Worker pipeline (`yt-dlp`, `ffmpeg`, Whisper API, llama.cpp API)
 - Podman containers + systemd units
 
-## Architecture
+## Runtime architecture
 
 Containers:
 
@@ -22,7 +29,20 @@ Containers:
 5. External Whisper ASR webservice
 6. External llama.cpp server
 
-Whisper and llama servers are consumed as external endpoints and are not implemented in this repository.
+Whisper and llama servers are external dependencies and are not implemented in this repository.
+
+## External model services
+
+Install/deploy these separately:
+
+- Whisper ASR webservice:
+  - Image: `ghcr.io/ahmetoner/whisper-asr-webservice:latest`
+  - Docs: `https://github.com/ahmetoner/whisper-asr-webservice`
+- llama.cpp OpenAI-compatible server:
+  - Image: `ghcr.io/ggerganov/llama.cpp:server`
+  - Docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
+
+Pipeline includes a dedicated `prepare_llama_model` step before summary generation. It performs model warm-up and emits `llama_model_progress` events; UI shows a spinner while model load/warm-up is in progress.
 
 ## Data model
 
@@ -36,27 +56,55 @@ Tables:
 
 Schema is managed by Alembic (`alembic/versions/0001_initial.py`).
 
-## Authentication model
+## Auth and user context
 
-- API trusts `X-Forwarded-User` only when request source IP is inside `trusted_proxy_cidrs`.
-- User record is auto-created on first request.
-- All task data is filtered by authenticated user id.
-- Admin emails are configured via `VTS_ADMIN_EMAILS`.
-- Admin can switch context to another user via `?as_user=<email>` (used by UI admin panel).
+- API trusts `X-Forwarded-User` only from `trusted_proxy_cidrs`.
+- Missing users are auto-created.
+- Data is isolated by user id.
+- Admin emails are configured by `VTS_ADMIN_EMAILS`.
+- Admin can switch context to an existing registered user (`?as_user=<email>`).
+- Tasks created while switched are created for the selected user, not the admin.
 
-## Pipeline DAG
+## Browser cache and auto-update
 
-1. `download`
-2. `extract_audio`
-3. `segment_audio`
-4. `transcribe_segments`
-5. `merge_transcript`
-6. `summarize_windows`
-7. `summarize_final`
+- `index.html` is served with `Cache-Control: no-store`.
+- Frontend assets are versioned (`?v=<server_version>`).
+- SPA polls `/api/version` and auto-reloads on version mismatch.
 
-Each step is restart-safe: persisted in DB, idempotent by output checks, and logs to `logs/task.log`.
+## Production vs local environment files
 
-## API
+- Production uses `/opt/vts/config/config.yaml` as the source of truth.
+- Production uses `/opt/vts/config/vts.env` mainly for image tags (`WEBAPI_IMAGE`, `WORKER_IMAGE`) and optional explicit overrides.
+- `.env` / `.env.example` are for local `docker/podman compose` usage and are not required for systemd deployment.
+
+## Build and image publish
+
+`build.sh` builds and pushes both images to Docker Hub:
+
+- `docker.io/gorynychzmey/vts:<version>-webapi`
+- `docker.io/gorynychzmey/vts:<version>-worker`
+- `docker.io/gorynychzmey/vts:latest-webapi`
+- `docker.io/gorynychzmey/vts:latest-worker`
+
+Example:
+
+```bash
+docker login
+export CONTAINER_ENGINE=docker
+export IMAGE_REPO=docker.io/gorynychzmey/vts
+export APT_MIRROR=http://ftp.de.debian.org/debian
+export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
+./build.sh
+```
+
+## Build performance notes
+
+- Dockerfiles are multi-stage.
+- BuildKit caches are used for `apt` and `pip wheel`.
+- Runtime images do not include test tooling.
+- Local test tooling is in `requirements-dev.txt`.
+
+## API summary
 
 - `POST /api/tasks`
 - `GET /api/tasks`
@@ -71,123 +119,15 @@ Each step is restart-safe: persisted in DB, idempotent by output checks, and log
 - `GET /api/me`
 - `GET /api/admin/users` (admin only)
 
-## Storage layout
+## Workflow summary
 
-- Artifacts: `/srv/vts-data/{user_hash}/{task_id}/`
-- Runtime config: `/opt/vts/config.yaml`
-- Prompts: `/opt/vts/prompts/segment_prompt.md`, `/opt/vts/prompts/global_prompt.md`
-
-## Admin impersonation
-
-- Set `VTS_ADMIN_EMAILS=["admin1@example.com","admin2@example.com"]`.
-- When authenticated user email is in this list, UI shows an Admin Panel.
-- Panel allows switching only to users already registered in the system.
-- Creating tasks while switched adds tasks to the selected user context, not to admin's own account.
-- Current context is always shown as `Working as` in UI header.
-
-## Browser cache and auto-update
-
-- `index.html` is served with `Cache-Control: no-store`.
-- Frontend assets are versioned (`/static/app.js?v=<version>`, `/static/styles.css?v=<version>`).
-- SPA polls `/api/version`; if server version differs from loaded frontend version, browser auto-reloads to the latest build.
-- Hard reload is not required after deployment.
-
-## Quick start
-
-1. Copy env:
-   - `cp .env.example .env`
-2. Use `config.yaml` as primary runtime config. In `systemd/vts.env` keep only image tags active; leave `VTS_*` commented unless override is needed.
-3. Start infrastructure:
-   - `podman compose up -d postgres redis`
-4. Prepare Postgres role/database:
-   - `CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh`
-5. Apply DB migrations:
-   - `alembic upgrade head`
-6. Start app services and open UI:
-   - `http://localhost:8080`
-
-## Build performance
-
-- Dockerfiles use multi-stage build: compiler toolchain is used only in builder stage, runtime image stays lean.
-- BuildKit caches are enabled for apt and pip wheel building.
-- Runtime image no longer installs test tooling (`pytest`).
-- For local testing tooling, install `requirements-dev.txt`.
-- You can set build-time mirror overrides:
-  - `APT_MIRROR=http://ftp.de.debian.org/debian` (often better near Munich)
-  - `APT_SECURITY_MIRROR=http://deb.debian.org/debian-security`
-
-## Versioning policy (strict semver)
-
-Current version lives in `vts/__init__.py`.
-
-Format: `a.b.c`
-
-- Start at `0.0.0`
-- Before every commit: bump PATCH `c`
-- Before every deployment: bump MINOR `b`, reset PATCH to `0`
-- MAJOR `a` reserved for breaking changes
-
-Automation:
-
-- Patch bump: `python scripts/bump_version.py patch`
-- Minor bump: `python scripts/bump_version.py minor`
-- Version endpoint: `GET /api/version`
-- Docker label: `org.opencontainers.image.version`
-
-## Commit workflow
-
-1. `python scripts/bump_version.py patch`
-2. `python -m pytest -q`
-3. `git add -A`
-4. `git commit -m "..."`
-5. `git push`
-
-Or use helper:
-
-- `./scripts/prepare_commit.sh`
-
-Task is complete only after tests pass, commit exists, and push is done.
-
-## Deployment workflow (manual)
-
-1. `python scripts/bump_version.py minor`
-2. `python -m pytest -q`
-3. `git add vts/__init__.py && git commit -m "chore: deploy X.Y.0"`
-4. `git push`
-5. `./build.sh` (build + push images)
-6. `./deploy.sh` (ssh, pull images, restart systemd services)
-
-`deploy.sh` uses:
-
-- `SSH_HOST`, `SSH_USER`, `REMOTE_DIR`
-- `WEBAPI_SERVICE`, `WORKER_SERVICE`
-
-Primary setup instructions:
-
-- `docs/INITIAL_DEPLOYMENT.md`
-
-## systemd + podman
-
-Templates:
-
-- `systemd/vts-webapi.service`
-- `systemd/vts-worker.service`
-- `systemd/vts.env.example`
-
-Install on server:
-
-1. Copy service files to `/etc/systemd/system/`
-2. Copy env to `/etc/vts/vts.env`
-3. `systemctl daemon-reload`
-4. `systemctl enable --now vts-webapi vts-worker`
-
-## Config files in repository
-
-- `.env.example`
-- `config.yaml` (example runtime config)
-- `prompts/segment_prompt.md`
-- `prompts/global_prompt.md`
-- `PROJECT_RULES.md`
+- Commit flow and semver rules: `PROJECT_RULES.md`
+- Deployment flow and server bootstrap: `docs/INITIAL_DEPLOYMENT.md`
+- Helper scripts:
+  - `scripts/bump_version.py`
+  - `scripts/prepare_commit.sh` (cleans pytest temp caches, bumps patch, runs tests, stages changes)
+  - `build.sh`
+  - `deploy.sh`
 
 
 

@@ -15,7 +15,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./config.yaml:/opt/vts/config.yaml:ro
+      - ./config.yaml:/opt/vts/config/config.yaml:ro
       - ./prompts:/opt/vts/prompts:ro
       - vts_data:/srv/vts-data
     depends_on:
@@ -35,7 +35,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./config.yaml:/opt/vts/config.yaml:ro
+      - ./config.yaml:/opt/vts/config/config.yaml:ro
       - ./prompts:/opt/vts/prompts:ro
       - vts_data:/srv/vts-data
     depends_on:

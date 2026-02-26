@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     redis_prefix: str = "vts:"
 
-    config_dir: Path = Path("/opt/vts")
+    config_dir: Path = Path("/opt/vts/config")
     prompts_dir: Path = Path("/opt/vts/prompts")
     artifacts_root: Path = Path("/srv/vts-data")
 
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
 
 def _load_yaml_overrides() -> dict[str, Any]:
-    default_path = Path("/opt/vts/config.yaml")
+    default_path = Path("/opt/vts/config/config.yaml")
     local_path = Path("config.yaml")
     path = default_path if default_path.exists() else local_path
     if not path.exists():

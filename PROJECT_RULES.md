@@ -9,6 +9,8 @@ This document is part of the repository contract and must stay in sync with auto
   - checks/tests pass,
   - commit is created,
   - commit is pushed.
+- Before commit, remove transient pytest cache directories (`pytest-cache-files-*`, `.pytest_cache`).
+  - automated in `scripts/prepare_commit.sh`.
 
 ## 2. Semantic Versioning
 
@@ -53,6 +55,8 @@ Scripts:
 - `build.sh`
 - `deploy.sh`
 - `systemd/*.service`
+
+Detailed first-time bootstrap instructions are maintained in `docs/INITIAL_DEPLOYMENT.md`.
 
 ## 4. Parallel Execution Constraints
 
