@@ -2,8 +2,7 @@ const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
 const authUserLabel = document.getElementById("auth-user");
-const actingUserLabel = document.getElementById("acting-user");
-const adminPanel = document.getElementById("admin-panel");
+const adminControls = document.getElementById("admin-controls");
 const adminSelect = document.getElementById("admin-user-select");
 const adminApplyBtn = document.getElementById("admin-apply-btn");
 const adminResetBtn = document.getElementById("admin-reset-btn");
@@ -24,18 +23,216 @@ const DAG_STEPS = [
   "summarize_final"
 ];
 const SUMMARY_STEPS = new Set(["prepare_llama_model", "summarize_windows", "summarize_final"]);
-const STEP_LABELS = {
-  download: "Загрузка медиа",
-  extract_audio: "Извлечение аудио",
-  segment_audio: "Сегментация аудио",
-  transcribe_segments: "Транскрибация сегментов",
-  merge_transcript: "Сборка транскрипта",
-  prepare_llama_model: "Подготовка LLM",
-  summarize_windows: "Сводка по окнам",
-  summarize_final: "Финальная сводка"
+
+const I18N = {
+  en: {
+    "header.title": "Video Transcribe & Summarize",
+    "header.subtitle": "Queue URL, monitor pipeline, inspect transcript and summary artifacts.",
+    "header.version": "Version:",
+    "context.authenticated": "Authenticated:",
+    "context.acting_as": "Working as:",
+    "context.admin_suffix": " (admin)",
+    "admin.title": "Admin Panel",
+    "admin.switch_user": "Switch to user",
+    "admin.apply": "Apply",
+    "admin.use_self": "Use self",
+    "new_task.title": "New Task",
+    "new_task.url_label": "Video URL",
+    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
+    "new_task.audio_only": "Audio only",
+    "new_task.transcript": "Transcript",
+    "new_task.summary": "Summary",
+    "new_task.language": "Language",
+    "new_task.language_auto": "auto",
+    "new_task.language_en": "English",
+    "new_task.language_ru": "Russian",
+    "new_task.language_de": "German",
+    "new_task.language_fr": "French",
+    "new_task.language_es": "Spanish",
+    "tasks.title": "Tasks",
+    "action.create": "Create task",
+    "action.refresh": "Refresh tasks",
+    "action.pause": "Pause",
+    "action.resume": "Resume",
+    "action.delete": "Delete",
+    "action.expand": "Expand",
+    "action.collapse": "Collapse",
+    "tab.transcript": "Transcript",
+    "tab.summary": "Summary",
+    "tab.log": "Log",
+    "tab.prompt_transcript": "Select tab to load transcript",
+    "tab.prompt_summary": "Select tab to load summary",
+    "tab.prompt_log": "Select tab to load task log",
+    "status.running": "running",
+    "status.queued": "queued",
+    "status.paused": "paused",
+    "status.completed": "completed",
+    "status.failed": "failed",
+    "status.canceled": "canceled",
+    "status.queued_pos": "queued #{position}",
+    "step.line": "Step {index} of {total}: {step}",
+    "step.waiting": "Step - of {total}: waiting",
+    "progress.working": "in progress",
+    "progress.queued": "queued",
+    "progress.queue_pos": "queue #{position}",
+    "progress.failed": "failed",
+    "confirm.delete": "Delete task? This action cannot be undone.",
+    "steps.download": "Media download",
+    "steps.extract_audio": "Audio extraction",
+    "steps.segment_audio": "Audio segmentation",
+    "steps.transcribe_segments": "Segment transcription",
+    "steps.merge_transcript": "Transcript merge",
+    "steps.prepare_llama_model": "LLM warm-up",
+    "steps.summarize_windows": "Window summaries",
+    "steps.summarize_final": "Final summary"
+  },
+  ru: {
+    "header.title": "Транскрибация и суммаризация видео",
+    "header.subtitle": "Поставьте URL в очередь, следите за пайплайном и проверяйте артефакты транскрипта и summary.",
+    "header.version": "Версия:",
+    "context.authenticated": "Аутентифицирован:",
+    "context.acting_as": "Работаю как:",
+    "context.admin_suffix": " (админ)",
+    "admin.title": "Панель администратора",
+    "admin.switch_user": "Переключиться на пользователя",
+    "admin.apply": "Применить",
+    "admin.use_self": "Свой пользователь",
+    "new_task.title": "Новая задача",
+    "new_task.url_label": "URL видео",
+    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
+    "new_task.audio_only": "Только аудио",
+    "new_task.transcript": "Транскрипт",
+    "new_task.summary": "Сводка",
+    "new_task.language": "Язык",
+    "new_task.language_auto": "авто",
+    "new_task.language_en": "Английский",
+    "new_task.language_ru": "Русский",
+    "new_task.language_de": "Немецкий",
+    "new_task.language_fr": "Французский",
+    "new_task.language_es": "Испанский",
+    "tasks.title": "Задачи",
+    "action.create": "Создать задачу",
+    "action.refresh": "Обновить задачи",
+    "action.pause": "Пауза",
+    "action.resume": "Возобновить",
+    "action.delete": "Удалить",
+    "action.expand": "Развернуть",
+    "action.collapse": "Свернуть",
+    "tab.transcript": "Транскрипт",
+    "tab.summary": "Сводка",
+    "tab.log": "Лог",
+    "tab.prompt_transcript": "Выберите вкладку, чтобы загрузить транскрипт",
+    "tab.prompt_summary": "Выберите вкладку, чтобы загрузить сводку",
+    "tab.prompt_log": "Выберите вкладку, чтобы загрузить лог задачи",
+    "status.running": "выполняется",
+    "status.queued": "в очереди",
+    "status.paused": "пауза",
+    "status.completed": "завершено",
+    "status.failed": "ошибка",
+    "status.canceled": "отменено",
+    "status.queued_pos": "очередь #{position}",
+    "step.line": "Шаг {index} из {total}: {step}",
+    "step.waiting": "Шаг - из {total}: ожидание",
+    "progress.working": "идет работа",
+    "progress.queued": "в очереди",
+    "progress.queue_pos": "очередь #{position}",
+    "progress.failed": "ошибка",
+    "confirm.delete": "Удалить задачу? Это действие необратимо.",
+    "steps.download": "Загрузка медиа",
+    "steps.extract_audio": "Извлечение аудио",
+    "steps.segment_audio": "Сегментация аудио",
+    "steps.transcribe_segments": "Транскрибация сегментов",
+    "steps.merge_transcript": "Сборка транскрипта",
+    "steps.prepare_llama_model": "Подготовка LLM",
+    "steps.summarize_windows": "Сводка по окнам",
+    "steps.summarize_final": "Финальная сводка"
+  },
+  de: {
+    "header.title": "Video transkribieren und zusammenfassen",
+    "header.subtitle": "URL in die Warteschlange stellen, Pipeline beobachten und Transkript-/Summary-Artefakte prüfen.",
+    "header.version": "Version:",
+    "context.authenticated": "Authentifiziert:",
+    "context.acting_as": "Arbeitet als:",
+    "context.admin_suffix": " (Admin)",
+    "admin.title": "Admin-Bereich",
+    "admin.switch_user": "Zu Benutzer wechseln",
+    "admin.apply": "Anwenden",
+    "admin.use_self": "Eigener Benutzer",
+    "new_task.title": "Neue Aufgabe",
+    "new_task.url_label": "Video-URL",
+    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
+    "new_task.audio_only": "Nur Audio",
+    "new_task.transcript": "Transkript",
+    "new_task.summary": "Zusammenfassung",
+    "new_task.language": "Sprache",
+    "new_task.language_auto": "auto",
+    "new_task.language_en": "Englisch",
+    "new_task.language_ru": "Russisch",
+    "new_task.language_de": "Deutsch",
+    "new_task.language_fr": "Französisch",
+    "new_task.language_es": "Spanisch",
+    "tasks.title": "Aufgaben",
+    "action.create": "Aufgabe erstellen",
+    "action.refresh": "Aufgaben aktualisieren",
+    "action.pause": "Pausieren",
+    "action.resume": "Fortsetzen",
+    "action.delete": "Löschen",
+    "action.expand": "Erweitern",
+    "action.collapse": "Einklappen",
+    "tab.transcript": "Transkript",
+    "tab.summary": "Zusammenfassung",
+    "tab.log": "Log",
+    "tab.prompt_transcript": "Tab auswählen, um das Transkript zu laden",
+    "tab.prompt_summary": "Tab auswählen, um die Zusammenfassung zu laden",
+    "tab.prompt_log": "Tab auswählen, um das Aufgaben-Log zu laden",
+    "status.running": "läuft",
+    "status.queued": "in warteschlange",
+    "status.paused": "pausiert",
+    "status.completed": "abgeschlossen",
+    "status.failed": "fehlgeschlagen",
+    "status.canceled": "abgebrochen",
+    "status.queued_pos": "warteschlange #{position}",
+    "step.line": "Schritt {index} von {total}: {step}",
+    "step.waiting": "Schritt - von {total}: warten",
+    "progress.working": "in bearbeitung",
+    "progress.queued": "in warteschlange",
+    "progress.queue_pos": "warteschlange #{position}",
+    "progress.failed": "fehlgeschlagen",
+    "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+    "steps.download": "Medien-Download",
+    "steps.extract_audio": "Audio-Extraktion",
+    "steps.segment_audio": "Audio-Segmentierung",
+    "steps.transcribe_segments": "Segment-Transkription",
+    "steps.merge_transcript": "Transkript-Zusammenführung",
+    "steps.prepare_llama_model": "LLM-Aufwärmen",
+    "steps.summarize_windows": "Fenster-Zusammenfassungen",
+    "steps.summarize_final": "Finale Zusammenfassung"
+  }
 };
 
+function detectLocale() {
+  const candidates = [];
+  if (typeof navigator !== "undefined" && Array.isArray(navigator.languages)) {
+    candidates.push(...navigator.languages);
+  }
+  if (typeof navigator !== "undefined" && navigator.language) {
+    candidates.push(navigator.language);
+  }
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+    const short = normalized.split(/[-_]/)[0];
+    if (I18N[short]) {
+      return short;
+    }
+  }
+  return "en";
+}
+
 const state = {
+  locale: detectLocale(),
   authUser: localStorage.getItem("vts_auth_user") || "demo@example.com",
   actingAs: localStorage.getItem("vts_as_user") || "",
   me: null,
@@ -45,6 +242,58 @@ const state = {
   queueTimer: null,
   queueRefreshInFlight: false
 };
+
+function interpolate(template, params = {}) {
+  return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (full, key) => {
+    const value = params[key];
+    return value === undefined || value === null ? full : String(value);
+  });
+}
+
+function t(key, params = {}) {
+  const localeDict = I18N[state.locale] || I18N.en;
+  const raw = localeDict[key] ?? I18N.en[key] ?? key;
+  return interpolate(raw, params);
+}
+
+function statusText(status) {
+  const key = `status.${status}`;
+  const translated = t(key);
+  return translated === key ? String(status || "") : translated;
+}
+
+function stepText(stepName) {
+  const key = `steps.${stepName}`;
+  const translated = t(key);
+  return translated === key ? String(stepName || "") : translated;
+}
+
+function applyI18n(root = document) {
+  const scope = root || document;
+  const applyAttr = (attr, updater) => {
+    if (scope instanceof Element && scope.hasAttribute(attr)) {
+      updater(scope);
+    }
+    scope.querySelectorAll(`[${attr}]`).forEach((el) => updater(el));
+  };
+  applyAttr("data-i18n", (el) => {
+    el.textContent = t(el.getAttribute("data-i18n") || "");
+  });
+  applyAttr("data-i18n-placeholder", (el) => {
+    el.setAttribute("placeholder", t(el.getAttribute("data-i18n-placeholder") || ""));
+  });
+  applyAttr("data-i18n-title", (el) => {
+    el.setAttribute("title", t(el.getAttribute("data-i18n-title") || ""));
+  });
+  applyAttr("data-i18n-aria-label", (el) => {
+    el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria-label") || ""));
+  });
+}
+
+function applyI18nToPage() {
+  document.documentElement.lang = state.locale;
+  applyI18n(document);
+}
 
 function setVersionLabel(version) {
   if (!appVersionLabel) {
@@ -177,10 +426,6 @@ function normalizeProgress(value) {
   return Math.max(0, Math.min(1, numeric));
 }
 
-function stepLabel(stepName) {
-  return STEP_LABELS[stepName] || stepName || "ожидание";
-}
-
 function parseQueuePosition(value) {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
@@ -240,13 +485,13 @@ function computeStepProgress(runtime) {
     return { value: 1, indeterminate: false, text: "100%" };
   }
   if (runtime.baseStatus === "failed") {
-    return { value: 1, indeterminate: false, text: "ошибка" };
+    return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
   if (runtime.baseStatus === "queued") {
     if (runtime.queuePosition) {
-      return { value: 0, indeterminate: false, text: `очередь #${runtime.queuePosition}` };
+      return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
     }
-    return { value: 0, indeterminate: false, text: "в очереди" };
+    return { value: 0, indeterminate: false, text: t("progress.queued") };
   }
 
   const active = resolveActiveStep(runtime);
@@ -296,16 +541,16 @@ function computeStepProgress(runtime) {
   }
 
   if (indeterminate) {
-    return { value: Math.max(0.05, value), indeterminate: true, text: "идет работа" };
+    return { value: Math.max(0.05, value), indeterminate: true, text: t("progress.working") };
   }
   return { value, indeterminate: false, text: `${Math.round(value * 100)}%` };
 }
 
 function setTaskStatusAppearance(statusEl, status, queuePosition = null) {
   if (status === "queued" && queuePosition) {
-    statusEl.textContent = `queued #${queuePosition}`;
+    statusEl.textContent = t("status.queued_pos", { position: queuePosition });
   } else {
-    statusEl.textContent = status;
+    statusEl.textContent = statusText(status);
   }
   statusEl.className = "task-status";
   statusEl.classList.add(`status-${status}`);
@@ -345,9 +590,13 @@ function renderTaskRuntime(taskEl) {
   const stepIndex = runtime.enabledSteps.indexOf(activeStep) + 1;
   const normalizedIndex = Math.max(stepIndex, 1);
   if (activeStep) {
-    elements.stepLabelEl.textContent = `Шаг ${normalizedIndex} из ${runtime.enabledSteps.length}: ${stepLabel(activeStep)}`;
+    elements.stepLabelEl.textContent = t("step.line", {
+      index: normalizedIndex,
+      total: runtime.enabledSteps.length,
+      step: stepText(activeStep)
+    });
   } else {
-    elements.stepLabelEl.textContent = `Шаг - из ${runtime.enabledSteps.length}: ожидание`;
+    elements.stepLabelEl.textContent = t("step.waiting", { total: runtime.enabledSteps.length });
   }
 
   if (runtime.baseStatus === "running" && runtime.currentStepStartedAt) {
@@ -378,16 +627,35 @@ function renderTasks(tasks) {
     const summaryPre = root.querySelector(".tab-content.summary");
     const logPre = root.querySelector(".tab-content.log");
 
+    applyI18n(root);
+
     root.dataset.taskId = task.id;
-    transcriptPre.textContent = "Select tab to load transcript";
-    summaryPre.textContent = "Select tab to load summary";
-    logPre.textContent = "Select tab to load task log";
+    transcriptPre.textContent = t("tab.prompt_transcript");
+    summaryPre.textContent = t("tab.prompt_summary");
+    logPre.textContent = t("tab.prompt_log");
+
+    pauseBtn.title = t("action.pause");
+    pauseBtn.setAttribute("aria-label", t("action.pause"));
+    resumeBtn.title = t("action.resume");
+    resumeBtn.setAttribute("aria-label", t("action.resume"));
+    deleteBtn.title = t("action.delete");
+    deleteBtn.setAttribute("aria-label", t("action.delete"));
+    toggleBtn.title = t("action.expand");
+    toggleBtn.setAttribute("aria-label", t("action.expand"));
+
+    root.querySelectorAll(".tab-btn").forEach((btn) => {
+      const tabName = String(btn.dataset.tab || "");
+      const tabLabel = t(`tab.${tabName}`);
+      btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
+    });
 
     toggleBtn.addEventListener("click", () => {
       body.classList.toggle("hidden");
-      toggleBtn.classList.toggle("expanded", !body.classList.contains("hidden"));
-      toggleBtn.title = body.classList.contains("hidden") ? "Expand" : "Collapse";
-      toggleBtn.setAttribute("aria-label", body.classList.contains("hidden") ? "Expand" : "Collapse");
+      const expanded = !body.classList.contains("hidden");
+      toggleBtn.classList.toggle("expanded", expanded);
+      const label = expanded ? t("action.collapse") : t("action.expand");
+      toggleBtn.title = label;
+      toggleBtn.setAttribute("aria-label", label);
     });
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
@@ -476,7 +744,7 @@ async function updateTaskStatus(taskId, action) {
 }
 
 async function removeTask(taskId) {
-  const confirmed = window.confirm("Удалить задачу? Это действие необратимо.");
+  const confirmed = window.confirm(t("confirm.delete"));
   if (!confirmed) {
     return;
   }
@@ -731,8 +999,7 @@ async function loadMe() {
   state.me = me;
   state.authUser = String(me.requested_by || state.authUser);
   localStorage.setItem("vts_auth_user", state.authUser);
-  authUserLabel.textContent = `${me.requested_by}${me.is_admin ? " (admin)" : ""}`;
-  actingUserLabel.textContent = me.acting_as;
+  authUserLabel.textContent = `${me.requested_by}${me.is_admin ? t("context.admin_suffix") : ""}`;
   if (!state.actingAs && me.acting_as !== me.requested_by) {
     state.actingAs = me.acting_as;
     localStorage.setItem("vts_as_user", state.actingAs);
@@ -740,11 +1007,14 @@ async function loadMe() {
 }
 
 async function loadAdminPanel() {
-  if (!state.me || !state.me.is_admin) {
-    adminPanel.classList.add("hidden");
+  if (!adminControls || !adminSelect) {
     return;
   }
-  adminPanel.classList.remove("hidden");
+  if (!state.me || !state.me.is_admin) {
+    adminControls.classList.add("hidden");
+    return;
+  }
+  adminControls.classList.remove("hidden");
   const response = await api("/api/admin/users").catch(() => ({ users: [] }));
   const users = new Set(response.users || []);
   users.add(state.me.requested_by);
@@ -763,6 +1033,9 @@ async function loadAdminPanel() {
 }
 
 async function applyAdminUser() {
+  if (!adminSelect || !state.me) {
+    return;
+  }
   const selected = adminSelect.value.trim();
   if (!selected) {
     return;
@@ -796,9 +1069,14 @@ async function refreshAll() {
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
 form.transcript.addEventListener("change", syncSummaryToggle);
-adminApplyBtn.addEventListener("click", applyAdminUser);
-adminResetBtn.addEventListener("click", resetAdminUser);
+if (adminApplyBtn) {
+  adminApplyBtn.addEventListener("click", applyAdminUser);
+}
+if (adminResetBtn) {
+  adminResetBtn.addEventListener("click", resetAdminUser);
+}
 
+applyI18nToPage();
 setVersionLabel(BUILD_VERSION);
 syncSummaryToggle();
 refreshAll();

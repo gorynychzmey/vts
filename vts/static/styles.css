@@ -167,15 +167,15 @@ button:hover {
 }
 
 .user-context {
-  display: flex;
-  gap: 1.2rem;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 0.65rem;
 }
 
 .context-line {
-  display: inline-flex;
-  gap: 0.4rem;
-  align-items: baseline;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .context-label {
@@ -188,11 +188,10 @@ button:hover {
   font-size: 0.88rem;
 }
 
-.admin-row {
-  display: flex;
-  gap: 0.7rem;
-  align-items: center;
-  flex-wrap: wrap;
+.admin-controls select {
+  min-width: min(20rem, 100%);
+  border-radius: 999px;
+  padding-block: 0.45rem;
 }
 
 .icon-btn {
@@ -457,9 +456,8 @@ button:hover {
     margin-top: 1rem;
   }
 
-  .user-context {
-    flex-direction: column;
-    gap: 0.4rem;
+  .admin-controls select {
+    width: 100%;
   }
 
   .task-header-row {
