@@ -18,7 +18,7 @@ from vts.api.deps import get_current_user, get_redis, get_session_dep, get_setti
 from vts.api.schemas import AdminUsersOut, MeOut, MessageOut, TaskCreateRequest, TaskOut
 from vts.core.config import Settings
 from vts.core.logging import configure_logging
-from vts.db.models import Task, TaskStatus
+from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.redis_bus import RedisBus
@@ -33,10 +33,81 @@ def can_resume_task(status: TaskStatus) -> bool:
     return status == TaskStatus.paused
 
 
-def serialize_task(task: Task, queue_positions: dict[uuid.UUID, int] | None = None) -> TaskOut:
+def _read_json_payload(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _list_count(payload: dict[str, Any] | None, key: str) -> int:
+    if payload is None:
+        return 0
+    value = payload.get(key)
+    return len(value) if isinstance(value, list) else 0
+
+
+def _find_step_status(task: Task, step_name: str) -> StepStatus | None:
+    for step in task.steps:
+        if step.name == step_name:
+            return step.status
+    return None
+
+
+def _summary_progress_for_task(task: Task) -> tuple[int, int]:
+    options = task.options if isinstance(task.options, dict) else {}
+    if options.get("summary") is False:
+        return (0, 0)
+
+    artifact = Path(task.artifact_dir)
+    summary_dir = artifact / "summary"
+    outputs_dir = artifact / "outputs"
+
+    chunks_payload = _read_json_payload(summary_dir / "chunks.json") or _read_json_payload(
+        outputs_dir / "summary_chunks.json"
+    )
+    windows_payload = _read_json_payload(summary_dir / "windows.json") or _read_json_payload(
+        outputs_dir / "window_summaries.json"
+    )
+    window_total = _list_count(chunks_payload, "chunks")
+    window_done = _list_count(windows_payload, "windows")
+    if window_total > 0:
+        window_done = min(window_done, window_total)
+
+    total_parts = window_total + 1 if window_total > 0 else 0
+    final_step = _find_step_status(task, "summarize_final")
+    if total_parts == 0 and final_step in {StepStatus.running, StepStatus.completed}:
+        total_parts = 1
+
+    current = window_done
+    if final_step == StepStatus.running:
+        current = max(current, window_total)
+    elif final_step == StepStatus.completed:
+        current = total_parts
+
+    return (max(current, 0), max(total_parts, 0))
+
+
+def serialize_task(
+    task: Task,
+    queue_positions: dict[uuid.UUID, int] | None = None,
+    asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+    summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+) -> TaskOut:
     queue_position: int | None = None
     if queue_positions is not None:
         queue_position = queue_positions.get(task.id)
+    transcribe_current, transcribe_total = (0, 0)
+    if asr_progress is not None:
+        transcribe_current, transcribe_total = asr_progress.get(task.id, (0, 0))
+    summary_current, summary_total = (0, 0)
+    if summary_progress is not None:
+        summary_current, summary_total = summary_progress.get(task.id, (0, 0))
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
@@ -59,6 +130,10 @@ def serialize_task(task: Task, queue_positions: dict[uuid.UUID, int] | None = No
             }
             for step in sorted(task.steps, key=lambda item: item.name)
         ],
+        progress={
+            "transcribe": {"current": transcribe_current, "total": transcribe_total},
+            "summary": {"current": summary_current, "total": summary_total},
+        },
     )
 
 
@@ -147,7 +222,9 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=500, detail="Task not found after creation")
         queue_positions = await repo.get_global_queue_positions()
-        return serialize_task(task, queue_positions)
+        asr_progress = await repo.get_asr_progress_for_tasks([task.id])
+        summary_progress = {task.id: _summary_progress_for_task(task)}
+        return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
     @app.get("/api/tasks", response_model=list[TaskOut])
     async def list_tasks(
@@ -157,7 +234,10 @@ def create_app() -> FastAPI:
         repo = Repo(session)
         tasks = await repo.list_tasks_for_user(uuid.UUID(user.id))
         queue_positions = await repo.get_global_queue_positions()
-        return [serialize_task(task, queue_positions) for task in tasks]
+        task_ids = [task.id for task in tasks]
+        asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
+        summary_progress = {task.id: _summary_progress_for_task(task) for task in tasks}
+        return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
 
     @app.get("/api/tasks/{task_id}", response_model=TaskOut)
     async def get_task(
@@ -170,7 +250,9 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         queue_positions = await repo.get_global_queue_positions()
-        return serialize_task(task, queue_positions)
+        asr_progress = await repo.get_asr_progress_for_tasks([task.id])
+        summary_progress = {task.id: _summary_progress_for_task(task)}
+        return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
     @app.post("/api/tasks/{task_id}/pause", response_model=MessageOut)
     async def pause_task(

@@ -239,6 +239,20 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    async def get_asr_progress_for_tasks(self, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
+        if not task_ids:
+            return {}
+        stmt = select(AsrSegment.task_id, AsrSegment.raw_json).where(AsrSegment.task_id.in_(task_ids))
+        result = await self.session.execute(stmt)
+        progress: dict[uuid.UUID, tuple[int, int]] = {}
+        for task_id, raw_json in result.all():
+            done, total = progress.get(task_id, (0, 0))
+            total += 1
+            if isinstance(raw_json, dict) and bool(raw_json):
+                done += 1
+            progress[task_id] = (done, total)
+        return progress
+
     async def get_task_words(self, task_id: uuid.UUID) -> list[AsrWord]:
         stmt = select(AsrWord).where(AsrWord.task_id == task_id).order_by(AsrWord.start_sec.asc())
         result = await self.session.scalars(stmt)

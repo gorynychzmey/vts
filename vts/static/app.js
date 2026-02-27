@@ -654,10 +654,23 @@ function parseQueuePosition(value) {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
+function readStageProgress(task, stageName) {
+  const progress = task && typeof task === "object" ? task.progress : null;
+  const stage = progress && typeof progress === "object" ? progress[stageName] : null;
+  const current = Number(stage && stage.current);
+  const total = Number(stage && stage.total);
+  return {
+    current: Number.isFinite(current) && current > 0 ? current : 0,
+    total: Number.isFinite(total) && total > 0 ? total : 0
+  };
+}
+
 function createRuntime(task) {
   const runningStep = findStep(task, "running");
   const failedStep = findStep(task, "failed");
   const enabledSteps = getEnabledSteps(task);
+  const transcribeProgress = readStageProgress(task, "transcribe");
+  const summaryProgress = readStageProgress(task, "summary");
   return {
     sourceUrl: String(task.source_url || ""),
     displayName: "",
@@ -680,12 +693,12 @@ function createRuntime(task) {
       hasAudio: false
     },
     transcribe: {
-      current: 0,
-      total: 0
+      current: transcribeProgress.current,
+      total: transcribeProgress.total
     },
     summary: {
-      current: 0,
-      total: 0
+      current: summaryProgress.current,
+      total: summaryProgress.total
     }
   };
 }
@@ -1205,6 +1218,12 @@ async function refreshQueuePositions() {
       runtime.baseStatus = String(task.status || runtime.baseStatus);
       runtime.queuePosition = parseQueuePosition(task.queue_position);
       runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
+      const transcribeProgress = readStageProgress(task, "transcribe");
+      const summaryProgress = readStageProgress(task, "summary");
+      runtime.transcribe.current = transcribeProgress.current;
+      runtime.transcribe.total = transcribeProgress.total;
+      runtime.summary.current = summaryProgress.current;
+      runtime.summary.total = summaryProgress.total;
       if (runtime.baseStatus !== "running") {
         runtime.taskStartedAt = computeTaskStartedAt(task);
       }

@@ -30,6 +30,16 @@ class StepOut(BaseModel):
     message: str | None
 
 
+class StageProgressOut(BaseModel):
+    current: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0)
+
+
+class TaskProgressOut(BaseModel):
+    transcribe: StageProgressOut = Field(default_factory=StageProgressOut)
+    summary: StageProgressOut = Field(default_factory=StageProgressOut)
+
+
 class TaskOut(BaseModel):
     id: UUID
     source_url: str
@@ -42,6 +52,7 @@ class TaskOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     steps: list[StepOut]
+    progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
 
 
 class MessageOut(BaseModel):

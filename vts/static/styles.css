@@ -420,18 +420,27 @@ button:hover {
   font-weight: 600;
 }
 
-.tabs {
+.tabs-bar {
   margin-top: 0.85rem;
   display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
   align-items: center;
+  gap: 0.6rem;
+}
+
+.tabs {
+  display: flex;
+  min-width: 0;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .tab-actions {
   margin-left: auto;
   display: inline-flex;
   gap: 0.3rem;
+  flex-shrink: 0;
 }
 
 .tab-actions .icon-btn {
@@ -440,6 +449,7 @@ button:hover {
 }
 
 .tab-btn {
+  flex: 0 0 auto;
   background: #ece7da;
   color: var(--ink);
   font-weight: 600;
