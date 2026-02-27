@@ -31,7 +31,11 @@ echo "Deploying on ${SSH_USER}@${SSH_HOST}"
 ssh "${SSH_USER}@${SSH_HOST}" bash -s <<EOF
 set -euo pipefail
 cd "${REMOTE_DIR}"
-podman compose pull
+set -a
+source /opt/vts/config/vts.env
+set +a
+podman pull "\${WEBAPI_IMAGE}"
+podman pull "\${WORKER_IMAGE}"
 sudo systemctl restart "${WEBAPI_SERVICE}"
 sudo systemctl restart "${WORKER_SERVICE}"
 sudo systemctl status "${WEBAPI_SERVICE}" --no-pager
