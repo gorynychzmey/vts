@@ -22,6 +22,16 @@ prompts_dir: /opt/vts/prompts
 whisper_url: http://whisper:9000
 llama_url: http://llama:8000/v1
 llama_model: Qwen2.5-7B-Instruct-Q4
+# Optional yt-dlp auth/debug options for YouTube 403 cases.
+# cookies_from_browser format: [browser, profile, keyring, container]
+# examples:
+# ytdlp_cookies_from_browser: ["firefox"]
+# ytdlp_cookies_from_browser: ["chrome", "Default", "basictext"]
+ytdlp_cookies_file: null
+ytdlp_cookies_from_browser: []
+ytdlp_youtube_player_client: null
+ytdlp_youtube_po_token: null
+ytdlp_verbose: false
 
 segment_target_seconds: 300
 segment_search_window_seconds: 30

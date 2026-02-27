@@ -46,6 +46,16 @@ Install/deploy these separately:
 
 Pipeline includes a dedicated `prepare_llama_model` step before summary generation. It performs model warm-up and emits `llama_model_progress` events; UI shows a spinner while model load/warm-up is in progress.
 
+## yt-dlp YouTube auth and diagnostics
+
+When YouTube returns `HTTP 403`, configure `yt-dlp` runtime options in `config.yaml` (or `VTS_*` overrides):
+
+- `ytdlp_cookies_file` (`VTS_YTDLP_COOKIES_FILE`)
+- `ytdlp_cookies_from_browser` (`VTS_YTDLP_COOKIES_FROM_BROWSER`, JSON array in order `[browser, profile, keyring, container]`)
+- `ytdlp_youtube_player_client` (`VTS_YTDLP_YOUTUBE_PLAYER_CLIENT`)
+- `ytdlp_youtube_po_token` (`VTS_YTDLP_YOUTUBE_PO_TOKEN`)
+- `ytdlp_verbose` (`VTS_YTDLP_VERBOSE`)
+
 ## Data model
 
 Tables:

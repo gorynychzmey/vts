@@ -241,6 +241,11 @@ class TaskProcessor:
             phase_cb=sync_phase,
             logger=logger,
             audio_only=audio_only,
+            ytdlp_cookies_file=self.settings.ytdlp_cookies_file,
+            ytdlp_cookies_from_browser=self.settings.ytdlp_cookies_from_browser,
+            ytdlp_youtube_player_client=self.settings.ytdlp_youtube_player_client,
+            ytdlp_youtube_po_token=self.settings.ytdlp_youtube_po_token,
+            ytdlp_verbose=self.settings.ytdlp_verbose,
         )
         logger.info("download finished")
         return True

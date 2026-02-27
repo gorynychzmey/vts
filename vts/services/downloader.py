@@ -64,6 +64,34 @@ def _run_download(
         ydl.download([url])
 
 
+def _build_ytdlp_base_opts(
+    *,
+    ytdlp_cookies_file: Path | None,
+    ytdlp_cookies_from_browser: list[str],
+    ytdlp_youtube_player_client: str | None,
+    ytdlp_youtube_po_token: str | None,
+    ytdlp_verbose: bool,
+) -> dict[str, Any]:
+    opts: dict[str, Any] = {
+        "noplaylist": True,
+        "quiet": not ytdlp_verbose,
+        "verbose": ytdlp_verbose,
+    }
+    if ytdlp_cookies_file:
+        opts["cookiefile"] = str(ytdlp_cookies_file)
+    browser_spec = tuple(item.strip() for item in ytdlp_cookies_from_browser if item.strip())
+    if browser_spec:
+        opts["cookiesfrombrowser"] = browser_spec
+    youtube_args: dict[str, list[str]] = {}
+    if ytdlp_youtube_player_client and ytdlp_youtube_player_client.strip():
+        youtube_args["player_client"] = [ytdlp_youtube_player_client.strip()]
+    if ytdlp_youtube_po_token and ytdlp_youtube_po_token.strip():
+        youtube_args["po_token"] = [ytdlp_youtube_po_token.strip()]
+    if youtube_args:
+        opts["extractor_args"] = {"youtube": youtube_args}
+    return opts
+
+
 def _run_process(command: list[str], logger: logging.Logger) -> None:
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.stdout:
@@ -128,11 +156,23 @@ def download_video_and_audio(
     phase_cb: PhaseCallback,
     logger: logging.Logger,
     audio_only: bool = False,
+    ytdlp_cookies_file: Path | None = None,
+    ytdlp_cookies_from_browser: list[str] | None = None,
+    ytdlp_youtube_player_client: str | None = None,
+    ytdlp_youtube_po_token: str | None = None,
+    ytdlp_verbose: bool = False,
 ) -> tuple[Path | None, Path]:
     media_dir.mkdir(parents=True, exist_ok=True)
     video_source_out = media_dir / "video.source.%(ext)s"
     audio_source_out = media_dir / "audio.source.%(ext)s"
     video_merged = media_dir / "video.mkv"
+    common_ydl_opts = _build_ytdlp_base_opts(
+        ytdlp_cookies_file=ytdlp_cookies_file,
+        ytdlp_cookies_from_browser=ytdlp_cookies_from_browser or [],
+        ytdlp_youtube_player_client=ytdlp_youtube_player_client,
+        ytdlp_youtube_po_token=ytdlp_youtube_po_token,
+        ytdlp_verbose=ytdlp_verbose,
+    )
 
     if audio_only:
         phase_cb("audio", "running")
@@ -141,9 +181,8 @@ def download_video_and_audio(
             url=source_url,
             outtmpl=str(audio_source_out),
             ydl_opts={
+                **common_ydl_opts,
                 "format": "bestaudio/best",
-                "noplaylist": True,
-                "quiet": True,
             },
             phase="audio",
             progress_cb=progress_cb,
@@ -179,9 +218,8 @@ def download_video_and_audio(
         url=source_url,
         outtmpl=str(video_source_out),
         ydl_opts={
+            **common_ydl_opts,
             "format": "bestvideo/best",
-            "noplaylist": True,
-            "quiet": True,
         },
         phase="video",
         progress_cb=progress_cb,
@@ -195,9 +233,8 @@ def download_video_and_audio(
         url=source_url,
         outtmpl=str(audio_source_out),
         ydl_opts={
+            **common_ydl_opts,
             "format": "bestaudio/best",
-            "noplaylist": True,
-            "quiet": True,
         },
         phase="audio",
         progress_cb=progress_cb,

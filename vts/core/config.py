@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     whisper_url: str = "http://whisper:9000"
     llama_url: str = "http://llama:8000/v1"
     llama_model: str = "Qwen2.5-7B-Instruct-Q4"
+    ytdlp_cookies_file: Path | None = None
+    ytdlp_cookies_from_browser: list[str] = Field(default_factory=list)
+    ytdlp_youtube_player_client: str | None = None
+    ytdlp_youtube_po_token: str | None = None
+    ytdlp_verbose: bool = False
 
     segment_target_seconds: int = 300
     segment_search_window_seconds: int = 30
@@ -60,6 +65,13 @@ class Settings(BaseSettings):
     night_mode_end_hour: int = 7
 
     media_ttl_hours: int = 72
+
+    @field_validator("ytdlp_cookies_file", mode="before")
+    @classmethod
+    def _normalize_optional_cookie_path(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def config_yaml_path(self) -> Path:
