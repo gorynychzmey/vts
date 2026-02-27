@@ -575,6 +575,10 @@ function renderTaskRuntime(taskEl) {
 
   renderTaskTitle(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
+  const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
+  const canResume = runtime.baseStatus === "paused";
+  elements.pauseBtn.disabled = !canPause;
+  elements.resumeBtn.disabled = !canResume;
 
   if (runtime.baseStatus === "running") {
     if (!runtime.taskStartedAt) {
@@ -687,6 +691,8 @@ function renderTasks(tasks) {
       sourceEl: root.querySelector(".task-source"),
       statusEl: root.querySelector(".task-status"),
       taskRuntimeEl: root.querySelector(".task-runtime"),
+      pauseBtn,
+      resumeBtn,
       stepLabelEl: root.querySelector(".step-label"),
       stepTimeEl: root.querySelector(".step-time"),
       progressWrap: root.querySelector(".step-progress"),

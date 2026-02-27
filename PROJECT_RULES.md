@@ -9,6 +9,9 @@ This document is part of the repository contract and must stay in sync with auto
   - checks/tests pass,
   - commit is created,
   - commit is pushed.
+- If task wording includes `build` after commit/push, default action is GitHub Actions build trigger:
+  - create and push tag `build-*` (for example `build-0.2.6`),
+  - do not run local `build.sh` unless explicitly requested.
 - Before commit, remove transient pytest cache directories (`pytest-cache-files-*`, `.pytest_cache`).
   - automated in `scripts/prepare_commit.sh`.
 

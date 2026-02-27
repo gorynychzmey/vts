@@ -121,6 +121,7 @@ Triggers:
 
 - Manual run: `Actions -> Build Images -> Run workflow`
 - Special push tag: `build-*` (for example `build-0.2.1`)
+- Team convention: if request says `build` after commit/push, this means pushing `build-*` tag to trigger GitHub Actions build. Local `./build.sh` is run only on explicit request.
 
 Tag-trigger example:
 

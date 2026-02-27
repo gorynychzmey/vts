@@ -228,6 +228,15 @@ button:hover {
   background: #e6dece;
 }
 
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.icon-btn.ghost:disabled:hover {
+  background: #efe9db;
+}
+
 .icon-btn.danger {
   color: var(--danger);
 }

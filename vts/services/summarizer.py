@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,39 @@ def _raise_with_response_details(response: httpx.Response, *, context: str) -> N
     )
 
 
+def _is_loading_model_response(response: httpx.Response) -> bool:
+    if response.status_code not in (503, 529):
+        return False
+    detail = _response_error_detail(response).lower()
+    return "loading model" in detail or "model is loading" in detail
+
+
+async def _post_with_loading_retry(
+    *,
+    client: httpx.AsyncClient,
+    endpoint: str,
+    payload: dict[str, Any],
+    loading_wait_seconds: float,
+) -> httpx.Response:
+    response = await client.post(endpoint, json=payload)
+    elapsed = 0.0
+    attempt = 0
+    while _is_loading_model_response(response) and elapsed < loading_wait_seconds:
+        delay = min(0.5 * (2**attempt), 5.0)
+        wait_for = min(delay, loading_wait_seconds - elapsed)
+        if wait_for <= 0:
+            break
+        await asyncio.sleep(wait_for)
+        elapsed += wait_for
+        response = await client.post(endpoint, json=payload)
+        attempt += 1
+    return response
+
+
+def _loading_wait_seconds(timeout_seconds: int, *, cap_seconds: float = 120.0) -> float:
+    return max(5.0, min(float(timeout_seconds) * 0.6, cap_seconds))
+
+
 def _build_chat_payload(
     *,
     model: str,
@@ -82,6 +116,32 @@ def _build_chat_payload(
     if max_tokens is not None:
         payload[max_tokens_key] = max_tokens
     return payload
+
+
+def _model_name_variants(model: str) -> list[str]:
+    value = model.strip()
+    if not value:
+        return []
+    candidates: list[str] = []
+
+    def add(item: str) -> None:
+        normalized = item.strip()
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+    add(value)
+    if value.endswith(".gguf"):
+        add(value[: -len(".gguf")])
+    else:
+        add(f"{value}.gguf")
+    if "/" in value:
+        basename = value.rsplit("/", 1)[-1]
+        add(basename)
+        if basename.endswith(".gguf"):
+            add(basename[: -len(".gguf")])
+        else:
+            add(f"{basename}.gguf")
+    return candidates
 
 
 async def _list_chat_models(
@@ -124,28 +184,55 @@ async def llama_tokenize(
     payload: dict[str, Any] = {"content": text}
     if model:
         payload["model"] = model
+    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.post(endpoint, json=payload)
+        response = await _post_with_loading_retry(
+            client=client,
+            endpoint=endpoint,
+            payload=payload,
+            loading_wait_seconds=loading_wait_seconds,
+        )
         if response.status_code == 400 and model:
-            retry_response = await client.post(endpoint, json={"content": text})
+            retry_response = await _post_with_loading_retry(
+                client=client,
+                endpoint=endpoint,
+                payload={"content": text},
+                loading_wait_seconds=loading_wait_seconds,
+            )
             if retry_response.is_success:
                 response = retry_response
             else:
-                available_models = await _list_chat_models(client=client, llama_url=llama_url)
-                if available_models and model not in available_models:
-                    server_model = available_models[0]
-                    model_retry = await client.post(
-                        endpoint,
-                        json={"content": text, "model": server_model},
+                recovered = False
+                for variant in _model_name_variants(model)[1:]:
+                    model_retry = await _post_with_loading_retry(
+                        client=client,
+                        endpoint=endpoint,
+                        payload={"content": text, "model": variant},
+                        loading_wait_seconds=loading_wait_seconds,
                     )
                     if model_retry.is_success:
                         response = model_retry
-                    else:
-                        _raise_with_response_details(
-                            model_retry,
-                            context=f"llama tokenize (retry with model={server_model})",
+                        recovered = True
+                        break
+                if not recovered:
+                    available_models = await _list_chat_models(client=client, llama_url=llama_url)
+                    if available_models and model not in available_models:
+                        server_model = available_models[0]
+                        model_retry = await _post_with_loading_retry(
+                            client=client,
+                            endpoint=endpoint,
+                            payload={"content": text, "model": server_model},
+                            loading_wait_seconds=loading_wait_seconds,
                         )
-                else:
+                        if model_retry.is_success:
+                            response = model_retry
+                            recovered = True
+                        else:
+                            _raise_with_response_details(
+                                model_retry,
+                                context=f"llama tokenize (retry with model={server_model})",
+                            )
+                if not recovered:
                     _raise_with_response_details(
                         retry_response,
                         context="llama tokenize (retry without model)",
@@ -170,28 +257,55 @@ async def llama_detokenize(
     payload: dict[str, Any] = {"tokens": tokens}
     if model:
         payload["model"] = model
+    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.post(endpoint, json=payload)
+        response = await _post_with_loading_retry(
+            client=client,
+            endpoint=endpoint,
+            payload=payload,
+            loading_wait_seconds=loading_wait_seconds,
+        )
         if response.status_code == 400 and model:
-            retry_response = await client.post(endpoint, json={"tokens": tokens})
+            retry_response = await _post_with_loading_retry(
+                client=client,
+                endpoint=endpoint,
+                payload={"tokens": tokens},
+                loading_wait_seconds=loading_wait_seconds,
+            )
             if retry_response.is_success:
                 response = retry_response
             else:
-                available_models = await _list_chat_models(client=client, llama_url=llama_url)
-                if available_models and model not in available_models:
-                    server_model = available_models[0]
-                    model_retry = await client.post(
-                        endpoint,
-                        json={"tokens": tokens, "model": server_model},
+                recovered = False
+                for variant in _model_name_variants(model)[1:]:
+                    model_retry = await _post_with_loading_retry(
+                        client=client,
+                        endpoint=endpoint,
+                        payload={"tokens": tokens, "model": variant},
+                        loading_wait_seconds=loading_wait_seconds,
                     )
                     if model_retry.is_success:
                         response = model_retry
-                    else:
-                        _raise_with_response_details(
-                            model_retry,
-                            context=f"llama detokenize (retry with model={server_model})",
+                        recovered = True
+                        break
+                if not recovered:
+                    available_models = await _list_chat_models(client=client, llama_url=llama_url)
+                    if available_models and model not in available_models:
+                        server_model = available_models[0]
+                        model_retry = await _post_with_loading_retry(
+                            client=client,
+                            endpoint=endpoint,
+                            payload={"tokens": tokens, "model": server_model},
+                            loading_wait_seconds=loading_wait_seconds,
                         )
-                else:
+                        if model_retry.is_success:
+                            response = model_retry
+                            recovered = True
+                        else:
+                            _raise_with_response_details(
+                                model_retry,
+                                context=f"llama detokenize (retry with model={server_model})",
+                            )
+                if not recovered:
                     _raise_with_response_details(
                         retry_response,
                         context="llama detokenize (retry without model)",
@@ -251,6 +365,7 @@ async def llama_chat_completion(
     max_tokens: int | None = None,
 ) -> str:
     endpoint = llama_url.rstrip("/") + "/chat/completions"
+    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
     queue: list[tuple[str, dict[str, Any]]] = []
     seen_payloads: set[str] = set()
 
@@ -271,6 +386,43 @@ async def llama_chat_completion(
             include_response_format=True,
         ),
     )
+    model_variants = _model_name_variants(model)
+    for variant in model_variants[1:]:
+        enqueue(
+            f"default_model_variant:{variant}",
+            _build_chat_payload(
+                model=model,
+                model_override=variant,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                include_response_format=True,
+            ),
+        )
+        enqueue(
+            f"without_response_format_model_variant:{variant}",
+            _build_chat_payload(
+                model=model,
+                model_override=variant,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                include_response_format=False,
+            ),
+        )
+        if max_tokens is not None:
+            enqueue(
+                f"without_response_format_model_variant:{variant}:max_completion_tokens",
+                _build_chat_payload(
+                    model=model,
+                    model_override=variant,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    include_response_format=False,
+                    max_tokens_key="max_completion_tokens",
+                ),
+            )
     enqueue(
         "without_response_format",
         _build_chat_payload(
@@ -323,7 +475,12 @@ async def llama_chat_completion(
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         while queue:
             label, payload = queue.pop(0)
-            response = await client.post(endpoint, json=payload)
+            response = await _post_with_loading_retry(
+                client=client,
+                endpoint=endpoint,
+                payload=payload,
+                loading_wait_seconds=loading_wait_seconds,
+            )
             if response.is_success:
                 data = response.json()
                 break

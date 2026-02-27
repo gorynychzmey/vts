@@ -25,6 +25,14 @@ from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
 
 
+def can_pause_task(status: TaskStatus) -> bool:
+    return status in {TaskStatus.queued, TaskStatus.running}
+
+
+def can_resume_task(status: TaskStatus) -> bool:
+    return status == TaskStatus.paused
+
+
 def serialize_task(task: Task, queue_positions: dict[uuid.UUID, int] | None = None) -> TaskOut:
     queue_position: int | None = None
     if queue_positions is not None:
@@ -174,6 +182,11 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        if not can_pause_task(task.status):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot pause task with status '{task.status.value}'",
+            )
         await repo.set_task_status(task, TaskStatus.paused)
         await session.commit()
         return MessageOut(status="paused")
@@ -190,6 +203,11 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        if not can_resume_task(task.status):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot resume task with status '{task.status.value}'",
+            )
         await repo.set_task_status(task, TaskStatus.queued)
         await session.commit()
         bus = RedisBus(redis, settings)
