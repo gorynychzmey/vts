@@ -7,9 +7,25 @@ from redis.asyncio import Redis
 
 from vts.core.config import get_settings
 from vts.core.logging import configure_logging
+from vts.db.models import TaskStatus
+from vts.db.repo import Repo
 from vts.db.session import SessionLocal
 from vts.pipeline.processor import TaskProcessor
 from vts.services.redis_bus import RedisBus
+
+
+async def recover_pending_tasks(bus: RedisBus, log: logging.Logger) -> None:
+    async with SessionLocal() as session:
+        repo = Repo(session)
+        recovered_running = await repo.requeue_running_tasks()
+        queued_ids = await repo.list_task_ids_for_statuses([TaskStatus.queued])
+        await session.commit()
+    for task_id in queued_ids:
+        await bus.enqueue_task(task_id)
+    if recovered_running:
+        log.info("recovered running tasks: %s", len(recovered_running))
+    if queued_ids:
+        log.info("queued tasks restored on startup: %s", len(queued_ids))
 
 
 async def worker_loop() -> None:
@@ -20,6 +36,7 @@ async def worker_loop() -> None:
     log = logging.getLogger("vts.worker")
 
     try:
+        await recover_pending_tasks(bus, log)
         while True:
             task_id = await bus.dequeue_task(timeout_seconds=5)
             if task_id is None:

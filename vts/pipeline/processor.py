@@ -62,6 +62,7 @@ class TaskProcessor:
                 return
             if task.status in {TaskStatus.canceled, TaskStatus.completed}:
                 return
+            task_options = self._task_options(task.options)
             await repo.set_task_status(task, TaskStatus.running)
             await session.commit()
             await self.bus.publish_event(
@@ -88,9 +89,19 @@ class TaskProcessor:
                         return
                     if task.status == TaskStatus.canceled:
                         return
-                    await self._run_step(session, repo, task.id, str(task.user_id), step_name, dirs, logger)
+                    await self._run_step(
+                        session,
+                        repo,
+                        task.id,
+                        str(task.user_id),
+                        step_name,
+                        dirs,
+                        logger,
+                        task_options,
+                    )
                     await session.refresh(task)
                     await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
+                await self._cleanup_media(dirs["media"])
                 await repo.set_task_status(task, TaskStatus.completed)
                 await session.commit()
                 await self.bus.publish_event(
@@ -119,10 +130,30 @@ class TaskProcessor:
         step_name: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
     ) -> None:
         step = await repo.upsert_step(task_id, step_name)
+        if not self._is_step_enabled(step_name, task_options):
+            if step.status != StepStatus.skipped:
+                await repo.set_step_status(step, StepStatus.skipped, message="Disabled by task options")
+                await session.commit()
+            await self.bus.publish_event(
+                user_id=user_id,
+                task_id=str(task_id),
+                event="step",
+                data={"name": step_name, "status": StepStatus.skipped.value},
+            )
+            return
+
         method = getattr(self, f"step_{step_name}")
-        if step.status == StepStatus.completed and await method(task_id, user_id, dirs, logger, dry_run=True):
+        if step.status == StepStatus.completed and await method(
+            task_id,
+            user_id,
+            dirs,
+            logger,
+            task_options,
+            dry_run=True,
+        ):
             return
 
         await repo.set_step_status(step, StepStatus.running)
@@ -134,7 +165,7 @@ class TaskProcessor:
             data={"name": step_name, "status": StepStatus.running.value},
         )
         try:
-            await method(task_id, user_id, dirs, logger, dry_run=False)
+            await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
             await repo.set_step_status(step, StepStatus.completed)
             await session.commit()
             await self.bus.publish_event(
@@ -160,11 +191,15 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
-        video_file = next(dirs["media"].glob("video.*"), None)
-        audio_file = next(dirs["media"].glob("audio.*"), None)
-        if video_file and audio_file:
+        audio_only = self._task_flag(task_options, "audio_only", default=False)
+        video_file = dirs["media"] / "video.mkv"
+        audio_file = next(dirs["media"].glob("audio.original.*"), None)
+        if audio_only and audio_file:
+            return True
+        if not audio_only and video_file.exists() and audio_file:
             return True
         if dry_run:
             return False
@@ -186,12 +221,26 @@ class TaskProcessor:
                 )
             )
 
+        def sync_phase(phase: str, status: str) -> None:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(
+                    self.bus.publish_event(
+                        user_id=user_id,
+                        task_id=str(task_id),
+                        event="phase",
+                        data={"phase": phase, "status": status},
+                    )
+                )
+            )
+
         await asyncio.to_thread(
             download_video_and_audio,
             source_url=source_url,
             media_dir=dirs["media"],
             progress_cb=sync_progress,
+            phase_cb=sync_phase,
             logger=logger,
+            audio_only=audio_only,
         )
         logger.info("download finished")
         return True
@@ -202,6 +251,7 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
         output = dirs["media"] / "audio_16k.wav"
@@ -209,7 +259,7 @@ class TaskProcessor:
             return True
         if dry_run:
             return False
-        audio_file = next(dirs["media"].glob("audio.*"), None)
+        audio_file = next(dirs["media"].glob("audio.original.*"), None)
         if not audio_file:
             raise RuntimeError("Missing downloaded audio file")
         await asyncio.to_thread(
@@ -233,6 +283,7 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
         manifest_path = dirs["outputs"] / "segments_manifest.json"
@@ -277,6 +328,15 @@ class TaskProcessor:
         async with self.session_factory() as session:
             repo = Repo(session)
             await repo.clear_asr_for_task(task_id)
+            for spec in specs:
+                await repo.upsert_asr_segment_payload(
+                    task_id=task_id,
+                    segment_index=int(spec["segment_index"]),
+                    start_sec=float(spec["start"]),
+                    end_sec=float(spec["end"]),
+                    text="",
+                    raw_json={},
+                )
             await session.commit()
         return True
 
@@ -286,6 +346,7 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
         manifest_path = dirs["outputs"] / "segments_manifest.json"
@@ -300,32 +361,44 @@ class TaskProcessor:
 
         async with self.session_factory() as session:
             repo = Repo(session)
-            existing = {
-                item.segment_index for item in await repo.get_task_segments(task_id)
-            }
-        missing = [spec for spec in specs if int(spec["segment_index"]) not in existing]
+            existing_segments = {seg.segment_index: seg for seg in await repo.get_task_segments(task_id)}
+        missing = []
+        for spec in specs:
+            idx = int(spec["segment_index"])
+            seg = existing_segments.get(idx)
+            if seg is None:
+                missing.append(spec)
+                continue
+            if isinstance(seg.raw_json, dict) and seg.raw_json:
+                continue
+            missing.append(spec)
         if not missing:
             return True
         if dry_run:
             return False
 
-        language = await self._task_language(task_id)
-        semaphore = asyncio.Semaphore(self.settings.transcribe_parallel_per_task)
-
-        async def process_one(spec: dict[str, Any]) -> dict[str, Any]:
+        raw_language = task_options.get("language")
+        language = str(raw_language) if raw_language else None
+        missing.sort(key=lambda spec: int(spec["segment_index"]))
+        text_by_index = {seg.segment_index: seg.text for seg in existing_segments.values() if seg.text.strip()}
+        results: list[dict[str, Any]] = []
+        for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
             start = float(spec["start"])
             end = float(spec["end"])
-            async with semaphore:
-                async with self.heavy_slot:
-                    logger.info("transcribing segment %s", idx)
-                    raw = await transcribe_with_whisper(
-                        whisper_url=self.settings.whisper_url,
-                        audio_path=segment_path,
-                        language=language,
-                    )
+            initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
+            async with self.heavy_slot:
+                logger.info("transcribing segment %s", idx)
+                raw = await transcribe_with_whisper(
+                    whisper_url=self.settings.whisper_url,
+                    audio_path=segment_path,
+                    language=language,
+                    initial_prompt=initial_prompt,
+                )
+            self._log_payload(logger, f"asr response segment={idx}", raw)
             text, words = normalize_whisper_output(raw, segment_offset_sec=start)
+            text_by_index[idx] = text
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),
@@ -333,23 +406,22 @@ class TaskProcessor:
                 data={"segment_index": idx, "total": len(specs)},
                 throttle_key="transcribe_progress",
             )
-            return {
-                "segment_index": idx,
-                "start": start,
-                "end": end,
-                "text": text,
-                "raw_json": raw,
-                "words": words,
-            }
+            results.append(
+                {
+                    "segment_index": idx,
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                    "raw_json": raw,
+                    "words": words,
+                }
+            )
 
-        results = await asyncio.gather(*(process_one(spec) for spec in missing))
         results.sort(key=lambda item: int(item["segment_index"]))
         async with self.session_factory() as session:
             repo = Repo(session)
             for item in results:
-                if await repo.has_segment(task_id, int(item["segment_index"])):
-                    continue
-                seg = await repo.add_asr_segment(
+                seg = await repo.upsert_asr_segment_payload(
                     task_id=task_id,
                     segment_index=int(item["segment_index"]),
                     start_sec=float(item["start"]),
@@ -357,10 +429,31 @@ class TaskProcessor:
                     text=str(item["text"]),
                     raw_json=item["raw_json"],
                 )
-                await repo.add_asr_words(task_id=task_id, segment_id=seg.id, words=item["words"])
+                await repo.replace_asr_words(task_id=task_id, segment_id=seg.id, words=item["words"])
                 await session.flush()
                 await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
             await session.commit()
+
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            all_segments = await repo.get_task_segments(task_id)
+        asr_dir = dirs["root"] / "asr"
+        asr_dir.mkdir(parents=True, exist_ok=True)
+        write_json(
+            asr_dir / "segments_raw.json",
+            {
+                "segments": [
+                    {
+                        "segment_index": int(seg.segment_index),
+                        "start": float(seg.start_sec),
+                        "end": float(seg.end_sec),
+                        "raw_json": seg.raw_json,
+                    }
+                    for seg in all_segments
+                    if isinstance(seg.raw_json, dict) and bool(seg.raw_json)
+                ]
+            },
+        )
         return True
 
     async def step_merge_transcript(
@@ -369,6 +462,7 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
         transcript_json = dirs["outputs"] / "transcript.json"
@@ -380,25 +474,28 @@ class TaskProcessor:
 
         async with self.session_factory() as session:
             repo = Repo(session)
-            words = await repo.get_task_words(task_id)
-            if not words:
-                segments = await repo.get_task_segments(task_id)
-                merged_text = " ".join(seg.text for seg in segments).strip()
-                entries = [
-                    {"start": seg.start_sec, "end": seg.end_sec, "text": seg.text}
-                    for seg in segments
-                ]
-            else:
-                entries: list[dict[str, Any]] = []
-                merged_tokens: list[str] = []
-                last_time = -1.0
-                for word in words:
-                    if word.start_sec <= last_time and merged_tokens and merged_tokens[-1] == word.word:
-                        continue
-                    merged_tokens.append(word.word)
-                    entries.append({"start": word.start_sec, "end": word.end_sec, "word": word.word})
-                    last_time = max(last_time, word.start_sec)
-                merged_text = " ".join(token for token in merged_tokens if token).strip()
+            segments = await repo.get_task_segments(task_id)
+            entries: list[dict[str, Any]] = []
+            merged_tokens: list[str] = []
+            previous_segment_end = -1.0
+            for segment in segments:
+                words = await repo.get_words_for_segment(segment.id)
+                if words:
+                    for word in words:
+                        if word.start_sec < previous_segment_end:
+                            continue
+                        token = word.word.strip()
+                        if not token:
+                            continue
+                        merged_tokens.append(token)
+                        entries.append({"start": word.start_sec, "end": word.end_sec, "word": token})
+                else:
+                    fallback_text = segment.text.strip()
+                    if fallback_text and segment.start_sec >= previous_segment_end:
+                        merged_tokens.append(fallback_text)
+                        entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": fallback_text})
+                previous_segment_end = max(previous_segment_end, segment.end_sec)
+            merged_text = " ".join(token for token in merged_tokens if token).strip()
 
             write_json(transcript_json, {"text": merged_text, "entries": entries})
             transcript_txt.write_text(merged_text, encoding="utf-8")
@@ -406,10 +503,10 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 raise RuntimeError("task not found during merge")
-            task.transcript_path = str(transcript_json)
+            task.transcript_path = str(transcript_txt)
             await session.commit()
 
-        for path in dirs["segments"].glob("segment_*.wav"):
+        for path in dirs["segments"].glob("*.wav"):
             path.unlink(missing_ok=True)
         await self.bus.publish_event(
             user_id=user_id,
@@ -425,6 +522,7 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
         marker = dirs["outputs"] / "llama_model_ready.json"
@@ -456,6 +554,7 @@ class TaskProcessor:
                     timeout_seconds=1200,
                     max_tokens=32,
                 )
+            self._log_payload(logger, "llama warmup response", raw)
         except Exception as exc:
             await self.bus.publish_event(
                 user_id=user_id,
@@ -489,10 +588,13 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
-        output = dirs["outputs"] / "window_summaries.json"
-        if output.exists():
+        summary_dir = dirs["root"] / "summary"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        output = summary_dir / "windows.json"
+        if output.exists() and any(summary_dir.glob("window_*.txt")):
             return True
         if dry_run:
             return False
@@ -510,7 +612,13 @@ class TaskProcessor:
             "segment_prompt.md",
             "Return JSON with keys: topic, bullets, action_items.",
         )
-        chunks = chunk_text(transcript, window_tokens=2000, overlap_ratio=0.15)
+        chunks = await chunk_text(
+            text=transcript,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            window_tokens=2000,
+            overlap_ratio=0.15,
+        )
         windows: list[dict[str, Any]] = []
         for idx, chunk in enumerate(chunks):
             async with self.heavy_slot:
@@ -520,8 +628,11 @@ class TaskProcessor:
                     system_prompt=segment_prompt,
                     user_prompt=f"Window {idx + 1}/{len(chunks)}\n\n{chunk}",
                 )
+            self._log_payload(logger, f"llm window response index={idx + 1}", raw)
             parsed = parse_json_response(raw)
-            windows.append({"window_index": idx, "summary": parsed})
+            window_path = summary_dir / f"window_{idx + 1:02d}.txt"
+            window_path.write_text(json.dumps(parsed, ensure_ascii=True, indent=2), encoding="utf-8")
+            windows.append({"window_index": idx + 1, "summary": parsed, "path": str(window_path)})
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),
@@ -530,6 +641,7 @@ class TaskProcessor:
                 throttle_key="summary_progress",
             )
         write_json(output, {"windows": windows})
+        write_json(dirs["outputs"] / "window_summaries.json", {"windows": windows})
         logger.info("window summaries generated: %s", len(windows))
         return True
 
@@ -539,16 +651,21 @@ class TaskProcessor:
         user_id: str,
         dirs: dict[str, Path],
         logger: logging.Logger,
+        task_options: dict[str, Any],
         dry_run: bool,
     ) -> bool:
-        summary_json = dirs["outputs"] / "summary.json"
-        summary_md = dirs["outputs"] / "summary.md"
+        summary_dir = dirs["root"] / "summary"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        summary_json = summary_dir / "final.json"
+        summary_md = summary_dir / "final.md"
         if summary_json.exists() and summary_md.exists():
             return True
         if dry_run:
             return False
 
-        windows_file = dirs["outputs"] / "window_summaries.json"
+        windows_file = summary_dir / "windows.json"
+        if not windows_file.exists():
+            windows_file = dirs["outputs"] / "window_summaries.json"
         if not windows_file.exists():
             raise RuntimeError("Missing window summaries")
         windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
@@ -565,9 +682,12 @@ class TaskProcessor:
                 system_prompt=global_prompt,
                 user_prompt=merged,
             )
+        self._log_payload(logger, "llm final summary response", raw)
         parsed = parse_json_response(raw)
         write_json(summary_json, parsed)
+        write_json(dirs["outputs"] / "summary.json", parsed)
         summary_md.write_text(self._summary_markdown(parsed), encoding="utf-8")
+        (dirs["outputs"] / "summary.md").write_text(self._summary_markdown(parsed), encoding="utf-8")
         logger.info("final summary generated")
 
         async with self.session_factory() as session:
@@ -575,10 +695,8 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 raise RuntimeError("task not found during final summary")
-            task.summary_path = str(summary_json)
+            task.summary_path = str(summary_md)
             await session.commit()
-
-        await self._cleanup_media(dirs["media"])
         return True
 
     def _summary_markdown(self, payload: dict[str, Any]) -> str:
@@ -610,14 +728,43 @@ class TaskProcessor:
                 raise RuntimeError("Task not found")
             return task.source_url
 
-    async def _task_language(self, task_id: uuid.UUID) -> str | None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                return None
-            value = task.options.get("language")
-            return str(value) if value else None
+    def _task_options(self, raw_options: dict[str, Any] | None) -> dict[str, Any]:
+        return dict(raw_options or {})
+
+    def _task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:
+        value = options.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _is_step_enabled(self, step_name: str, task_options: dict[str, Any]) -> bool:
+        transcript_enabled = self._task_flag(task_options, "transcript", default=True)
+        summary_enabled = self._task_flag(task_options, "summary", default=True)
+        if not transcript_enabled:
+            return step_name == "download"
+        if not summary_enabled and step_name in {
+            "prepare_llama_model",
+            "summarize_windows",
+            "summarize_final",
+        }:
+            return False
+        return True
+
+    def _tail_prompt(self, text: str, max_chars: int = 800) -> str | None:
+        normalized = text.strip()
+        if not normalized:
+            return None
+        return normalized[-max_chars:]
+
+    def _log_payload(self, logger: logging.Logger, prefix: str, payload: Any, max_chars: int = 4000) -> None:
+        try:
+            raw = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=True)
+        except Exception:
+            raw = str(payload)
+        truncated = raw if len(raw) <= max_chars else raw[:max_chars] + "...<truncated>"
+        logger.info("%s: %s", prefix, truncated)
 
     def _task_logger(self, task_id: uuid.UUID, log_path: Path) -> logging.Logger:
         logger = logging.getLogger(f"task.{task_id}")

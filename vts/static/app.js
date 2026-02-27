@@ -104,8 +104,15 @@ function renderTaskRuntime(taskEl) {
   if (runtime.llamaStatus === "loading") {
     statusText = `${statusText} · LLM loading`;
   }
+  if (runtime.mediaPhase) {
+    statusText = `${statusText} · ${runtime.mediaPhase}`;
+  }
   taskEl._elements.statusEl.textContent = statusText;
   taskEl._elements.llamaLoading.classList.toggle("hidden", runtime.llamaStatus !== "loading");
+  taskEl._elements.downloadLoading.classList.toggle("hidden", !runtime.mediaPhase);
+  if (runtime.mediaPhase) {
+    taskEl._elements.downloadLoadingText.textContent = `Media ${runtime.mediaPhase}...`;
+  }
 }
 
 function renderTasks(tasks) {
@@ -119,6 +126,8 @@ function renderTasks(tasks) {
     const statusEl = node.querySelector(".task-status");
     const videoProgress = node.querySelector(".video-progress");
     const audioProgress = node.querySelector(".audio-progress");
+    const downloadLoading = node.querySelector(".download-loading");
+    const downloadLoadingText = node.querySelector(".download-loading-text");
     const llamaLoading = node.querySelector(".llama-loading");
     const transcriptPre = node.querySelector(".transcript");
     const summaryPre = node.querySelector(".summary");
@@ -155,11 +164,12 @@ function renderTasks(tasks) {
       });
     });
 
-    root._elements = { statusEl, videoProgress, audioProgress, llamaLoading };
+    root._elements = { statusEl, videoProgress, audioProgress, downloadLoading, downloadLoadingText, llamaLoading };
     root._runtime = {
       baseStatus: task.status,
       currentStep,
-      llamaStatus: currentStep === "prepare_llama_model" ? "loading" : "idle"
+      llamaStatus: currentStep === "prepare_llama_model" ? "loading" : "idle",
+      mediaPhase: ""
     };
     renderTaskRuntime(root);
     taskList.appendChild(node);
@@ -179,8 +189,9 @@ async function createTask(event) {
   const payload = {
     url: form.url.value,
     language: form.language.value || null,
-    include_word_timestamps: form.include_word_timestamps.checked,
-    force_reprocess: form.force_reprocess.checked
+    audio_only: form.audio_only.checked,
+    transcript: form.transcript.checked,
+    summary: form.summary.checked
   };
   await api("/api/tasks", {
     method: "POST",
@@ -188,8 +199,19 @@ async function createTask(event) {
     body: JSON.stringify(payload)
   });
   form.reset();
-  form.include_word_timestamps.checked = true;
+  form.transcript.checked = true;
+  form.summary.checked = true;
+  syncSummaryToggle();
   await loadTasks();
+}
+
+function syncSummaryToggle() {
+  if (!form.transcript.checked) {
+    form.summary.checked = false;
+    form.summary.disabled = true;
+    return;
+  }
+  form.summary.disabled = false;
 }
 
 async function updateTaskStatus(taskId, action) {
@@ -211,6 +233,7 @@ function patchTaskStatus(taskId, status) {
   if (status !== "running") {
     taskEl._runtime.currentStep = "";
     taskEl._runtime.llamaStatus = "idle";
+    taskEl._runtime.mediaPhase = "";
   }
   renderTaskRuntime(taskEl);
 }
@@ -243,6 +266,18 @@ function patchLlamaModelProgress(taskId, status) {
     taskEl._runtime.currentStep = "prepare_llama_model failed";
   }
   renderTaskRuntime(taskEl);
+}
+
+function patchTaskPhase(taskId, phase, status) {
+  const taskEl = document.querySelector(`[data-task-id="${taskId}"]`);
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+    return;
+  }
+  const phaseName = String(phase || "").toLowerCase();
+  if (phaseName === "merge" || phaseName === "postprocess") {
+    taskEl._runtime.mediaPhase = status === "running" ? phaseName : "";
+    renderTaskRuntime(taskEl);
+  }
 }
 
 function patchTaskProgress(taskId, video, audio) {
@@ -288,6 +323,10 @@ function connectEvents() {
   state.eventSource.addEventListener("llama_model_progress", (event) => {
     const payload = JSON.parse(event.data);
     patchLlamaModelProgress(payload.task_id, payload.data.status);
+  });
+  state.eventSource.addEventListener("phase", (event) => {
+    const payload = JSON.parse(event.data);
+    patchTaskPhase(payload.task_id, payload.data.phase, payload.data.status);
   });
   state.eventSource.onerror = () => {
     if (state.eventSource) {
@@ -376,8 +415,10 @@ async function refreshAll() {
 
 document.getElementById("refresh-btn").addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
+form.transcript.addEventListener("change", syncSummaryToggle);
 adminApplyBtn.addEventListener("click", applyAdminUser);
 adminResetBtn.addEventListener("click", resetAdminUser);
 
 setVersionLabel(BUILD_VERSION);
+syncSummaryToggle();
 refreshAll();

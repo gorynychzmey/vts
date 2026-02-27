@@ -17,18 +17,23 @@ class RedisBus:
         self.redis = redis
         self.settings = settings
         self.queue_key = f"{settings.redis_prefix}queue:tasks"
+        self.queue_index_key = f"{settings.redis_prefix}queue:tasks:index"
         self.events_channel = f"{settings.redis_prefix}events"
         self._last_emit: dict[str, float] = defaultdict(float)
         self._lock = asyncio.Lock()
 
     async def enqueue_task(self, task_id: uuid.UUID) -> None:
-        await self.redis.lpush(self.queue_key, str(task_id))
+        raw_task_id = str(task_id)
+        added = await self.redis.sadd(self.queue_index_key, raw_task_id)
+        if added:
+            await self.redis.lpush(self.queue_key, raw_task_id)
 
     async def dequeue_task(self, timeout_seconds: int = 3) -> uuid.UUID | None:
         item = await self.redis.brpop(self.queue_key, timeout=timeout_seconds)
         if item is None:
             return None
         _, raw = item
+        await self.redis.srem(self.queue_index_key, raw.decode("utf-8"))
         return uuid.UUID(raw.decode("utf-8"))
 
     async def publish_event(
@@ -55,4 +60,3 @@ class RedisBus:
             "data": data,
         }
         await self.redis.publish(self.events_channel, json.dumps(payload, ensure_ascii=True))
-

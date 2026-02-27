@@ -222,7 +222,8 @@ def create_app() -> FastAPI:
         path = Path(task.transcript_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Transcript file missing")
-        return Response(content=path.read_text(encoding="utf-8"), media_type="application/json")
+        media_type = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/json"
+        return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
 
     @app.get("/api/tasks/{task_id}/summary")
     async def get_summary(
@@ -239,7 +240,8 @@ def create_app() -> FastAPI:
         path = Path(task.summary_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Summary file missing")
-        return Response(content=path.read_text(encoding="utf-8"), media_type="application/json")
+        media_type = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
+        return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
 
     @app.get("/api/tasks/{task_id}/log")
     async def get_log(

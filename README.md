@@ -5,6 +5,8 @@ Production-ready self-hosted service for video transcription and summarization.
 ## Documentation map
 
 - Production first-time setup: `docs/INITIAL_DEPLOYMENT.md`
+- Spec compliance and key implementation points: `docs/SPEC_COMPLIANCE.md`
+- Detailed processing contract audit (download/transcribe/summary): `docs/PROCESSING_CONTRACT.md`
 - Workflow and release contract: `PROJECT_RULES.md`
 - Runtime example config: `config.yaml`
 - systemd runtime env template: `systemd/vts.env.example`
@@ -125,16 +127,42 @@ export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 - `GET /api/me`
 - `GET /api/admin/users` (admin only)
 
+## Task options
+
+`POST /api/tasks` supports stage control options:
+
+- `audio_only` (`false` by default): skip video stream download, keep only audio track.
+- `transcript` (`true` by default): run transcription pipeline; if `false`, pipeline stops after download.
+- `summary` (`true` by default): run summarization pipeline; requires `transcript=true`.
+- `language` (`auto`/`ru`/`de`/`en` via UI; free string in API).
+
+Naming note:
+- In the detailed contract, `do_transcribe` = `transcript`, `do_summary` = `summary`.
+- API accepts both naming styles (`transcript/summary` and `do_transcribe/do_summary`).
+- For full behavioral matrix and current gaps vs detailed contract see `docs/PROCESSING_CONTRACT.md`.
+
+## Processing Artifacts
+
+- Download artifacts:
+  - `media/video.mkv` (when `audio_only=false`)
+  - `media/audio.original.<ext>`
+- Segmentation artifacts:
+  - `segments/0001.wav`, `segments/0002.wav`, ...
+- Transcription artifacts:
+  - `asr/segments_raw.json`
+  - `outputs/transcript.txt`
+- Summary artifacts:
+  - `summary/window_01.txt`, `summary/window_02.txt`, ...
+  - `summary/final.md`
+
 ## Workflow summary
 
 - Commit flow and semver rules: `PROJECT_RULES.md`
 - Deployment flow and server bootstrap: `docs/INITIAL_DEPLOYMENT.md`
+- Spec compliance audit and key code entry points: `docs/SPEC_COMPLIANCE.md`
+- Detailed processing contract coverage and gap matrix: `docs/PROCESSING_CONTRACT.md`
 - Helper scripts:
   - `scripts/bump_version.py`
   - `scripts/prepare_commit.sh` (cleans pytest temp caches, bumps patch, runs tests, stages changes)
   - `build.sh`
   - `deploy.sh`
-
-
-
-

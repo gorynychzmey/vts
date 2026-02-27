@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from yt_dlp import YoutubeDL
 
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
+PhaseCallback = Callable[[str, str], None]
 
 
 class _YdlLogger:
@@ -62,36 +64,136 @@ def _run_download(
         ydl.download([url])
 
 
+def _run_process(command: list[str], logger: logging.Logger) -> None:
+    proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    if proc.stdout:
+        for line in proc.stdout.splitlines():
+            if line.strip():
+                logger.info("ffmpeg %s", line)
+    if proc.stderr:
+        for line in proc.stderr.splitlines():
+            if line.strip():
+                logger.info("ffmpeg %s", line)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Process failed ({proc.returncode}): {' '.join(command)}")
+
+
+def _find_single(media_dir: Path, pattern: str) -> Path:
+    matches = sorted(media_dir.glob(pattern))
+    if not matches:
+        raise RuntimeError(f"Expected file matching {pattern}")
+    return matches[-1]
+
+
+def _probe_audio_codec(path: Path) -> str:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}")
+    codec = proc.stdout.strip().splitlines()
+    if not codec:
+        raise RuntimeError(f"Unable to detect audio codec for {path}")
+    return codec[0].strip().lower()
+
+
+def _codec_extension(codec: str) -> str:
+    mapping = {
+        "aac": "m4a",
+        "opus": "opus",
+        "vorbis": "ogg",
+        "flac": "flac",
+        "alac": "m4a",
+        # Keep "no mp3 artifact" contract; use a generic container for mp3 streams.
+        "mp3": "mka",
+    }
+    return mapping.get(codec, "mka")
+
+
 def download_video_and_audio(
     *,
     source_url: str,
     media_dir: Path,
     progress_cb: ProgressCallback,
+    phase_cb: PhaseCallback,
     logger: logging.Logger,
-) -> tuple[Path, Path]:
+    audio_only: bool = False,
+) -> tuple[Path | None, Path]:
     media_dir.mkdir(parents=True, exist_ok=True)
-    video_out = media_dir / "video.%(ext)s"
-    audio_out = media_dir / "audio.%(ext)s"
+    video_source_out = media_dir / "video.source.%(ext)s"
+    audio_source_out = media_dir / "audio.source.%(ext)s"
+    video_merged = media_dir / "video.mkv"
 
+    if audio_only:
+        phase_cb("audio", "running")
+        logger.info("downloading audio stream")
+        _run_download(
+            url=source_url,
+            outtmpl=str(audio_source_out),
+            ydl_opts={
+                "format": "bestaudio/best",
+                "noplaylist": True,
+                "quiet": True,
+            },
+            phase="audio",
+            progress_cb=progress_cb,
+            logger=logger,
+        )
+        phase_cb("audio", "done")
+        audio_source = _find_single(media_dir, "audio.source.*")
+        phase_cb("postprocess", "running")
+        codec = _probe_audio_codec(audio_source)
+        audio_original = media_dir / f"audio.original.{_codec_extension(codec)}"
+        _run_process(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(audio_source),
+                "-vn",
+                "-map",
+                "0:a:0",
+                "-c",
+                "copy",
+                str(audio_original),
+            ],
+            logger,
+        )
+        phase_cb("postprocess", "done")
+        audio_source.unlink(missing_ok=True)
+        return None, audio_original
+
+    phase_cb("video", "running")
     logger.info("downloading video stream")
     _run_download(
         url=source_url,
-        outtmpl=str(video_out),
+        outtmpl=str(video_source_out),
         ydl_opts={
-            "format": "bv*+ba/best",
+            "format": "bestvideo/best",
             "noplaylist": True,
             "quiet": True,
-            "merge_output_format": "mp4",
         },
         phase="video",
         progress_cb=progress_cb,
         logger=logger,
     )
+    phase_cb("video", "done")
 
+    phase_cb("audio", "running")
     logger.info("downloading audio stream")
     _run_download(
         url=source_url,
-        outtmpl=str(audio_out),
+        outtmpl=str(audio_source_out),
         ydl_opts={
             "format": "bestaudio/best",
             "noplaylist": True,
@@ -101,9 +203,54 @@ def download_video_and_audio(
         progress_cb=progress_cb,
         logger=logger,
     )
+    phase_cb("audio", "done")
 
-    video_file = next(media_dir.glob("video.*"), None)
-    audio_file = next(media_dir.glob("audio.*"), None)
-    if not video_file or not audio_file:
-        raise RuntimeError("yt-dlp did not produce expected video/audio files")
-    return video_file, audio_file
+    video_source = _find_single(media_dir, "video.source.*")
+    audio_source = _find_single(media_dir, "audio.source.*")
+
+    phase_cb("merge", "running")
+    logger.info("merging downloaded streams into %s", video_merged.name)
+    _run_process(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_source),
+            "-i",
+            str(audio_source),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c",
+            "copy",
+            str(video_merged),
+        ],
+        logger,
+    )
+    phase_cb("merge", "done")
+
+    phase_cb("postprocess", "running")
+    codec = _probe_audio_codec(video_merged)
+    audio_original = media_dir / f"audio.original.{_codec_extension(codec)}"
+    logger.info("extracting original audio stream with copy codec -> %s", audio_original.name)
+    _run_process(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_merged),
+            "-vn",
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            str(audio_original),
+        ],
+        logger,
+    )
+    phase_cb("postprocess", "done")
+
+    video_source.unlink(missing_ok=True)
+    audio_source.unlink(missing_ok=True)
+    return video_merged, audio_original

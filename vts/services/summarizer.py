@@ -7,18 +7,79 @@ from typing import Any
 import httpx
 
 
-def chunk_text(text: str, window_tokens: int = 2000, overlap_ratio: float = 0.15) -> list[str]:
-    words = text.split()
-    if not words:
+def _llama_server_base(llama_url: str) -> str:
+    url = llama_url.rstrip("/")
+    if url.endswith("/v1"):
+        return url[: -len("/v1")]
+    return url
+
+
+async def llama_tokenize(
+    *,
+    llama_url: str,
+    model: str,
+    text: str,
+    timeout_seconds: int = 120,
+) -> list[int]:
+    endpoint = _llama_server_base(llama_url) + "/tokenize"
+    payload: dict[str, Any] = {"content": text}
+    if model:
+        payload["model"] = model
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(endpoint, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    tokens = data.get("tokens")
+    if not isinstance(tokens, list):
+        raise RuntimeError("Invalid llama.cpp tokenize response format")
+    return [int(token) for token in tokens]
+
+
+async def llama_detokenize(
+    *,
+    llama_url: str,
+    model: str,
+    tokens: list[int],
+    timeout_seconds: int = 120,
+) -> str:
+    endpoint = _llama_server_base(llama_url) + "/detokenize"
+    payload: dict[str, Any] = {"tokens": tokens}
+    if model:
+        payload["model"] = model
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(endpoint, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    content = data.get("content")
+    if not isinstance(content, str):
+        raise RuntimeError("Invalid llama.cpp detokenize response format")
+    return content
+
+
+async def chunk_text(
+    *,
+    text: str,
+    llama_url: str,
+    model: str,
+    window_tokens: int = 2000,
+    overlap_ratio: float = 0.15,
+) -> list[str]:
+    if not text.strip():
         return []
+    tokens = await llama_tokenize(llama_url=llama_url, model=model, text=text)
+    if not tokens:
+        return []
+
     overlap = max(int(window_tokens * overlap_ratio), 1)
     step = max(window_tokens - overlap, 1)
     chunks: list[str] = []
     cursor = 0
-    while cursor < len(words):
-        part = words[cursor : cursor + window_tokens]
-        chunks.append(" ".join(part))
-        if cursor + window_tokens >= len(words):
+    while cursor < len(tokens):
+        part = tokens[cursor : cursor + window_tokens]
+        chunk = await llama_detokenize(llama_url=llama_url, model=model, tokens=part)
+        if chunk.strip():
+            chunks.append(chunk)
+        if cursor + window_tokens >= len(tokens):
             break
         cursor += step
     return chunks

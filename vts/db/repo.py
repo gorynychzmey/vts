@@ -67,6 +67,22 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    async def list_task_ids_for_statuses(self, statuses: list[TaskStatus]) -> list[uuid.UUID]:
+        stmt = select(Task.id).where(Task.status.in_(statuses)).order_by(Task.created_at.asc())
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def requeue_running_tasks(self) -> list[uuid.UUID]:
+        stmt = select(Task).where(Task.status == TaskStatus.running)
+        result = await self.session.scalars(stmt)
+        tasks = list(result.all())
+        for task in tasks:
+            task.status = TaskStatus.queued
+            task.error_message = None
+            task.updated_at = utcnow()
+        await self.session.flush()
+        return [task.id for task in tasks]
+
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Task | None:
         stmt = (
             select(Task)
@@ -145,6 +161,40 @@ class Repo:
         await self.session.flush()
         return segment
 
+    async def get_task_segment_by_index(self, task_id: uuid.UUID, segment_index: int) -> AsrSegment | None:
+        stmt = select(AsrSegment).where(
+            AsrSegment.task_id == task_id,
+            AsrSegment.segment_index == segment_index,
+        )
+        return await self.session.scalar(stmt)
+
+    async def upsert_asr_segment_payload(
+        self,
+        *,
+        task_id: uuid.UUID,
+        segment_index: int,
+        start_sec: float,
+        end_sec: float,
+        text: str,
+        raw_json: dict[str, object],
+    ) -> AsrSegment:
+        segment = await self.get_task_segment_by_index(task_id, segment_index)
+        if segment is None:
+            return await self.add_asr_segment(
+                task_id=task_id,
+                segment_index=segment_index,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                text=text,
+                raw_json=raw_json,
+            )
+        segment.start_sec = start_sec
+        segment.end_sec = end_sec
+        segment.text = text
+        segment.raw_json = raw_json
+        await self.session.flush()
+        return segment
+
     async def add_asr_words(
         self, task_id: uuid.UUID, segment_id: uuid.UUID, words: list[dict[str, object]]
     ) -> None:
@@ -160,13 +210,24 @@ class Repo:
             self.session.add(record)
         await self.session.flush()
 
+    async def replace_asr_words(
+        self, task_id: uuid.UUID, segment_id: uuid.UUID, words: list[dict[str, object]]
+    ) -> None:
+        await self.session.execute(delete(AsrWord).where(AsrWord.segment_id == segment_id))
+        await self.add_asr_words(task_id=task_id, segment_id=segment_id, words=words)
+
     async def get_task_segments(self, task_id: uuid.UUID) -> list[AsrSegment]:
-        stmt = select(AsrSegment).where(AsrSegment.task_id == task_id).order_by(AsrSegment.start_sec.asc())
+        stmt = select(AsrSegment).where(AsrSegment.task_id == task_id).order_by(AsrSegment.segment_index.asc())
         result = await self.session.scalars(stmt)
         return list(result.all())
 
     async def get_task_words(self, task_id: uuid.UUID) -> list[AsrWord]:
         stmt = select(AsrWord).where(AsrWord.task_id == task_id).order_by(AsrWord.start_sec.asc())
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_words_for_segment(self, segment_id: uuid.UUID) -> list[AsrWord]:
+        stmt = select(AsrWord).where(AsrWord.segment_id == segment_id).order_by(AsrWord.start_sec.asc())
         result = await self.session.scalars(stmt)
         return list(result.all())
 

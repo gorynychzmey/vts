@@ -52,12 +52,16 @@
           <input id="url" name="url" type="url" required placeholder="https://youtube.com/watch?v=..." />
           <div class="row">
             <label class="checkbox">
-              <input id="include_word_timestamps" name="include_word_timestamps" type="checkbox" checked />
-              Include word timestamps
+              <input id="audio_only" name="audio_only" type="checkbox" />
+              Audio only
             </label>
             <label class="checkbox">
-              <input id="force_reprocess" name="force_reprocess" type="checkbox" />
-              Force reprocess
+              <input id="transcript" name="transcript" type="checkbox" checked />
+              Transcript
+            </label>
+            <label class="checkbox">
+              <input id="summary" name="summary" type="checkbox" checked />
+              Summary
             </label>
           </div>
           <label for="language">Language</label>
@@ -98,6 +102,10 @@
               <label>Audio</label>
               <progress class="audio-progress" max="1" value="0"></progress>
             </div>
+          </div>
+          <div class="download-loading hidden">
+            <span class="spinner-dot" aria-hidden="true"></span>
+            <span class="download-loading-text">Processing media...</span>
           </div>
           <div class="llama-loading hidden">
             <span class="spinner-dot" aria-hidden="true"></span>

@@ -71,7 +71,7 @@ def detect_silence_points(audio_wav: Path, log_path: Path, search_window: int) -
         "-i",
         str(audio_wav),
         "-af",
-        "silencedetect=noise=-30dB:d=0.4",
+        "silencedetect=noise=-30dB:d=1.0",
         "-f",
         "null",
         "-",
@@ -131,8 +131,8 @@ def build_segments(
 def export_segments(audio_wav: Path, segments: list[tuple[float, float]], segment_dir: Path, log_path: Path) -> list[SegmentSpec]:
     segment_dir.mkdir(parents=True, exist_ok=True)
     specs: list[SegmentSpec] = []
-    for idx, (start, end) in enumerate(segments):
-        segment_file = segment_dir / f"segment_{idx:04d}.wav"
+    for idx, (start, end) in enumerate(segments, start=1):
+        segment_file = segment_dir / f"{idx:04d}.wav"
         if not segment_file.exists():
             cmd = [
                 "ffmpeg",
@@ -161,4 +161,3 @@ def export_segments(audio_wav: Path, segments: list[tuple[float, float]], segmen
             )
         )
     return specs
-

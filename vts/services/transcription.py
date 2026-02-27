@@ -11,12 +11,15 @@ async def transcribe_with_whisper(
     whisper_url: str,
     audio_path: Path,
     language: str | None,
+    initial_prompt: str | None = None,
     timeout_seconds: int = 1800,
 ) -> dict[str, Any]:
     endpoint = whisper_url.rstrip("/") + "/asr"
     params = {"output": "json", "word_timestamps": "true"}
     if language:
         params["language"] = language
+    if initial_prompt:
+        params["initial_prompt"] = initial_prompt
 
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         with audio_path.open("rb") as file_obj:
@@ -48,4 +51,3 @@ def normalize_whisper_output(
                 }
             )
     return text, words
-

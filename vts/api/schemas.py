@@ -4,14 +4,21 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class TaskCreateRequest(BaseModel):
     url: str = Field(min_length=3)
     language: str | None = None
-    include_word_timestamps: bool = True
-    force_reprocess: bool = False
+    audio_only: bool = False
+    transcript: bool = Field(default=True, validation_alias=AliasChoices("transcript", "do_transcribe"))
+    summary: bool = Field(default=True, validation_alias=AliasChoices("summary", "do_summary"))
+
+    @model_validator(mode="after")
+    def validate_stage_dependencies(self) -> "TaskCreateRequest":
+        if self.summary and not self.transcript:
+            raise ValueError("summary requires transcript")
+        return self
 
 
 class StepOut(BaseModel):
