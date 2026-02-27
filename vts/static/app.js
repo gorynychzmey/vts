@@ -7,6 +7,7 @@ const adminPanel = document.getElementById("admin-panel");
 const adminSelect = document.getElementById("admin-user-select");
 const adminApplyBtn = document.getElementById("admin-apply-btn");
 const adminResetBtn = document.getElementById("admin-reset-btn");
+const appVersionLabel = document.getElementById("app-version");
 const BUILD_VERSION = String(window.__VTS_BUILD_VERSION__ || "0.0.0");
 const VERSION_CHECK_INTERVAL_MS = 30000;
 
@@ -17,6 +18,14 @@ const state = {
   eventSource: null,
   versionTimer: null
 };
+
+function setVersionLabel(version) {
+  if (!appVersionLabel) {
+    return;
+  }
+  const value = String(version || "").trim();
+  appVersionLabel.textContent = value ? `v${value}` : "-";
+}
 
 function buildPath(path) {
   const url = new URL(path, window.location.origin);
@@ -59,6 +68,7 @@ async function checkServerVersion() {
     }
     const payload = await response.json();
     const serverVersion = String(payload.version || "");
+    setVersionLabel(serverVersion || BUILD_VERSION);
     if (serverVersion && serverVersion !== BUILD_VERSION) {
       forceReloadToVersion(serverVersion);
     }
@@ -369,4 +379,5 @@ form.addEventListener("submit", createTask);
 adminApplyBtn.addEventListener("click", applyAdminUser);
 adminResetBtn.addEventListener("click", resetAdminUser);
 
+setVersionLabel(BUILD_VERSION);
 refreshAll();

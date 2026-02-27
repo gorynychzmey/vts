@@ -16,6 +16,14 @@ WEBAPI_IMAGE="${IMAGE_REPO}:${VERSION}-webapi"
 WORKER_IMAGE="${IMAGE_REPO}:${VERSION}-worker"
 WEBAPI_LATEST="${IMAGE_REPO}:latest-webapi"
 WORKER_LATEST="${IMAGE_REPO}:latest-worker"
+PYTEST_VERSION="${PYTEST_VERSION:-8.4.2}"
+
+run_tests_in_webapi_container() {
+  local runtime="${1}"
+  echo "Running tests inside container ${WEBAPI_IMAGE}"
+  "${runtime}" run --rm --entrypoint sh "${WEBAPI_IMAGE}" -lc \
+    "pip install -q pytest==${PYTEST_VERSION} && python -m pytest -q tests"
+}
 
 echo "Building version ${VERSION}"
 echo "APT_MIRROR=${APT_MIRROR}"
@@ -54,6 +62,11 @@ if [[ "${use_buildx}" == "true" ]]; then
   echo "Build mode: docker buildx + registry cache"
   echo "BUILDX_CACHE_REPO=${BUILDX_CACHE_REPO}"
   echo "BUILDX_CACHE_MODE=${BUILDX_CACHE_MODE}"
+  if [[ "${BUILDX_PLATFORM}" == *,* ]]; then
+    echo "BUILDX_PLATFORM=${BUILDX_PLATFORM} is multi-platform."
+    echo "Tests before push require loading image locally; use a single platform."
+    exit 1
+  fi
   common_args=(
     --build-arg "VTS_VERSION=${VERSION}"
     --build-arg "APT_MIRROR=${APT_MIRROR}"
@@ -71,7 +84,7 @@ if [[ "${use_buildx}" == "true" ]]; then
     --cache-to "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-webapi,mode=${BUILDX_CACHE_MODE}" \
     -t "${WEBAPI_IMAGE}" \
     -t "${WEBAPI_LATEST}" \
-    --push .
+    --load .
 
   docker buildx build \
     -f docker/worker.Dockerfile \
@@ -80,7 +93,15 @@ if [[ "${use_buildx}" == "true" ]]; then
     --cache-to "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-worker,mode=${BUILDX_CACHE_MODE}" \
     -t "${WORKER_IMAGE}" \
     -t "${WORKER_LATEST}" \
-    --push .
+    --load .
+
+  run_tests_in_webapi_container "docker"
+
+  echo "Pushing images"
+  docker push "${WEBAPI_IMAGE}"
+  docker push "${WEBAPI_LATEST}"
+  docker push "${WORKER_IMAGE}"
+  docker push "${WORKER_LATEST}"
 else
   echo "Build mode: classic ${ENGINE} build + push"
   "${ENGINE}" build \
@@ -98,6 +119,8 @@ else
     --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
     -t "${WORKER_IMAGE}" \
     -t "${WORKER_LATEST}" .
+
+  run_tests_in_webapi_container "${ENGINE}"
 
   echo "Pushing images"
   "${ENGINE}" push "${WEBAPI_IMAGE}"

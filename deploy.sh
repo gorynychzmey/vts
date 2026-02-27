@@ -16,15 +16,12 @@ echo "Bumping MINOR version before deployment"
 python scripts/bump_version.py minor
 NEW_VERSION="$(python scripts/get_version.py)"
 
-echo "Running tests"
-python -m pytest -q
-
 echo "Committing version bump ${NEW_VERSION}"
 git add vts/__init__.py
 git commit -m "chore: deploy ${NEW_VERSION}"
 git push
 
-echo "Building and pushing images"
+echo "Building, testing, and pushing images"
 ./build.sh
 
 echo "Deploying on ${SSH_USER}@${SSH_HOST}"

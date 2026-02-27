@@ -44,6 +44,13 @@ header p {
   color: var(--ink-soft);
 }
 
+.header-version {
+  margin: -0.7rem 0 1.2rem;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--line);
