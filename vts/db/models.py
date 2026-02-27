@@ -49,6 +49,7 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    preferred_ytdlp_client: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="user")
@@ -156,4 +157,3 @@ class AsrWord(Base):
         Index("ix_asr_words_task_start", "task_id", "start_sec"),
         Index("ix_asr_words_segment", "segment_id"),
     )
-

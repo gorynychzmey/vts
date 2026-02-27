@@ -56,6 +56,9 @@ When YouTube returns `HTTP 403`, configure `yt-dlp` runtime options in `config.y
 - `ytdlp_youtube_po_token` (`VTS_YTDLP_YOUTUBE_PO_TOKEN`)
 - `ytdlp_verbose` (`VTS_YTDLP_VERBOSE`)
 
+Worker automatically remembers the last successful YouTube `player_client` per user in DB and reuses it on next tasks.
+If saved client fails, worker retries fallback clients and updates stored preference.
+
 ## Data model
 
 Tables:

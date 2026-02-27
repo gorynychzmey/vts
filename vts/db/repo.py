@@ -37,6 +37,18 @@ class Repo:
         stmt = select(User).where(User.username == username)
         return await self.session.scalar(stmt)
 
+    async def get_user_preferred_ytdlp_client(self, user_id: uuid.UUID) -> str | None:
+        stmt = select(User.preferred_ytdlp_client).where(User.id == user_id)
+        return await self.session.scalar(stmt)
+
+    async def set_user_preferred_ytdlp_client(self, user_id: uuid.UUID, player_client: str | None) -> None:
+        stmt = select(User).where(User.id == user_id)
+        user = await self.session.scalar(stmt)
+        if user is None:
+            return
+        user.preferred_ytdlp_client = player_client
+        await self.session.flush()
+
     async def create_task(
         self,
         user_id: uuid.UUID,

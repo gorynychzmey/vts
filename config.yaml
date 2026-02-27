@@ -29,6 +29,7 @@ llama_model: Qwen2.5-7B-Instruct-Q4
 # ytdlp_cookies_from_browser: ["chrome", "Default", "basictext"]
 ytdlp_cookies_file: null
 ytdlp_cookies_from_browser: []
+# Optional manual override. Normally worker auto-selects and remembers client per user.
 ytdlp_youtube_player_client: null
 ytdlp_youtube_po_token: null
 ytdlp_verbose: false

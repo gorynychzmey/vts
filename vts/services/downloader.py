@@ -5,12 +5,14 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from yt_dlp import YoutubeDL
 
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 PhaseCallback = Callable[[str, str], None]
+YOUTUBE_CLIENT_FALLBACK_ORDER = ("android_vr", "android", "ios", "mweb", "web_safari", "web")
 
 
 class _YdlLogger:
@@ -64,11 +66,102 @@ def _run_download(
         ydl.download([url])
 
 
+def _is_youtube_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    if host == "youtu.be":
+        return True
+    return (
+        host == "youtube.com"
+        or host.endswith(".youtube.com")
+        or host == "youtube-nocookie.com"
+        or host.endswith(".youtube-nocookie.com")
+    )
+
+
+def _build_youtube_client_candidates(
+    *,
+    preferred_client: str | None,
+    configured_client: str | None,
+) -> list[str]:
+    if configured_client and configured_client.strip():
+        return [configured_client.strip()]
+    candidates: list[str] = []
+    if preferred_client and preferred_client.strip():
+        candidates.append(preferred_client.strip())
+    for candidate in YOUTUBE_CLIENT_FALLBACK_ORDER:
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _with_youtube_player_client(ydl_opts: dict[str, Any], player_client: str | None) -> dict[str, Any]:
+    if not player_client:
+        return dict(ydl_opts)
+    options = dict(ydl_opts)
+    extractor_args = dict(options.get("extractor_args") or {})
+    youtube_args = dict(extractor_args.get("youtube") or {})
+    youtube_args["player_client"] = [player_client]
+    extractor_args["youtube"] = youtube_args
+    options["extractor_args"] = extractor_args
+    return options
+
+
+def _run_download_with_client_resolution(
+    *,
+    url: str,
+    outtmpl: str,
+    ydl_opts: dict[str, Any],
+    phase: str,
+    progress_cb: ProgressCallback,
+    logger: logging.Logger,
+    preferred_youtube_client: str | None,
+    configured_youtube_client: str | None,
+) -> str | None:
+    if not _is_youtube_url(url):
+        _run_download(
+            url=url,
+            outtmpl=outtmpl,
+            ydl_opts=ydl_opts,
+            phase=phase,
+            progress_cb=progress_cb,
+            logger=logger,
+        )
+        return None
+
+    candidates = _build_youtube_client_candidates(
+        preferred_client=preferred_youtube_client,
+        configured_client=configured_youtube_client,
+    )
+    last_error: Exception | None = None
+    for index, candidate in enumerate(candidates, start=1):
+        options = _with_youtube_player_client(ydl_opts, candidate)
+        logger.info("yt-dlp youtube player client attempt %s/%s: %s", index, len(candidates), candidate)
+        try:
+            _run_download(
+                url=url,
+                outtmpl=outtmpl,
+                ydl_opts=options,
+                phase=phase,
+                progress_cb=progress_cb,
+                logger=logger,
+            )
+            return candidate
+        except Exception as exc:
+            last_error = exc
+            if index >= len(candidates):
+                raise
+            logger.warning("yt-dlp youtube player client %s failed: %s", candidate, exc)
+            logger.info("yt-dlp retrying with next youtube player client")
+
+    if last_error:
+        raise last_error
+    return None
+
+
 def _build_ytdlp_base_opts(
     *,
     ytdlp_cookies_file: Path | None,
     ytdlp_cookies_from_browser: list[str],
-    ytdlp_youtube_player_client: str | None,
     ytdlp_youtube_po_token: str | None,
     ytdlp_verbose: bool,
 ) -> dict[str, Any]:
@@ -83,8 +176,6 @@ def _build_ytdlp_base_opts(
     if browser_spec:
         opts["cookiesfrombrowser"] = browser_spec
     youtube_args: dict[str, list[str]] = {}
-    if ytdlp_youtube_player_client and ytdlp_youtube_player_client.strip():
-        youtube_args["player_client"] = [ytdlp_youtube_player_client.strip()]
     if ytdlp_youtube_po_token and ytdlp_youtube_po_token.strip():
         youtube_args["po_token"] = [ytdlp_youtube_po_token.strip()]
     if youtube_args:
@@ -156,12 +247,13 @@ def download_video_and_audio(
     phase_cb: PhaseCallback,
     logger: logging.Logger,
     audio_only: bool = False,
+    preferred_youtube_client: str | None = None,
     ytdlp_cookies_file: Path | None = None,
     ytdlp_cookies_from_browser: list[str] | None = None,
     ytdlp_youtube_player_client: str | None = None,
     ytdlp_youtube_po_token: str | None = None,
     ytdlp_verbose: bool = False,
-) -> tuple[Path | None, Path]:
+) -> tuple[Path | None, Path, str | None]:
     media_dir.mkdir(parents=True, exist_ok=True)
     video_source_out = media_dir / "video.source.%(ext)s"
     audio_source_out = media_dir / "audio.source.%(ext)s"
@@ -169,7 +261,6 @@ def download_video_and_audio(
     common_ydl_opts = _build_ytdlp_base_opts(
         ytdlp_cookies_file=ytdlp_cookies_file,
         ytdlp_cookies_from_browser=ytdlp_cookies_from_browser or [],
-        ytdlp_youtube_player_client=ytdlp_youtube_player_client,
         ytdlp_youtube_po_token=ytdlp_youtube_po_token,
         ytdlp_verbose=ytdlp_verbose,
     )
@@ -177,7 +268,7 @@ def download_video_and_audio(
     if audio_only:
         phase_cb("audio", "running")
         logger.info("downloading audio stream")
-        _run_download(
+        selected_client = _run_download_with_client_resolution(
             url=source_url,
             outtmpl=str(audio_source_out),
             ydl_opts={
@@ -187,6 +278,8 @@ def download_video_and_audio(
             phase="audio",
             progress_cb=progress_cb,
             logger=logger,
+            preferred_youtube_client=preferred_youtube_client,
+            configured_youtube_client=ytdlp_youtube_player_client,
         )
         phase_cb("audio", "done")
         audio_source = _find_single(media_dir, "audio.source.*")
@@ -210,11 +303,11 @@ def download_video_and_audio(
         )
         phase_cb("postprocess", "done")
         audio_source.unlink(missing_ok=True)
-        return None, audio_original
+        return None, audio_original, selected_client
 
     phase_cb("video", "running")
     logger.info("downloading video stream")
-    _run_download(
+    selected_video_client = _run_download_with_client_resolution(
         url=source_url,
         outtmpl=str(video_source_out),
         ydl_opts={
@@ -224,12 +317,14 @@ def download_video_and_audio(
         phase="video",
         progress_cb=progress_cb,
         logger=logger,
+        preferred_youtube_client=preferred_youtube_client,
+        configured_youtube_client=ytdlp_youtube_player_client,
     )
     phase_cb("video", "done")
 
     phase_cb("audio", "running")
     logger.info("downloading audio stream")
-    _run_download(
+    selected_audio_client = _run_download_with_client_resolution(
         url=source_url,
         outtmpl=str(audio_source_out),
         ydl_opts={
@@ -239,6 +334,8 @@ def download_video_and_audio(
         phase="audio",
         progress_cb=progress_cb,
         logger=logger,
+        preferred_youtube_client=selected_video_client or preferred_youtube_client,
+        configured_youtube_client=ytdlp_youtube_player_client,
     )
     phase_cb("audio", "done")
 
@@ -290,4 +387,5 @@ def download_video_and_audio(
 
     video_source.unlink(missing_ok=True)
     audio_source.unlink(missing_ok=True)
-    return video_merged, audio_original
+    selected_client = selected_audio_client or selected_video_client
+    return video_merged, audio_original, selected_client

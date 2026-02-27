@@ -205,6 +205,10 @@ class TaskProcessor:
             return False
 
         source_url = await self._task_url(task_id)
+        user_uuid = uuid.UUID(user_id)
+        preferred_youtube_client = await self._get_user_preferred_ytdlp_client(user_uuid)
+        if preferred_youtube_client:
+            logger.info("using saved yt-dlp youtube client for user: %s", preferred_youtube_client)
         loop = asyncio.get_running_loop()
 
         def sync_progress(phase: str, payload: dict[str, Any]) -> None:
@@ -233,7 +237,7 @@ class TaskProcessor:
                 )
             )
 
-        await asyncio.to_thread(
+        _, _, selected_youtube_client = await asyncio.to_thread(
             download_video_and_audio,
             source_url=source_url,
             media_dir=dirs["media"],
@@ -241,12 +245,16 @@ class TaskProcessor:
             phase_cb=sync_phase,
             logger=logger,
             audio_only=audio_only,
+            preferred_youtube_client=preferred_youtube_client,
             ytdlp_cookies_file=self.settings.ytdlp_cookies_file,
             ytdlp_cookies_from_browser=self.settings.ytdlp_cookies_from_browser,
             ytdlp_youtube_player_client=self.settings.ytdlp_youtube_player_client,
             ytdlp_youtube_po_token=self.settings.ytdlp_youtube_po_token,
             ytdlp_verbose=self.settings.ytdlp_verbose,
         )
+        if selected_youtube_client and selected_youtube_client != preferred_youtube_client:
+            await self._set_user_preferred_ytdlp_client(user_uuid, selected_youtube_client)
+            logger.info("saved yt-dlp youtube client for user: %s", selected_youtube_client)
         logger.info("download finished")
         return True
 
@@ -732,6 +740,17 @@ class TaskProcessor:
             if task is None:
                 raise RuntimeError("Task not found")
             return task.source_url
+
+    async def _get_user_preferred_ytdlp_client(self, user_id: uuid.UUID) -> str | None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            return await repo.get_user_preferred_ytdlp_client(user_id)
+
+    async def _set_user_preferred_ytdlp_client(self, user_id: uuid.UUID, player_client: str) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            await repo.set_user_preferred_ytdlp_client(user_id, player_client)
+            await session.commit()
 
     def _task_options(self, raw_options: dict[str, Any] | None) -> dict[str, Any]:
         return dict(raw_options or {})
