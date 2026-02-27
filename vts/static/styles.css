@@ -425,6 +425,18 @@ button:hover {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.tab-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.tab-actions .icon-btn {
+  width: 2.05rem;
+  height: 2.05rem;
 }
 
 .tab-btn {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -635,10 +636,16 @@ class TaskProcessor:
         summary_dir = dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
         output = summary_dir / "windows.json"
-        if output.exists():
-            return True
+        output_mirror = dirs["outputs"] / "window_summaries.json"
         if dry_run:
-            return False
+            if not output.exists():
+                return False
+            try:
+                payload = json.loads(output.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return False
+            windows = payload.get("windows") if isinstance(payload, dict) else None
+            return isinstance(windows, list)
 
         segment_prompt = load_prompt(
             self.settings.prompts_dir,
@@ -653,35 +660,114 @@ class TaskProcessor:
         chunks = json.loads(chunks_file.read_text(encoding="utf-8")).get("chunks", [])
         if not isinstance(chunks, list):
             raise RuntimeError("Invalid summary chunks payload")
+        total_windows = len(chunks)
+
+        windows_by_index: dict[int, dict[str, Any]] = {}
+        if output.exists():
+            try:
+                payload = json.loads(output.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            raw_windows = payload.get("windows") if isinstance(payload, dict) else None
+            if isinstance(raw_windows, list):
+                for item in raw_windows:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_index = item.get("window_index")
+                    try:
+                        idx = int(raw_index)
+                    except (TypeError, ValueError):
+                        continue
+                    if idx < 1:
+                        continue
+                    summary_payload = item.get("summary")
+                    if not isinstance(summary_payload, dict):
+                        summary_payload = {"raw": str(summary_payload)}
+                    path = item.get("path")
+                    if not isinstance(path, str) or not path.strip():
+                        path = str(summary_dir / f"window_{idx:02d}.txt")
+                    windows_by_index[idx] = {
+                        "window_index": idx,
+                        "summary": summary_payload,
+                        "path": path,
+                    }
+
+        file_pattern = re.compile(r"^window_(\d+)\.txt$")
+        for window_path in sorted(summary_dir.glob("window_*.txt")):
+            match = file_pattern.match(window_path.name)
+            if not match:
+                continue
+            idx = int(match.group(1))
+            if idx in windows_by_index:
+                continue
+            try:
+                parsed = json.loads(window_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            windows_by_index[idx] = {
+                "window_index": idx,
+                "summary": parsed,
+                "path": str(window_path),
+            }
+
+        for idx in list(windows_by_index.keys()):
+            if idx > total_windows:
+                windows_by_index.pop(idx, None)
+
+        restored = sum(1 for idx in windows_by_index if 1 <= idx <= total_windows)
+        if restored:
+            logger.info("restored summarized windows: %s/%s", restored, total_windows)
+        if restored == total_windows:
+            ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
+            write_json(output, {"windows": ordered})
+            write_json(output_mirror, {"windows": ordered})
+            logger.info("window summaries already complete: %s", total_windows)
+            return True
+
         logger.info("window summarization started: %s windows", len(chunks))
         total_parts = len(chunks) + 1
-        windows: list[dict[str, Any]] = []
-        for idx, chunk in enumerate(chunks):
-            logger.info("summarizing window %s/%s", idx + 1, len(chunks))
-            logger.info("waiting for heavy slot: summarize window %s/%s", idx + 1, len(chunks))
+        for idx, chunk in enumerate(chunks, start=1):
+            if idx in windows_by_index:
+                logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="summary_progress",
+                    data={"current": idx, "total": total_parts},
+                    throttle_key="summary_progress",
+                )
+                continue
+            logger.info("summarizing window %s/%s", idx, len(chunks))
+            logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
             async with self.heavy_slot:
-                logger.info("heavy slot acquired: summarize window %s/%s", idx + 1, len(chunks))
+                logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
                     model=self.settings.llama_model,
                     system_prompt=segment_prompt,
-                    user_prompt=f"Window {idx + 1}/{len(chunks)}\n\n{chunk}",
+                    user_prompt=f"Window {idx}/{len(chunks)}\n\n{chunk}",
                 )
-            self._log_payload(logger, f"llm window response index={idx + 1}", raw)
+            self._log_payload(logger, f"llm window response index={idx}", raw)
             parsed = parse_json_response(raw)
-            window_path = summary_dir / f"window_{idx + 1:02d}.txt"
+            window_path = summary_dir / f"window_{idx:02d}.txt"
             window_path.write_text(json.dumps(parsed, ensure_ascii=True, indent=2), encoding="utf-8")
-            windows.append({"window_index": idx + 1, "summary": parsed, "path": str(window_path)})
+            windows_by_index[idx] = {"window_index": idx, "summary": parsed, "path": str(window_path)}
+            ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
+            write_json(output, {"windows": ordered})
+            write_json(output_mirror, {"windows": ordered})
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),
                 event="summary_progress",
-                data={"current": idx + 1, "total": total_parts},
+                data={"current": idx, "total": total_parts},
                 throttle_key="summary_progress",
             )
-        write_json(output, {"windows": windows})
-        write_json(dirs["outputs"] / "window_summaries.json", {"windows": windows})
-        logger.info("window summaries generated: %s", len(windows))
+        ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
+        write_json(output, {"windows": ordered})
+        write_json(output_mirror, {"windows": ordered})
+        logger.info("window summaries generated: %s", len(ordered))
         return True
 
     async def step_summarize_final(

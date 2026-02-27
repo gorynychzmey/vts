@@ -11,6 +11,7 @@ const refreshBtn = document.getElementById("refresh-btn");
 const BUILD_VERSION = String(window.__VTS_BUILD_VERSION__ || "0.0.0");
 const VERSION_CHECK_INTERVAL_MS = 30000;
 const QUEUE_POLL_INTERVAL_MS = 5000;
+const LOG_POLL_INTERVAL_MS = 2000;
 
 const DAG_STEPS = [
   "download",
@@ -61,6 +62,8 @@ const I18N = {
     "action.pause": "Pause",
     "action.resume": "Resume",
     "action.delete": "Delete",
+    "action.copy_tab": "Copy active tab",
+    "action.save_tab": "Save active tab",
     "action.expand": "Expand",
     "action.collapse": "Collapse",
     "tab.transcript": "Transcript",
@@ -124,6 +127,8 @@ const I18N = {
     "action.pause": "Пауза",
     "action.resume": "Возобновить",
     "action.delete": "Удалить",
+    "action.copy_tab": "Скопировать вкладку",
+    "action.save_tab": "Сохранить вкладку",
     "action.expand": "Развернуть",
     "action.collapse": "Свернуть",
     "tab.transcript": "Транскрипт",
@@ -187,6 +192,8 @@ const I18N = {
     "action.pause": "Pausieren",
     "action.resume": "Fortsetzen",
     "action.delete": "Löschen",
+    "action.copy_tab": "Aktiven Tab kopieren",
+    "action.save_tab": "Aktiven Tab speichern",
     "action.expand": "Erweitern",
     "action.collapse": "Einklappen",
     "tab.transcript": "Transkript",
@@ -355,6 +362,210 @@ async function api(path, options = {}) {
     return response.json();
   }
   return response.text();
+}
+
+function stopLogPolling(taskEl) {
+  if (!taskEl) {
+    return;
+  }
+  if (taskEl._logPollTimer) {
+    window.clearInterval(taskEl._logPollTimer);
+    taskEl._logPollTimer = null;
+  }
+  taskEl._logPollInFlight = false;
+  taskEl._forceLogScroll = false;
+}
+
+function stopAllLogPolling() {
+  document.querySelectorAll(".task").forEach((taskEl) => {
+    stopLogPolling(taskEl);
+  });
+}
+
+async function refreshTaskLog(taskEl, taskId) {
+  if (!taskEl || !taskEl.isConnected || taskEl._logPollInFlight || !taskEl._elements) {
+    return;
+  }
+  const panel = taskEl._elements.logPanel;
+  if (!panel || !panel.classList.contains("active")) {
+    return;
+  }
+  taskEl._logPollInFlight = true;
+  try {
+    const text = await api(`/api/tasks/${taskId}/log`);
+    if (!taskEl.isConnected) {
+      return;
+    }
+    if (typeof text !== "string") {
+      return;
+    }
+    if (text === taskEl._lastLogText) {
+      return;
+    }
+    const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
+    panel.textContent = text;
+    taskEl._lastLogText = text;
+    if (nearBottom || taskEl._forceLogScroll) {
+      panel.scrollTop = panel.scrollHeight;
+    }
+    taskEl._forceLogScroll = false;
+  } catch (error) {
+    if (!taskEl.isConnected) {
+      return;
+    }
+    panel.textContent = error.message;
+    taskEl._lastLogText = "";
+  } finally {
+    taskEl._logPollInFlight = false;
+  }
+}
+
+function startLogPolling(taskEl, taskId) {
+  stopLogPolling(taskEl);
+  taskEl._forceLogScroll = true;
+  void refreshTaskLog(taskEl, taskId);
+  taskEl._logPollTimer = window.setInterval(() => {
+    if (!taskEl.isConnected || !taskEl._elements || !taskEl._elements.logPanel?.classList.contains("active")) {
+      stopLogPolling(taskEl);
+      return;
+    }
+    void refreshTaskLog(taskEl, taskId);
+  }, LOG_POLL_INTERVAL_MS);
+}
+
+function getActiveTabName(taskEl) {
+  if (!taskEl) {
+    return "";
+  }
+  const activeBtn = taskEl.querySelector(".tab-btn.active");
+  return activeBtn ? String(activeBtn.dataset.tab || "") : "";
+}
+
+function getTabPanel(taskEl, tabName) {
+  if (!taskEl || !tabName) {
+    return null;
+  }
+  return taskEl.querySelector(`.tab-content.${tabName}`);
+}
+
+function getTabDownloadSpec(tabName) {
+  if (tabName === "transcript") {
+    return { prefix: "transcript", ext: "txt" };
+  }
+  if (tabName === "summary") {
+    return { prefix: "summary", ext: "md" };
+  }
+  if (tabName === "log") {
+    return { prefix: "log", ext: "log" };
+  }
+  return { prefix: "content", ext: "txt" };
+}
+
+function buildTabFilename(taskId, tabName) {
+  const spec = getTabDownloadSpec(tabName);
+  const idPart = String(taskId || "")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 12);
+  const safeId = idPart || "task";
+  return `${spec.prefix}-${safeId}.${spec.ext}`;
+}
+
+function downloadTextFile(fileName, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) {
+    return false;
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const ok = typeof document.execCommand === "function" ? document.execCommand("copy") : false;
+  textarea.remove();
+  return ok;
+}
+
+async function loadTabContent(taskEl, taskId, tabName) {
+  if (tabName === "log") {
+    const panel = getTabPanel(taskEl, "log");
+    const text = await api(`/api/tasks/${taskId}/log`).catch((err) => err.message);
+    const value = String(text || "");
+    if (panel) {
+      const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
+      panel.textContent = value;
+      if (nearBottom || taskEl._forceLogScroll) {
+        panel.scrollTop = panel.scrollHeight;
+      }
+      taskEl._forceLogScroll = false;
+    }
+    taskEl._lastLogText = value;
+    return value;
+  }
+  const endpoint = tabName === "transcript" ? "transcript" : tabName === "summary" ? "summary" : "";
+  if (!endpoint) {
+    return "";
+  }
+  const text = await api(`/api/tasks/${taskId}/${endpoint}`).catch((err) => err.message);
+  const value = String(text || "");
+  const panel = getTabPanel(taskEl, tabName);
+  if (panel) {
+    panel.textContent = value;
+  }
+  return value;
+}
+
+async function getActiveTabPayload(taskEl, taskId) {
+  const tabName = getActiveTabName(taskEl);
+  if (!tabName) {
+    return { tabName: "", text: "" };
+  }
+  let text = String(getTabPanel(taskEl, tabName)?.textContent || "");
+  const promptKey = `tab.prompt_${tabName}`;
+  const promptValue = t(promptKey);
+  if (!text || text === promptValue) {
+    text = await loadTabContent(taskEl, taskId, tabName);
+  } else if (tabName === "log") {
+    text = await loadTabContent(taskEl, taskId, tabName);
+  }
+  return { tabName, text: String(text || "") };
+}
+
+async function copyActiveTabContent(taskEl, taskId) {
+  const payload = await getActiveTabPayload(taskEl, taskId);
+  if (!payload.text) {
+    return;
+  }
+  try {
+    await copyTextToClipboard(payload.text);
+  } catch {
+    // Ignore clipboard failures (e.g. browser permissions).
+  }
+}
+
+async function saveActiveTabContent(taskEl, taskId) {
+  const payload = await getActiveTabPayload(taskEl, taskId);
+  if (!payload.text) {
+    return;
+  }
+  const fileName = buildTabFilename(taskId, payload.tabName);
+  downloadTextFile(fileName, payload.text);
 }
 
 function forceReloadToVersion(version) {
@@ -657,6 +868,7 @@ function renderTaskRuntime(taskEl) {
 }
 
 function renderTasks(tasks) {
+  stopAllLogPolling();
   taskList.innerHTML = "";
   tasks.forEach((task) => {
     const node = taskTemplate.content.cloneNode(true);
@@ -671,6 +883,8 @@ function renderTasks(tasks) {
     const logPre = root.querySelector(".tab-content.log");
     const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
     const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
+    const copyTabBtn = root.querySelector(".tab-copy-btn");
+    const saveTabBtn = root.querySelector(".tab-save-btn");
 
     applyI18n(root);
 
@@ -705,6 +919,16 @@ function renderTasks(tasks) {
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
     deleteBtn.addEventListener("click", () => removeTask(task.id));
+    if (copyTabBtn) {
+      copyTabBtn.addEventListener("click", async () => {
+        await copyActiveTabContent(root, task.id);
+      });
+    }
+    if (saveTabBtn) {
+      saveTabBtn.addEventListener("click", async () => {
+        await saveActiveTabContent(root, task.id);
+      });
+    }
 
     root.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -721,11 +945,15 @@ function renderTasks(tasks) {
         }
         panel.classList.add("active");
         if (tab === "transcript") {
+          stopLogPolling(root);
           transcriptPre.textContent = await api(`/api/tasks/${task.id}/transcript`).catch((err) => err.message);
         } else if (tab === "summary") {
+          stopLogPolling(root);
           summaryPre.textContent = await api(`/api/tasks/${task.id}/summary`).catch((err) => err.message);
         } else if (tab === "log") {
-          logPre.textContent = await api(`/api/tasks/${task.id}/log`).catch((err) => err.message);
+          startLogPolling(root, task.id);
+        } else {
+          stopLogPolling(root);
         }
       });
     });
@@ -739,8 +967,11 @@ function renderTasks(tasks) {
       resumeBtn,
       transcriptTabBtn,
       summaryTabBtn,
+      copyTabBtn,
+      saveTabBtn,
       transcriptPanel: transcriptPre,
       summaryPanel: summaryPre,
+      logPanel: logPre,
       stepLabelEl: root.querySelector(".step-label"),
       stepTimeEl: root.querySelector(".step-time"),
       progressWrap: root.querySelector(".step-progress"),
