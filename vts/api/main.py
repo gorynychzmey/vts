@@ -30,7 +30,7 @@ def can_pause_task(status: TaskStatus) -> bool:
 
 
 def can_resume_task(status: TaskStatus) -> bool:
-    return status == TaskStatus.paused
+    return status in {TaskStatus.paused, TaskStatus.failed}
 
 
 def _read_json_payload(path: Path) -> dict[str, Any] | None:

@@ -245,6 +245,49 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
     assert "model name is missing from the request" in message
 
 
+def test_llama_chat_completion_retries_on_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    endpoint = "http://llama.local/v1/chat/completions"
+    post_calls: list[dict[str, object]] = []
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            post_calls.append({"url": url, "json": json})
+            if len(post_calls) == 1:
+                raise httpx.ReadTimeout("simulated timeout", request=httpx.Request("POST", endpoint))
+            return _response(
+                status_code=200,
+                url=endpoint,
+                payload={"choices": [{"message": {"content": '{"status":"ready"}'}}]},
+            )
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    raw = asyncio.run(
+        llama_chat_completion(
+            llama_url="http://llama.local/v1",
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt='Return compact JSON: {"status":"ready"}.',
+            user_prompt="Warm up model for upcoming summarization.",
+            request_attempts=2,
+        )
+    )
+
+    assert raw == '{"status":"ready"}'
+    assert len(post_calls) == 2
+
+
 def test_llama_tokenize_retries_without_model(monkeypatch: pytest.MonkeyPatch) -> None:
     endpoint = "http://llama.local/tokenize"
     post_responses = [

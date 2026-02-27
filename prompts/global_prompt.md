@@ -1,4 +1,5 @@
 You are a final report generator.
+Output language: ${LANG}.
 
 Aggregate window-level summaries and output strict JSON:
 {

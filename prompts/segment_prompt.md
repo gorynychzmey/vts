@@ -1,4 +1,5 @@
 You are a transcript summarization assistant.
+Output language: ${LANG}.
 
 Return strict JSON with this schema:
 {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import json
 import logging
 import re
@@ -25,6 +26,7 @@ from vts.services.media import (
     export_segments,
     extract_audio_16k_mono,
     probe_duration,
+    trim_initial_silence,
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import ensure_task_dirs, write_json
@@ -291,6 +293,53 @@ class TaskProcessor:
         )
         return True
 
+    async def step_trim_initial_silence(
+        self,
+        task_id: uuid.UUID,
+        user_id: str,
+        dirs: dict[str, Path],
+        logger: logging.Logger,
+        task_options: dict[str, Any],
+        dry_run: bool,
+    ) -> bool:
+        source = dirs["media"] / "audio_16k.wav"
+        output = dirs["media"] / "audio_16k_trimmed.wav"
+        marker = dirs["outputs"] / "audio_preprocess.json"
+        if output.exists() and marker.exists():
+            return True
+        if dry_run:
+            return False
+        if not source.exists():
+            raise RuntimeError("Missing extracted WAV")
+
+        trimmed_seconds = await asyncio.to_thread(
+            trim_initial_silence,
+            source,
+            output,
+            dirs["logs"] / "task.log",
+            threshold_db=self.settings.trim_silence_threshold_db,
+            min_duration_sec=self.settings.trim_silence_min_duration_sec,
+            max_trim_seconds=self.settings.trim_silence_max_seconds,
+        )
+        payload = {
+            "source": str(source),
+            "output": str(output),
+            "trimmed_seconds": round(trimmed_seconds, 3),
+            "threshold_db": self.settings.trim_silence_threshold_db,
+            "min_duration_sec": self.settings.trim_silence_min_duration_sec,
+            "max_trim_seconds": self.settings.trim_silence_max_seconds,
+        }
+        write_json(marker, payload)
+        source.unlink(missing_ok=True)
+        logger.info("initial silence trim finished: trimmed=%.3fs", trimmed_seconds)
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="phase",
+            data={"phase": "trim_initial_silence", "status": "done", "trimmed_seconds": round(trimmed_seconds, 3)},
+        )
+        return True
+
     async def step_segment_audio(
         self,
         task_id: uuid.UUID,
@@ -306,7 +355,7 @@ class TaskProcessor:
         if dry_run:
             return False
 
-        audio_wav = dirs["media"] / "audio_16k.wav"
+        audio_wav = self._transcribe_audio_path(dirs)
         if not audio_wav.exists():
             raise RuntimeError("Missing extracted WAV")
 
@@ -354,6 +403,100 @@ class TaskProcessor:
             await session.commit()
         return True
 
+    async def step_detect_language(
+        self,
+        task_id: uuid.UUID,
+        user_id: str,
+        dirs: dict[str, Path],
+        logger: logging.Logger,
+        task_options: dict[str, Any],
+        dry_run: bool,
+    ) -> bool:
+        marker = dirs["outputs"] / "language_detection.json"
+        explicit = self._normalize_language(task_options.get("language"))
+        if explicit:
+            task_options["detected_language"] = explicit
+            if not marker.exists() and not dry_run:
+                write_json(
+                    marker,
+                    {
+                        "source": "task_option",
+                        "language": explicit,
+                        "confidence": 1.0,
+                        "detected_at": utcnow().isoformat(),
+                    },
+                )
+            return True
+
+        if marker.exists():
+            try:
+                payload = json.loads(marker.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            language = self._normalize_language(payload.get("language") if isinstance(payload, dict) else None)
+            confidence = payload.get("confidence") if isinstance(payload, dict) else None
+            if (
+                language
+                and isinstance(confidence, (int, float))
+                and float(confidence) >= self.settings.language_detection_confidence_threshold
+            ):
+                task_options["detected_language"] = language
+                return True
+        if dry_run:
+            return False
+
+        manifest_path = dirs["outputs"] / "segments_manifest.json"
+        if not manifest_path.exists():
+            raise RuntimeError("Missing segment manifest for language detection")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        specs = payload.get("segments", [])
+        if not isinstance(specs, list) or not specs:
+            raise RuntimeError("Missing segment files for language detection")
+        first = specs[0]
+        segment_path = dirs["segments"] / str(first.get("file", ""))
+        if not segment_path.exists():
+            raise RuntimeError("Missing first segment for language detection")
+
+        logger.info("waiting for heavy slot: detect language")
+        async with self.heavy_slot:
+            logger.info("heavy slot acquired: detect language")
+            raw = await transcribe_with_whisper(
+                whisper_url=self.settings.whisper_url,
+                audio_path=segment_path,
+                language=None,
+                initial_prompt=None,
+            )
+        self._log_payload(logger, "asr language probe response", raw)
+        language, confidence = self._extract_detected_language(raw)
+        threshold = self.settings.language_detection_confidence_threshold
+        if not language:
+            raise RuntimeError("Auto language detection failed: language not recognized")
+        if confidence is None or confidence < threshold:
+            raise RuntimeError(
+                f"Auto language detection confidence too low: language={language}, "
+                f"confidence={confidence}, threshold={threshold}"
+            )
+        task_options["detected_language"] = language
+        write_json(
+            marker,
+            {
+                "source": "whisper_first_segment",
+                "language": language,
+                "confidence": confidence,
+                "threshold": threshold,
+                "detected_at": utcnow().isoformat(),
+            },
+        )
+        await self._persist_detected_language(task_id, language, confidence)
+        logger.info("language detected: %s (confidence=%.3f)", language, confidence)
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="phase",
+            data={"phase": "detect_language", "status": "done", "language": language, "confidence": confidence},
+        )
+        return True
+
     async def step_transcribe_segments(
         self,
         task_id: uuid.UUID,
@@ -391,16 +534,24 @@ class TaskProcessor:
         if dry_run:
             return False
 
-        raw_language = task_options.get("language")
-        language = str(raw_language) if raw_language else None
+        language = self._effective_language(task_options, dirs)
+        if not language:
+            raise RuntimeError("Missing transcription language after detection")
         missing.sort(key=lambda spec: int(spec["segment_index"]))
         text_by_index = {seg.segment_index: seg.text for seg in existing_segments.values() if seg.text.strip()}
+        suspicious_by_index: dict[int, bool] = {
+            seg.segment_index: self._is_probable_asr_hallucination(text=seg.text, words=[])
+            for seg in existing_segments.values()
+            if seg.text.strip()
+        }
         for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
             start = float(spec["start"])
             end = float(spec["end"])
-            initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
+            initial_prompt = None
+            if not suspicious_by_index.get(idx - 1, False):
+                initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
             logger.info("waiting for heavy slot: transcribe segment %s", idx)
             async with self.heavy_slot:
                 logger.info("heavy slot acquired: transcribe segment %s", idx)
@@ -412,6 +563,41 @@ class TaskProcessor:
                 )
             self._log_payload(logger, f"asr response segment={idx}", raw)
             text, words = normalize_whisper_output(raw, segment_offset_sec=start)
+            suspicious = self._is_probable_asr_hallucination(text=text, words=words)
+            if suspicious:
+                logger.warning("asr segment %s appears repetitive/noisy; retrying without tail prompt", idx)
+                logger.info("waiting for heavy slot: transcribe segment %s retry", idx)
+                async with self.heavy_slot:
+                    logger.info("heavy slot acquired: transcribe segment %s retry", idx)
+                    retry_raw = await transcribe_with_whisper(
+                        whisper_url=self.settings.whisper_url,
+                        audio_path=segment_path,
+                        language=language,
+                        initial_prompt=None,
+                    )
+                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start)
+                retry_suspicious = self._is_probable_asr_hallucination(text=retry_text, words=retry_words)
+                old_score = self._transcript_quality_score(text, words)
+                new_score = self._transcript_quality_score(retry_text, retry_words)
+                if (not retry_suspicious) or (new_score > old_score):
+                    raw = retry_raw
+                    text = retry_text
+                    words = retry_words
+                    suspicious = retry_suspicious
+                    logger.info(
+                        "asr retry accepted for segment %s (old_score=%.3f, new_score=%.3f)",
+                        idx,
+                        old_score,
+                        new_score,
+                    )
+                else:
+                    logger.info(
+                        "asr retry rejected for segment %s (old_score=%.3f, new_score=%.3f)",
+                        idx,
+                        old_score,
+                        new_score,
+                    )
+            suspicious_by_index[idx] = suspicious
             text_by_index[idx] = text
             await self.bus.publish_event(
                 user_id=user_id,
@@ -496,9 +682,22 @@ class TaskProcessor:
                         entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": fallback_text})
                 previous_segment_end = max(previous_segment_end, segment.end_sec)
             merged_text = " ".join(token for token in merged_tokens if token).strip()
-
-            write_json(transcript_json, {"text": merged_text, "entries": entries})
-            transcript_txt.write_text(merged_text, encoding="utf-8")
+            cleaned_text, cleanup_meta = self._trim_repetitive_edges(merged_text)
+            write_json(
+                transcript_json,
+                {
+                    "text": cleaned_text,
+                    "raw_text": merged_text,
+                    "entries": entries,
+                    "cleanup": cleanup_meta,
+                },
+            )
+            transcript_txt.write_text(cleaned_text, encoding="utf-8")
+            logger.info(
+                "transcript merge cleanup: start_removed=%s end_removed=%s",
+                cleanup_meta.get("removed_head_sentences", 0),
+                cleanup_meta.get("removed_tail_sentences", 0),
+            )
 
             task = await repo.get_task_by_id(task_id)
             if task is None:
@@ -647,10 +846,14 @@ class TaskProcessor:
             windows = payload.get("windows") if isinstance(payload, dict) else None
             return isinstance(windows, list)
 
-        segment_prompt = load_prompt(
-            self.settings.prompts_dir,
-            "segment_prompt.md",
-            "Return JSON with keys: topic, bullets, action_items.",
+        output_language = self._effective_language(task_options, dirs)
+        segment_prompt = self._render_prompt_with_language(
+            load_prompt(
+                self.settings.prompts_dir,
+                "segment_prompt.md",
+                "Return JSON with keys: topic, bullets, action_items.",
+            ),
+            output_language,
         )
         chunks_file = summary_dir / "chunks.json"
         if not chunks_file.exists():
@@ -748,6 +951,7 @@ class TaskProcessor:
                     model=self.settings.llama_model,
                     system_prompt=segment_prompt,
                     user_prompt=f"Window {idx}/{len(chunks)}\n\n{chunk}",
+                    timeout_seconds=int(getattr(self.settings, "llama_chat_timeout_seconds", 600)),
                 )
             self._log_payload(logger, f"llm window response index={idx}", raw)
             parsed = parse_json_response(raw)
@@ -813,10 +1017,14 @@ class TaskProcessor:
             event="summary_progress",
             data={"current": len(windows), "total": total_parts},
         )
-        global_prompt = load_prompt(
-            self.settings.prompts_dir,
-            "global_prompt.md",
-            "Produce JSON with executive_summary, key_points, risks, decisions.",
+        output_language = self._effective_language(task_options, dirs)
+        global_prompt = self._render_prompt_with_language(
+            load_prompt(
+                self.settings.prompts_dir,
+                "global_prompt.md",
+                "Produce JSON with executive_summary, key_points, risks, decisions.",
+            ),
+            output_language,
         )
         merged = json.dumps(windows, ensure_ascii=True)
         logger.info("waiting for heavy slot: final summary")
@@ -827,6 +1035,7 @@ class TaskProcessor:
                 model=self.settings.llama_model,
                 system_prompt=global_prompt,
                 user_prompt=merged,
+                timeout_seconds=int(getattr(self.settings, "llama_final_timeout_seconds", 1800)),
             )
         self._log_payload(logger, "llm final summary response", raw)
         parsed = parse_json_response(raw)
@@ -890,6 +1099,214 @@ class TaskProcessor:
             repo = Repo(session)
             await repo.set_user_preferred_ytdlp_client(user_id, player_client)
             await session.commit()
+
+    async def _persist_detected_language(self, task_id: uuid.UUID, language: str, confidence: float) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            options = dict(task.options or {})
+            options["detected_language"] = language
+            options["detected_language_confidence"] = float(confidence)
+            task.options = options
+            await session.commit()
+
+    def _transcribe_audio_path(self, dirs: dict[str, Path]) -> Path:
+        trimmed = dirs["media"] / "audio_16k_trimmed.wav"
+        if trimmed.exists():
+            return trimmed
+        return dirs["media"] / "audio_16k.wav"
+
+    def _normalize_language(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        return normalized or None
+
+    def _effective_language(self, task_options: dict[str, Any], dirs: dict[str, Path]) -> str | None:
+        explicit = self._normalize_language(task_options.get("language"))
+        if explicit:
+            return explicit
+        detected = self._normalize_language(task_options.get("detected_language"))
+        if detected:
+            return detected
+        marker = dirs["outputs"] / "language_detection.json"
+        if not marker.exists():
+            return None
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return self._normalize_language(payload.get("language"))
+
+    def _extract_detected_language(self, payload: dict[str, Any]) -> tuple[str | None, float | None]:
+        language = self._normalize_language(payload.get("language"))
+        confidence_raw = payload.get("language_probability")
+        if confidence_raw is None:
+            confidence_raw = payload.get("language_confidence")
+        if confidence_raw is None:
+            language_probs = payload.get("language_probs")
+            if isinstance(language_probs, dict) and language:
+                confidence_raw = language_probs.get(language)
+        confidence: float | None
+        if isinstance(confidence_raw, (int, float)):
+            confidence = float(confidence_raw)
+        else:
+            confidence = None
+        return language, confidence
+
+    def _render_prompt_with_language(self, prompt: str, language: str | None) -> str:
+        value = self._language_display_name(language)
+        return prompt.replace("${LANG}", value)
+
+    def _language_display_name(self, language: str | None) -> str:
+        lang = (language or "en").strip().lower()
+        mapping = {
+            "en": "English",
+            "ru": "Russian",
+            "de": "German",
+            "fr": "French",
+            "es": "Spanish",
+        }
+        return mapping.get(lang, lang)
+
+    def _is_probable_asr_hallucination(self, *, text: str, words: list[dict[str, Any]]) -> bool:
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        if not normalized:
+            return False
+        tokens = [self._normalize_token(token) for token in re.split(r"\s+", normalized)]
+        tokens = [token for token in tokens if token]
+        if len(tokens) < 10:
+            return False
+
+        token_counts = Counter(tokens)
+        unique_ratio = len(token_counts) / float(len(tokens))
+        top_token_ratio = token_counts.most_common(1)[0][1] / float(len(tokens))
+
+        sentences = [self._normalize_token(part) for part in re.split(r"[.!?…]+", normalized)]
+        sentences = [sentence for sentence in sentences if sentence]
+        repeated_edge = False
+        if len(sentences) >= 5:
+            head = sentences[0]
+            tail = sentences[-1]
+            head_repeats = 0
+            tail_repeats = 0
+            for sentence in sentences:
+                if sentence == head:
+                    head_repeats += 1
+                else:
+                    break
+            for sentence in reversed(sentences):
+                if sentence == tail:
+                    tail_repeats += 1
+                else:
+                    break
+            repeated_edge = max(head_repeats, tail_repeats) >= 5
+
+        low_confidence_ratio = 0.0
+        if words:
+            confidences = [float(item.get("confidence")) for item in words if item.get("confidence") is not None]
+            if confidences:
+                low_confidence_ratio = sum(1 for value in confidences if value < 0.35) / float(len(confidences))
+
+        signals = 0
+        if unique_ratio < 0.30:
+            signals += 1
+        if top_token_ratio > 0.35:
+            signals += 1
+        if repeated_edge:
+            signals += 1
+        if low_confidence_ratio > 0.75:
+            signals += 1
+        return signals >= 2
+
+    def _transcript_quality_score(self, text: str, words: list[dict[str, Any]]) -> float:
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        if not normalized:
+            return 0.0
+        tokens = [self._normalize_token(token) for token in re.split(r"\s+", normalized)]
+        tokens = [token for token in tokens if token]
+        if not tokens:
+            return 0.0
+        unique_ratio = len(set(tokens)) / float(len(tokens))
+        score = len(tokens) * unique_ratio
+        if words:
+            confidences = [float(item.get("confidence")) for item in words if item.get("confidence") is not None]
+            if confidences:
+                score += sum(confidences) / float(len(confidences)) * 10.0
+        return score
+
+    def _normalize_token(self, value: str) -> str:
+        return re.sub(r"[^\wа-яА-ЯёЁ]+", "", value, flags=re.UNICODE).strip().lower()
+
+    def _trim_repetitive_edges(self, text: str) -> tuple[str, dict[str, Any]]:
+        if not text.strip():
+            return "", {
+                "removed_head_sentences": 0,
+                "removed_tail_sentences": 0,
+                "head_phrase": None,
+                "tail_phrase": None,
+            }
+        raw_sentences = [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text) if item.strip()]
+        if not raw_sentences:
+            return text.strip(), {
+                "removed_head_sentences": 0,
+                "removed_tail_sentences": 0,
+                "head_phrase": None,
+                "tail_phrase": None,
+            }
+
+        sentences = list(raw_sentences)
+        removed_head = 0
+        removed_tail = 0
+        head_phrase: str | None = None
+        tail_phrase: str | None = None
+        min_repeats = 6
+
+        while len(sentences) >= min_repeats:
+            head = self._normalize_token(sentences[0])
+            if not head or len(head) > 64:
+                break
+            repeats = 0
+            for sentence in sentences:
+                if self._normalize_token(sentence) == head:
+                    repeats += 1
+                else:
+                    break
+            if repeats < min_repeats:
+                break
+            removed_head += repeats
+            head_phrase = sentences[0]
+            sentences = sentences[repeats:]
+
+        while len(sentences) >= min_repeats:
+            tail = self._normalize_token(sentences[-1])
+            if not tail or len(tail) > 64:
+                break
+            repeats = 0
+            for sentence in reversed(sentences):
+                if self._normalize_token(sentence) == tail:
+                    repeats += 1
+                else:
+                    break
+            if repeats < min_repeats:
+                break
+            removed_tail += repeats
+            tail_phrase = sentences[-1]
+            sentences = sentences[:-repeats]
+
+        cleaned = " ".join(sentences).strip()
+        if not cleaned:
+            cleaned = text.strip()
+        return cleaned, {
+            "removed_head_sentences": removed_head,
+            "removed_tail_sentences": removed_tail,
+            "head_phrase": head_phrase,
+            "tail_phrase": tail_phrase,
+        }
 
     def _task_options(self, raw_options: dict[str, Any] | None) -> dict[str, Any]:
         return dict(raw_options or {})

@@ -16,7 +16,9 @@ const LOG_POLL_INTERVAL_MS = 2000;
 const DAG_STEPS = [
   "download",
   "extract_audio",
+  "trim_initial_silence",
   "segment_audio",
+  "detect_language",
   "transcribe_segments",
   "merge_transcript",
   "prepare_llama_model",
@@ -89,7 +91,9 @@ const I18N = {
     "confirm.delete": "Delete task? This action cannot be undone.",
     "steps.download": "Media download",
     "steps.extract_audio": "Audio extraction",
+    "steps.trim_initial_silence": "Initial silence trim",
     "steps.segment_audio": "Audio segmentation",
+    "steps.detect_language": "Language detection",
     "steps.transcribe_segments": "Segment transcription",
     "steps.merge_transcript": "Transcript merge",
     "steps.prepare_llama_model": "LLM warm-up",
@@ -154,7 +158,9 @@ const I18N = {
     "confirm.delete": "Удалить задачу? Это действие необратимо.",
     "steps.download": "Загрузка медиа",
     "steps.extract_audio": "Извлечение аудио",
+    "steps.trim_initial_silence": "Удаление начальной тишины",
     "steps.segment_audio": "Сегментация аудио",
+    "steps.detect_language": "Определение языка",
     "steps.transcribe_segments": "Транскрибация сегментов",
     "steps.merge_transcript": "Сборка транскрипта",
     "steps.prepare_llama_model": "Подготовка LLM",
@@ -219,7 +225,9 @@ const I18N = {
     "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
     "steps.download": "Medien-Download",
     "steps.extract_audio": "Audio-Extraktion",
+    "steps.trim_initial_silence": "Anfangsstille entfernen",
     "steps.segment_audio": "Audio-Segmentierung",
+    "steps.detect_language": "Spracherkennung",
     "steps.transcribe_segments": "Segment-Transkription",
     "steps.merge_transcript": "Transkript-Zusammenführung",
     "steps.prepare_llama_model": "LLM-Aufwärmen",
@@ -568,6 +576,32 @@ async function saveActiveTabContent(taskEl, taskId) {
   downloadTextFile(fileName, payload.text);
 }
 
+async function activateTaskTab(taskEl, taskId, tabName) {
+  const tab = String(tabName || "");
+  if (!tab) {
+    return;
+  }
+  const panel = taskEl.querySelector(`.tab-content.${tab}`);
+  if (!panel) {
+    return;
+  }
+  taskEl.querySelectorAll(".tab-btn").forEach((item) => item.classList.remove("active"));
+  taskEl.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
+  const activeBtn = taskEl.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  if (activeBtn) {
+    activeBtn.classList.add("active");
+  }
+  panel.classList.add("active");
+  if (tab === "log") {
+    startLogPolling(taskEl, taskId);
+    return;
+  }
+  stopLogPolling(taskEl);
+  if (tab === "transcript" || tab === "summary") {
+    await loadTabContent(taskEl, taskId, tab);
+  }
+}
+
 function forceReloadToVersion(version) {
   const target = new URL("/", window.location.origin);
   target.searchParams.set("v", version);
@@ -829,7 +863,7 @@ function renderTaskRuntime(taskEl) {
   renderTaskTitle(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
-  const canResume = runtime.baseStatus === "paused";
+  const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   const canOpenSummary = runtime.summaryReady;
@@ -928,6 +962,14 @@ function renderTasks(tasks) {
       const label = expanded ? t("action.collapse") : t("action.expand");
       toggleBtn.title = label;
       toggleBtn.setAttribute("aria-label", label);
+      if (expanded) {
+        const activeTab = getActiveTabName(root);
+        if (activeTab) {
+          void activateTaskTab(root, task.id, activeTab);
+        }
+      } else {
+        stopLogPolling(root);
+      }
     });
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
@@ -948,26 +990,7 @@ function renderTasks(tasks) {
         if (btn.disabled) {
           return;
         }
-        root.querySelectorAll(".tab-btn").forEach((item) => item.classList.remove("active"));
-        root.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
-        btn.classList.add("active");
-        const tab = btn.dataset.tab;
-        const panel = root.querySelector(`.tab-content.${tab}`);
-        if (!panel) {
-          return;
-        }
-        panel.classList.add("active");
-        if (tab === "transcript") {
-          stopLogPolling(root);
-          transcriptPre.textContent = await api(`/api/tasks/${task.id}/transcript`).catch((err) => err.message);
-        } else if (tab === "summary") {
-          stopLogPolling(root);
-          summaryPre.textContent = await api(`/api/tasks/${task.id}/summary`).catch((err) => err.message);
-        } else if (tab === "log") {
-          startLogPolling(root, task.id);
-        } else {
-          stopLogPolling(root);
-        }
+        await activateTaskTab(root, task.id, String(btn.dataset.tab || ""));
       });
     });
 

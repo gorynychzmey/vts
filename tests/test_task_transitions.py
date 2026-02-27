@@ -11,10 +11,10 @@ def test_can_pause_task_allows_only_queued_or_running() -> None:
     assert not can_pause_task(TaskStatus.canceled)
 
 
-def test_can_resume_task_allows_only_paused() -> None:
+def test_can_resume_task_allows_paused_or_failed() -> None:
     assert can_resume_task(TaskStatus.paused)
+    assert can_resume_task(TaskStatus.failed)
     assert not can_resume_task(TaskStatus.queued)
     assert not can_resume_task(TaskStatus.running)
     assert not can_resume_task(TaskStatus.completed)
-    assert not can_resume_task(TaskStatus.failed)
     assert not can_resume_task(TaskStatus.canceled)

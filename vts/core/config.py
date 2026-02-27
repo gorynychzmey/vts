@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     whisper_url: str = "http://whisper:9000"
     llama_url: str = "http://llama:8000/v1"
     llama_model: str = "Qwen2.5-7B-Instruct-Q4"
+    llama_chat_timeout_seconds: int = 600
+    llama_final_timeout_seconds: int = 1800
     ytdlp_cookies_file: Path | None = None
     ytdlp_cookies_from_browser: list[str] = Field(default_factory=list)
     ytdlp_youtube_player_client: str | None = None
@@ -54,6 +56,10 @@ class Settings(BaseSettings):
     segment_target_seconds: int = 300
     segment_search_window_seconds: int = 30
     segment_overlap_seconds: int = 3
+    trim_silence_threshold_db: float = -35.0
+    trim_silence_min_duration_sec: float = 0.4
+    trim_silence_max_seconds: float = 30.0
+    language_detection_confidence_threshold: float = 0.60
 
     transcribe_parallel_per_task: int = 2
     heavy_slot_limit: int = 1

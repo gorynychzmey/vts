@@ -145,4 +145,4 @@ Implemented:
 
 ## Implementation Backlog To Reach Full Match
 
-- No open gaps against the current detailed processing contract.
+- Add UI flow for manual language override when auto-detection fails with low confidence, then resume from `detect_language`.

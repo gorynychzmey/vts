@@ -90,6 +90,40 @@ def _loading_wait_seconds(timeout_seconds: int, *, cap_seconds: float = 120.0) -
     return max(5.0, min(float(timeout_seconds) * 0.6, cap_seconds))
 
 
+def _is_transient_http_error(exc: Exception) -> bool:
+    return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError))
+
+
+async def _post_with_transient_retry(
+    *,
+    client: httpx.AsyncClient,
+    endpoint: str,
+    payload: dict[str, Any],
+    loading_wait_seconds: float,
+    max_attempts: int,
+) -> httpx.Response:
+    attempts = max(1, max_attempts)
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await _post_with_loading_retry(
+                client=client,
+                endpoint=endpoint,
+                payload=payload,
+                loading_wait_seconds=loading_wait_seconds,
+            )
+        except Exception as exc:
+            if not _is_transient_http_error(exc):
+                raise
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            await asyncio.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("llama request failed without response and without captured exception")
+
+
 def _build_chat_payload(
     *,
     model: str,
@@ -363,6 +397,7 @@ async def llama_chat_completion(
     user_prompt: str,
     timeout_seconds: int = 600,
     max_tokens: int | None = None,
+    request_attempts: int = 3,
 ) -> str:
     endpoint = llama_url.rstrip("/") + "/chat/completions"
     loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
@@ -475,12 +510,19 @@ async def llama_chat_completion(
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         while queue:
             label, payload = queue.pop(0)
-            response = await _post_with_loading_retry(
-                client=client,
-                endpoint=endpoint,
-                payload=payload,
-                loading_wait_seconds=loading_wait_seconds,
-            )
+            try:
+                response = await _post_with_transient_retry(
+                    client=client,
+                    endpoint=endpoint,
+                    payload=payload,
+                    loading_wait_seconds=loading_wait_seconds,
+                    max_attempts=request_attempts,
+                )
+            except Exception as exc:
+                if _is_transient_http_error(exc):
+                    failures.append(f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})")
+                    continue
+                raise
             if response.is_success:
                 data = response.json()
                 break

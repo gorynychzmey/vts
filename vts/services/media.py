@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TypedDict
@@ -63,6 +64,46 @@ def extract_audio_16k_mono(input_file: Path, output_wav: Path, log_path: Path) -
         str(output_wav),
     ]
     run_ffmpeg(cmd, log_path)
+
+
+def trim_initial_silence(
+    input_wav: Path,
+    output_wav: Path,
+    log_path: Path,
+    *,
+    threshold_db: float,
+    min_duration_sec: float,
+    max_trim_seconds: float,
+) -> float:
+    input_duration = probe_duration(input_wav)
+    if output_wav.exists():
+        output_duration = probe_duration(output_wav)
+        return max(0.0, input_duration - output_duration)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_wav),
+        "-af",
+        (
+            "silenceremove="
+            f"start_periods=1:start_duration={min_duration_sec}:start_threshold={threshold_db}dB:start_mode=all"
+        ),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+    run_ffmpeg(cmd, log_path)
+    output_duration = probe_duration(output_wav)
+    trimmed = max(0.0, input_duration - output_duration)
+    if output_duration <= 0.0 or trimmed > max_trim_seconds:
+        shutil.copy2(input_wav, output_wav)
+        return 0.0
+    return trimmed
 
 
 def detect_silence_points(audio_wav: Path, log_path: Path, search_window: int) -> list[float]:
