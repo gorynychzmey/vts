@@ -394,7 +394,6 @@ class TaskProcessor:
         language = str(raw_language) if raw_language else None
         missing.sort(key=lambda spec: int(spec["segment_index"]))
         text_by_index = {seg.segment_index: seg.text for seg in existing_segments.values() if seg.text.strip()}
-        results: list[dict[str, Any]] = []
         for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
@@ -419,33 +418,19 @@ class TaskProcessor:
                 data={"segment_index": idx, "total": len(specs)},
                 throttle_key="transcribe_progress",
             )
-            results.append(
-                {
-                    "segment_index": idx,
-                    "start": start,
-                    "end": end,
-                    "text": text,
-                    "raw_json": raw,
-                    "words": words,
-                }
-            )
-
-        results.sort(key=lambda item: int(item["segment_index"]))
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            for item in results:
+            async with self.session_factory() as session:
+                repo = Repo(session)
                 seg = await repo.upsert_asr_segment_payload(
                     task_id=task_id,
-                    segment_index=int(item["segment_index"]),
-                    start_sec=float(item["start"]),
-                    end_sec=float(item["end"]),
-                    text=str(item["text"]),
-                    raw_json=item["raw_json"],
+                    segment_index=idx,
+                    start_sec=start,
+                    end_sec=end,
+                    text=text,
+                    raw_json=raw,
                 )
-                await repo.replace_asr_words(task_id=task_id, segment_id=seg.id, words=item["words"])
-                await session.flush()
-                await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
-            await session.commit()
+                await repo.replace_asr_words(task_id=task_id, segment_id=seg.id, words=words)
+                await session.commit()
+            await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
 
         async with self.session_factory() as session:
             repo = Repo(session)
@@ -672,6 +657,15 @@ class TaskProcessor:
         summary_json = summary_dir / "final.json"
         summary_md = summary_dir / "final.md"
         if summary_json.exists() and summary_md.exists():
+            async with self.session_factory() as session:
+                repo = Repo(session)
+                task = await repo.get_task_by_id(task_id)
+                if task is None:
+                    raise RuntimeError("task not found during final summary restore")
+                summary_path = str(summary_md)
+                if task.summary_path != summary_path:
+                    task.summary_path = summary_path
+                    await session.commit()
             return True
         if dry_run:
             return False

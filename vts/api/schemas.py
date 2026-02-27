@@ -34,6 +34,7 @@ class TaskOut(BaseModel):
     id: UUID
     source_url: str
     status: str
+    queue_position: int | None = Field(default=None, ge=1)
     options: dict[str, Any]
     transcript_path: str | None
     summary_path: str | None

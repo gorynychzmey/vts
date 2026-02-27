@@ -43,6 +43,18 @@ def _run_download(
 ) -> None:
     def hook(data: dict[str, Any]) -> None:
         status = data.get("status", "")
+        info_dict = data.get("info_dict") if isinstance(data.get("info_dict"), dict) else {}
+        media_title = str(info_dict.get("title", "")).strip() if info_dict else ""
+        raw_filename = data.get("filename") or info_dict.get("_filename")
+        media_filename = Path(raw_filename).name if isinstance(raw_filename, str) and raw_filename.strip() else ""
+        meta = {}
+        if media_title:
+            meta["media_title"] = media_title
+        if media_filename:
+            meta["media_filename"] = media_filename
+        if status == "finished":
+            progress_cb(phase, {"phase": phase, "progress": 1.0, **meta})
+            return
         if status != "downloading":
             return
         total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
@@ -55,6 +67,7 @@ def _run_download(
                 "progress": progress,
                 "downloaded_bytes": downloaded,
                 "total_bytes": total,
+                **meta,
             },
         )
 

@@ -25,11 +25,15 @@ from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
 
 
-def serialize_task(task: Task) -> TaskOut:
+def serialize_task(task: Task, queue_positions: dict[uuid.UUID, int] | None = None) -> TaskOut:
+    queue_position: int | None = None
+    if queue_positions is not None:
+        queue_position = queue_positions.get(task.id)
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
         status=task.status.value,
+        queue_position=queue_position,
         options=task.options,
         transcript_path=task.transcript_path,
         summary_path=task.summary_path,
@@ -134,7 +138,8 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(effective_user_id, task.id)
         if task is None:
             raise HTTPException(status_code=500, detail="Task not found after creation")
-        return serialize_task(task)
+        queue_positions = await repo.get_global_queue_positions()
+        return serialize_task(task, queue_positions)
 
     @app.get("/api/tasks", response_model=list[TaskOut])
     async def list_tasks(
@@ -143,7 +148,8 @@ def create_app() -> FastAPI:
     ) -> list[TaskOut]:
         repo = Repo(session)
         tasks = await repo.list_tasks_for_user(uuid.UUID(user.id))
-        return [serialize_task(task) for task in tasks]
+        queue_positions = await repo.get_global_queue_positions()
+        return [serialize_task(task, queue_positions) for task in tasks]
 
     @app.get("/api/tasks/{task_id}", response_model=TaskOut)
     async def get_task(
@@ -155,7 +161,8 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        return serialize_task(task)
+        queue_positions = await repo.get_global_queue_positions()
+        return serialize_task(task, queue_positions)
 
     @app.post("/api/tasks/{task_id}/pause", response_model=MessageOut)
     async def pause_task(

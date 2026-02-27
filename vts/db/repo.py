@@ -80,9 +80,15 @@ class Repo:
         return list(result.all())
 
     async def list_task_ids_for_statuses(self, statuses: list[TaskStatus]) -> list[uuid.UUID]:
-        stmt = select(Task.id).where(Task.status.in_(statuses)).order_by(Task.created_at.asc())
+        stmt = select(Task.id).where(Task.status.in_(statuses)).order_by(Task.created_at.asc(), Task.id.asc())
         result = await self.session.scalars(stmt)
         return list(result.all())
+
+    async def get_global_queue_positions(self) -> dict[uuid.UUID, int]:
+        stmt = select(Task.id).where(Task.status == TaskStatus.queued).order_by(Task.created_at.asc(), Task.id.asc())
+        result = await self.session.scalars(stmt)
+        queued_ids = list(result.all())
+        return {task_id: index for index, task_id in enumerate(queued_ids, start=1)}
 
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
         stmt = select(Task).where(Task.status == TaskStatus.running)
