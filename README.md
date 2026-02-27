@@ -122,6 +122,9 @@ Triggers:
 - Manual run: `Actions -> Build Images -> Run workflow`
 - Special push tag: `build-*` (for example `build-0.2.1`)
 - Team convention: if request says `build` after commit/push, this means pushing `build-*` tag to trigger GitHub Actions build. Local `./build.sh` is run only on explicit request.
+- Team convention (strict): `build` after commit/push always means the commit must be accompanied by pushed git tag `build-*`.
+- Mandatory rule: before pushing `build-*`, bump version in `vts/__init__.py` and push that commit first.
+- Mandatory rule: `build-*` tag version must match current project version.
 
 Tag-trigger example:
 

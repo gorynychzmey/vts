@@ -10,7 +10,10 @@ This document is part of the repository contract and must stay in sync with auto
   - commit is created,
   - commit is pushed.
 - If task wording includes `build` after commit/push, default action is GitHub Actions build trigger:
+  - `build` after commit/push always means: create and push a git tag `build-*` for that commit,
   - create and push tag `build-*` (for example `build-0.2.6`),
+  - before pushing `build-*`, always bump project version in `vts/__init__.py` and push a commit with that bump,
+  - `build-*` tag version must match current project version,
   - do not run local `build.sh` unless explicitly requested.
 - Before commit, remove transient pytest cache directories (`pytest-cache-files-*`, `.pytest_cache`).
   - automated in `scripts/prepare_commit.sh`.
