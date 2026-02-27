@@ -126,8 +126,8 @@ Notes:
   - for manual run you can set input `build_version`;
   - fallback is `vts/__init__.py` version.
 - Workflow pushes to both registries:
-  - Docker Hub
-  - GHCR
+  - GHCR (primary push from GitHub Actions build)
+  - Docker Hub (mirror from GHCR tags)
 - Repository targets can be overridden by workflow inputs:
   - `dockerhub_image_repo`
   - `ghcr_image_repo`

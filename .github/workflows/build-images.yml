@@ -113,20 +113,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build, test, and push images to Docker Hub
+      - name: Build, test, and push images to GHCR
         shell: bash
         env:
           CONTAINER_ENGINE: docker
           USE_BUILDX: auto
-          BUILDX_CACHE_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+          BUILDX_CACHE_REPO: ${{ steps.repos.outputs.ghcr_repo }}
           BUILDX_CACHE_MODE: max
-          IMAGE_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+          IMAGE_REPO: ${{ steps.repos.outputs.ghcr_repo }}
           VERSION_OVERRIDE: ${{ steps.repos.outputs.version }}
         run: |
           set -euo pipefail
           bash ./build.sh
 
-      - name: Mirror Docker Hub images to GHCR
+      - name: Mirror GHCR images to Docker Hub
         shell: bash
         env:
           DOCKERHUB_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
@@ -135,11 +135,11 @@ jobs:
         run: |
           set -euo pipefail
           for suffix in webapi worker; do
-            docker tag "${DOCKERHUB_REPO}:${VERSION}-${suffix}" "${GHCR_REPO}:${VERSION}-${suffix}"
-            docker tag "${DOCKERHUB_REPO}:latest-${suffix}" "${GHCR_REPO}:latest-${suffix}"
+            docker tag "${GHCR_REPO}:${VERSION}-${suffix}" "${DOCKERHUB_REPO}:${VERSION}-${suffix}"
+            docker tag "${GHCR_REPO}:latest-${suffix}" "${DOCKERHUB_REPO}:latest-${suffix}"
           done
 
-          docker push "${GHCR_REPO}:${VERSION}-webapi"
-          docker push "${GHCR_REPO}:latest-webapi"
-          docker push "${GHCR_REPO}:${VERSION}-worker"
-          docker push "${GHCR_REPO}:latest-worker"
+          docker push "${DOCKERHUB_REPO}:${VERSION}-webapi"
+          docker push "${DOCKERHUB_REPO}:latest-webapi"
+          docker push "${DOCKERHUB_REPO}:${VERSION}-worker"
+          docker push "${DOCKERHUB_REPO}:latest-worker"

@@ -30,8 +30,17 @@ PYTEST_VERSION="${PYTEST_VERSION:-8.4.2}"
 
 run_tests_in_webapi_container() {
   local runtime="${1}"
+  local tests_dir="${PWD}/tests"
+  local -a run_args
+  run_args=(run --rm --entrypoint sh)
+  if [[ -d "${tests_dir}" ]]; then
+    run_args+=(-v "${tests_dir}:/app/tests:ro")
+  else
+    echo "Tests directory not found at ${tests_dir}"
+    exit 1
+  fi
   echo "Running tests inside container ${WEBAPI_IMAGE}"
-  "${runtime}" run --rm --entrypoint sh "${WEBAPI_IMAGE}" -lc \
+  "${runtime}" "${run_args[@]}" "${WEBAPI_IMAGE}" -lc \
     "pip install -q pytest==${PYTEST_VERSION} && python -m pytest -q tests"
 }
 
