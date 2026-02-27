@@ -65,6 +65,7 @@ const I18N = {
     "action.collapse": "Collapse",
     "tab.transcript": "Transcript",
     "tab.summary": "Summary",
+    "tab.summary_pending": "Summary is not ready yet",
     "tab.log": "Log",
     "tab.prompt_transcript": "Select tab to load transcript",
     "tab.prompt_summary": "Select tab to load summary",
@@ -127,6 +128,7 @@ const I18N = {
     "action.collapse": "Свернуть",
     "tab.transcript": "Транскрипт",
     "tab.summary": "Сводка",
+    "tab.summary_pending": "Сводка еще не готова",
     "tab.log": "Лог",
     "tab.prompt_transcript": "Выберите вкладку, чтобы загрузить транскрипт",
     "tab.prompt_summary": "Выберите вкладку, чтобы загрузить сводку",
@@ -189,6 +191,7 @@ const I18N = {
     "action.collapse": "Einklappen",
     "tab.transcript": "Transkript",
     "tab.summary": "Zusammenfassung",
+    "tab.summary_pending": "Zusammenfassung ist noch nicht bereit",
     "tab.log": "Log",
     "tab.prompt_transcript": "Tab auswählen, um das Transkript zu laden",
     "tab.prompt_summary": "Tab auswählen, um die Zusammenfassung zu laden",
@@ -443,12 +446,15 @@ function parseQueuePosition(value) {
 function createRuntime(task) {
   const runningStep = findStep(task, "running");
   const failedStep = findStep(task, "failed");
+  const enabledSteps = getEnabledSteps(task);
   return {
     sourceUrl: String(task.source_url || ""),
     displayName: "",
     baseStatus: String(task.status || ""),
     queuePosition: parseQueuePosition(task.queue_position),
-    enabledSteps: getEnabledSteps(task),
+    enabledSteps,
+    summaryExpected: enabledSteps.includes("summarize_final"),
+    summaryReady: Boolean(task.summary_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
@@ -602,6 +608,16 @@ function renderTaskRuntime(taskEl) {
   const canResume = runtime.baseStatus === "paused";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
+  const canOpenSummary = runtime.summaryReady;
+  elements.summaryTabBtn.disabled = !canOpenSummary;
+  elements.summaryTabBtn.title = canOpenSummary ? t("tab.summary") : t("tab.summary_pending");
+  elements.summaryTabBtn.setAttribute("aria-label", elements.summaryTabBtn.title);
+  if (!canOpenSummary && elements.summaryTabBtn.classList.contains("active")) {
+    elements.summaryTabBtn.classList.remove("active");
+    elements.summaryPanel.classList.remove("active");
+    elements.transcriptTabBtn.classList.add("active");
+    elements.transcriptPanel.classList.add("active");
+  }
 
   if (runtime.baseStatus === "running") {
     if (!runtime.taskStartedAt) {
@@ -653,6 +669,8 @@ function renderTasks(tasks) {
     const transcriptPre = root.querySelector(".tab-content.transcript");
     const summaryPre = root.querySelector(".tab-content.summary");
     const logPre = root.querySelector(".tab-content.log");
+    const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
+    const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
 
     applyI18n(root);
 
@@ -690,6 +708,9 @@ function renderTasks(tasks) {
 
     root.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
+        if (btn.disabled) {
+          return;
+        }
         root.querySelectorAll(".tab-btn").forEach((item) => item.classList.remove("active"));
         root.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
         btn.classList.add("active");
@@ -716,6 +737,10 @@ function renderTasks(tasks) {
       taskRuntimeEl: root.querySelector(".task-runtime"),
       pauseBtn,
       resumeBtn,
+      transcriptTabBtn,
+      summaryTabBtn,
+      transcriptPanel: transcriptPre,
+      summaryPanel: summaryPre,
       stepLabelEl: root.querySelector(".step-label"),
       stepTimeEl: root.querySelector(".step-time"),
       progressWrap: root.querySelector(".step-progress"),
@@ -797,6 +822,9 @@ function patchTaskStatus(taskId, status) {
   }
   if (runtime.baseStatus === "running" && !runtime.taskStartedAt) {
     runtime.taskStartedAt = Date.now();
+  }
+  if (runtime.baseStatus === "completed" && runtime.summaryExpected) {
+    runtime.summaryReady = true;
   }
   renderTaskRuntime(taskEl);
   updateQueueWatcherFromDom();
@@ -945,6 +973,7 @@ async function refreshQueuePositions() {
       }
       runtime.baseStatus = String(task.status || runtime.baseStatus);
       runtime.queuePosition = parseQueuePosition(task.queue_position);
+      runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
       if (runtime.baseStatus !== "running") {
         runtime.taskStartedAt = computeTaskStartedAt(task);
       }

@@ -433,6 +433,11 @@ button:hover {
   font-weight: 600;
 }
 
+.tab-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .tab-btn.active {
   background: var(--accent-2);
   color: #fff;
