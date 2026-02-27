@@ -146,3 +146,47 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
     )
 
     assert success is True
+
+
+def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_exists(
+    tmp_path: Path,
+) -> None:
+    processor = TaskProcessor.__new__(TaskProcessor)
+    processor.settings = SimpleNamespace(
+        language_detection_confidence_threshold=0.6,
+        whisper_url="http://whisper.local",
+    )
+    processor.bus = _DummyBus()
+    processor.heavy_slot = _DummyHeavySlot()
+    processor._log_payload = lambda *args, **kwargs: None
+
+    root = tmp_path / "task"
+    outputs = root / "outputs"
+    segments = root / "segments"
+    outputs.mkdir(parents=True, exist_ok=True)
+    segments.mkdir(parents=True, exist_ok=True)
+    (outputs / "segments_manifest.json").write_text(
+        json.dumps({"segments": [{"segment_index": 1, "file": "0001.wav"}]}),
+        encoding="utf-8",
+    )
+    (outputs / "transcript.json").write_text(
+        json.dumps({"text": "Это пример русского текста для теста."}),
+        encoding="utf-8",
+    )
+
+    success = asyncio.run(
+        TaskProcessor.step_detect_language(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"root": root, "outputs": outputs, "segments": segments},
+            logger=logging.getLogger("test_step_detect_language_resume_fallback"),
+            task_options={},
+            dry_run=False,
+        )
+    )
+
+    assert success is True
+    marker = json.loads((outputs / "language_detection.json").read_text(encoding="utf-8"))
+    assert marker["source"] == "resume_transcript_fallback"
+    assert marker["language"] == "ru"

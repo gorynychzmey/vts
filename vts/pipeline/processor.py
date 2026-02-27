@@ -413,6 +413,7 @@ class TaskProcessor:
         dry_run: bool,
     ) -> bool:
         marker = dirs["outputs"] / "language_detection.json"
+        transcript_json = dirs["outputs"] / "transcript.json"
         explicit = self._normalize_language(task_options.get("language"))
         if explicit:
             task_options["detected_language"] = explicit
@@ -426,6 +427,8 @@ class TaskProcessor:
                         "detected_at": utcnow().isoformat(),
                     },
                 )
+                if hasattr(self, "session_factory"):
+                    await self._persist_detected_language(task_id, explicit, 1.0)
             return True
 
         if marker.exists():
@@ -442,6 +445,8 @@ class TaskProcessor:
             ):
                 task_options["detected_language"] = language
                 return True
+        if dry_run and transcript_json.exists():
+            return True
         if dry_run:
             return False
 
@@ -455,6 +460,31 @@ class TaskProcessor:
         first = specs[0]
         segment_path = dirs["segments"] / str(first.get("file", ""))
         if not segment_path.exists():
+            if transcript_json.exists():
+                inferred = self._infer_language_from_transcript(transcript_json)
+                if inferred:
+                    task_options["detected_language"] = inferred
+                    write_json(
+                        marker,
+                        {
+                            "source": "resume_transcript_fallback",
+                            "language": inferred,
+                            "confidence": 0.5,
+                            "threshold": self.settings.language_detection_confidence_threshold,
+                            "detected_at": utcnow().isoformat(),
+                        },
+                    )
+                logger.info(
+                    "language detection fallback: first segment missing, transcript already exists, inferred=%s",
+                    inferred,
+                )
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="phase",
+                    data={"phase": "detect_language", "status": "done", "fallback": True, "language": inferred},
+                )
+                return True
             raise RuntimeError("Missing first segment for language detection")
 
         logger.info("waiting for heavy slot: detect language")
@@ -1141,6 +1171,22 @@ class TaskProcessor:
         if not isinstance(payload, dict):
             return None
         return self._normalize_language(payload.get("language"))
+
+    def _infer_language_from_transcript(self, transcript_json: Path) -> str | None:
+        try:
+            payload = json.loads(transcript_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        cyr = sum(1 for ch in text if ("\u0400" <= ch <= "\u04ff"))
+        lat = sum(1 for ch in text if ("a" <= ch.lower() <= "z"))
+        if cyr == 0 and lat == 0:
+            return None
+        return "ru" if cyr >= lat else "en"
 
     def _extract_detected_language(self, payload: dict[str, Any]) -> tuple[str | None, float | None]:
         language = self._normalize_language(payload.get("language"))
