@@ -580,6 +580,46 @@ class TaskProcessor:
         logger.info("llama model is ready: %s", target_model)
         return True
 
+    async def step_prepare_summary_chunks(
+        self,
+        task_id: uuid.UUID,
+        user_id: str,
+        dirs: dict[str, Path],
+        logger: logging.Logger,
+        task_options: dict[str, Any],
+        dry_run: bool,
+    ) -> bool:
+        summary_dir = dirs["root"] / "summary"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        chunks_file = summary_dir / "chunks.json"
+        if chunks_file.exists():
+            return True
+        if dry_run:
+            return False
+
+        transcript_json = dirs["outputs"] / "transcript.json"
+        if not transcript_json.exists():
+            raise RuntimeError("Missing transcript for summarization")
+        transcript = json.loads(transcript_json.read_text(encoding="utf-8")).get("text", "")
+        if not isinstance(transcript, str) or not transcript.strip():
+            logger.info("summary chunks skipped: empty transcript")
+            write_json(chunks_file, {"chunks": []})
+            write_json(dirs["outputs"] / "summary_chunks.json", {"chunks": []})
+            return True
+
+        logger.info("summary chunk preparation started")
+        chunks = await chunk_text(
+            text=transcript,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            window_tokens=2000,
+            overlap_ratio=0.15,
+        )
+        logger.info("summary chunk preparation finished: %s windows", len(chunks))
+        write_json(chunks_file, {"chunks": chunks})
+        write_json(dirs["outputs"] / "summary_chunks.json", {"chunks": chunks})
+        return True
+
     async def step_summarize_windows(
         self,
         task_id: uuid.UUID,
@@ -592,33 +632,29 @@ class TaskProcessor:
         summary_dir = dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
         output = summary_dir / "windows.json"
-        if output.exists() and any(summary_dir.glob("window_*.txt")):
+        if output.exists():
             return True
         if dry_run:
             return False
-
-        transcript_json = dirs["outputs"] / "transcript.json"
-        if not transcript_json.exists():
-            raise RuntimeError("Missing transcript for summarization")
-        transcript = json.loads(transcript_json.read_text(encoding="utf-8")).get("text", "")
-        if not isinstance(transcript, str) or not transcript.strip():
-            write_json(output, {"windows": []})
-            return True
 
         segment_prompt = load_prompt(
             self.settings.prompts_dir,
             "segment_prompt.md",
             "Return JSON with keys: topic, bullets, action_items.",
         )
-        chunks = await chunk_text(
-            text=transcript,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
-            window_tokens=2000,
-            overlap_ratio=0.15,
-        )
+        chunks_file = summary_dir / "chunks.json"
+        if not chunks_file.exists():
+            chunks_file = dirs["outputs"] / "summary_chunks.json"
+        if not chunks_file.exists():
+            raise RuntimeError("Missing summary chunks")
+        chunks = json.loads(chunks_file.read_text(encoding="utf-8")).get("chunks", [])
+        if not isinstance(chunks, list):
+            raise RuntimeError("Invalid summary chunks payload")
+        logger.info("window summarization started: %s windows", len(chunks))
+        total_parts = len(chunks) + 1
         windows: list[dict[str, Any]] = []
         for idx, chunk in enumerate(chunks):
+            logger.info("summarizing window %s/%s", idx + 1, len(chunks))
             async with self.heavy_slot:
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
@@ -635,7 +671,7 @@ class TaskProcessor:
                 user_id=user_id,
                 task_id=str(task_id),
                 event="summary_progress",
-                data={"current": idx + 1, "total": len(chunks)},
+                data={"current": idx + 1, "total": total_parts},
                 throttle_key="summary_progress",
             )
         write_json(output, {"windows": windows})
@@ -676,6 +712,16 @@ class TaskProcessor:
         if not windows_file.exists():
             raise RuntimeError("Missing window summaries")
         windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
+        if not isinstance(windows, list):
+            raise RuntimeError("Invalid window summaries payload")
+        total_parts = len(windows) + 1
+        logger.info("final summary generation started: windows=%s", len(windows))
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="summary_progress",
+            data={"current": len(windows), "total": total_parts},
+        )
         global_prompt = load_prompt(
             self.settings.prompts_dir,
             "global_prompt.md",
@@ -695,6 +741,12 @@ class TaskProcessor:
         write_json(dirs["outputs"] / "summary.json", parsed)
         summary_md.write_text(self._summary_markdown(parsed), encoding="utf-8")
         (dirs["outputs"] / "summary.md").write_text(self._summary_markdown(parsed), encoding="utf-8")
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="summary_progress",
+            data={"current": total_parts, "total": total_parts},
+        )
         logger.info("final summary generated")
 
         async with self.session_factory() as session:
@@ -764,6 +816,7 @@ class TaskProcessor:
             return step_name == "download"
         if not summary_enabled and step_name in {
             "prepare_llama_model",
+            "prepare_summary_chunks",
             "summarize_windows",
             "summarize_final",
         }:

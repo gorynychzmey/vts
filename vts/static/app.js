@@ -19,10 +19,16 @@ const DAG_STEPS = [
   "transcribe_segments",
   "merge_transcript",
   "prepare_llama_model",
+  "prepare_summary_chunks",
   "summarize_windows",
   "summarize_final"
 ];
-const SUMMARY_STEPS = new Set(["prepare_llama_model", "summarize_windows", "summarize_final"]);
+const SUMMARY_STEPS = new Set([
+  "prepare_llama_model",
+  "prepare_summary_chunks",
+  "summarize_windows",
+  "summarize_final"
+]);
 
 const I18N = {
   en: {
@@ -83,6 +89,7 @@ const I18N = {
     "steps.transcribe_segments": "Segment transcription",
     "steps.merge_transcript": "Transcript merge",
     "steps.prepare_llama_model": "LLM warm-up",
+    "steps.prepare_summary_chunks": "Summary chunking",
     "steps.summarize_windows": "Window summaries",
     "steps.summarize_final": "Final summary"
   },
@@ -144,6 +151,7 @@ const I18N = {
     "steps.transcribe_segments": "Транскрибация сегментов",
     "steps.merge_transcript": "Сборка транскрипта",
     "steps.prepare_llama_model": "Подготовка LLM",
+    "steps.prepare_summary_chunks": "Подготовка окон summary",
     "steps.summarize_windows": "Сводка по окнам",
     "steps.summarize_final": "Финальная сводка"
   },
@@ -205,6 +213,7 @@ const I18N = {
     "steps.transcribe_segments": "Segment-Transkription",
     "steps.merge_transcript": "Transkript-Zusammenführung",
     "steps.prepare_llama_model": "LLM-Aufwärmen",
+    "steps.prepare_summary_chunks": "Summary-Chunking",
     "steps.summarize_windows": "Fenster-Zusammenfassungen",
     "steps.summarize_final": "Finale Zusammenfassung"
   }
@@ -497,6 +506,7 @@ function computeStepProgress(runtime) {
   const active = resolveActiveStep(runtime);
   let value = 0;
   let indeterminate = false;
+  let textOverride = "";
 
   if (active === "download") {
     const phase = runtime.download.phase;
@@ -526,7 +536,17 @@ function computeStepProgress(runtime) {
     }
   } else if (active === "summarize_windows") {
     if (runtime.summary.total > 0) {
-      value = normalizeProgress(runtime.summary.current / runtime.summary.total);
+      const current = Math.max(0, Math.min(runtime.summary.current, runtime.summary.total));
+      value = normalizeProgress(current / runtime.summary.total);
+      textOverride = `${current}/${runtime.summary.total}`;
+    } else {
+      indeterminate = true;
+    }
+  } else if (active === "summarize_final") {
+    if (runtime.summary.total > 0) {
+      const current = Math.max(0, Math.min(runtime.summary.current, runtime.summary.total));
+      value = normalizeProgress(current / runtime.summary.total);
+      textOverride = `${current}/${runtime.summary.total}`;
     } else {
       indeterminate = true;
     }
@@ -542,6 +562,9 @@ function computeStepProgress(runtime) {
 
   if (indeterminate) {
     return { value: Math.max(0.05, value), indeterminate: true, text: t("progress.working") };
+  }
+  if (textOverride) {
+    return { value, indeterminate: false, text: textOverride };
   }
   return { value, indeterminate: false, text: `${Math.round(value * 100)}%` };
 }

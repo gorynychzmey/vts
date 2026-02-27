@@ -44,7 +44,7 @@ Install/deploy these separately:
   - Image: `ghcr.io/ggerganov/llama.cpp:server`
   - Docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
 
-Pipeline includes a dedicated `prepare_llama_model` step before summary generation. It performs model warm-up and emits `llama_model_progress` events; UI shows a spinner while model load/warm-up is in progress.
+Pipeline includes dedicated `prepare_llama_model` and `prepare_summary_chunks` steps before summary generation. They perform model warm-up and transcript chunk preparation so long tokenization/detokenization is visible as a separate stage.
 
 ## yt-dlp YouTube auth and diagnostics
 
