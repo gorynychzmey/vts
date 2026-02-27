@@ -1,17 +1,21 @@
 version: "3.9"
 
+x-vts-build: &vts-build
+  context: .
+  dockerfile: docker/vts.Dockerfile
+  args:
+    VTS_VERSION: ${VTS_VERSION:-0.0.0}
+    APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
+    APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+
 services:
   webapi:
-    build:
-      context: .
-      dockerfile: docker/webapi.Dockerfile
-      args:
-        VTS_VERSION: ${VTS_VERSION:-0.0.0}
-        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
-        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
-    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}-webapi
+    build: *vts-build
+    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}
     env_file:
       - .env
+    environment:
+      VTS_ROLE: webapi
     ports:
       - "8080:8080"
     volumes:
@@ -24,16 +28,12 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: docker/worker.Dockerfile
-      args:
-        VTS_VERSION: ${VTS_VERSION:-0.0.0}
-        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org/debian}
-        APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
-    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}-worker
+    build: *vts-build
+    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}
     env_file:
       - .env
+    environment:
+      VTS_ROLE: worker
     volumes:
       - ./config.yaml:/opt/vts/config/config.yaml:ro
       - ./prompts:/opt/vts/prompts:ro

@@ -31,8 +31,17 @@ cd "${REMOTE_DIR}"
 set -a
 source /opt/vts/config/vts.env
 set +a
-podman pull "\${WEBAPI_IMAGE}"
-podman pull "\${WORKER_IMAGE}"
+if [[ -n "\${VTS_IMAGE:-}" ]]; then
+  image="\${VTS_IMAGE}"
+elif [[ -n "\${WEBAPI_IMAGE:-}" ]]; then
+  image="\${WEBAPI_IMAGE}"
+elif [[ -n "\${WORKER_IMAGE:-}" ]]; then
+  image="\${WORKER_IMAGE}"
+else
+  echo "Set VTS_IMAGE in /opt/vts/config/vts.env"
+  exit 1
+fi
+podman pull "\${image}"
 sudo systemctl restart "${WEBAPI_SERVICE}"
 sudo systemctl restart "${WORKER_SERVICE}"
 sudo systemctl status "${WEBAPI_SERVICE}" --no-pager

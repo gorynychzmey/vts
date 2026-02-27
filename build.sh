@@ -22,13 +22,11 @@ if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-WEBAPI_IMAGE="${IMAGE_REPO}:${VERSION}-webapi"
-WORKER_IMAGE="${IMAGE_REPO}:${VERSION}-worker"
-WEBAPI_LATEST="${IMAGE_REPO}:latest-webapi"
-WORKER_LATEST="${IMAGE_REPO}:latest-worker"
+VTS_IMAGE="${IMAGE_REPO}:${VERSION}"
+VTS_LATEST="${IMAGE_REPO}:latest"
 PYTEST_VERSION="${PYTEST_VERSION:-8.4.2}"
 
-run_tests_in_webapi_container() {
+run_tests_in_container() {
   local runtime="${1}"
   local tests_dir="${PWD}/tests"
   local -a run_args
@@ -39,8 +37,8 @@ run_tests_in_webapi_container() {
     echo "Tests directory not found at ${tests_dir}"
     exit 1
   fi
-  echo "Running tests inside container ${WEBAPI_IMAGE}"
-  "${runtime}" "${run_args[@]}" "${WEBAPI_IMAGE}" -lc \
+  echo "Running tests inside container ${VTS_IMAGE}"
+  "${runtime}" "${run_args[@]}" "${VTS_IMAGE}" -lc \
     "pip install -q pytest==${PYTEST_VERSION} && python -m pytest -q tests"
 }
 
@@ -97,55 +95,34 @@ if [[ "${use_buildx}" == "true" ]]; then
   fi
 
   docker buildx build \
-    -f docker/webapi.Dockerfile \
+    -f docker/vts.Dockerfile \
     "${common_args[@]}" \
-    --cache-from "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-webapi" \
-    --cache-to "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-webapi,mode=${BUILDX_CACHE_MODE}" \
-    -t "${WEBAPI_IMAGE}" \
-    -t "${WEBAPI_LATEST}" \
+    --cache-from "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-vts" \
+    --cache-to "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-vts,mode=${BUILDX_CACHE_MODE}" \
+    -t "${VTS_IMAGE}" \
+    -t "${VTS_LATEST}" \
     --load .
 
-  docker buildx build \
-    -f docker/worker.Dockerfile \
-    "${common_args[@]}" \
-    --cache-from "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-worker" \
-    --cache-to "type=registry,ref=${BUILDX_CACHE_REPO}:buildcache-worker,mode=${BUILDX_CACHE_MODE}" \
-    -t "${WORKER_IMAGE}" \
-    -t "${WORKER_LATEST}" \
-    --load .
-
-  run_tests_in_webapi_container "docker"
+  run_tests_in_container "docker"
 
   echo "Pushing images"
-  docker push "${WEBAPI_IMAGE}"
-  docker push "${WEBAPI_LATEST}"
-  docker push "${WORKER_IMAGE}"
-  docker push "${WORKER_LATEST}"
+  docker push "${VTS_IMAGE}"
+  docker push "${VTS_LATEST}"
 else
   echo "Build mode: classic ${ENGINE} build + push"
   "${ENGINE}" build \
-    -f docker/webapi.Dockerfile \
+    -f docker/vts.Dockerfile \
     --build-arg VTS_VERSION="${VERSION}" \
     --build-arg APT_MIRROR="${APT_MIRROR}" \
     --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
-    -t "${WEBAPI_IMAGE}" \
-    -t "${WEBAPI_LATEST}" .
+    -t "${VTS_IMAGE}" \
+    -t "${VTS_LATEST}" .
 
-  "${ENGINE}" build \
-    -f docker/worker.Dockerfile \
-    --build-arg VTS_VERSION="${VERSION}" \
-    --build-arg APT_MIRROR="${APT_MIRROR}" \
-    --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
-    -t "${WORKER_IMAGE}" \
-    -t "${WORKER_LATEST}" .
-
-  run_tests_in_webapi_container "${ENGINE}"
+  run_tests_in_container "${ENGINE}"
 
   echo "Pushing images"
-  "${ENGINE}" push "${WEBAPI_IMAGE}"
-  "${ENGINE}" push "${WEBAPI_LATEST}"
-  "${ENGINE}" push "${WORKER_IMAGE}"
-  "${ENGINE}" push "${WORKER_LATEST}"
+  "${ENGINE}" push "${VTS_IMAGE}"
+  "${ENGINE}" push "${VTS_LATEST}"
 fi
 
 echo "Done"

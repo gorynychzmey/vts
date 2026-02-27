@@ -89,17 +89,15 @@ Schema is managed by Alembic (`alembic/versions/0001_initial.py`).
 ## Production vs local environment files
 
 - Production uses `/opt/vts/config/config.yaml` as the source of truth.
-- Production uses `/opt/vts/config/vts.env` mainly for image tags (`WEBAPI_IMAGE`, `WORKER_IMAGE`) and optional explicit overrides.
+- Production uses `/opt/vts/config/vts.env` mainly for image tag (`VTS_IMAGE`) and optional explicit overrides.
 - `.env` / `.env.example` are for local `docker/podman compose` usage and are not required for systemd deployment.
 
 ## Build and image publish
 
-`build.sh` builds and pushes both images to Docker Hub:
+`build.sh` builds and pushes one universal image to Docker Hub:
 
-- `docker.io/gorynychzmey/vts:<version>-webapi`
-- `docker.io/gorynychzmey/vts:<version>-worker`
-- `docker.io/gorynychzmey/vts:latest-webapi`
-- `docker.io/gorynychzmey/vts:latest-worker`
+- `docker.io/gorynychzmey/vts:<version>`
+- `docker.io/gorynychzmey/vts:latest`
 
 Example:
 
@@ -133,7 +131,7 @@ git push origin build-0.2.1
 
 Notes:
 
-- Build uses existing `build.sh` (including tests inside `webapi` container before push).
+- Build uses existing `build.sh` (including tests inside the built image before push).
 - Version source:
   - for tag trigger `build-X.Y.Z`, workflow uses `X.Y.Z` as image version;
   - for manual run you can set input `build_version`;

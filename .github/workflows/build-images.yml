@@ -134,12 +134,7 @@ jobs:
           VERSION: ${{ steps.repos.outputs.version }}
         run: |
           set -euo pipefail
-          for suffix in webapi worker; do
-            docker tag "${GHCR_REPO}:${VERSION}-${suffix}" "${DOCKERHUB_REPO}:${VERSION}-${suffix}"
-            docker tag "${GHCR_REPO}:latest-${suffix}" "${DOCKERHUB_REPO}:latest-${suffix}"
-          done
-
-          docker push "${DOCKERHUB_REPO}:${VERSION}-webapi"
-          docker push "${DOCKERHUB_REPO}:latest-webapi"
-          docker push "${DOCKERHUB_REPO}:${VERSION}-worker"
-          docker push "${DOCKERHUB_REPO}:latest-worker"
+          docker tag "${GHCR_REPO}:${VERSION}" "${DOCKERHUB_REPO}:${VERSION}"
+          docker tag "${GHCR_REPO}:latest" "${DOCKERHUB_REPO}:latest"
+          docker push "${DOCKERHUB_REPO}:${VERSION}"
+          docker push "${DOCKERHUB_REPO}:latest"

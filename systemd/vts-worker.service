@@ -6,13 +6,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/opt/vts/config/vts.env
-ExecStartPre=/usr/bin/podman pull ${WORKER_IMAGE}
+ExecStartPre=/usr/bin/podman pull ${VTS_IMAGE}
 ExecStart=/usr/bin/podman run --rm --name vts-worker \
   --env-file /opt/vts/config/vts.env \
+  -e VTS_ROLE=worker \
   -v /opt/vts/config:/opt/vts/config:ro \
   -v /opt/vts/prompts:/opt/vts/prompts:ro \
   -v /srv/vts-data:/srv/vts-data \
-  ${WORKER_IMAGE}
+  ${VTS_IMAGE}
 ExecStop=/usr/bin/podman stop -t 20 vts-worker
 Restart=always
 RestartSec=5

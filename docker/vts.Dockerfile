@@ -32,7 +32,7 @@ FROM python:3.14-slim AS runtime
 ARG APT_MIRROR=http://deb.debian.org/debian
 ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 
-LABEL org.opencontainers.image.title="vts-worker"
+LABEL org.opencontainers.image.title="vts"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -59,7 +59,9 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-index --find-links=/wheels -r /app/requirements.txt && rm -rf /wheels
 
 COPY . /app
+RUN chmod +x /app/docker/vts-entrypoint.sh
 ARG VTS_VERSION=0.0.0
 LABEL org.opencontainers.image.version="${VTS_VERSION}"
 
-CMD ["python", "-m", "vts.worker.main"]
+EXPOSE 8080
+ENTRYPOINT ["/app/docker/vts-entrypoint.sh"]

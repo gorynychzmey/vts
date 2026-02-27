@@ -65,16 +65,13 @@ CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 
 Published tags:
 
-- `docker.io/gorynychzmey/vts:<version>-webapi`
-- `docker.io/gorynychzmey/vts:<version>-worker`
-- `docker.io/gorynychzmey/vts:latest-webapi`
-- `docker.io/gorynychzmey/vts:latest-worker`
+- `docker.io/gorynychzmey/vts:<version>`
+- `docker.io/gorynychzmey/vts:latest`
 
 Set `/opt/vts/config/vts.env`:
 
 ```bash
-WEBAPI_IMAGE=docker.io/gorynychzmey/vts:<version>-webapi
-WORKER_IMAGE=docker.io/gorynychzmey/vts:<version>-worker
+VTS_IMAGE=docker.io/gorynychzmey/vts:<version>
 ```
 
 If you need to rebuild and push images from a build host:
@@ -104,7 +101,7 @@ docker compose run --rm -v "$(pwd)":/app webapi sh -lc "pip install pytest==8.4.
 
 ## 5. DB migrations on webapi startup
 
-`webapi` container runs `alembic upgrade head` in its entrypoint before starting `uvicorn`.
+`webapi` service uses the common image with `VTS_ROLE=webapi` and runs `alembic upgrade head` before starting `uvicorn`.
 No separate migration container is required.
 
 ## 6. Install and start systemd units
