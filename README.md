@@ -121,6 +121,10 @@ git push origin build-0.2.1
 Notes:
 
 - Build uses existing `build.sh` (including tests inside `webapi` container before push).
+- Version source:
+  - for tag trigger `build-X.Y.Z`, workflow uses `X.Y.Z` as image version;
+  - for manual run you can set input `build_version`;
+  - fallback is `vts/__init__.py` version.
 - Workflow pushes to both registries:
   - Docker Hub
   - GHCR

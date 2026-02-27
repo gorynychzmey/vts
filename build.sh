@@ -10,7 +10,17 @@ BUILDX_CACHE_REPO="${BUILDX_CACHE_REPO:-${IMAGE_REPO}}"
 BUILDX_CACHE_MODE="${BUILDX_CACHE_MODE:-max}"
 BUILDX_PLATFORM="${BUILDX_PLATFORM:-}"
 BUILDX_PROGRESS="${BUILDX_PROGRESS:-auto}"
-VERSION="$(python scripts/get_version.py)"
+VERSION_OVERRIDE="${VERSION_OVERRIDE:-}"
+if [[ -n "${VERSION_OVERRIDE}" ]]; then
+  VERSION="${VERSION_OVERRIDE}"
+else
+  VERSION="$(python scripts/get_version.py)"
+fi
+
+if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid version '${VERSION}'. Expected semver: X.Y.Z"
+  exit 1
+fi
 
 WEBAPI_IMAGE="${IMAGE_REPO}:${VERSION}-webapi"
 WORKER_IMAGE="${IMAGE_REPO}:${VERSION}-worker"
