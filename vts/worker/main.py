@@ -34,8 +34,11 @@ async def worker_loop() -> None:
     bus = RedisBus(redis, settings)
     processor = TaskProcessor(session_factory=SessionLocal, redis=redis, settings=settings)
     log = logging.getLogger("vts.worker")
+    heavy_slot_key = f"{settings.redis_prefix}heavy_slots"
 
     try:
+        await redis.set(heavy_slot_key, 0)
+        log.info("heavy slot counter reset on startup")
         await recover_pending_tasks(bus, log)
         while True:
             task_id = await bus.dequeue_task(timeout_seconds=5)

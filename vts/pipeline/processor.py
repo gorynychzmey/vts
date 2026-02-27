@@ -400,8 +400,9 @@ class TaskProcessor:
             start = float(spec["start"])
             end = float(spec["end"])
             initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
+            logger.info("waiting for heavy slot: transcribe segment %s", idx)
             async with self.heavy_slot:
-                logger.info("transcribing segment %s", idx)
+                logger.info("heavy slot acquired: transcribe segment %s", idx)
                 raw = await transcribe_with_whisper(
                     whisper_url=self.settings.whisper_url,
                     audio_path=segment_path,
@@ -543,7 +544,9 @@ class TaskProcessor:
         )
         logger.info("warming llama model: %s", target_model)
         try:
+            logger.info("waiting for heavy slot: llama warmup")
             async with self.heavy_slot:
+                logger.info("heavy slot acquired: llama warmup")
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
                     model=target_model,
@@ -655,7 +658,9 @@ class TaskProcessor:
         windows: list[dict[str, Any]] = []
         for idx, chunk in enumerate(chunks):
             logger.info("summarizing window %s/%s", idx + 1, len(chunks))
+            logger.info("waiting for heavy slot: summarize window %s/%s", idx + 1, len(chunks))
             async with self.heavy_slot:
+                logger.info("heavy slot acquired: summarize window %s/%s", idx + 1, len(chunks))
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
                     model=self.settings.llama_model,
@@ -728,7 +733,9 @@ class TaskProcessor:
             "Produce JSON with executive_summary, key_points, risks, decisions.",
         )
         merged = json.dumps(windows, ensure_ascii=True)
+        logger.info("waiting for heavy slot: final summary")
         async with self.heavy_slot:
+            logger.info("heavy slot acquired: final summary")
             raw = await llama_chat_completion(
                 llama_url=self.settings.llama_url,
                 model=self.settings.llama_model,
