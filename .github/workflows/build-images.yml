@@ -1,0 +1,128 @@
+name: Build Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      dockerhub_image_repo:
+        description: "Docker Hub image repository (e.g. docker.io/gorynychzmey/vts)"
+        required: false
+        default: ""
+      ghcr_image_repo:
+        description: "GHCR image repository (e.g. ghcr.io/<owner>/vts)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "build-*"
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image repositories
+        id: repos
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+
+          dockerhub_input="${{ github.event.inputs.dockerhub_image_repo || '' }}"
+          ghcr_input="${{ github.event.inputs.ghcr_image_repo || '' }}"
+          dockerhub_var="${{ vars.DOCKERHUB_IMAGE_REPO || '' }}"
+          ghcr_var="${{ vars.GHCR_IMAGE_REPO || '' }}"
+
+          if [[ -n "${dockerhub_input}" ]]; then
+            dockerhub_repo="${dockerhub_input}"
+          elif [[ -n "${dockerhub_var}" ]]; then
+            dockerhub_repo="${dockerhub_var}"
+          else
+            dockerhub_repo="docker.io/gorynychzmey/vts"
+          fi
+
+          if [[ -n "${ghcr_input}" ]]; then
+            ghcr_repo="${ghcr_input}"
+          elif [[ -n "${ghcr_var}" ]]; then
+            ghcr_repo="${ghcr_var}"
+          else
+            ghcr_repo="ghcr.io/${owner_lc}/vts"
+          fi
+
+          version="$(python scripts/get_version.py)"
+
+          echo "dockerhub_repo=${dockerhub_repo}" >>"${GITHUB_OUTPUT}"
+          echo "ghcr_repo=${ghcr_repo}" >>"${GITHUB_OUTPUT}"
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+          echo "Using Docker Hub repo: ${dockerhub_repo}"
+          echo "Using GHCR repo: ${ghcr_repo}"
+          echo "Version: ${version}"
+
+      - name: Validate Docker Hub secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.DOCKERHUB_USERNAME }}" || -z "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then
+            echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are required."
+            exit 1
+          fi
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build, test, and push images to Docker Hub
+        shell: bash
+        env:
+          CONTAINER_ENGINE: docker
+          USE_BUILDX: auto
+          BUILDX_CACHE_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+          BUILDX_CACHE_MODE: max
+          IMAGE_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+        run: |
+          set -euo pipefail
+          bash ./build.sh
+
+      - name: Mirror Docker Hub images to GHCR
+        shell: bash
+        env:
+          DOCKERHUB_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+          GHCR_REPO: ${{ steps.repos.outputs.ghcr_repo }}
+          VERSION: ${{ steps.repos.outputs.version }}
+        run: |
+          set -euo pipefail
+          for suffix in webapi worker; do
+            docker tag "${DOCKERHUB_REPO}:${VERSION}-${suffix}" "${GHCR_REPO}:${VERSION}-${suffix}"
+            docker tag "${DOCKERHUB_REPO}:latest-${suffix}" "${GHCR_REPO}:latest-${suffix}"
+          done
+
+          docker push "${GHCR_REPO}:${VERSION}-webapi"
+          docker push "${GHCR_REPO}:latest-webapi"
+          docker push "${GHCR_REPO}:${VERSION}-worker"
+          docker push "${GHCR_REPO}:latest-worker"

@@ -1,0 +1,97 @@
+name: Deploy After Build
+
+on:
+  workflow_run:
+    workflows:
+      - Build Images
+    types:
+      - completed
+
+concurrency:
+  group: deploy-after-build
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate deploy secrets
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DEPLOY_HOST}" ]]; then
+            echo "Missing required secret: DEPLOY_HOST"
+            exit 1
+          fi
+          if [[ -z "${DEPLOY_SSH_KEY}" ]]; then
+            echo "Missing required secret: DEPLOY_SSH_KEY"
+            exit 1
+          fi
+          if [[ -z "${DEPLOY_KNOWN_HOSTS}" ]]; then
+            echo "Missing required secret: DEPLOY_KNOWN_HOSTS"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" >"${HOME}/.ssh/deploy_key"
+          chmod 600 "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
+
+      - name: Deploy on server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_REMOTE_DIR: ${{ vars.DEPLOY_REMOTE_DIR }}
+          DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
+          WEBAPI_SERVICE: ${{ vars.WEBAPI_SERVICE }}
+          WORKER_SERVICE: ${{ vars.WORKER_SERVICE }}
+        run: |
+          set -euo pipefail
+          deploy_user="${DEPLOY_USER:-root}"
+          deploy_port="${DEPLOY_PORT:-22}"
+          remote_dir="${DEPLOY_REMOTE_DIR:-/opt/vts}"
+          env_file="${DEPLOY_ENV_FILE:-/opt/vts/config/vts.env}"
+          webapi_service="${WEBAPI_SERVICE:-vts-webapi.service}"
+          worker_service="${WORKER_SERVICE:-vts-worker.service}"
+
+          ssh -i "${HOME}/.ssh/deploy_key" \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+            -p "${deploy_port}" \
+            "${deploy_user}@${DEPLOY_HOST}" \
+            "REMOTE_DIR='${remote_dir}' ENV_FILE='${env_file}' WEBAPI_SERVICE='${webapi_service}' WORKER_SERVICE='${worker_service}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "${REMOTE_DIR}"
+          set -a
+          source "${ENV_FILE}"
+          set +a
+          podman pull "${WEBAPI_IMAGE}"
+          podman pull "${WORKER_IMAGE}"
+          sudo systemctl restart "${WEBAPI_SERVICE}"
+          sudo systemctl restart "${WORKER_SERVICE}"
+          sudo systemctl status "${WEBAPI_SERVICE}" --no-pager
+          sudo systemctl status "${WORKER_SERVICE}" --no-pager
+          REMOTE

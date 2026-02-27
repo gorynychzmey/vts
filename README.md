@@ -102,6 +102,68 @@ export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ./build.sh
 ```
 
+### Controlled GitHub Actions build
+
+Workflow: `.github/workflows/build-images.yml`
+
+Triggers:
+
+- Manual run: `Actions -> Build Images -> Run workflow`
+- Special push tag: `build-*` (for example `build-0.2.1`)
+
+Tag-trigger example:
+
+```bash
+git tag build-0.2.1
+git push origin build-0.2.1
+```
+
+Notes:
+
+- Build uses existing `build.sh` (including tests inside `webapi` container before push).
+- Workflow pushes to both registries:
+  - Docker Hub
+  - GHCR
+- Repository targets can be overridden by workflow inputs:
+  - `dockerhub_image_repo`
+  - `ghcr_image_repo`
+- Or by repository variables:
+  - `DOCKERHUB_IMAGE_REPO`
+  - `GHCR_IMAGE_REPO`
+- For Docker Hub pushes set repository secrets:
+  - `DOCKERHUB_USERNAME`
+  - `DOCKERHUB_TOKEN`
+- GHCR push uses built-in `${{ secrets.GITHUB_TOKEN }}`.
+
+### Auto deploy after successful build (optional)
+
+Workflow: `.github/workflows/deploy-after-build.yml`
+
+Trigger:
+
+- Automatically runs after successful `Build Images` workflow.
+
+Required repository secrets:
+
+- `DEPLOY_HOST` (for example `vts.example.com`)
+- `DEPLOY_SSH_KEY` (private key for deploy user)
+- `DEPLOY_KNOWN_HOSTS` (exact known_hosts line for server key)
+
+Optional repository variables (defaults shown):
+
+- `DEPLOY_USER` (`root`)
+- `DEPLOY_PORT` (`22`)
+- `DEPLOY_REMOTE_DIR` (`/opt/vts`)
+- `DEPLOY_ENV_FILE` (`/opt/vts/config/vts.env`)
+- `WEBAPI_SERVICE` (`vts-webapi.service`)
+- `WORKER_SERVICE` (`vts-worker.service`)
+
+Prepare `DEPLOY_KNOWN_HOSTS` locally:
+
+```bash
+ssh-keyscan -H <your-hostname>
+```
+
 ## Build performance notes
 
 - Dockerfiles are multi-stage.
