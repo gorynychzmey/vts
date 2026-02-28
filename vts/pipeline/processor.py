@@ -376,12 +376,35 @@ class TaskProcessor:
             overlap_seconds=self.settings.segment_overlap_seconds,
             silence_points=silence_points,
         )
+        total_segments = len(segments)
+        await self.bus.publish_event(
+            user_id=user_id,
+            task_id=str(task_id),
+            event="segment_progress",
+            data={"current": 0, "total": total_segments},
+        )
+        loop = asyncio.get_running_loop()
+
+        def sync_segment_progress(current: int, total: int) -> None:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(
+                    self.bus.publish_event(
+                        user_id=user_id,
+                        task_id=str(task_id),
+                        event="segment_progress",
+                        data={"current": int(current), "total": int(total)},
+                        throttle_key="segment_progress",
+                    )
+                )
+            )
+
         specs = await asyncio.to_thread(
             export_segments,
             audio_wav,
             segments,
             dirs["segments"],
             dirs["logs"] / "task.log",
+            sync_segment_progress,
         )
         logger.info("segmentation finished with %s segments", len(specs))
         write_json(manifest_path, {"segments": specs})

@@ -246,3 +246,111 @@ def test_step_detect_language_accepts_missing_confidence_when_language_is_presen
     assert marker["language"] == "ru"
     assert marker["confidence"] == 0.6
     assert marker["confidence_source"] == "assumed_threshold"
+
+
+def test_step_segment_audio_publishes_progress_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processor = TaskProcessor.__new__(TaskProcessor)
+    processor.settings = SimpleNamespace(
+        segment_search_window_seconds=30,
+        segment_target_seconds=60,
+        segment_overlap_seconds=5,
+        db_write_throttle_ms=0,
+    )
+    processor.bus = _DummyBus()
+
+    class _DummySession:
+        async def __aenter__(self) -> "_DummySession":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        async def commit(self) -> None:
+            return None
+
+    processor.session_factory = lambda: _DummySession()
+
+    class _DummyRepo:
+        def __init__(self, session: object) -> None:
+            self.session = session
+
+        async def clear_asr_for_task(self, task_id: uuid.UUID) -> None:
+            return None
+
+        async def upsert_asr_segment_payload(
+            self,
+            task_id: uuid.UUID,
+            segment_index: int,
+            start_sec: float,
+            end_sec: float,
+            text: str,
+            raw_json: dict[str, object],
+        ) -> object:
+            return object()
+
+    monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
+    monkeypatch.setattr("vts.pipeline.processor.probe_duration", lambda *args, **kwargs: 130.0)
+    monkeypatch.setattr("vts.pipeline.processor.detect_silence_points", lambda *args, **kwargs: [60.0, 120.0])
+
+    def _fake_export_segments(
+        audio_wav: Path,
+        segments: list[tuple[float, float]],
+        segment_dir: Path,
+        log_path: Path,
+        progress_cb: object = None,
+    ) -> list[dict[str, object]]:
+        specs: list[dict[str, object]] = []
+        total = len(segments)
+        for idx, (start, end) in enumerate(segments, start=1):
+            segment_file = segment_dir / f"{idx:04d}.wav"
+            segment_file.parent.mkdir(parents=True, exist_ok=True)
+            segment_file.write_bytes(b"wav")
+            specs.append(
+                {
+                    "segment_index": idx,
+                    "start": float(start),
+                    "end": float(end),
+                    "file": segment_file.name,
+                }
+            )
+            if callable(progress_cb):
+                progress_cb(idx, total)
+        return specs
+
+    monkeypatch.setattr("vts.pipeline.processor.export_segments", _fake_export_segments)
+
+    root = tmp_path / "task"
+    outputs = root / "outputs"
+    segments = root / "segments"
+    logs = root / "logs"
+    media = root / "media"
+    outputs.mkdir(parents=True, exist_ok=True)
+    segments.mkdir(parents=True, exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    media.mkdir(parents=True, exist_ok=True)
+    (media / "audio_16k.wav").write_bytes(b"wav")
+
+    success = asyncio.run(
+        TaskProcessor.step_segment_audio(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"root": root, "outputs": outputs, "segments": segments, "logs": logs, "media": media},
+            logger=logging.getLogger("test_step_segment_audio_progress"),
+            task_options={},
+            dry_run=False,
+        )
+    )
+
+    assert success is True
+    progress_events = [event for event in processor.bus.events if event.get("event") == "segment_progress"]
+    assert progress_events
+    assert progress_events[0]["data"] == {"current": 0, "total": 3}
+    assert progress_events[-1]["data"] == {"current": 3, "total": 3}
+    phase_events = [event for event in processor.bus.events if event.get("event") == "phase"]
+    assert phase_events[-1]["data"] == {"phase": "segment_audio", "segments": 3}
+    manifest = json.loads((outputs / "segments_manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest.get("segments", [])) == 3

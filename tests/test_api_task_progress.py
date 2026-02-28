@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -10,13 +10,19 @@ from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, _summary
 from vts.db.models import StepStatus, TaskStatus
 
 
-def _step(name: str, status: StepStatus) -> SimpleNamespace:
+def _step(
+    name: str,
+    status: StepStatus,
+    *,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
         status=status,
         attempt=1,
-        started_at=None,
-        finished_at=None,
+        started_at=started_at,
+        finished_at=finished_at,
         message=None,
     )
 
@@ -93,6 +99,36 @@ def test_serialize_task_sets_failure_code_for_live_not_started(tmp_path: Path) -
     payload = serialize_task(task)
 
     assert payload.failure_code == "download_live_not_started"
+
+
+def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = outputs_dir / "transcript.txt"
+    summary_path = outputs_dir / "summary.md"
+    transcript_text = "Hello world"
+    summary_text = "Summary body"
+    transcript_path.write_text(transcript_text, encoding="utf-8")
+    summary_path.write_text(summary_text, encoding="utf-8")
+
+    started = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    finished = started + timedelta(minutes=2, seconds=5)
+    task = _task(
+        tmp_path,
+        steps=[
+            _step("download", StepStatus.completed, started_at=started, finished_at=started + timedelta(seconds=20)),
+            _step("merge_transcript", StepStatus.completed, started_at=started + timedelta(seconds=20), finished_at=finished),
+        ],
+    )
+    task.status = TaskStatus.completed
+    task.transcript_path = str(transcript_path)
+    task.summary_path = str(summary_path)
+
+    payload = serialize_task(task)
+
+    assert payload.stats.processing_seconds == 125
+    assert payload.stats.transcript_chars == len(transcript_text)
+    assert payload.stats.summary_chars == len(summary_text)
 
 
 def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> None:

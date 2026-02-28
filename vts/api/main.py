@@ -161,6 +161,52 @@ def _summary_progress_for_task(task: Task) -> tuple[int, int]:
     return (max(current, 0), max(total_parts, 0))
 
 
+def _processing_seconds_for_task(task: Task) -> int | None:
+    started = [step.started_at for step in task.steps if step.started_at is not None]
+    finished = [step.finished_at for step in task.steps if step.finished_at is not None]
+    if not started or not finished:
+        return None
+    duration = (max(finished) - min(started)).total_seconds()
+    if duration < 0:
+        return 0
+    return int(duration)
+
+
+def _text_length_from_path(path_value: str | None, *, prefer_json_text_field: bool = False) -> int | None:
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    text_value = raw_text
+    if prefer_json_text_field and path.suffix.lower() == ".json":
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        extracted = payload.get("text")
+        if not isinstance(extracted, str):
+            return None
+        text_value = extracted
+
+    return len(text_value.strip())
+
+
+def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
+    return {
+        "processing_seconds": _processing_seconds_for_task(task),
+        "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
+        "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
+    }
+
+
 def serialize_task(
     task: Task,
     queue_positions: dict[uuid.UUID, int] | None = None,
@@ -204,6 +250,7 @@ def serialize_task(
             "transcribe": {"current": transcribe_current, "total": transcribe_total},
             "summary": {"current": summary_current, "total": summary_total},
         },
+        stats=_task_stats_for_serialization(task),
     )
 
 
@@ -371,11 +418,16 @@ def create_app() -> FastAPI:
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
     ) -> MessageOut:
         repo = Repo(session)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        bus = RedisBus(redis, settings)
+        await bus.request_cancel(task.id)
+        await bus.remove_task_from_queue(task.id)
         await repo.set_task_status(task, TaskStatus.canceled)
         artifact = Path(task.artifact_dir)
         await session.delete(task)

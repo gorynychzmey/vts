@@ -603,6 +603,23 @@ function parseErrorMessage(value) {
   return text || "";
 }
 
+function parseNonNegativeInt(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return null;
+  }
+  return Math.floor(numeric);
+}
+
+function parseTaskStats(task) {
+  const stats = task && typeof task === "object" ? task.stats : null;
+  return {
+    processingSeconds: parseNonNegativeInt(stats && stats.processing_seconds),
+    transcriptChars: parseNonNegativeInt(stats && stats.transcript_chars),
+    summaryChars: parseNonNegativeInt(stats && stats.summary_chars)
+  };
+}
+
 function detectFailureCode(errorMessage) {
   const text = String(errorMessage || "").toLowerCase();
   if (!text) {
@@ -633,6 +650,43 @@ function resolveFailureMessage(runtime) {
     return baseMessage;
   }
   return t("failure.with_error", { message: baseMessage, error: runtime.failureError });
+}
+
+function formatMetricNumber(value) {
+  return new Intl.NumberFormat(state.locale || "en").format(value);
+}
+
+function formatMetricChars(value) {
+  if (!Number.isInteger(value) || value < 0) {
+    return t("stats.unknown");
+  }
+  return t("stats.chars", { count: formatMetricNumber(value) });
+}
+
+function formatMetricDuration(seconds) {
+  if (!Number.isInteger(seconds) || seconds < 0) {
+    return t("stats.unknown");
+  }
+  return formatDuration(seconds);
+}
+
+function resolveCompletedMessage(runtime) {
+  if (runtime.baseStatus !== "completed") {
+    return "";
+  }
+  return t("success.completed_stats", {
+    time: formatMetricDuration(runtime.stats.processingSeconds),
+    transcript: formatMetricChars(runtime.stats.transcriptChars),
+    summary: formatMetricChars(runtime.stats.summaryChars)
+  });
+}
+
+function resolveTaskMessage(runtime) {
+  const failureMessage = resolveFailureMessage(runtime);
+  if (failureMessage) {
+    return failureMessage;
+  }
+  return resolveCompletedMessage(runtime);
 }
 
 function readStageProgress(task, stageName) {
@@ -680,19 +734,24 @@ function createRuntime(task) {
       current: transcribeProgress.current,
       total: transcribeProgress.total
     },
+    segment: {
+      current: 0,
+      total: 0
+    },
     summary: {
       current: summaryProgress.current,
       total: summaryProgress.total
-    }
+    },
+    stats: parseTaskStats(task)
   };
 }
 
 function resolveActiveStep(runtime) {
-  if (runtime.mediaPhase || runtime.download.hasVideo || runtime.download.hasAudio) {
-    return "download";
-  }
   if (runtime.currentStepName) {
     return runtime.currentStepName;
+  }
+  if (runtime.mediaPhase || runtime.download.hasVideo || runtime.download.hasAudio) {
+    return "download";
   }
   if (runtime.failedStepName) {
     return runtime.failedStepName;
@@ -748,6 +807,14 @@ function computeStepProgress(runtime) {
   } else if (active === "transcribe_segments") {
     if (runtime.transcribe.total > 0) {
       value = normalizeProgress(runtime.transcribe.current / runtime.transcribe.total);
+    } else {
+      indeterminate = true;
+    }
+  } else if (active === "segment_audio") {
+    if (runtime.segment.total > 0) {
+      const current = Math.max(0, Math.min(runtime.segment.current, runtime.segment.total));
+      value = normalizeProgress(current / runtime.segment.total);
+      textOverride = `${current}/${runtime.segment.total}`;
     } else {
       indeterminate = true;
     }
@@ -868,10 +935,10 @@ function renderTaskRuntime(taskEl) {
   elements.progressFill.style.width = `${Math.round(progress.value * 100)}%`;
   elements.progressText.textContent = progress.text;
   elements.progressWrap.setAttribute("aria-valuenow", String(Math.round(progress.value * 100)));
-  const failureMessage = resolveFailureMessage(runtime);
+  const taskMessage = resolveTaskMessage(runtime);
   if (elements.messageEl) {
-    elements.messageEl.textContent = failureMessage;
-    elements.messageEl.classList.toggle("hidden", !failureMessage);
+    elements.messageEl.textContent = taskMessage;
+    elements.messageEl.classList.toggle("hidden", !taskMessage);
   }
 }
 
@@ -1079,6 +1146,7 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
   }
   if (runtime.baseStatus === "completed" && runtime.summaryExpected) {
     runtime.summaryReady = true;
+    void refreshQueuePositions();
   }
   renderTaskRuntime(taskEl);
   updateQueueWatcherFromDom();
@@ -1135,6 +1203,20 @@ function patchTaskProgress(taskId, phase, payload) {
     runtime.displayName = mediaTitle;
   } else if (mediaFilename && !runtime.displayName) {
     runtime.displayName = mediaFilename;
+  }
+  renderTaskRuntime(taskEl);
+}
+
+function patchSegmentProgress(taskId, current, total) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  runtime.segment.current = Number(current) || 0;
+  runtime.segment.total = Number(total) || 0;
+  if (runtime.baseStatus === "running" && !runtime.currentStepName) {
+    runtime.currentStepName = "segment_audio";
   }
   renderTaskRuntime(taskEl);
 }
@@ -1239,6 +1321,7 @@ async function refreshQueuePositions() {
       runtime.failureCode = parseFailureCode(task.failure_code) || detectFailureCode(runtime.failureError);
       runtime.transcriptReady = Boolean(task.transcript_path);
       runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
+      runtime.stats = parseTaskStats(task);
       const transcribeProgress = readStageProgress(task, "transcribe");
       const summaryProgress = readStageProgress(task, "summary");
       runtime.transcribe.current = transcribeProgress.current;
@@ -1298,6 +1381,10 @@ function connectEvents() {
   state.eventSource.addEventListener("transcribe_progress", (event) => {
     const payload = JSON.parse(event.data);
     patchTranscribeProgress(payload.task_id, payload.data.segment_index, payload.data.total);
+  });
+  state.eventSource.addEventListener("segment_progress", (event) => {
+    const payload = JSON.parse(event.data);
+    patchSegmentProgress(payload.task_id, payload.data.current, payload.data.total);
   });
   state.eventSource.addEventListener("summary_progress", (event) => {
     const payload = JSON.parse(event.data);

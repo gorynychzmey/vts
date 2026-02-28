@@ -59,6 +59,9 @@ window.__VTS_I18N.ru = {
 "failure.download_live_not_started":
   "YouTube-трансляция пока недоступна. Нажмите Resume позже, когда трансляция уже начнется.",
 "failure.with_error": "{message} Техническая деталь: {error}",
+"success.completed_stats": "Готово. Время: {time}. Транскрипт: {transcript}. Саммари: {summary}.",
+"stats.chars": "{count} симв.",
+"stats.unknown": "н/д",
 "confirm.delete": "Удалить задачу? Это действие необратимо.",
 "confirm.archive": "Архивировать артефакты задачи? Транскрипт и сводка сохранятся, остальные файлы будут удалены.",
 "steps.download": "Загрузка медиа",

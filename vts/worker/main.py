@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import logging
 
 from redis.asyncio import Redis
@@ -40,14 +41,54 @@ async def worker_loop() -> None:
         await redis.set(heavy_slot_key, 0)
         log.info("heavy slot counter reset on startup")
         await recover_pending_tasks(bus, log)
+        running_task_id = None
+        running_task: asyncio.Task[None] | None = None
+        cancel_sent = False
         while True:
-            task_id = await bus.dequeue_task(timeout_seconds=5)
-            if task_id is None:
+            if running_task is None:
+                task_id = await bus.dequeue_task(timeout_seconds=5)
+                if task_id is None:
+                    await asyncio.sleep(0.2)
+                    continue
+                if await bus.is_cancel_requested(task_id):
+                    await bus.clear_cancel_request(task_id)
+                    log.info("skipping canceled task %s before start", task_id)
+                    continue
+                await bus.clear_cancel_request(task_id)
+                running_task_id = task_id
+                running_task = asyncio.create_task(processor.process_task(task_id))
+                cancel_sent = False
+                log.info("processing task %s", task_id)
+                continue
+
+            if running_task_id is not None and not cancel_sent and await bus.is_cancel_requested(running_task_id):
+                log.info("cancel requested for running task %s", running_task_id)
+                running_task.cancel()
+                cancel_sent = True
+
+            if not running_task.done():
                 await asyncio.sleep(0.2)
                 continue
-            log.info("processing task %s", task_id)
-            await processor.process_task(task_id)
+
+            try:
+                await running_task
+            except asyncio.CancelledError:
+                if running_task_id is not None:
+                    log.info("task %s canceled", running_task_id)
+            except Exception:
+                if running_task_id is not None:
+                    log.exception("task %s crashed with unhandled exception", running_task_id)
+            finally:
+                if running_task_id is not None:
+                    await bus.clear_cancel_request(running_task_id)
+                running_task_id = None
+                running_task = None
+                cancel_sent = False
     finally:
+        if "running_task" in locals() and running_task is not None and not running_task.done():
+            running_task.cancel()
+            with suppress(BaseException):
+                await running_task
         await redis.aclose()
 
 

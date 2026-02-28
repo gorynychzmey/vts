@@ -40,6 +40,12 @@ class TaskProgressOut(BaseModel):
     summary: StageProgressOut = Field(default_factory=StageProgressOut)
 
 
+class TaskStatsOut(BaseModel):
+    processing_seconds: int | None = Field(default=None, ge=0)
+    transcript_chars: int | None = Field(default=None, ge=0)
+    summary_chars: int | None = Field(default=None, ge=0)
+
+
 class TaskOut(BaseModel):
     id: UUID
     source_url: str
@@ -54,6 +60,7 @@ class TaskOut(BaseModel):
     updated_at: datetime
     steps: list[StepOut]
     progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
+    stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
 
 
 class MessageOut(BaseModel):

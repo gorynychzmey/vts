@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 
 class SegmentSpec(TypedDict):
@@ -169,9 +169,16 @@ def build_segments(
     return segments
 
 
-def export_segments(audio_wav: Path, segments: list[tuple[float, float]], segment_dir: Path, log_path: Path) -> list[SegmentSpec]:
+def export_segments(
+    audio_wav: Path,
+    segments: list[tuple[float, float]],
+    segment_dir: Path,
+    log_path: Path,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[SegmentSpec]:
     segment_dir.mkdir(parents=True, exist_ok=True)
     specs: list[SegmentSpec] = []
+    total = len(segments)
     for idx, (start, end) in enumerate(segments, start=1):
         segment_file = segment_dir / f"{idx:04d}.wav"
         if not segment_file.exists():
@@ -201,4 +208,6 @@ def export_segments(audio_wav: Path, segments: list[tuple[float, float]], segmen
                 file=str(segment_file.name),
             )
         )
+        if progress_cb is not None:
+            progress_cb(idx, total)
     return specs

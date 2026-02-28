@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     heavy_slot_limit: int = 1
     event_throttle_hz: int = 4
     db_write_throttle_ms: int = 150
+    task_cancel_ttl_seconds: int = 3600
 
     night_mode_enabled: bool = False
     night_mode_start_hour: int = 22
