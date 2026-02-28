@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from yt_dlp import YoutubeDL
 
+from vts.core.failures import classify_failure_code
+
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 PhaseCallback = Callable[[str, str], None]
@@ -161,6 +163,10 @@ def _run_download_with_client_resolution(
             return candidate
         except Exception as exc:
             last_error = exc
+            failure_code = classify_failure_code(str(exc))
+            if failure_code == "download_live_not_started":
+                logger.warning("yt-dlp non-retriable youtube error (%s): %s", failure_code, exc)
+                raise
             if index >= len(candidates):
                 raise
             logger.warning("yt-dlp youtube player client %s failed: %s", candidate, exc)

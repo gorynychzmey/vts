@@ -1,6 +1,11 @@
+import logging
+
+import pytest
+
 from vts.services.downloader import (
     _build_youtube_client_candidates,
     _is_youtube_url,
+    _run_download_with_client_resolution,
     _with_youtube_player_client,
 )
 
@@ -42,3 +47,32 @@ def test_with_youtube_player_client_preserves_other_extractor_args() -> None:
     assert updated["extractor_args"]["youtube"]["po_token"] == ["web+token"]
     assert updated["extractor_args"]["youtube"]["player_client"] == ["android_vr"]
 
+
+def test_run_download_with_client_resolution_skips_fallback_for_live_not_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _fake_run_download(**kwargs: object) -> None:
+        options = kwargs.get("ydl_opts")
+        extractor_args = options.get("extractor_args", {}) if isinstance(options, dict) else {}
+        youtube_args = extractor_args.get("youtube", {}) if isinstance(extractor_args, dict) else {}
+        player_client = youtube_args.get("player_client", [""])[0]
+        calls.append(str(player_client))
+        raise RuntimeError("ERROR: [youtube] abc: This live event will begin in a few moments.")
+
+    monkeypatch.setattr("vts.services.downloader._run_download", _fake_run_download)
+
+    with pytest.raises(RuntimeError, match="live event will begin"):
+        _run_download_with_client_resolution(
+            url="https://youtube.com/watch?v=abc",
+            outtmpl="/tmp/out.%(ext)s",
+            ydl_opts={},
+            phase="video",
+            progress_cb=lambda phase, payload: None,
+            logger=logging.getLogger("test_downloader_live_not_started"),
+            preferred_youtube_client="ios",
+            configured_youtube_client=None,
+        )
+
+    assert calls == ["ios"]

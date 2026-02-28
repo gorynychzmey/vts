@@ -49,6 +49,7 @@ class TaskOut(BaseModel):
     transcript_path: str | None
     summary_path: str | None
     error_message: str | None
+    failure_code: str | None
     created_at: datetime
     updated_at: datetime
     steps: list[StepOut]

@@ -17,6 +17,7 @@ from vts import __version__
 from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
 from vts.api.schemas import AdminUsersOut, MeOut, MessageOut, TaskCreateRequest, TaskOut
 from vts.core.config import Settings
+from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
@@ -108,6 +109,7 @@ def serialize_task(
     summary_current, summary_total = (0, 0)
     if summary_progress is not None:
         summary_current, summary_total = summary_progress.get(task.id, (0, 0))
+    failure_code = classify_failure_code(task.error_message)
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
@@ -117,6 +119,7 @@ def serialize_task(
         transcript_path=task.transcript_path,
         summary_path=task.summary_path,
         error_message=task.error_message,
+        failure_code=failure_code,
         created_at=task.created_at,
         updated_at=task.updated_at,
         steps=[

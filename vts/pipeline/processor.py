@@ -15,6 +15,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import Settings
+from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.types import DAG_STEPS
@@ -115,13 +116,15 @@ class TaskProcessor:
                 )
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
-                await repo.set_task_status(task, TaskStatus.failed, error_message=str(exc))
+                raw_error = str(exc)
+                failure_code = classify_failure_code(raw_error)
+                await repo.set_task_status(task, TaskStatus.failed, error_message=raw_error)
                 await session.commit()
                 await self.bus.publish_event(
                     user_id=str(task.user_id),
                     task_id=str(task.id),
                     event="task_status",
-                    data={"status": TaskStatus.failed.value, "error": str(exc)},
+                    data={"status": TaskStatus.failed.value, "error": raw_error, "failure_code": failure_code},
                 )
 
     async def _run_step(

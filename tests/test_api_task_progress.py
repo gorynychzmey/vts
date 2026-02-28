@@ -79,3 +79,17 @@ def test_serialize_task_includes_transcribe_and_summary_progress(tmp_path: Path)
     assert payload.progress.transcribe.total == 13
     assert payload.progress.summary.current == 1
     assert payload.progress.summary.total == 1
+    assert payload.failure_code is None
+
+
+def test_serialize_task_sets_failure_code_for_live_not_started(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[_step("download", StepStatus.failed)],
+    )
+    task.status = TaskStatus.failed
+    task.error_message = "ERROR: [youtube] wdEo7uHeWgs: This live event will begin in a few moments."
+
+    payload = serialize_task(task)
+
+    assert payload.failure_code == "download_live_not_started"

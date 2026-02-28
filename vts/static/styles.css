@@ -420,6 +420,17 @@ button:hover {
   font-weight: 600;
 }
 
+.task-message {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #e7b3b3;
+  background: #fdf0f0;
+  color: #7e1f1f;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
 .tabs-bar {
   margin-top: 0.85rem;
   display: flex;

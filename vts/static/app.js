@@ -33,209 +33,10 @@ const SUMMARY_STEPS = new Set([
   "summarize_final"
 ]);
 
-const I18N = {
-  en: {
-    "header.title": "Video Transcribe & Summarize",
-    "header.subtitle": "Queue URL, monitor pipeline, inspect transcript and summary artifacts.",
-    "header.version": "Version:",
-    "context.authenticated": "Authenticated:",
-    "context.acting_as": "Working as:",
-    "context.admin_suffix": " (admin)",
-    "admin.title": "Admin Panel",
-    "admin.switch_user": "Switch to user",
-    "admin.apply": "Apply",
-    "admin.use_self": "Use self",
-    "new_task.title": "New Task",
-    "new_task.url_label": "Video URL",
-    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
-    "new_task.audio_only": "Audio only",
-    "new_task.transcript": "Transcript",
-    "new_task.summary": "Summary",
-    "new_task.language": "Language",
-    "new_task.language_auto": "auto",
-    "new_task.language_en": "English",
-    "new_task.language_ru": "Russian",
-    "new_task.language_de": "German",
-    "new_task.language_fr": "French",
-    "new_task.language_es": "Spanish",
-    "tasks.title": "Tasks",
-    "action.create": "Create task",
-    "action.refresh": "Refresh tasks",
-    "action.pause": "Pause",
-    "action.resume": "Resume",
-    "action.delete": "Delete",
-    "action.copy_tab": "Copy active tab",
-    "action.save_tab": "Save active tab",
-    "action.expand": "Expand",
-    "action.collapse": "Collapse",
-    "tab.transcript": "Transcript",
-    "tab.summary": "Summary",
-    "tab.summary_pending": "Summary is not ready yet",
-    "tab.log": "Log",
-    "tab.prompt_transcript": "Select tab to load transcript",
-    "tab.prompt_summary": "Select tab to load summary",
-    "tab.prompt_log": "Select tab to load task log",
-    "status.running": "running",
-    "status.queued": "queued",
-    "status.paused": "paused",
-    "status.completed": "completed",
-    "status.failed": "failed",
-    "status.canceled": "canceled",
-    "status.queued_pos": "queued #{position}",
-    "step.line": "Step {index} of {total}: {step}",
-    "step.waiting": "Step - of {total}: waiting",
-    "progress.working": "in progress",
-    "progress.queued": "queued",
-    "progress.queue_pos": "queue #{position}",
-    "progress.failed": "failed",
-    "confirm.delete": "Delete task? This action cannot be undone.",
-    "steps.download": "Media download",
-    "steps.extract_audio": "Audio extraction",
-    "steps.trim_initial_silence": "Initial silence trim",
-    "steps.segment_audio": "Audio segmentation",
-    "steps.detect_language": "Language detection",
-    "steps.transcribe_segments": "Segment transcription",
-    "steps.merge_transcript": "Transcript merge",
-    "steps.prepare_llama_model": "LLM warm-up",
-    "steps.prepare_summary_chunks": "Summary chunking",
-    "steps.summarize_windows": "Window summaries",
-    "steps.summarize_final": "Final summary"
-  },
-  ru: {
-    "header.title": "Транскрибация и суммаризация видео",
-    "header.subtitle": "Поставьте URL в очередь, следите за пайплайном и проверяйте артефакты транскрипта и summary.",
-    "header.version": "Версия:",
-    "context.authenticated": "Аутентифицирован:",
-    "context.acting_as": "Работаю как:",
-    "context.admin_suffix": " (админ)",
-    "admin.title": "Панель администратора",
-    "admin.switch_user": "Переключиться на пользователя",
-    "admin.apply": "Применить",
-    "admin.use_self": "Свой пользователь",
-    "new_task.title": "Новая задача",
-    "new_task.url_label": "URL видео",
-    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
-    "new_task.audio_only": "Только аудио",
-    "new_task.transcript": "Транскрипт",
-    "new_task.summary": "Сводка",
-    "new_task.language": "Язык",
-    "new_task.language_auto": "авто",
-    "new_task.language_en": "Английский",
-    "new_task.language_ru": "Русский",
-    "new_task.language_de": "Немецкий",
-    "new_task.language_fr": "Французский",
-    "new_task.language_es": "Испанский",
-    "tasks.title": "Задачи",
-    "action.create": "Создать задачу",
-    "action.refresh": "Обновить задачи",
-    "action.pause": "Пауза",
-    "action.resume": "Возобновить",
-    "action.delete": "Удалить",
-    "action.copy_tab": "Скопировать вкладку",
-    "action.save_tab": "Сохранить вкладку",
-    "action.expand": "Развернуть",
-    "action.collapse": "Свернуть",
-    "tab.transcript": "Транскрипт",
-    "tab.summary": "Сводка",
-    "tab.summary_pending": "Сводка еще не готова",
-    "tab.log": "Лог",
-    "tab.prompt_transcript": "Выберите вкладку, чтобы загрузить транскрипт",
-    "tab.prompt_summary": "Выберите вкладку, чтобы загрузить сводку",
-    "tab.prompt_log": "Выберите вкладку, чтобы загрузить лог задачи",
-    "status.running": "выполняется",
-    "status.queued": "в очереди",
-    "status.paused": "пауза",
-    "status.completed": "завершено",
-    "status.failed": "ошибка",
-    "status.canceled": "отменено",
-    "status.queued_pos": "очередь #{position}",
-    "step.line": "Шаг {index} из {total}: {step}",
-    "step.waiting": "Шаг - из {total}: ожидание",
-    "progress.working": "идет работа",
-    "progress.queued": "в очереди",
-    "progress.queue_pos": "очередь #{position}",
-    "progress.failed": "ошибка",
-    "confirm.delete": "Удалить задачу? Это действие необратимо.",
-    "steps.download": "Загрузка медиа",
-    "steps.extract_audio": "Извлечение аудио",
-    "steps.trim_initial_silence": "Удаление начальной тишины",
-    "steps.segment_audio": "Сегментация аудио",
-    "steps.detect_language": "Определение языка",
-    "steps.transcribe_segments": "Транскрибация сегментов",
-    "steps.merge_transcript": "Сборка транскрипта",
-    "steps.prepare_llama_model": "Подготовка LLM",
-    "steps.prepare_summary_chunks": "Подготовка окон summary",
-    "steps.summarize_windows": "Сводка по окнам",
-    "steps.summarize_final": "Финальная сводка"
-  },
-  de: {
-    "header.title": "Video transkribieren und zusammenfassen",
-    "header.subtitle": "URL in die Warteschlange stellen, Pipeline beobachten und Transkript-/Summary-Artefakte prüfen.",
-    "header.version": "Version:",
-    "context.authenticated": "Authentifiziert:",
-    "context.acting_as": "Arbeitet als:",
-    "context.admin_suffix": " (Admin)",
-    "admin.title": "Admin-Bereich",
-    "admin.switch_user": "Zu Benutzer wechseln",
-    "admin.apply": "Anwenden",
-    "admin.use_self": "Eigener Benutzer",
-    "new_task.title": "Neue Aufgabe",
-    "new_task.url_label": "Video-URL",
-    "new_task.url_placeholder": "https://youtube.com/watch?v=...",
-    "new_task.audio_only": "Nur Audio",
-    "new_task.transcript": "Transkript",
-    "new_task.summary": "Zusammenfassung",
-    "new_task.language": "Sprache",
-    "new_task.language_auto": "auto",
-    "new_task.language_en": "Englisch",
-    "new_task.language_ru": "Russisch",
-    "new_task.language_de": "Deutsch",
-    "new_task.language_fr": "Französisch",
-    "new_task.language_es": "Spanisch",
-    "tasks.title": "Aufgaben",
-    "action.create": "Aufgabe erstellen",
-    "action.refresh": "Aufgaben aktualisieren",
-    "action.pause": "Pausieren",
-    "action.resume": "Fortsetzen",
-    "action.delete": "Löschen",
-    "action.copy_tab": "Aktiven Tab kopieren",
-    "action.save_tab": "Aktiven Tab speichern",
-    "action.expand": "Erweitern",
-    "action.collapse": "Einklappen",
-    "tab.transcript": "Transkript",
-    "tab.summary": "Zusammenfassung",
-    "tab.summary_pending": "Zusammenfassung ist noch nicht bereit",
-    "tab.log": "Log",
-    "tab.prompt_transcript": "Tab auswählen, um das Transkript zu laden",
-    "tab.prompt_summary": "Tab auswählen, um die Zusammenfassung zu laden",
-    "tab.prompt_log": "Tab auswählen, um das Aufgaben-Log zu laden",
-    "status.running": "läuft",
-    "status.queued": "in warteschlange",
-    "status.paused": "pausiert",
-    "status.completed": "abgeschlossen",
-    "status.failed": "fehlgeschlagen",
-    "status.canceled": "abgebrochen",
-    "status.queued_pos": "warteschlange #{position}",
-    "step.line": "Schritt {index} von {total}: {step}",
-    "step.waiting": "Schritt - von {total}: warten",
-    "progress.working": "in bearbeitung",
-    "progress.queued": "in warteschlange",
-    "progress.queue_pos": "warteschlange #{position}",
-    "progress.failed": "fehlgeschlagen",
-    "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
-    "steps.download": "Medien-Download",
-    "steps.extract_audio": "Audio-Extraktion",
-    "steps.trim_initial_silence": "Anfangsstille entfernen",
-    "steps.segment_audio": "Audio-Segmentierung",
-    "steps.detect_language": "Spracherkennung",
-    "steps.transcribe_segments": "Segment-Transkription",
-    "steps.merge_transcript": "Transkript-Zusammenführung",
-    "steps.prepare_llama_model": "LLM-Aufwärmen",
-    "steps.prepare_summary_chunks": "Summary-Chunking",
-    "steps.summarize_windows": "Fenster-Zusammenfassungen",
-    "steps.summarize_final": "Finale Zusammenfassung"
-  }
-};
+window.__VTS_I18N = window.__VTS_I18N || {};
+const I18N = window.__VTS_I18N || {};
+const SUPPORTED_LOCALES = new Set(["en", "ru", "de"]);
+const pendingLocaleLoads = new Map();
 
 function detectLocale() {
   const candidates = [];
@@ -251,15 +52,60 @@ function detectLocale() {
       continue;
     }
     const short = normalized.split(/[-_]/)[0];
-    if (I18N[short]) {
+    if (SUPPORTED_LOCALES.has(short)) {
       return short;
     }
   }
   return "en";
 }
 
+function localeScriptUrl(locale) {
+  const safeLocale = String(locale || "").toLowerCase();
+  return `/static/i18n/${safeLocale}.js?v=${encodeURIComponent(BUILD_VERSION)}`;
+}
+
+function loadLocaleScript(locale) {
+  const safeLocale = String(locale || "").toLowerCase();
+  if (!SUPPORTED_LOCALES.has(safeLocale)) {
+    return Promise.resolve(false);
+  }
+  if (I18N[safeLocale]) {
+    return Promise.resolve(true);
+  }
+  const pending = pendingLocaleLoads.get(safeLocale);
+  if (pending) {
+    return pending;
+  }
+  const promise = new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = localeScriptUrl(safeLocale);
+    script.async = true;
+    script.onload = () => resolve(Boolean(I18N[safeLocale]));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+  pendingLocaleLoads.set(safeLocale, promise);
+  return promise.finally(() => {
+    pendingLocaleLoads.delete(safeLocale);
+  });
+}
+
+async function ensureI18nLoaded() {
+  const preferred = detectLocale();
+  const localeLoaded = await loadLocaleScript(preferred);
+  if (preferred !== "en") {
+    await loadLocaleScript("en");
+  }
+  if (localeLoaded) {
+    state.locale = preferred;
+    return;
+  }
+  state.locale = "en";
+  await loadLocaleScript("en");
+}
+
 const state = {
-  locale: detectLocale(),
+  locale: "en",
   authUser: localStorage.getItem("vts_auth_user") || "demo@example.com",
   actingAs: localStorage.getItem("vts_as_user") || "",
   me: null,
@@ -278,8 +124,9 @@ function interpolate(template, params = {}) {
 }
 
 function t(key, params = {}) {
-  const localeDict = I18N[state.locale] || I18N.en;
-  const raw = localeDict[key] ?? I18N.en[key] ?? key;
+  const localeDict = I18N[state.locale] || I18N.en || {};
+  const fallbackDict = I18N.en || {};
+  const raw = localeDict[key] ?? fallbackDict[key] ?? key;
   return interpolate(raw, params);
 }
 
@@ -688,6 +535,48 @@ function parseQueuePosition(value) {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
+function parseFailureCode(value) {
+  const code = String(value || "").trim();
+  return code || "";
+}
+
+function parseErrorMessage(value) {
+  const text = String(value || "").trim();
+  return text || "";
+}
+
+function detectFailureCode(errorMessage) {
+  const text = String(errorMessage || "").toLowerCase();
+  if (!text) {
+    return "";
+  }
+  if (
+    text.includes("this live event will begin in a few moments") ||
+    text.includes("this live event has not started") ||
+    text.includes("premieres in")
+  ) {
+    return "download_live_not_started";
+  }
+  return "";
+}
+
+function resolveFailureMessage(runtime) {
+  if (runtime.baseStatus !== "failed") {
+    return "";
+  }
+  const failureCode = runtime.failureCode || detectFailureCode(runtime.failureError);
+  let baseMessage = "";
+  if (failureCode === "download_live_not_started") {
+    baseMessage = t("failure.download_live_not_started");
+  } else {
+    baseMessage = t("failure.generic");
+  }
+  if (!runtime.failureError || failureCode === "download_live_not_started") {
+    return baseMessage;
+  }
+  return t("failure.with_error", { message: baseMessage, error: runtime.failureError });
+}
+
 function readStageProgress(task, stageName) {
   const progress = task && typeof task === "object" ? task.progress : null;
   const stage = progress && typeof progress === "object" ? progress[stageName] : null;
@@ -709,6 +598,8 @@ function createRuntime(task) {
     sourceUrl: String(task.source_url || ""),
     displayName: "",
     baseStatus: String(task.status || ""),
+    failureCode: parseFailureCode(task.failure_code),
+    failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
     enabledSteps,
     summaryExpected: enabledSteps.includes("summarize_final"),
@@ -912,6 +803,11 @@ function renderTaskRuntime(taskEl) {
   elements.progressFill.style.width = `${Math.round(progress.value * 100)}%`;
   elements.progressText.textContent = progress.text;
   elements.progressWrap.setAttribute("aria-valuenow", String(Math.round(progress.value * 100)));
+  const failureMessage = resolveFailureMessage(runtime);
+  if (elements.messageEl) {
+    elements.messageEl.textContent = failureMessage;
+    elements.messageEl.classList.toggle("hidden", !failureMessage);
+  }
 }
 
 function renderTasks(tasks) {
@@ -1012,7 +908,8 @@ function renderTasks(tasks) {
       stepTimeEl: root.querySelector(".step-time"),
       progressWrap: root.querySelector(".step-progress"),
       progressFill: root.querySelector(".step-progress-fill"),
-      progressText: root.querySelector(".step-progress-text")
+      progressText: root.querySelector(".step-progress-text"),
+      messageEl: root.querySelector(".task-message")
     };
     root._runtime = createRuntime(task);
     renderTaskRuntime(root);
@@ -1077,13 +974,20 @@ function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
 
-function patchTaskStatus(taskId, status) {
+function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
     return;
   }
   const runtime = taskEl._runtime;
   runtime.baseStatus = String(status || "");
+  if (runtime.baseStatus === "failed") {
+    runtime.failureError = parseErrorMessage(errorMessage);
+    runtime.failureCode = parseFailureCode(failureCode) || detectFailureCode(runtime.failureError);
+  } else {
+    runtime.failureError = "";
+    runtime.failureCode = "";
+  }
   if (runtime.baseStatus !== "queued") {
     runtime.queuePosition = null;
   }
@@ -1240,6 +1144,8 @@ async function refreshQueuePositions() {
       }
       runtime.baseStatus = String(task.status || runtime.baseStatus);
       runtime.queuePosition = parseQueuePosition(task.queue_position);
+      runtime.failureError = parseErrorMessage(task.error_message);
+      runtime.failureCode = parseFailureCode(task.failure_code) || detectFailureCode(runtime.failureError);
       runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
       const transcribeProgress = readStageProgress(task, "transcribe");
       const summaryProgress = readStageProgress(task, "summary");
@@ -1283,7 +1189,7 @@ function connectEvents() {
   });
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
-    patchTaskStatus(payload.task_id, payload.data.status);
+    patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code);
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);
@@ -1407,7 +1313,12 @@ if (adminResetBtn) {
   adminResetBtn.addEventListener("click", resetAdminUser);
 }
 
-applyI18nToPage();
-setVersionLabel(BUILD_VERSION);
-syncSummaryToggle();
-refreshAll();
+async function bootstrap() {
+  await ensureI18nLoaded();
+  applyI18nToPage();
+  setVersionLabel(BUILD_VERSION);
+  syncSummaryToggle();
+  await refreshAll();
+}
+
+void bootstrap();
