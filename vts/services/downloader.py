@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +16,7 @@ from vts.core.failures import classify_failure_code
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 PhaseCallback = Callable[[str, str], None]
 YOUTUBE_CLIENT_FALLBACK_ORDER = ("android_vr", "android", "ios", "mweb", "web_safari", "web")
+_PERCENT_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*%")
 
 
 class _YdlLogger:
@@ -32,6 +34,25 @@ class _YdlLogger:
 
     def error(self, msg: str) -> None:
         self.logger.error("yt-dlp %s", msg)
+
+
+def _extract_download_progress(data: dict[str, Any]) -> tuple[float, int | float, int | float]:
+    total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+    downloaded = data.get("downloaded_bytes") or 0
+    if total:
+        progress = float(downloaded) / float(total)
+        return max(0.0, min(1.0, progress)), downloaded, total
+
+    percent_raw = data.get("_percent_str")
+    if isinstance(percent_raw, str):
+        match = _PERCENT_RE.search(percent_raw)
+        if match:
+            try:
+                progress = float(match.group(1)) / 100.0
+                return max(0.0, min(1.0, progress)), downloaded, total
+            except ValueError:
+                pass
+    return 0.0, downloaded, total
 
 
 def _run_download(
@@ -59,9 +80,7 @@ def _run_download(
             return
         if status != "downloading":
             return
-        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
-        downloaded = data.get("downloaded_bytes") or 0
-        progress = float(downloaded) / float(total) if total else 0.0
+        progress, downloaded, total = _extract_download_progress(data)
         progress_cb(
             phase,
             {

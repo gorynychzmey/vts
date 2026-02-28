@@ -12,6 +12,7 @@ const BUILD_VERSION = String(window.__VTS_BUILD_VERSION__ || "0.0.0");
 const VERSION_CHECK_INTERVAL_MS = 30000;
 const QUEUE_POLL_INTERVAL_MS = 5000;
 const LOG_POLL_INTERVAL_MS = 2000;
+const ARCHIVED_LOG_MARKER = "__VTS_LOG_ARCHIVED__";
 
 const DAG_STEPS = [
   "download",
@@ -142,6 +143,14 @@ function stepText(stepName) {
   return translated === key ? String(stepName || "") : translated;
 }
 
+function localizeLogText(text) {
+  const value = String(text || "");
+  if (value.trim() === ARCHIVED_LOG_MARKER) {
+    return t("log.archived");
+  }
+  return value;
+}
+
 function applyI18n(root = document) {
   const scope = root || document;
   const applyAttr = (attr, updater) => {
@@ -254,12 +263,14 @@ async function refreshTaskLog(taskEl, taskId) {
     if (typeof text !== "string") {
       return;
     }
-    if (text === taskEl._lastLogText) {
+    if (text === taskEl._lastLogRaw) {
       return;
     }
+    const renderedText = localizeLogText(text);
     const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
-    panel.textContent = text;
-    taskEl._lastLogText = text;
+    panel.textContent = renderedText;
+    taskEl._lastLogRaw = text;
+    taskEl._lastLogText = renderedText;
     if (nearBottom || taskEl._forceLogScroll) {
       panel.scrollTop = panel.scrollHeight;
     }
@@ -269,6 +280,7 @@ async function refreshTaskLog(taskEl, taskId) {
       return;
     }
     panel.textContent = error.message;
+    taskEl._lastLogRaw = "";
     taskEl._lastLogText = "";
   } finally {
     taskEl._logPollInFlight = false;
@@ -301,6 +313,47 @@ function getTabPanel(taskEl, tabName) {
     return null;
   }
   return taskEl.querySelector(`.tab-content.${tabName}`);
+}
+
+function getTabButton(taskEl, tabName) {
+  if (!taskEl || !tabName) {
+    return null;
+  }
+  return taskEl.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+}
+
+function isTabEnabled(taskEl, tabName) {
+  const btn = getTabButton(taskEl, tabName);
+  return Boolean(btn && !btn.disabled);
+}
+
+function getFirstEnabledTab(taskEl) {
+  const orderedTabs = ["transcript", "summary", "log"];
+  for (const tabName of orderedTabs) {
+    if (isTabEnabled(taskEl, tabName)) {
+      return tabName;
+    }
+  }
+  return "";
+}
+
+function ensureActiveTabSelection(taskEl) {
+  if (!taskEl) {
+    return "";
+  }
+  const currentTab = getActiveTabName(taskEl);
+  if (currentTab && isTabEnabled(taskEl, currentTab)) {
+    return currentTab;
+  }
+  const fallbackTab = getFirstEnabledTab(taskEl);
+  if (!fallbackTab) {
+    return "";
+  }
+  taskEl.querySelectorAll(".tab-btn").forEach((item) => item.classList.remove("active"));
+  taskEl.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
+  getTabButton(taskEl, fallbackTab)?.classList.add("active");
+  getTabPanel(taskEl, fallbackTab)?.classList.add("active");
+  return fallbackTab;
 }
 
 function getTabDownloadSpec(tabName) {
@@ -361,7 +414,8 @@ async function loadTabContent(taskEl, taskId, tabName) {
   if (tabName === "log") {
     const panel = getTabPanel(taskEl, "log");
     const text = await api(`/api/tasks/${taskId}/log`).catch((err) => err.message);
-    const value = String(text || "");
+    const rawValue = String(text || "");
+    const value = localizeLogText(rawValue);
     if (panel) {
       const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
       panel.textContent = value;
@@ -370,6 +424,7 @@ async function loadTabContent(taskEl, taskId, tabName) {
       }
       taskEl._forceLogScroll = false;
     }
+    taskEl._lastLogRaw = rawValue;
     taskEl._lastLogText = value;
     return value;
   }
@@ -426,6 +481,9 @@ async function saveActiveTabContent(taskEl, taskId) {
 async function activateTaskTab(taskEl, taskId, tabName) {
   const tab = String(tabName || "");
   if (!tab) {
+    return;
+  }
+  if (!isTabEnabled(taskEl, tab)) {
     return;
   }
   const panel = taskEl.querySelector(`.tab-content.${tab}`);
@@ -602,6 +660,7 @@ function createRuntime(task) {
     failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
     enabledSteps,
+    transcriptReady: Boolean(task.transcript_path),
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
@@ -629,6 +688,9 @@ function createRuntime(task) {
 }
 
 function resolveActiveStep(runtime) {
+  if (runtime.mediaPhase || runtime.download.hasVideo || runtime.download.hasAudio) {
+    return "download";
+  }
   if (runtime.currentStepName) {
     return runtime.currentStepName;
   }
@@ -755,18 +817,21 @@ function renderTaskRuntime(taskEl) {
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
   const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
+  const canArchive = runtime.baseStatus === "completed";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
+  if (elements.archiveBtn) {
+    elements.archiveBtn.disabled = !canArchive;
+  }
+  const canOpenTranscript = runtime.transcriptReady;
+  elements.transcriptTabBtn.disabled = !canOpenTranscript;
+  elements.transcriptTabBtn.title = canOpenTranscript ? t("tab.transcript") : t("tab.transcript_pending");
+  elements.transcriptTabBtn.setAttribute("aria-label", elements.transcriptTabBtn.title);
   const canOpenSummary = runtime.summaryReady;
   elements.summaryTabBtn.disabled = !canOpenSummary;
   elements.summaryTabBtn.title = canOpenSummary ? t("tab.summary") : t("tab.summary_pending");
   elements.summaryTabBtn.setAttribute("aria-label", elements.summaryTabBtn.title);
-  if (!canOpenSummary && elements.summaryTabBtn.classList.contains("active")) {
-    elements.summaryTabBtn.classList.remove("active");
-    elements.summaryPanel.classList.remove("active");
-    elements.transcriptTabBtn.classList.add("active");
-    elements.transcriptPanel.classList.add("active");
-  }
+  ensureActiveTabSelection(taskEl);
 
   if (runtime.baseStatus === "running") {
     if (!runtime.taskStartedAt) {
@@ -820,6 +885,7 @@ function renderTasks(tasks) {
     const toggleBtn = root.querySelector(".toggle-btn");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
+    const archiveBtn = root.querySelector(".archive-btn");
     const deleteBtn = root.querySelector(".delete-btn");
     const transcriptPre = root.querySelector(".tab-content.transcript");
     const summaryPre = root.querySelector(".tab-content.summary");
@@ -840,6 +906,10 @@ function renderTasks(tasks) {
     pauseBtn.setAttribute("aria-label", t("action.pause"));
     resumeBtn.title = t("action.resume");
     resumeBtn.setAttribute("aria-label", t("action.resume"));
+    if (archiveBtn) {
+      archiveBtn.title = t("action.archive");
+      archiveBtn.setAttribute("aria-label", t("action.archive"));
+    }
     deleteBtn.title = t("action.delete");
     deleteBtn.setAttribute("aria-label", t("action.delete"));
     toggleBtn.title = t("action.expand");
@@ -859,7 +929,7 @@ function renderTasks(tasks) {
       toggleBtn.title = label;
       toggleBtn.setAttribute("aria-label", label);
       if (expanded) {
-        const activeTab = getActiveTabName(root);
+        const activeTab = ensureActiveTabSelection(root);
         if (activeTab) {
           void activateTaskTab(root, task.id, activeTab);
         }
@@ -869,6 +939,9 @@ function renderTasks(tasks) {
     });
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
+    if (archiveBtn) {
+      archiveBtn.addEventListener("click", () => archiveTask(task.id));
+    }
     deleteBtn.addEventListener("click", () => removeTask(task.id));
     if (copyTabBtn) {
       copyTabBtn.addEventListener("click", async () => {
@@ -897,6 +970,7 @@ function renderTasks(tasks) {
       taskRuntimeEl: root.querySelector(".task-runtime"),
       pauseBtn,
       resumeBtn,
+      archiveBtn,
       transcriptTabBtn,
       summaryTabBtn,
       copyTabBtn,
@@ -970,6 +1044,15 @@ async function removeTask(taskId) {
   await loadTasks();
 }
 
+async function archiveTask(taskId) {
+  const confirmed = window.confirm(t("confirm.archive"));
+  if (!confirmed) {
+    return;
+  }
+  await api(`/api/tasks/${taskId}/archive`, { method: "POST" });
+  await loadTasks();
+}
+
 function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
@@ -1022,6 +1105,8 @@ function patchTaskStep(taskId, name, status) {
   } else if (stepStatus === "failed") {
     runtime.currentStepName = stepName;
     runtime.failedStepName = stepName;
+  } else if (stepStatus === "completed" && stepName === "merge_transcript") {
+    runtime.transcriptReady = true;
   }
   renderTaskRuntime(taskEl);
 }
@@ -1033,6 +1118,9 @@ function patchTaskProgress(taskId, phase, payload) {
   }
   const runtime = taskEl._runtime;
   const stepPhase = String(phase || "");
+  if (!runtime.currentStepName && runtime.baseStatus === "running") {
+    runtime.currentStepName = "download";
+  }
   runtime.download.phase = stepPhase;
   if (stepPhase === "video") {
     runtime.download.video = normalizeProgress(payload.progress);
@@ -1059,6 +1147,9 @@ function patchTaskPhase(taskId, phase, status) {
   const runtime = taskEl._runtime;
   const phaseName = String(phase || "").toLowerCase();
   const phaseStatus = String(status || "").toLowerCase();
+  if (phaseStatus === "running" && (phaseName === "video" || phaseName === "audio") && !runtime.currentStepName) {
+    runtime.currentStepName = "download";
+  }
   runtime.mediaPhase = phaseStatus === "running" ? phaseName : "";
   renderTaskRuntime(taskEl);
 }
@@ -1146,6 +1237,7 @@ async function refreshQueuePositions() {
       runtime.queuePosition = parseQueuePosition(task.queue_position);
       runtime.failureError = parseErrorMessage(task.error_message);
       runtime.failureCode = parseFailureCode(task.failure_code) || detectFailureCode(runtime.failureError);
+      runtime.transcriptReady = Boolean(task.transcript_path);
       runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
       const transcribeProgress = readStageProgress(task, "transcribe");
       const summaryProgress = readStageProgress(task, "summary");

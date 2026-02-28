@@ -190,3 +190,59 @@ def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_
     marker = json.loads((outputs / "language_detection.json").read_text(encoding="utf-8"))
     assert marker["source"] == "resume_transcript_fallback"
     assert marker["language"] == "ru"
+
+
+def test_step_detect_language_accepts_missing_confidence_when_language_is_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processor = TaskProcessor.__new__(TaskProcessor)
+    processor.settings = SimpleNamespace(
+        language_detection_confidence_threshold=0.6,
+        whisper_url="http://whisper.local",
+    )
+    processor.bus = _DummyBus()
+    processor.heavy_slot = _DummyHeavySlot()
+    processor._log_payload = lambda *args, **kwargs: None
+
+    async def _persist_detected_language(*args: object, **kwargs: object) -> None:
+        return None
+
+    processor._persist_detected_language = _persist_detected_language
+
+    async def _fake_transcribe_with_whisper(**kwargs: object) -> dict[str, object]:
+        return {"language": "ru"}
+
+    monkeypatch.setattr("vts.pipeline.processor.transcribe_with_whisper", _fake_transcribe_with_whisper)
+
+    root = tmp_path / "task"
+    outputs = root / "outputs"
+    segments = root / "segments"
+    outputs.mkdir(parents=True, exist_ok=True)
+    segments.mkdir(parents=True, exist_ok=True)
+    (outputs / "segments_manifest.json").write_text(
+        json.dumps({"segments": [{"segment_index": 1, "file": "0001.wav"}]}),
+        encoding="utf-8",
+    )
+    (segments / "0001.wav").write_bytes(b"wav")
+
+    task_options: dict[str, object] = {}
+    success = asyncio.run(
+        TaskProcessor.step_detect_language(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"root": root, "outputs": outputs, "segments": segments},
+            logger=logging.getLogger("test_step_detect_language_missing_confidence"),
+            task_options=task_options,
+            dry_run=False,
+        )
+    )
+
+    assert success is True
+    assert task_options["detected_language"] == "ru"
+    marker = json.loads((outputs / "language_detection.json").read_text(encoding="utf-8"))
+    assert marker["source"] == "whisper_first_segment"
+    assert marker["language"] == "ru"
+    assert marker["confidence"] == 0.6
+    assert marker["confidence_source"] == "assumed_threshold"

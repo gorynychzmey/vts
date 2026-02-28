@@ -34,6 +34,73 @@ def can_resume_task(status: TaskStatus) -> bool:
     return status in {TaskStatus.paused, TaskStatus.failed}
 
 
+ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
+
+
+def _is_path_within(root: Path, path: Path) -> bool:
+    try:
+        root_resolved = root.resolve()
+        path_resolved = path.resolve()
+    except OSError:
+        return False
+    return path_resolved == root_resolved or root_resolved in path_resolved.parents
+
+
+def _archive_task_artifacts(task: Task) -> None:
+    artifact_root = Path(task.artifact_dir)
+    if not artifact_root.exists():
+        return
+    try:
+        root_resolved = artifact_root.resolve()
+    except OSError:
+        return
+
+    keep_files: set[Path] = set()
+    for raw_path in (task.transcript_path, task.summary_path):
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        if _is_path_within(root_resolved, path):
+            keep_files.add(path.resolve())
+
+    log_path = artifact_root / "logs" / "task.log"
+    try:
+        log_resolved = log_path.resolve(strict=False)
+    except OSError:
+        log_resolved = log_path
+
+    for file_path in artifact_root.rglob("*"):
+        if not file_path.is_file():
+            continue
+        try:
+            file_resolved = file_path.resolve()
+        except OSError:
+            continue
+        if file_resolved in keep_files or file_resolved == log_resolved:
+            continue
+        file_path.unlink(missing_ok=True)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(f"{ARCHIVED_LOG_MESSAGE}\n", encoding="utf-8")
+
+    directories = sorted(
+        (path for path in artifact_root.rglob("*") if path.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        if directory == artifact_root:
+            continue
+        try:
+            next(directory.iterdir())
+        except StopIteration:
+            directory.rmdir()
+        except OSError:
+            continue
+
+
 def _read_json_payload(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -316,6 +383,24 @@ def create_app() -> FastAPI:
         if artifact.exists():
             await asyncio.to_thread(shutil.rmtree, artifact, True)
         return MessageOut(status="deleted")
+
+    @app.post("/api/tasks/{task_id}/archive", response_model=MessageOut)
+    async def archive_task(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> MessageOut:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.status != TaskStatus.completed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot archive task with status '{task.status.value}'",
+            )
+        await asyncio.to_thread(_archive_task_artifacts, task)
+        return MessageOut(status="archived")
 
     @app.get("/api/tasks/{task_id}/transcript")
     async def get_transcript(

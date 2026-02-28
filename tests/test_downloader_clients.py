@@ -4,6 +4,7 @@ import pytest
 
 from vts.services.downloader import (
     _build_youtube_client_candidates,
+    _extract_download_progress,
     _is_youtube_url,
     _run_download_with_client_resolution,
     _with_youtube_player_client,
@@ -76,3 +77,17 @@ def test_run_download_with_client_resolution_skips_fallback_for_live_not_started
         )
 
     assert calls == ["ios"]
+
+
+def test_extract_download_progress_uses_percent_fallback() -> None:
+    progress, downloaded, total = _extract_download_progress(
+        {
+            "downloaded_bytes": 0,
+            "total_bytes": None,
+            "total_bytes_estimate": None,
+            "_percent_str": " 10.6% ",
+        }
+    )
+    assert progress == pytest.approx(0.106)
+    assert downloaded == 0
+    assert total == 0

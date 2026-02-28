@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
-from vts.api.main import _summary_progress_for_task, serialize_task
+from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, _summary_progress_for_task, serialize_task
 from vts.db.models import StepStatus, TaskStatus
 
 
@@ -93,3 +93,34 @@ def test_serialize_task_sets_failure_code_for_live_not_started(tmp_path: Path) -
     payload = serialize_task(task)
 
     assert payload.failure_code == "download_live_not_started"
+
+
+def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    media_dir = tmp_path / "media"
+    outputs_dir = tmp_path / "outputs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    media_dir.mkdir(parents=True, exist_ok=True)
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    transcript_path = outputs_dir / "transcript.txt"
+    summary_path = outputs_dir / "summary.md"
+    transcript_path.write_text("hello", encoding="utf-8")
+    summary_path.write_text("world", encoding="utf-8")
+    (logs_dir / "task.log").write_text("old log", encoding="utf-8")
+    (media_dir / "video.mkv").write_text("video", encoding="utf-8")
+    (outputs_dir / "segments_manifest.json").write_text("{}", encoding="utf-8")
+
+    task = SimpleNamespace(
+        artifact_dir=str(tmp_path),
+        transcript_path=str(transcript_path),
+        summary_path=str(summary_path),
+    )
+
+    _archive_task_artifacts(task)
+
+    assert transcript_path.exists()
+    assert summary_path.exists()
+    assert not (media_dir / "video.mkv").exists()
+    assert not (outputs_dir / "segments_manifest.json").exists()
+    assert (logs_dir / "task.log").read_text(encoding="utf-8").strip() == ARCHIVED_LOG_MESSAGE

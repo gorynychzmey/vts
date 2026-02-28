@@ -504,7 +504,16 @@ class TaskProcessor:
         threshold = self.settings.language_detection_confidence_threshold
         if not language:
             raise RuntimeError("Auto language detection failed: language not recognized")
-        if confidence is None or confidence < threshold:
+        confidence_source = "whisper_payload"
+        if confidence is None:
+            confidence = float(threshold)
+            confidence_source = "assumed_threshold"
+            logger.warning(
+                "language detection confidence is missing for language=%s; using threshold fallback=%.3f",
+                language,
+                confidence,
+            )
+        if confidence < threshold:
             raise RuntimeError(
                 f"Auto language detection confidence too low: language={language}, "
                 f"confidence={confidence}, threshold={threshold}"
@@ -516,17 +525,24 @@ class TaskProcessor:
                 "source": "whisper_first_segment",
                 "language": language,
                 "confidence": confidence,
+                "confidence_source": confidence_source,
                 "threshold": threshold,
                 "detected_at": utcnow().isoformat(),
             },
         )
         await self._persist_detected_language(task_id, language, confidence)
-        logger.info("language detected: %s (confidence=%.3f)", language, confidence)
+        logger.info("language detected: %s (confidence=%.3f, source=%s)", language, confidence, confidence_source)
         await self.bus.publish_event(
             user_id=user_id,
             task_id=str(task_id),
             event="phase",
-            data={"phase": "detect_language", "status": "done", "language": language, "confidence": confidence},
+            data={
+                "phase": "detect_language",
+                "status": "done",
+                "language": language,
+                "confidence": confidence,
+                "confidence_source": confidence_source,
+            },
         )
         return True
 
@@ -1200,12 +1216,41 @@ class TaskProcessor:
             language_probs = payload.get("language_probs")
             if isinstance(language_probs, dict) and language:
                 confidence_raw = language_probs.get(language)
+        if confidence_raw is None:
+            confidence_raw = self._extract_confidence_from_word_probabilities(payload)
         confidence: float | None
         if isinstance(confidence_raw, (int, float)):
             confidence = float(confidence_raw)
         else:
             confidence = None
         return language, confidence
+
+    def _extract_confidence_from_word_probabilities(self, payload: dict[str, Any]) -> float | None:
+        segments = payload.get("segments")
+        if not isinstance(segments, list):
+            return None
+        probabilities: list[float] = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            words = segment.get("words")
+            if not isinstance(words, list):
+                continue
+            for word in words:
+                if not isinstance(word, dict):
+                    continue
+                probability = word.get("probability")
+                if isinstance(probability, (int, float)):
+                    value = float(probability)
+                    if 0.0 <= value <= 1.0:
+                        probabilities.append(value)
+                if len(probabilities) >= 64:
+                    break
+            if len(probabilities) >= 64:
+                break
+        if not probabilities:
+            return None
+        return sum(probabilities) / float(len(probabilities))
 
     def _render_prompt_with_language(self, prompt: str, language: str | None) -> str:
         value = self._language_display_name(language)
