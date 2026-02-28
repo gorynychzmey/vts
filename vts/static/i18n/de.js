@@ -46,6 +46,7 @@ window.__VTS_I18N.de = {
 "status.queued": "in warteschlange",
 "status.paused": "pausiert",
 "status.completed": "abgeschlossen",
+"status.archived": "archiviert",
 "status.failed": "fehlgeschlagen",
 "status.canceled": "abgebrochen",
 "status.queued_pos": "warteschlange #{position}",

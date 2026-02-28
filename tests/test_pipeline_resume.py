@@ -354,3 +354,95 @@ def test_step_segment_audio_publishes_progress_events(
     assert phase_events[-1]["data"] == {"phase": "segment_audio", "segments": 3}
     manifest = json.loads((outputs / "segments_manifest.json").read_text(encoding="utf-8"))
     assert len(manifest.get("segments", [])) == 3
+
+
+def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processor = TaskProcessor.__new__(TaskProcessor)
+    processor.settings = SimpleNamespace(
+        prompts_dir=tmp_path / "prompts",
+        llama_url="http://llama.local/v1",
+        llama_model="Qwen2.5-7B-Instruct-Q4_K_M",
+        llama_final_timeout_seconds=120,
+    )
+    processor.bus = _DummyBus()
+    processor.heavy_slot = _DummyHeavySlot()
+    processor._log_payload = lambda *args, **kwargs: None
+    processor._effective_language = lambda *args, **kwargs: "en"
+    processor._render_prompt_with_language = lambda prompt, language: prompt
+    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "global prompt")
+
+    class _DummySession:
+        async def __aenter__(self) -> "_DummySession":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        async def commit(self) -> None:
+            return None
+
+    class _DummyTask:
+        def __init__(self) -> None:
+            self.summary_path: str | None = None
+
+    dummy_task = _DummyTask()
+    processor.session_factory = lambda: _DummySession()
+
+    class _DummyRepo:
+        def __init__(self, session: object) -> None:
+            self.session = session
+
+        async def get_task_by_id(self, task_id: uuid.UUID) -> _DummyTask:
+            return dummy_task
+
+    monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
+
+    llama_calls: list[int] = []
+
+    async def _fake_llama_chat_completion(**kwargs: object) -> str:
+        payload = json.loads(str(kwargs.get("user_prompt", "[]")))
+        llama_calls.append(len(payload))
+        if len(payload) > 3:
+            raise RuntimeError(
+                "llama chat completion failed after retries for http://llama.local/v1/chat/completions: "
+                "default: HTTP 400 (request (43663 tokens) exceeds the available context size (32768 tokens))"
+            )
+        return json.dumps({"executive_summary": "ok", "key_points": ["a"]})
+
+    monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake_llama_chat_completion)
+
+    root = tmp_path / "task"
+    summary_dir = root / "summary"
+    outputs = root / "outputs"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    outputs.mkdir(parents=True, exist_ok=True)
+    windows_payload = {
+        "windows": [
+            {"window_index": idx, "summary": {"topic": f"topic-{idx}", "bullets": [f"b-{idx}"]}}
+            for idx in range(1, 7)
+        ]
+    }
+    (summary_dir / "windows.json").write_text(json.dumps(windows_payload), encoding="utf-8")
+
+    success = asyncio.run(
+        TaskProcessor.step_summarize_final(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"root": root, "outputs": outputs},
+            logger=logging.getLogger("test_step_summarize_final_context_overflow"),
+            task_options={},
+            dry_run=False,
+        )
+    )
+
+    assert success is True
+    assert len(llama_calls) >= 2
+    assert llama_calls[0] == 6
+    assert llama_calls[-1] <= 3
+    assert (summary_dir / "final.json").exists()
+    assert (summary_dir / "final.md").exists()
+    assert dummy_task.summary_path == str(summary_dir / "final.md")

@@ -324,6 +324,12 @@ button:hover {
   color: #236952;
 }
 
+.task-status.status-archived {
+  border-color: #b8c7d6;
+  background: #edf3f8;
+  color: #36546f;
+}
+
 .task-status.status-queued {
   border-color: #d5caaf;
   background: #f5efe4;

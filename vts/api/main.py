@@ -446,12 +446,14 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task.status != TaskStatus.completed:
+        if task.status not in {TaskStatus.completed, TaskStatus.failed}:
             raise HTTPException(
                 status_code=409,
                 detail=f"Cannot archive task with status '{task.status.value}'",
             )
         await asyncio.to_thread(_archive_task_artifacts, task)
+        await repo.set_task_status(task, TaskStatus.archived)
+        await session.commit()
         return MessageOut(status="archived")
 
     @app.get("/api/tasks/{task_id}/transcript")

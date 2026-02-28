@@ -33,6 +33,22 @@ const SUMMARY_STEPS = new Set([
   "summarize_windows",
   "summarize_final"
 ]);
+// Relative per-step weights (in seconds) derived from a real pipeline run log.
+// Final summary failed in that run, so its weight is estimated separately.
+const STEP_WEIGHT_SECONDS = {
+  download: 15.147,
+  extract_audio: 19.606,
+  trim_initial_silence: 1.482,
+  segment_audio: 19.697,
+  detect_language: 267.314,
+  transcribe_segments: 7601.477,
+  merge_transcript: 0.81,
+  prepare_llama_model: 8.589,
+  prepare_summary_chunks: 0.396,
+  summarize_windows: 7345.851
+};
+// Fallback equals average duration of one summarize window from the same run.
+const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 408.101;
 
 window.__VTS_I18N = window.__VTS_I18N || {};
 const I18N = window.__VTS_I18N || {};
@@ -568,6 +584,47 @@ function getEnabledSteps(task) {
   return [...DAG_STEPS];
 }
 
+function buildStepStatusMap(task) {
+  const map = {};
+  const steps = Array.isArray(task && task.steps) ? task.steps : [];
+  steps.forEach((step) => {
+    const name = String(step && step.name ? step.name : "");
+    if (!name) {
+      return;
+    }
+    map[name] = String(step && step.status ? step.status : "");
+  });
+  return map;
+}
+
+function isStepFinishedStatus(status) {
+  return status === "completed" || status === "skipped";
+}
+
+function estimateFinalSummaryWeight(runtime) {
+  const summaryTotal = Number(runtime && runtime.summary ? runtime.summary.total : 0);
+  const windows = Number.isFinite(summaryTotal) && summaryTotal > 1 ? summaryTotal - 1 : 0;
+  if (windows > 0) {
+    return STEP_WEIGHT_SECONDS.summarize_windows / windows;
+  }
+  return FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS;
+}
+
+function getStepWeight(runtime, stepName) {
+  if (stepName === "summarize_final") {
+    return estimateFinalSummaryWeight(runtime);
+  }
+  const value = STEP_WEIGHT_SECONDS[stepName];
+  if (Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  return 1;
+}
+
+function getTotalEnabledWeight(runtime) {
+  return runtime.enabledSteps.reduce((sum, step) => sum + getStepWeight(runtime, step), 0);
+}
+
 function findStep(task, wantedStatus) {
   return (task.steps || []).find((step) => step.status === wantedStatus) || null;
 }
@@ -704,6 +761,7 @@ function createRuntime(task) {
   const runningStep = findStep(task, "running");
   const failedStep = findStep(task, "failed");
   const enabledSteps = getEnabledSteps(task);
+  const stepStatusByName = buildStepStatusMap(task);
   const transcribeProgress = readStageProgress(task, "transcribe");
   const summaryProgress = readStageProgress(task, "summary");
   return {
@@ -714,6 +772,7 @@ function createRuntime(task) {
     failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
     enabledSteps,
+    stepStatusByName,
     transcriptReady: Boolean(task.transcript_path),
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
@@ -747,14 +806,30 @@ function createRuntime(task) {
 }
 
 function resolveActiveStep(runtime) {
-  if (runtime.currentStepName) {
+  if (runtime.currentStepName && runtime.enabledSteps.includes(runtime.currentStepName)) {
     return runtime.currentStepName;
+  }
+  const runningFromSnapshot = runtime.enabledSteps.find((step) => runtime.stepStatusByName[step] === "running");
+  if (runningFromSnapshot) {
+    return runningFromSnapshot;
   }
   if (runtime.mediaPhase || runtime.download.hasVideo || runtime.download.hasAudio) {
     return "download";
   }
   if (runtime.failedStepName) {
     return runtime.failedStepName;
+  }
+  const failedFromSnapshot = runtime.enabledSteps.find((step) => runtime.stepStatusByName[step] === "failed");
+  if (failedFromSnapshot) {
+    return failedFromSnapshot;
+  }
+  if (runtime.baseStatus === "running") {
+    const firstIncomplete = runtime.enabledSteps.find(
+      (step) => !isStepFinishedStatus(runtime.stepStatusByName[step] || "")
+    );
+    if (firstIncomplete) {
+      return firstIncomplete;
+    }
   }
   if (runtime.baseStatus === "queued" && runtime.enabledSteps.length > 0) {
     return runtime.enabledSteps[0];
@@ -765,21 +840,7 @@ function resolveActiveStep(runtime) {
   return "";
 }
 
-function computeStepProgress(runtime) {
-  if (runtime.baseStatus === "completed") {
-    return { value: 1, indeterminate: false, text: "100%" };
-  }
-  if (runtime.baseStatus === "failed") {
-    return { value: 1, indeterminate: false, text: t("progress.failed") };
-  }
-  if (runtime.baseStatus === "queued") {
-    if (runtime.queuePosition) {
-      return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
-    }
-    return { value: 0, indeterminate: false, text: t("progress.queued") };
-  }
-
-  const active = resolveActiveStep(runtime);
+function computeActiveStepLocalProgress(runtime, active) {
   let value = 0;
   let indeterminate = false;
   let textOverride = "";
@@ -819,19 +880,20 @@ function computeStepProgress(runtime) {
       indeterminate = true;
     }
   } else if (active === "summarize_windows") {
-    if (runtime.summary.total > 0) {
-      const current = Math.max(0, Math.min(runtime.summary.current, runtime.summary.total));
-      value = normalizeProgress(current / runtime.summary.total);
-      textOverride = `${current}/${runtime.summary.total}`;
+    if (runtime.summary.total > 1) {
+      const totalWindows = runtime.summary.total - 1;
+      const currentWindows = Math.max(0, Math.min(runtime.summary.current, totalWindows));
+      value = normalizeProgress(currentWindows / totalWindows);
+      textOverride = `${currentWindows}/${totalWindows}`;
     } else {
       indeterminate = true;
     }
   } else if (active === "summarize_final") {
-    if (runtime.summary.total > 0) {
-      const current = Math.max(0, Math.min(runtime.summary.current, runtime.summary.total));
-      value = normalizeProgress(current / runtime.summary.total);
-      textOverride = `${current}/${runtime.summary.total}`;
+    const finalStatus = runtime.stepStatusByName.summarize_final || "";
+    if (finalStatus === "completed") {
+      value = 1;
     } else {
+      value = 0;
       indeterminate = true;
     }
   } else if (active === "prepare_llama_model") {
@@ -844,13 +906,51 @@ function computeStepProgress(runtime) {
     indeterminate = true;
   }
 
-  if (indeterminate) {
-    return { value: Math.max(0.05, value), indeterminate: true, text: t("progress.working") };
+  return { value, indeterminate, textOverride };
+}
+
+function computeStepProgress(runtime) {
+  if (runtime.baseStatus === "completed") {
+    return { value: 1, indeterminate: false, text: "100%" };
   }
-  if (textOverride) {
-    return { value, indeterminate: false, text: textOverride };
+  if (runtime.baseStatus === "failed") {
+    return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
-  return { value, indeterminate: false, text: `${Math.round(value * 100)}%` };
+  if (runtime.baseStatus === "queued") {
+    if (runtime.queuePosition) {
+      return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
+    }
+    return { value: 0, indeterminate: false, text: t("progress.queued") };
+  }
+
+  const active = resolveActiveStep(runtime);
+  const local = computeActiveStepLocalProgress(runtime, active);
+  const totalWeight = getTotalEnabledWeight(runtime);
+  if (!(totalWeight > 0)) {
+    return { value: 0.05, indeterminate: true, text: t("progress.working") };
+  }
+
+  let doneWeight = 0;
+  runtime.enabledSteps.forEach((stepName) => {
+    const status = runtime.stepStatusByName[stepName] || "";
+    if (isStepFinishedStatus(status)) {
+      doneWeight += getStepWeight(runtime, stepName);
+    }
+  });
+
+  const activeStatus = active ? runtime.stepStatusByName[active] || "" : "";
+  if (active && runtime.enabledSteps.includes(active) && !isStepFinishedStatus(activeStatus)) {
+    const activeWeight = getStepWeight(runtime, active);
+    const localValue = local.indeterminate ? Math.max(0.05, local.value) : local.value;
+    doneWeight += activeWeight * normalizeProgress(localValue);
+  }
+
+  const overall = normalizeProgress(doneWeight / totalWeight);
+  const percentText = `${Math.round(overall * 100)}%`;
+  if (local.textOverride) {
+    return { value: overall, indeterminate: false, text: `${percentText} | ${local.textOverride}` };
+  }
+  return { value: overall, indeterminate: false, text: percentText };
 }
 
 function setTaskStatusAppearance(statusEl, status, queuePosition = null) {
@@ -884,7 +984,7 @@ function renderTaskRuntime(taskEl) {
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
   const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
-  const canArchive = runtime.baseStatus === "completed";
+  const canArchive = runtime.baseStatus === "completed" || runtime.baseStatus === "failed";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   if (elements.archiveBtn) {
@@ -1163,6 +1263,9 @@ function patchTaskStep(taskId, name, status) {
   const runtime = taskEl._runtime;
   const stepName = String(name || "");
   const stepStatus = String(status || "");
+  if (stepName) {
+    runtime.stepStatusByName[stepName] = stepStatus;
+  }
   if (stepStatus === "running") {
     runtime.currentStepName = stepName;
     runtime.failedStepName = "";
@@ -1173,7 +1276,13 @@ function patchTaskStep(taskId, name, status) {
   } else if (stepStatus === "failed") {
     runtime.currentStepName = stepName;
     runtime.failedStepName = stepName;
-  } else if (stepStatus === "completed" && stepName === "merge_transcript") {
+  } else if (stepStatus === "completed" || stepStatus === "skipped") {
+    if (runtime.currentStepName === stepName) {
+      runtime.currentStepName = "";
+      runtime.currentStepStartedAt = null;
+    }
+  }
+  if (stepStatus === "completed" && stepName === "merge_transcript") {
     runtime.transcriptReady = true;
   }
   renderTaskRuntime(taskEl);
@@ -1321,6 +1430,7 @@ async function refreshQueuePositions() {
       runtime.failureCode = parseFailureCode(task.failure_code) || detectFailureCode(runtime.failureError);
       runtime.transcriptReady = Boolean(task.transcript_path);
       runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
+      runtime.stepStatusByName = buildStepStatusMap(task);
       runtime.stats = parseTaskStats(task);
       const transcribeProgress = readStageProgress(task, "transcribe");
       const summaryProgress = readStageProgress(task, "summary");
@@ -1328,6 +1438,17 @@ async function refreshQueuePositions() {
       runtime.transcribe.total = transcribeProgress.total;
       runtime.summary.current = summaryProgress.current;
       runtime.summary.total = summaryProgress.total;
+      const runningStep = findStep(task, "running");
+      const failedStep = findStep(task, "failed");
+      if (runningStep) {
+        runtime.currentStepName = String(runningStep.name || "");
+      } else if (runtime.baseStatus === "failed" && failedStep) {
+        runtime.currentStepName = String(failedStep.name || "");
+      } else if (runtime.baseStatus !== "running") {
+        runtime.currentStepName = "";
+      }
+      runtime.currentStepStartedAt = runningStep ? parseIsoMs(runningStep.started_at) : null;
+      runtime.failedStepName = failedStep ? String(failedStep.name || "") : "";
       if (runtime.baseStatus !== "running") {
         runtime.taskStartedAt = computeTaskStartedAt(task);
       }

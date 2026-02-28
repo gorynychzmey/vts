@@ -46,6 +46,7 @@ window.__VTS_I18N.ru = {
 "status.queued": "в очереди",
 "status.paused": "пауза",
 "status.completed": "завершено",
+"status.archived": "в архиве",
 "status.failed": "ошибка",
 "status.canceled": "отменено",
 "status.queued_pos": "очередь #{position}",

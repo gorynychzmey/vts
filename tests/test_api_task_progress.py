@@ -160,3 +160,15 @@ def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> 
     assert not (media_dir / "video.mkv").exists()
     assert not (outputs_dir / "segments_manifest.json").exists()
     assert (logs_dir / "task.log").read_text(encoding="utf-8").strip() == ARCHIVED_LOG_MESSAGE
+
+
+def test_serialize_task_preserves_archived_status(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[_step("download", StepStatus.completed)],
+    )
+    task.status = TaskStatus.archived
+
+    payload = serialize_task(task)
+
+    assert payload.status == TaskStatus.archived.value

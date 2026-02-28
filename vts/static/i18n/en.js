@@ -46,6 +46,7 @@ window.__VTS_I18N.en = {
 "status.queued": "queued",
 "status.paused": "paused",
 "status.completed": "completed",
+"status.archived": "archived",
 "status.failed": "failed",
 "status.canceled": "canceled",
 "status.queued_pos": "queued #{position}",

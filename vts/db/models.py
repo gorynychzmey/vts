@@ -32,6 +32,7 @@ class TaskStatus(StrEnum):
     running = "running"
     paused = "paused"
     completed = "completed"
+    archived = "archived"
     failed = "failed"
     canceled = "canceled"
 

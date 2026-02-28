@@ -64,7 +64,7 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 return
-            if task.status in {TaskStatus.canceled, TaskStatus.completed}:
+            if task.status in {TaskStatus.canceled, TaskStatus.completed, TaskStatus.archived}:
                 return
             task_options = self._task_options(task.options)
             await repo.set_task_status(task, TaskStatus.running)
@@ -1098,19 +1098,59 @@ class TaskProcessor:
             ),
             output_language,
         )
-        merged = json.dumps(windows, ensure_ascii=True)
-        logger.info("waiting for heavy slot: final summary")
-        async with self.heavy_slot:
-            logger.info("heavy slot acquired: final summary")
-            raw = await llama_chat_completion(
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
-                system_prompt=global_prompt,
-                user_prompt=merged,
-                timeout_seconds=int(getattr(self.settings, "llama_final_timeout_seconds", 1800)),
+        selected_windows = list(windows)
+        total_windows = len(windows)
+        attempt = 1
+        while True:
+            merged = json.dumps(selected_windows, ensure_ascii=True)
+            logger.info(
+                "waiting for heavy slot: final summary (attempt=%s windows=%s/%s payload_bytes=%s)",
+                attempt,
+                len(selected_windows),
+                total_windows,
+                len(merged.encode("utf-8")),
             )
+            try:
+                async with self.heavy_slot:
+                    logger.info("heavy slot acquired: final summary")
+                    raw = await llama_chat_completion(
+                        llama_url=self.settings.llama_url,
+                        model=self.settings.llama_model,
+                        system_prompt=global_prompt,
+                        user_prompt=merged,
+                        timeout_seconds=int(getattr(self.settings, "llama_final_timeout_seconds", 1800)),
+                    )
+                break
+            except RuntimeError as exc:
+                request_tokens, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
+                if request_tokens is None:
+                    raise
+                if len(selected_windows) <= 1:
+                    raise RuntimeError(
+                        "Final summary prompt exceeds model context even with a single window summary."
+                    ) from exc
+                next_count = self._next_final_summary_window_count(
+                    current_count=len(selected_windows),
+                    request_tokens=request_tokens,
+                    context_tokens=context_tokens,
+                )
+                logger.warning(
+                    "final summary context overflow (request=%s context=%s), retrying with windows=%s/%s",
+                    request_tokens,
+                    context_tokens,
+                    next_count,
+                    total_windows,
+                )
+                selected_windows = self._select_uniform_windows_for_final_summary(windows, next_count)
+                attempt += 1
         self._log_payload(logger, "llm final summary response", raw)
         parsed = parse_json_response(raw)
+        if len(selected_windows) < total_windows:
+            logger.warning(
+                "final summary generated from reduced windows set: %s/%s",
+                len(selected_windows),
+                total_windows,
+            )
         write_json(summary_json, parsed)
         write_json(dirs["outputs"] / "summary.json", parsed)
         summary_md.write_text(self._summary_markdown(parsed), encoding="utf-8")
@@ -1131,6 +1171,63 @@ class TaskProcessor:
             task.summary_path = str(summary_md)
             await session.commit()
         return True
+
+    def _extract_llama_context_overflow_tokens(self, message: str) -> tuple[int | None, int | None]:
+        match = re.search(
+            r"request\s*\((\d+)\s*tokens\)\s*exceeds\s*the available context size\s*\((\d+)\s*tokens\)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return (None, None)
+        request_tokens = int(match.group(1))
+        context_tokens = int(match.group(2))
+        if request_tokens <= 0 or context_tokens <= 0:
+            return (None, None)
+        return (request_tokens, context_tokens)
+
+    def _next_final_summary_window_count(
+        self,
+        *,
+        current_count: int,
+        request_tokens: int,
+        context_tokens: int | None,
+    ) -> int:
+        target = int(current_count * 0.75)
+        if context_tokens is not None and request_tokens > 0 and context_tokens < request_tokens:
+            ratio = float(context_tokens) / float(request_tokens)
+            target = int(current_count * ratio * 0.9)
+        if target >= current_count:
+            target = current_count - 1
+        return max(1, target)
+
+    def _select_uniform_windows_for_final_summary(self, windows: list[Any], count: int) -> list[Any]:
+        total = len(windows)
+        if count >= total:
+            return list(windows)
+        if count <= 1:
+            return [windows[-1]]
+
+        selected_indices: list[int] = []
+        used: set[int] = set()
+        span = total - 1
+        for pos in range(count):
+            idx = round((pos * span) / (count - 1))
+            idx = max(0, min(span, int(idx)))
+            if idx in used:
+                continue
+            used.add(idx)
+            selected_indices.append(idx)
+        if len(selected_indices) < count:
+            for idx in range(total):
+                if idx in used:
+                    continue
+                used.add(idx)
+                selected_indices.append(idx)
+                if len(selected_indices) >= count:
+                    break
+        selected_indices.sort()
+        return [windows[idx] for idx in selected_indices]
 
     def _summary_markdown(self, payload: dict[str, Any]) -> str:
         lines = ["# Summary", ""]
