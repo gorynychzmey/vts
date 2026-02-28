@@ -27,6 +27,7 @@ window.__VTS_I18N.de = {
 "action.refresh": "Aufgaben aktualisieren",
 "action.pause": "Pausieren",
 "action.resume": "Fortsetzen",
+"action.restart_summary": "Summary neu starten",
 "action.archive": "Aufgabe archivieren",
 "action.delete": "Löschen",
 "action.copy_tab": "Aktiven Tab kopieren",
@@ -56,6 +57,8 @@ window.__VTS_I18N.de = {
 "progress.queued": "in warteschlange",
 "progress.queue_pos": "warteschlange #{position}",
 "progress.failed": "fehlgeschlagen",
+"progress.overall": "Gesamtfortschritt",
+"progress.step": "Schrittfortschritt",
 "failure.generic":
   "Die Aufgabe ist fehlgeschlagen. Sie koennen mit Resume neu starten oder im Log nach Details schauen.",
 "failure.download_live_not_started":
@@ -66,6 +69,7 @@ window.__VTS_I18N.de = {
 "stats.unknown": "k.A.",
 "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
 "confirm.archive": "Aufgabenartefakte archivieren? Transkript und Zusammenfassung bleiben erhalten, andere Dateien werden entfernt.",
+"confirm.restart_summary": "Summary-Stufen zurücksetzen und Zusammenfassung neu starten?",
 "steps.download": "Medien-Download",
 "steps.extract_audio": "Audio-Extraktion",
 "steps.trim_initial_silence": "Anfangsstille entfernen",

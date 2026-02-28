@@ -34,6 +34,27 @@ def can_resume_task(status: TaskStatus) -> bool:
     return status in {TaskStatus.paused, TaskStatus.failed}
 
 
+SUMMARY_STEP_NAMES = frozenset(
+    {
+        "prepare_llama_model",
+        "prepare_summary_chunks",
+        "summarize_windows",
+        "summarize_final",
+    }
+)
+
+
+def can_restart_summary_task(task: Task) -> bool:
+    options = task.options if isinstance(task.options, dict) else {}
+    if options.get("summary") is False:
+        return False
+    if task.status == TaskStatus.completed:
+        return True
+    if task.status != TaskStatus.failed:
+        return False
+    return any(step.name in SUMMARY_STEP_NAMES and step.status == StepStatus.failed for step in task.steps)
+
+
 ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
 
 
@@ -99,6 +120,42 @@ def _archive_task_artifacts(task: Task) -> None:
             directory.rmdir()
         except OSError:
             continue
+
+
+def _reset_summary_artifacts(task: Task) -> None:
+    artifact_root = Path(task.artifact_dir)
+    if not artifact_root.exists():
+        return
+
+    summary_dir = artifact_root / "summary"
+    outputs_dir = artifact_root / "outputs"
+
+    for path in summary_dir.glob("window_*.txt"):
+        path.unlink(missing_ok=True)
+
+    for path in (
+        summary_dir / "chunks.json",
+        summary_dir / "windows.json",
+        summary_dir / "final.json",
+        summary_dir / "final.md",
+        outputs_dir / "llama_model_ready.json",
+        outputs_dir / "summary_chunks.json",
+        outputs_dir / "window_summaries.json",
+        outputs_dir / "summary.json",
+        outputs_dir / "summary.md",
+    ):
+        path.unlink(missing_ok=True)
+
+
+def _reset_summary_steps(task: Task) -> None:
+    for step in task.steps:
+        if step.name not in SUMMARY_STEP_NAMES:
+            continue
+        step.status = StepStatus.pending
+        step.attempt = 0
+        step.started_at = None
+        step.finished_at = None
+        step.message = None
 
 
 def _read_json_payload(path: Path) -> dict[str, Any] | None:
@@ -407,6 +464,32 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail=f"Cannot resume task with status '{task.status.value}'",
             )
+        await repo.set_task_status(task, TaskStatus.queued)
+        await session.commit()
+        bus = RedisBus(redis, settings)
+        await bus.enqueue_task(task.id)
+        return MessageOut(status="queued")
+
+    @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
+    async def restart_summary_task(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> MessageOut:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not can_restart_summary_task(task):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot restart summary for task with status '{task.status.value}'",
+            )
+        _reset_summary_steps(task)
+        task.summary_path = None
+        await asyncio.to_thread(_reset_summary_artifacts, task)
         await repo.set_task_status(task, TaskStatus.queued)
         await session.commit()
         bus = RedisBus(redis, settings)

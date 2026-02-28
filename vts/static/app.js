@@ -909,7 +909,37 @@ function computeActiveStepLocalProgress(runtime, active) {
   return { value, indeterminate, textOverride };
 }
 
-function computeStepProgress(runtime) {
+function computeLocalStepProgress(runtime) {
+  if (runtime.baseStatus === "completed") {
+    return { value: 1, indeterminate: false, text: "100%" };
+  }
+  if (runtime.baseStatus === "failed") {
+    return { value: 1, indeterminate: false, text: t("progress.failed") };
+  }
+  if (runtime.baseStatus === "queued") {
+    if (runtime.queuePosition) {
+      return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
+    }
+    return { value: 0, indeterminate: false, text: t("progress.queued") };
+  }
+
+  const active = resolveActiveStep(runtime);
+  if (!active) {
+    return { value: 0.05, indeterminate: true, text: t("progress.working") };
+  }
+  const local = computeActiveStepLocalProgress(runtime, active);
+  const normalizedValue = normalizeProgress(local.value);
+  const displayValue = local.indeterminate ? Math.max(0.05, normalizedValue) : normalizedValue;
+  if (local.textOverride) {
+    return { value: displayValue, indeterminate: local.indeterminate, text: local.textOverride };
+  }
+  if (local.indeterminate) {
+    return { value: displayValue, indeterminate: true, text: t("progress.working") };
+  }
+  return { value: displayValue, indeterminate: false, text: `${Math.round(displayValue * 100)}%` };
+}
+
+function computeOverallProgress(runtime) {
   if (runtime.baseStatus === "completed") {
     return { value: 1, indeterminate: false, text: "100%" };
   }
@@ -946,11 +976,7 @@ function computeStepProgress(runtime) {
   }
 
   const overall = normalizeProgress(doneWeight / totalWeight);
-  const percentText = `${Math.round(overall * 100)}%`;
-  if (local.textOverride) {
-    return { value: overall, indeterminate: false, text: `${percentText} | ${local.textOverride}` };
-  }
-  return { value: overall, indeterminate: false, text: percentText };
+  return { value: overall, indeterminate: false, text: `${Math.round(overall * 100)}%` };
 }
 
 function setTaskStatusAppearance(statusEl, status, queuePosition = null) {
@@ -984,9 +1010,18 @@ function renderTaskRuntime(taskEl) {
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
   const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
+  const failedSummaryStep = runtime.enabledSteps.find(
+    (stepName) => SUMMARY_STEPS.has(stepName) && runtime.stepStatusByName[stepName] === "failed"
+  );
+  const canRestartSummary =
+    runtime.summaryExpected &&
+    (runtime.baseStatus === "completed" || (runtime.baseStatus === "failed" && Boolean(failedSummaryStep)));
   const canArchive = runtime.baseStatus === "completed" || runtime.baseStatus === "failed";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
+  if (elements.restartSummaryBtn) {
+    elements.restartSummaryBtn.disabled = !canRestartSummary;
+  }
   if (elements.archiveBtn) {
     elements.archiveBtn.disabled = !canArchive;
   }
@@ -1030,11 +1065,18 @@ function renderTaskRuntime(taskEl) {
     elements.stepTimeEl.textContent = "-";
   }
 
-  const progress = computeStepProgress(runtime);
-  elements.progressWrap.classList.toggle("indeterminate", progress.indeterminate);
-  elements.progressFill.style.width = `${Math.round(progress.value * 100)}%`;
-  elements.progressText.textContent = progress.text;
-  elements.progressWrap.setAttribute("aria-valuenow", String(Math.round(progress.value * 100)));
+  const overallProgress = computeOverallProgress(runtime);
+  elements.overallProgressWrap.classList.toggle("indeterminate", overallProgress.indeterminate);
+  elements.overallProgressFill.style.width = `${Math.round(overallProgress.value * 100)}%`;
+  elements.overallProgressText.textContent = overallProgress.text;
+  elements.overallProgressWrap.setAttribute("aria-valuenow", String(Math.round(overallProgress.value * 100)));
+
+  const localProgress = computeLocalStepProgress(runtime);
+  elements.localProgressWrap.classList.toggle("indeterminate", localProgress.indeterminate);
+  elements.localProgressFill.style.width = `${Math.round(localProgress.value * 100)}%`;
+  elements.localProgressText.textContent = localProgress.text;
+  elements.localProgressWrap.setAttribute("aria-valuenow", String(Math.round(localProgress.value * 100)));
+
   const taskMessage = resolveTaskMessage(runtime);
   if (elements.messageEl) {
     elements.messageEl.textContent = taskMessage;
@@ -1052,6 +1094,7 @@ function renderTasks(tasks) {
     const toggleBtn = root.querySelector(".toggle-btn");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
+    const restartSummaryBtn = root.querySelector(".restart-summary-btn");
     const archiveBtn = root.querySelector(".archive-btn");
     const deleteBtn = root.querySelector(".delete-btn");
     const transcriptPre = root.querySelector(".tab-content.transcript");
@@ -1073,6 +1116,10 @@ function renderTasks(tasks) {
     pauseBtn.setAttribute("aria-label", t("action.pause"));
     resumeBtn.title = t("action.resume");
     resumeBtn.setAttribute("aria-label", t("action.resume"));
+    if (restartSummaryBtn) {
+      restartSummaryBtn.title = t("action.restart_summary");
+      restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
+    }
     if (archiveBtn) {
       archiveBtn.title = t("action.archive");
       archiveBtn.setAttribute("aria-label", t("action.archive"));
@@ -1106,6 +1153,9 @@ function renderTasks(tasks) {
     });
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
+    if (restartSummaryBtn) {
+      restartSummaryBtn.addEventListener("click", () => restartSummary(task.id));
+    }
     if (archiveBtn) {
       archiveBtn.addEventListener("click", () => archiveTask(task.id));
     }
@@ -1137,6 +1187,7 @@ function renderTasks(tasks) {
       taskRuntimeEl: root.querySelector(".task-runtime"),
       pauseBtn,
       resumeBtn,
+      restartSummaryBtn,
       archiveBtn,
       transcriptTabBtn,
       summaryTabBtn,
@@ -1147,9 +1198,12 @@ function renderTasks(tasks) {
       logPanel: logPre,
       stepLabelEl: root.querySelector(".step-label"),
       stepTimeEl: root.querySelector(".step-time"),
-      progressWrap: root.querySelector(".step-progress"),
-      progressFill: root.querySelector(".step-progress-fill"),
-      progressText: root.querySelector(".step-progress-text"),
+      overallProgressWrap: root.querySelector(".overall-progress"),
+      overallProgressFill: root.querySelector(".overall-progress .step-progress-fill"),
+      overallProgressText: root.querySelector(".overall-progress .step-progress-text"),
+      localProgressWrap: root.querySelector(".local-progress"),
+      localProgressFill: root.querySelector(".local-progress .step-progress-fill"),
+      localProgressText: root.querySelector(".local-progress .step-progress-text"),
       messageEl: root.querySelector(".task-message")
     };
     root._runtime = createRuntime(task);
@@ -1217,6 +1271,15 @@ async function archiveTask(taskId) {
     return;
   }
   await api(`/api/tasks/${taskId}/archive`, { method: "POST" });
+  await loadTasks();
+}
+
+async function restartSummary(taskId) {
+  const confirmed = window.confirm(t("confirm.restart_summary"));
+  if (!confirmed) {
+    return;
+  }
+  await api(`/api/tasks/${taskId}/restart_summary`, { method: "POST" });
   await loadTasks();
 }
 

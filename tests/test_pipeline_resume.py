@@ -148,6 +148,33 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
     assert success is True
 
 
+def test_step_extract_audio_dry_run_accepts_trimmed_output(tmp_path: Path) -> None:
+    processor = TaskProcessor.__new__(TaskProcessor)
+    processor.settings = SimpleNamespace()
+    processor.bus = _DummyBus()
+
+    root = tmp_path / "task"
+    media = root / "media"
+    logs = root / "logs"
+    media.mkdir(parents=True, exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    (media / "audio_16k_trimmed.wav").write_bytes(b"wav")
+
+    success = asyncio.run(
+        TaskProcessor.step_extract_audio(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"media": media, "logs": logs},
+            logger=logging.getLogger("test_step_extract_audio_trimmed_resume"),
+            task_options={},
+            dry_run=True,
+        )
+    )
+
+    assert success is True
+
+
 def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_exists(
     tmp_path: Path,
 ) -> None:

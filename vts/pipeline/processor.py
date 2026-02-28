@@ -274,6 +274,11 @@ class TaskProcessor:
         dry_run: bool,
     ) -> bool:
         output = dirs["media"] / "audio_16k.wav"
+        trimmed = dirs["media"] / "audio_16k_trimmed.wav"
+        # After trim step we remove audio_16k.wav, so resume from later stages
+        # must treat the trimmed WAV as a valid completion marker too.
+        if trimmed.exists():
+            return True
         if output.exists():
             return True
         if dry_run:
