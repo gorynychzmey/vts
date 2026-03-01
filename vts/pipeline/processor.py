@@ -1107,7 +1107,12 @@ class TaskProcessor:
         total_windows = len(windows)
         attempt = 1
         while True:
-            merged = json.dumps(selected_windows, ensure_ascii=True)
+            parts: list[str] = []
+            for w in selected_windows:
+                idx = w.get("window_index", "?")
+                text = self._extract_window_text(w)
+                parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
+            merged = "\n\n".join(parts)
             logger.info(
                 "waiting for heavy slot: final summary (attempt=%s windows=%s/%s payload_bytes=%s)",
                 attempt,
@@ -1233,6 +1238,28 @@ class TaskProcessor:
                     break
         selected_indices.sort()
         return [windows[idx] for idx in selected_indices]
+
+    def _extract_window_text(self, window: dict[str, Any]) -> str:
+        summary = window.get("summary", {})
+        if isinstance(summary, str):
+            return summary.strip()
+        if not isinstance(summary, dict):
+            return str(summary).strip()
+        # Plain text wrapped by parse_json_response fallback: {"raw": t, "summary": t}
+        for key in ("summary", "raw"):
+            val = summary.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        # Legacy structured JSON summary — render as readable text
+        parts: list[str] = []
+        for key, val in summary.items():
+            if key == "raw":
+                continue
+            if isinstance(val, list):
+                parts.append(f"{key}: " + "; ".join(str(i) for i in val))
+            elif isinstance(val, str) and val.strip():
+                parts.append(f"{key}: {val.strip()}")
+        return "\n".join(parts)
 
     def _summary_markdown(self, payload: dict[str, Any]) -> str:
         lines = ["# Summary", ""]
