@@ -1,8 +1,9 @@
 # VTS Project Memory
 
 - Python project: `vts/` package, FastAPI + SQLAlchemy + Redis
-- Tests run **inside Docker container** — no local pytest
-- Version: `vts/__init__.py` · bump: `python scripts/bump_version.py patch`
+- Tests: run locally via `.venv` before commit; also run in Docker container during GitHub build
+- Local test setup (once): `python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
+- Version: `vts/__init__.py` · bump: `python3 scripts/bump_version.py patch`
 
 ## Git Workflow (ALWAYS FOLLOW → see [git_workflow.md](git_workflow.md))
 
@@ -13,6 +14,6 @@ Use `Agent(subagent_type="general-purpose", model="haiku")` for mechanical git s
 
 ## Project Notes
 
-- Segment prompt: plain structured text, no JSON (`prompts/segment_prompt.md`)
-- Final summary: JSON output (`prompts/global_prompt.md`)
-- `_extract_window_text()` in `processor.py` — extracts only `summary` text (not `raw`) for final LLM call
+- All LLM summaries (segment + final) return plain markdown, not JSON (`use_json_format=False`)
+- Segment summaries stored as raw strings in `window_*.txt` and `windows.json`
+- Final summary written directly to `final.md`; `final.json` stores `{"raw": <text>}` for checkpoint

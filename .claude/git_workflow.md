@@ -1,5 +1,10 @@
 # Git Workflow — VTS (see also [PROJECT_RULES.md](../PROJECT_RULES.md))
 
+## One-time local setup (if .venv missing)
+```
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+```
+
 ## Commit steps (every task)
 1. `bash scripts/prepare_commit.sh` — bumps patch version + stages all changes
 2. `git add <specific files>` — never blindly `git add -A`
