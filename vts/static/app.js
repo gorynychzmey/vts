@@ -868,26 +868,23 @@ function computeActiveStepLocalProgress(runtime, active) {
   } else if (active === "transcribe_segments") {
     if (runtime.transcribe.total > 0) {
       value = normalizeProgress(runtime.transcribe.current / runtime.transcribe.total);
-    } else {
-      indeterminate = true;
     }
+    // else: value = 0, indeterminate = false → показываем 0% пока не получен total
   } else if (active === "segment_audio") {
     if (runtime.segment.total > 0) {
       const current = Math.max(0, Math.min(runtime.segment.current, runtime.segment.total));
       value = normalizeProgress(current / runtime.segment.total);
       textOverride = `${current}/${runtime.segment.total}`;
-    } else {
-      indeterminate = true;
     }
+    // else: value = 0, indeterminate = false → показываем 0% пока не получен total
   } else if (active === "summarize_windows") {
     if (runtime.summary.total > 1) {
       const totalWindows = runtime.summary.total - 1;
       const currentWindows = Math.max(0, Math.min(runtime.summary.current, totalWindows));
       value = normalizeProgress(currentWindows / totalWindows);
       textOverride = `${currentWindows}/${totalWindows}`;
-    } else {
-      indeterminate = true;
     }
+    // else: value = 0, indeterminate = false → показываем 0% пока не получен total
   } else if (active === "summarize_final") {
     const finalStatus = runtime.stepStatusByName.summarize_final || "";
     if (finalStatus === "completed") {
