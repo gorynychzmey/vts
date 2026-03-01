@@ -4,6 +4,7 @@ Contract document — keep in sync with automation scripts.
 
 ## 1. Git Workflow
 
+- **Every task ends with commit+push** (mandatory, no exceptions).
 - **Commit checklist:** tests pass → `python scripts/bump_version.py patch` → `bash scripts/prepare_commit.sh` → commit → push
 - **`build` keyword** (after push): bump version commit, then `git tag build-X.Y.Z && git push origin build-X.Y.Z` (tag must match `vts/__init__.py`). Do NOT run `build.sh` locally.
 - `scripts/prepare_commit.sh` removes `.pytest_cache`, `pytest-cache-files-*`
