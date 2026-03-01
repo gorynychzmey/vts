@@ -463,3 +463,50 @@ def test_llama_tokenize_retries_when_model_loading(monkeypatch: pytest.MonkeyPat
     assert tokens == [7, 8, 9]
     assert len(post_calls) == 3
     assert len(sleep_calls) == 2
+
+
+def test_llama_chat_completion_no_response_format_when_use_json_format_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint = "http://llama.local/v1/chat/completions"
+    post_calls: list[dict[str, object]] = []
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            post_calls.append({"url": url, "json": json})
+            return _response(
+                status_code=200,
+                url=endpoint,
+                payload={"choices": [{"message": {"content": "## Topics\n- done"}}]},
+            )
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    raw = asyncio.run(
+        llama_chat_completion(
+            llama_url="http://llama.local/v1",
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="Extract knowledge as markdown.",
+            user_prompt="Segment text here.",
+            use_json_format=False,
+        )
+    )
+
+    assert raw == "## Topics\n- done"
+    assert all(
+        "response_format" not in call["json"]
+        for call in post_calls
+        if isinstance(call["json"], dict)
+    )

@@ -83,11 +83,12 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
 
     async def _fake_chat_completion(**kwargs: object) -> str:
         calls.append(kwargs)
+        assert kwargs.get("use_json_format") is False, "segment calls must not use JSON format"
         user_prompt = str(kwargs.get("user_prompt", ""))
         if "Window 2/" in user_prompt:
-            return json.dumps({"topic": "second", "bullets": ["b"], "action_items": []})
+            return "## Topics\n- second\n\n## Facts and Examples\n- b"
         if "Window 3/" in user_prompt:
-            return json.dumps({"topic": "third", "bullets": ["c"], "action_items": []})
+            return "## Topics\n- third\n\n## Facts and Examples\n- c"
         raise AssertionError(f"unexpected prompt: {user_prompt}")
 
     monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake_chat_completion)
@@ -112,8 +113,8 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
     windows = payload["windows"]
     assert [item["window_index"] for item in windows] == [1, 2, 3]
     assert windows[0]["summary"] == first_summary
-    assert windows[1]["summary"]["topic"] == "second"
-    assert windows[2]["summary"]["topic"] == "third"
+    assert isinstance(windows[1]["summary"], str) and "second" in windows[1]["summary"]
+    assert isinstance(windows[2]["summary"], str) and "third" in windows[2]["summary"]
     assert (dirs["outputs"] / "window_summaries.json").exists()
     assert len(processor.bus.events) == 3
 
