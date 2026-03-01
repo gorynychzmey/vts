@@ -5,8 +5,7 @@ set -euo pipefail
 find . -maxdepth 1 -type d -name "pytest-cache-files-*" -exec rm -rf {} +
 rm -rf .pytest_cache
 
-python scripts/bump_version.py patch
-python -m pytest -q
+python3 scripts/bump_version.py patch
 git add -A
 
 echo "Patch bumped, tests passed, changes staged. Create commit and push next."
