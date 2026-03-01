@@ -430,9 +430,10 @@ def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
     llama_calls: list[int] = []
 
     async def _fake_llama_chat_completion(**kwargs: object) -> str:
-        payload = json.loads(str(kwargs.get("user_prompt", "[]")))
-        llama_calls.append(len(payload))
-        if len(payload) > 3:
+        text = str(kwargs.get("user_prompt", ""))
+        count = text.count("[Segment ")
+        llama_calls.append(count)
+        if count > 3:
             raise RuntimeError(
                 "llama chat completion failed after retries for http://llama.local/v1/chat/completions: "
                 "default: HTTP 400 (request (43663 tokens) exceeds the available context size (32768 tokens))"
