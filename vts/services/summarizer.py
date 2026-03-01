@@ -398,6 +398,7 @@ async def llama_chat_completion(
     timeout_seconds: int = 600,
     max_tokens: int | None = None,
     request_attempts: int = 3,
+    use_json_format: bool = True,
 ) -> str:
     endpoint = llama_url.rstrip("/") + "/chat/completions"
     loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
@@ -418,7 +419,7 @@ async def llama_chat_completion(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
-            include_response_format=True,
+            include_response_format=use_json_format,
         ),
     )
     model_variants = _model_name_variants(model)
@@ -431,7 +432,7 @@ async def llama_chat_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                include_response_format=True,
+                include_response_format=use_json_format,
             ),
         )
         enqueue(

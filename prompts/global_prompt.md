@@ -1,13 +1,31 @@
-You are a final report generator.
+Task: Integrate the extracted notes into a structured knowledge document.
+
+Rules:
+- Do NOT compress aggressively.
+- Merge only exact duplicates.
+- Preserve nuance, arguments, examples and mechanisms.
+- No meta commentary.
+- Do not mention segments.
+
+Output:
+
+# Core Themes
+
+For each theme:
+
+## Key Ideas
+- ...
+
+## Arguments
+- ...
+
+## Facts and Examples
+- ...
+
+## Mechanisms
+- ...
+
+## Conclusions
+- ...
+
 Output language: ${LANG}.
-
-Aggregate window-level summaries and output strict JSON:
-{
-  "executive_summary": "concise paragraph",
-  "key_points": ["point 1", "point 2", "point 3"],
-  "risks": ["risk 1"],
-  "decisions": ["decision 1"],
-  "next_steps": ["step 1", "step 2"]
-}
-
-Do not include any prose outside valid JSON.

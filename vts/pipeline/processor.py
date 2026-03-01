@@ -961,8 +961,6 @@ class TaskProcessor:
                     if idx < 1:
                         continue
                     summary_payload = item.get("summary")
-                    if not isinstance(summary_payload, dict):
-                        summary_payload = {"raw": str(summary_payload)}
                     path = item.get("path")
                     if not isinstance(path, str) or not path.strip():
                         path = str(summary_dir / f"window_{idx:02d}.txt")
@@ -980,15 +978,15 @@ class TaskProcessor:
             idx = int(match.group(1))
             if idx in windows_by_index:
                 continue
+            content = window_path.read_text(encoding="utf-8")
             try:
-                parsed = json.loads(window_path.read_text(encoding="utf-8"))
+                parsed = json.loads(content)
+                summary: str | dict = parsed if isinstance(parsed, dict) else content
             except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
+                summary = content
             windows_by_index[idx] = {
                 "window_index": idx,
-                "summary": parsed,
+                "summary": summary,
                 "path": str(window_path),
             }
 
@@ -1029,12 +1027,12 @@ class TaskProcessor:
                     system_prompt=segment_prompt,
                     user_prompt=f"Window {idx}/{len(chunks)}\n\n{chunk}",
                     timeout_seconds=int(getattr(self.settings, "llama_chat_timeout_seconds", 600)),
+                    use_json_format=False,
                 )
             self._log_payload(logger, f"llm window response index={idx}", raw)
-            parsed = parse_json_response(raw)
             window_path = summary_dir / f"window_{idx:02d}.txt"
-            window_path.write_text(json.dumps(parsed, ensure_ascii=True, indent=2), encoding="utf-8")
-            windows_by_index[idx] = {"window_index": idx, "summary": parsed, "path": str(window_path)}
+            window_path.write_text(raw, encoding="utf-8")
+            windows_by_index[idx] = {"window_index": idx, "summary": raw, "path": str(window_path)}
             ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
             write_json(output, {"windows": ordered})
             write_json(output_mirror, {"windows": ordered})
@@ -1129,6 +1127,7 @@ class TaskProcessor:
                         system_prompt=global_prompt,
                         user_prompt=merged,
                         timeout_seconds=int(getattr(self.settings, "llama_final_timeout_seconds", 1800)),
+                        use_json_format=False,
                     )
                 break
             except RuntimeError as exc:
@@ -1154,17 +1153,16 @@ class TaskProcessor:
                 selected_windows = self._select_uniform_windows_for_final_summary(windows, next_count)
                 attempt += 1
         self._log_payload(logger, "llm final summary response", raw)
-        parsed = parse_json_response(raw)
         if len(selected_windows) < total_windows:
             logger.warning(
                 "final summary generated from reduced windows set: %s/%s",
                 len(selected_windows),
                 total_windows,
             )
-        write_json(summary_json, parsed)
-        write_json(dirs["outputs"] / "summary.json", parsed)
-        summary_md.write_text(self._summary_markdown(parsed), encoding="utf-8")
-        (dirs["outputs"] / "summary.md").write_text(self._summary_markdown(parsed), encoding="utf-8")
+        write_json(summary_json, {"raw": raw})
+        write_json(dirs["outputs"] / "summary.json", {"raw": raw})
+        summary_md.write_text(raw, encoding="utf-8")
+        (dirs["outputs"] / "summary.md").write_text(raw, encoding="utf-8")
         await self.bus.publish_event(
             user_id=user_id,
             task_id=str(task_id),
@@ -1245,7 +1243,7 @@ class TaskProcessor:
             return summary.strip()
         if not isinstance(summary, dict):
             return str(summary).strip()
-        # Plain text wrapped by parse_json_response fallback: {"raw": t, "summary": t}
+        # Legacy JSON dict summaries — check for raw/summary keys first
         for key in ("summary", "raw"):
             val = summary.get(key)
             if isinstance(val, str) and val.strip():
@@ -1260,18 +1258,6 @@ class TaskProcessor:
             elif isinstance(val, str) and val.strip():
                 parts.append(f"{key}: {val.strip()}")
         return "\n".join(parts)
-
-    def _summary_markdown(self, payload: dict[str, Any]) -> str:
-        lines = ["# Summary", ""]
-        for key, value in payload.items():
-            lines.append(f"## {key}")
-            if isinstance(value, list):
-                for item in value:
-                    lines.append(f"- {item}")
-            else:
-                lines.append(str(value))
-            lines.append("")
-        return "\n".join(lines).strip() + "\n"
 
     async def _cleanup_media(self, media_dir: Path) -> None:
         cutoff = utcnow() - timedelta(hours=self.settings.media_ttl_hours)
