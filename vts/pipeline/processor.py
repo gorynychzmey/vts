@@ -1093,6 +1093,7 @@ class TaskProcessor:
             data={"current": len(windows), "total": total_parts},
         )
         output_language = self._effective_language(task_options, dirs)
+        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
         global_prompt = self._render_prompt_with_language(
             load_prompt(
                 self.settings.prompts_dir,
@@ -1101,64 +1102,70 @@ class TaskProcessor:
             ),
             output_language,
         )
+        intermediate_prompt = self._render_prompt_with_language(
+            load_prompt(
+                self.settings.prompts_dir,
+                "intermediate_prompt.md",
+                "Integrate the notes from this group of segments into a condensed knowledge document.\n\nOutput language: ${LANG}.",
+            ),
+            output_language,
+        )
         selected_windows = list(windows)
         total_windows = len(windows)
-        attempt = 1
-        while True:
-            parts: list[str] = []
-            for w in selected_windows:
-                idx = w.get("window_index", "?")
-                text = self._extract_window_text(w)
-                parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
-            merged = "\n\n".join(parts)
-            logger.info(
-                "waiting for heavy slot: final summary (attempt=%s windows=%s/%s payload_bytes=%s)",
-                attempt,
-                len(selected_windows),
-                total_windows,
-                len(merged.encode("utf-8")),
-            )
-            try:
-                async with self.heavy_slot:
-                    logger.info("heavy slot acquired: final summary")
-                    raw = await llama_chat_completion(
-                        llama_url=self.settings.llama_url,
-                        model=self.settings.llama_model,
-                        system_prompt=global_prompt,
-                        user_prompt=merged,
-                        timeout_seconds=int(getattr(self.settings, "llama_final_timeout_seconds", 1800)),
-                        use_json_format=False,
-                    )
-                break
-            except RuntimeError as exc:
-                request_tokens, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
-                if request_tokens is None:
-                    raise
-                if len(selected_windows) <= 1:
-                    raise RuntimeError(
-                        "Final summary prompt exceeds model context even with a single window summary."
-                    ) from exc
-                next_count = self._next_final_summary_window_count(
+        parts: list[str] = []
+        for w in selected_windows:
+            idx = w.get("window_index", "?")
+            text = self._extract_window_text(w)
+            parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
+        merged = "\n\n".join(parts)
+        logger.info(
+            "waiting for heavy slot: final summary (windows=%s payload_bytes=%s)",
+            total_windows,
+            len(merged.encode("utf-8")),
+        )
+        try:
+            async with self.heavy_slot:
+                logger.info("heavy slot acquired: final summary")
+                raw = await llama_chat_completion(
+                    llama_url=self.settings.llama_url,
+                    model=self.settings.llama_model,
+                    system_prompt=global_prompt,
+                    user_prompt=merged,
+                    timeout_seconds=timeout_seconds,
+                    use_json_format=False,
+                )
+        except RuntimeError as exc:
+            request_tokens, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
+            is_timeout = "Timeout" in str(exc)
+            if request_tokens is None and not is_timeout:
+                raise
+            if len(selected_windows) <= 1:
+                raise RuntimeError(
+                    "Final summary prompt exceeds model context even with a single window summary."
+                ) from exc
+            if request_tokens is not None:
+                max_per_group = self._next_final_summary_window_count(
                     current_count=len(selected_windows),
                     request_tokens=request_tokens,
                     context_tokens=context_tokens,
                 )
-                logger.warning(
-                    "final summary context overflow (request=%s context=%s), retrying with windows=%s/%s",
-                    request_tokens,
-                    context_tokens,
-                    next_count,
-                    total_windows,
-                )
-                selected_windows = self._select_uniform_windows_for_final_summary(windows, next_count)
-                attempt += 1
-        self._log_payload(logger, "llm final summary response", raw)
-        if len(selected_windows) < total_windows:
+            else:
+                max_per_group = max(1, len(selected_windows) // 2)
             logger.warning(
-                "final summary generated from reduced windows set: %s/%s",
-                len(selected_windows),
+                "flat final summary failed (%s), switching to hierarchical: max_per_group=%s total=%s",
+                "timeout" if is_timeout else f"context overflow {request_tokens}>{context_tokens}",
+                max_per_group,
                 total_windows,
             )
+            raw = await self._summarize_hierarchical(
+                windows=selected_windows,
+                max_per_group=max_per_group,
+                intermediate_prompt=intermediate_prompt,
+                final_prompt=global_prompt,
+                timeout_seconds=timeout_seconds,
+                logger=logger,
+            )
+        self._log_payload(logger, "llm final summary response", raw)
         write_json(summary_json, {"raw": raw})
         write_json(dirs["outputs"] / "summary.json", {"raw": raw})
         summary_md.write_text(raw, encoding="utf-8")
@@ -1236,6 +1243,69 @@ class TaskProcessor:
                     break
         selected_indices.sort()
         return [windows[idx] for idx in selected_indices]
+
+    def _split_windows_into_groups(self, windows: list[Any], max_per_group: int) -> list[list[Any]]:
+        groups: list[list[Any]] = []
+        for i in range(0, len(windows), max_per_group):
+            groups.append(windows[i : i + max_per_group])
+        return groups
+
+    async def _summarize_hierarchical(
+        self,
+        *,
+        windows: list[Any],
+        max_per_group: int,
+        intermediate_prompt: str,
+        final_prompt: str,
+        timeout_seconds: int,
+        logger: logging.Logger,
+    ) -> str:
+        groups = self._split_windows_into_groups(windows, max_per_group)
+        logger.info(
+            "hierarchical summarization: %s groups of up to %s windows each",
+            len(groups),
+            max_per_group,
+        )
+        intermediate_texts: list[str] = []
+        for i, group in enumerate(groups, 1):
+            parts: list[str] = []
+            for w in group:
+                idx = w.get("window_index", "?")
+                text = self._extract_window_text(w)
+                parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
+            merged = "\n\n".join(parts)
+            logger.info(
+                "hierarchical group %s/%s: %s windows, %s bytes",
+                i,
+                len(groups),
+                len(group),
+                len(merged.encode("utf-8")),
+            )
+            async with self.heavy_slot:
+                text = await llama_chat_completion(
+                    llama_url=self.settings.llama_url,
+                    model=self.settings.llama_model,
+                    system_prompt=intermediate_prompt,
+                    user_prompt=merged,
+                    timeout_seconds=timeout_seconds,
+                    use_json_format=False,
+                )
+            intermediate_texts.append(f"[Part {i}]\n{text}")
+        combined = "\n\n".join(intermediate_texts)
+        logger.info(
+            "hierarchical final synthesis: %s parts, %s bytes",
+            len(intermediate_texts),
+            len(combined.encode("utf-8")),
+        )
+        async with self.heavy_slot:
+            return await llama_chat_completion(
+                llama_url=self.settings.llama_url,
+                model=self.settings.llama_model,
+                system_prompt=final_prompt,
+                user_prompt=combined,
+                timeout_seconds=timeout_seconds,
+                use_json_format=False,
+            )
 
     def _extract_window_text(self, window: dict[str, Any]) -> str:
         summary = window.get("summary", {})

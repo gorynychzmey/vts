@@ -384,10 +384,8 @@ def test_step_segment_audio_publishes_progress_events(
     assert len(manifest.get("segments", [])) == 3
 
 
-def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[object, object]:
+    """Return (processor, dummy_task) wired up for step_summarize_final tests."""
     processor = TaskProcessor.__new__(TaskProcessor)
     processor.settings = SimpleNamespace(
         prompts_dir=tmp_path / "prompts",
@@ -400,7 +398,7 @@ def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
     processor._log_payload = lambda *args, **kwargs: None
     processor._effective_language = lambda *args, **kwargs: "en"
     processor._render_prompt_with_language = lambda prompt, language: prompt
-    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "global prompt")
+    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "prompt")
 
     class _DummySession:
         async def __aenter__(self) -> "_DummySession":
@@ -427,21 +425,31 @@ def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
             return dummy_task
 
     monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
+    return processor, dummy_task
 
-    llama_calls: list[int] = []
 
-    async def _fake_llama_chat_completion(**kwargs: object) -> str:
+def test_step_summarize_final_uses_hierarchical_on_context_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flat call fails with context overflow → hierarchical: 2 groups of 5+3, then final synthesis."""
+    processor, dummy_task = _make_processor_for_final_summary(tmp_path, monkeypatch)
+
+    # 8 windows; flat call → overflow (43663 > 32768) → max_per_group=5 → groups [5, 3]
+    llama_calls: list[dict[str, int]] = []
+
+    async def _fake(**kwargs: object) -> str:
         text = str(kwargs.get("user_prompt", ""))
-        count = text.count("[Segment ")
-        llama_calls.append(count)
-        if count > 3:
+        segments = text.count("[Segment ")
+        if segments == 8:
             raise RuntimeError(
                 "llama chat completion failed after retries for http://llama.local/v1/chat/completions: "
                 "default: HTTP 400 (request (43663 tokens) exceeds the available context size (32768 tokens))"
             )
-        return json.dumps({"executive_summary": "ok", "key_points": ["a"]})
+        llama_calls.append({"segments": segments, "parts": text.count("[Part ")})
+        return "## Group\n- ok"
 
-    monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake_llama_chat_completion)
+    monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake)
 
     root = tmp_path / "task"
     summary_dir = root / "summary"
@@ -450,8 +458,8 @@ def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
     outputs.mkdir(parents=True, exist_ok=True)
     windows_payload = {
         "windows": [
-            {"window_index": idx, "summary": {"topic": f"topic-{idx}", "bullets": [f"b-{idx}"]}}
-            for idx in range(1, 7)
+            {"window_index": idx, "summary": f"summary-{idx}"}
+            for idx in range(1, 9)
         ]
     }
     (summary_dir / "windows.json").write_text(json.dumps(windows_payload), encoding="utf-8")
@@ -462,16 +470,77 @@ def test_step_summarize_final_retries_with_reduced_windows_on_context_overflow(
             task_id=uuid.uuid4(),
             user_id="user-1",
             dirs={"root": root, "outputs": outputs},
-            logger=logging.getLogger("test_step_summarize_final_context_overflow"),
+            logger=logging.getLogger("test_hierarchical_overflow"),
             task_options={},
             dry_run=False,
         )
     )
 
     assert success is True
-    assert len(llama_calls) >= 2
-    assert llama_calls[0] == 6
-    assert llama_calls[-1] <= 3
+    # 2 intermediate group calls + 1 final synthesis call
+    assert len(llama_calls) == 3
+    assert llama_calls[0]["segments"] == 5  # first group
+    assert llama_calls[1]["segments"] == 3  # second group
+    assert llama_calls[2]["segments"] == 0 and llama_calls[2]["parts"] == 2  # final synthesis
+    assert (summary_dir / "final.json").exists()
+    assert (summary_dir / "final.md").exists()
+    assert dummy_task.summary_path == str(summary_dir / "final.md")
+
+
+def test_step_summarize_final_uses_hierarchical_on_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flat call times out → hierarchical: 2 groups of 4, then final synthesis."""
+    processor, dummy_task = _make_processor_for_final_summary(tmp_path, monkeypatch)
+
+    # 8 windows; flat call → ReadTimeout → max_per_group=4 → groups [4, 4]
+    llama_calls: list[dict[str, int]] = []
+
+    async def _fake(**kwargs: object) -> str:
+        text = str(kwargs.get("user_prompt", ""))
+        segments = text.count("[Segment ")
+        if segments == 8:
+            raise RuntimeError(
+                "llama chat completion failed after retries for http://llama.local/v1/chat/completions: "
+                "default: ReadTimeout (no details)"
+            )
+        llama_calls.append({"segments": segments, "parts": text.count("[Part ")})
+        return "## Group\n- ok"
+
+    monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake)
+
+    root = tmp_path / "task"
+    summary_dir = root / "summary"
+    outputs = root / "outputs"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    outputs.mkdir(parents=True, exist_ok=True)
+    windows_payload = {
+        "windows": [
+            {"window_index": idx, "summary": f"summary-{idx}"}
+            for idx in range(1, 9)
+        ]
+    }
+    (summary_dir / "windows.json").write_text(json.dumps(windows_payload), encoding="utf-8")
+
+    success = asyncio.run(
+        TaskProcessor.step_summarize_final(
+            processor,
+            task_id=uuid.uuid4(),
+            user_id="user-1",
+            dirs={"root": root, "outputs": outputs},
+            logger=logging.getLogger("test_hierarchical_timeout"),
+            task_options={},
+            dry_run=False,
+        )
+    )
+
+    assert success is True
+    # 2 intermediate group calls + 1 final synthesis call
+    assert len(llama_calls) == 3
+    assert llama_calls[0]["segments"] == 4  # first group
+    assert llama_calls[1]["segments"] == 4  # second group
+    assert llama_calls[2]["segments"] == 0 and llama_calls[2]["parts"] == 2  # final synthesis
     assert (summary_dir / "final.json").exists()
     assert (summary_dir / "final.md").exists()
     assert dummy_task.summary_path == str(summary_dir / "final.md")

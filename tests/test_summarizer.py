@@ -465,6 +465,45 @@ def test_llama_tokenize_retries_when_model_loading(monkeypatch: pytest.MonkeyPat
     assert len(sleep_calls) == 2
 
 
+def test_llama_chat_completion_stops_variants_on_persistent_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On persistent ReadTimeout, the variant loop should break immediately and not try more variants."""
+    endpoint = "http://llama.local/v1/chat/completions"
+    post_calls: list[dict[str, object]] = []
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            post_calls.append({"url": url, "json": json})
+            raise httpx.ReadTimeout("simulated timeout", request=httpx.Request("POST", endpoint))
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    with pytest.raises(RuntimeError, match="ReadTimeout"):
+        asyncio.run(
+            llama_chat_completion(
+                llama_url="http://llama.local/v1",
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="Summarize.",
+                user_prompt="Very long text.",
+                request_attempts=1,
+            )
+        )
+
+    # Only one POST call should be made — the variant loop breaks on timeout, not iterate all variants
+    assert len(post_calls) == 1
+
+
 def test_llama_chat_completion_no_response_format_when_use_json_format_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
