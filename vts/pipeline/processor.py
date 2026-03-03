@@ -1404,14 +1404,9 @@ class TaskProcessor:
                 packed_notes = []
             packing_triggered: bool = bool(packed_payload.get("packing_triggered", False))
             packing_pass_count: int = int(packed_payload.get("packing_pass_count", 0))
-            # Packed notes are plain strings; no [Segment] prefix needed for flat call
             merged = "\n\n".join(packed_notes)
-            # For hierarchical fallback, wrap each packed note as a synthetic window
-            fallback_windows: list[Any] = [
-                {"window_index": i + 1, "summary": t}
-                for i, t in enumerate(packed_notes)
-            ]
-            total_parts = len(packed_notes) + 1
+            total_windows = len(packed_notes)
+            total_parts = total_windows + 1
             logger.info(
                 "final summary: using packed notes (%d) packing_triggered=%s",
                 len(packed_notes),
@@ -1433,13 +1428,11 @@ class TaskProcessor:
                 text = self._extract_window_text(w)
                 parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
             merged = "\n\n".join(parts)
-            # Pass original window dicts to hierarchical path so it builds its own [Segment N] prefix
-            fallback_windows = windows
             packing_triggered = False
             packing_pass_count = 0
-            total_parts = len(windows) + 1
+            total_windows = len(windows)
+            total_parts = total_windows + 1
 
-        total_windows = len(fallback_windows)
         logger.info("final summary generation started: notes=%s", total_windows)
         await self.bus.publish_event(
             user_id=user_id,
@@ -1456,15 +1449,6 @@ class TaskProcessor:
             ),
             output_language,
         )
-        intermediate_prompt = self._render_prompt_with_language(
-            load_prompt(
-                self.settings.prompts_dir,
-                "intermediate_prompt.md",
-                "Integrate the notes from this group of segments into a condensed knowledge document.\n\nOutput language: ${LANG}.",
-            ),
-            output_language,
-        )
-
         # Stage C: adaptive token budget
         input_tokens = await count_tokens(
             text=merged,
@@ -1497,48 +1481,16 @@ class TaskProcessor:
             total_windows,
             len(merged.encode("utf-8")),
         )
-        try:
-            async with self.heavy_slot:
-                logger.info("heavy slot acquired: final summary")
-                raw = await llama_chat_completion(
-                    llama_url=self.settings.llama_url,
-                    model=self.settings.llama_model,
-                    system_prompt=global_prompt,
-                    user_prompt=merged,
-                    timeout_seconds=timeout_seconds,
-                    max_tokens=target_tokens,
-                    use_json_format=False,
-                )
-        except RuntimeError as exc:
-            request_tokens_overflow, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
-            is_timeout = "Timeout" in str(exc)
-            if request_tokens_overflow is None and not is_timeout:
-                raise
-            if total_windows <= 1:
-                raise RuntimeError(
-                    "Final summary prompt exceeds model context even with a single note."
-                ) from exc
-            if request_tokens_overflow is not None:
-                max_per_group = self._next_final_summary_window_count(
-                    current_count=total_windows,
-                    request_tokens=request_tokens_overflow,
-                    context_tokens=context_tokens,
-                )
-            else:
-                max_per_group = max(1, total_windows // 2)
-            logger.warning(
-                "flat final summary failed (%s), switching to hierarchical: max_per_group=%s total=%s",
-                "timeout" if is_timeout else f"context overflow {request_tokens_overflow}>{context_tokens}",
-                max_per_group,
-                total_windows,
-            )
-            raw = await self._summarize_hierarchical(
-                windows=fallback_windows,
-                max_per_group=max_per_group,
-                intermediate_prompt=intermediate_prompt,
-                final_prompt=global_prompt,
+        async with self.heavy_slot:
+            logger.info("heavy slot acquired: final summary")
+            raw = await llama_chat_completion(
+                llama_url=self.settings.llama_url,
+                model=self.settings.llama_model,
+                system_prompt=global_prompt,
+                user_prompt=merged,
                 timeout_seconds=timeout_seconds,
-                logger=logger,
+                max_tokens=target_tokens,
+                use_json_format=False,
             )
 
         actual_output_tokens = await count_tokens(
@@ -1576,126 +1528,6 @@ class TaskProcessor:
             task.summary_path = str(summary_md)
             await session.commit()
         return True
-
-    def _extract_llama_context_overflow_tokens(self, message: str) -> tuple[int | None, int | None]:
-        match = re.search(
-            r"request\s*\((\d+)\s*tokens\)\s*exceeds\s*the available context size\s*\((\d+)\s*tokens\)",
-            message,
-            flags=re.IGNORECASE,
-        )
-        if not match:
-            return (None, None)
-        request_tokens = int(match.group(1))
-        context_tokens = int(match.group(2))
-        if request_tokens <= 0 or context_tokens <= 0:
-            return (None, None)
-        return (request_tokens, context_tokens)
-
-    def _next_final_summary_window_count(
-        self,
-        *,
-        current_count: int,
-        request_tokens: int,
-        context_tokens: int | None,
-    ) -> int:
-        target = int(current_count * 0.75)
-        if context_tokens is not None and request_tokens > 0 and context_tokens < request_tokens:
-            ratio = float(context_tokens) / float(request_tokens)
-            target = int(current_count * ratio * 0.9)
-        if target >= current_count:
-            target = current_count - 1
-        return max(1, target)
-
-    def _select_uniform_windows_for_final_summary(self, windows: list[Any], count: int) -> list[Any]:
-        total = len(windows)
-        if count >= total:
-            return list(windows)
-        if count <= 1:
-            return [windows[-1]]
-
-        selected_indices: list[int] = []
-        used: set[int] = set()
-        span = total - 1
-        for pos in range(count):
-            idx = round((pos * span) / (count - 1))
-            idx = max(0, min(span, int(idx)))
-            if idx in used:
-                continue
-            used.add(idx)
-            selected_indices.append(idx)
-        if len(selected_indices) < count:
-            for idx in range(total):
-                if idx in used:
-                    continue
-                used.add(idx)
-                selected_indices.append(idx)
-                if len(selected_indices) >= count:
-                    break
-        selected_indices.sort()
-        return [windows[idx] for idx in selected_indices]
-
-    def _split_windows_into_groups(self, windows: list[Any], max_per_group: int) -> list[list[Any]]:
-        groups: list[list[Any]] = []
-        for i in range(0, len(windows), max_per_group):
-            groups.append(windows[i : i + max_per_group])
-        return groups
-
-    async def _summarize_hierarchical(
-        self,
-        *,
-        windows: list[Any],
-        max_per_group: int,
-        intermediate_prompt: str,
-        final_prompt: str,
-        timeout_seconds: int,
-        logger: logging.Logger,
-    ) -> str:
-        groups = self._split_windows_into_groups(windows, max_per_group)
-        logger.info(
-            "hierarchical summarization: %s groups of up to %s windows each",
-            len(groups),
-            max_per_group,
-        )
-        intermediate_texts: list[str] = []
-        for i, group in enumerate(groups, 1):
-            parts: list[str] = []
-            for w in group:
-                idx = w.get("window_index", "?")
-                text = self._extract_window_text(w)
-                parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
-            merged = "\n\n".join(parts)
-            logger.info(
-                "hierarchical group %s/%s: %s windows, %s bytes",
-                i,
-                len(groups),
-                len(group),
-                len(merged.encode("utf-8")),
-            )
-            async with self.heavy_slot:
-                text = await llama_chat_completion(
-                    llama_url=self.settings.llama_url,
-                    model=self.settings.llama_model,
-                    system_prompt=intermediate_prompt,
-                    user_prompt=merged,
-                    timeout_seconds=timeout_seconds,
-                    use_json_format=False,
-                )
-            intermediate_texts.append(f"[Part {i}]\n{text}")
-        combined = "\n\n".join(intermediate_texts)
-        logger.info(
-            "hierarchical final synthesis: %s parts, %s bytes",
-            len(intermediate_texts),
-            len(combined.encode("utf-8")),
-        )
-        async with self.heavy_slot:
-            return await llama_chat_completion(
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
-                system_prompt=final_prompt,
-                user_prompt=combined,
-                timeout_seconds=timeout_seconds,
-                use_json_format=False,
-            )
 
     def _extract_window_text(self, window: dict[str, Any]) -> str:
         summary = window.get("summary", {})
