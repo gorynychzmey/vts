@@ -90,3 +90,17 @@ media_ttl_hours: 72
 # summary_final_ratio: 0.70
 # summary_final_min_ratio: 0.60
 # summary_final_max_ratio: 0.80
+
+# ── Metrics collection ───────────────────────────────────────────────────────
+#
+# metrics_enabled: true — write a JSONL event after each pipeline stage.
+# Each line is a JSON object with ts, task_id, run_id, stage, status,
+# t_wall_ms, and stage-specific quality fields (compression_ratio,
+# redundancy_dup_sentence_ratio, number/date/unit mismatch counts, etc.).
+#
+# metrics_jsonl_path: /opt/vts/logs/metrics.jsonl
+#
+# SimHash redundancy parameters (near-duplicate sentence detection):
+# metrics_redundancy_shingle_n: 3    # word n-gram size
+# metrics_redundancy_simhash_bits: 64
+# metrics_redundancy_max_hamming: 3  # max bit-distance to consider duplicates
