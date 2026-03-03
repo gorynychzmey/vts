@@ -48,3 +48,45 @@ night_mode_start_hour: 22
 night_mode_end_hour: 7
 
 media_ttl_hours: 72
+
+# ── Adaptive token budgeting for the summarization pipeline ─────────────────
+#
+# Stage A (summarize_windows): compress each transcript chunk.
+#   target  = clamp(input * segment_ratio,
+#             max(ceil(input * segment_min_ratio), segment_min_floor),
+#             min(floor(input * segment_max_ratio), segment_max_cap))
+#
+# Stage B (pack_window_notes): batch-pack window notes until they fit in the
+#   final context.  Triggered when sum(note_tokens) > final_in_budget, where
+#   final_in_budget = n_ctx − final_prompt_tokens − final_out_budget − safety_margin.
+#   Batches are limited to pack_batch_max_input_tokens tokens each.
+#   target  = clamp(input * pack_ratio,
+#             max(ceil(input * pack_min_ratio), pack_min_floor),
+#             floor(input * pack_max_ratio))
+#
+# Stage C (summarize_final): final themed synthesis.
+#   target  = clamp(input * final_ratio,
+#             ceil(input * final_min_ratio),
+#             min(floor(input * final_max_ratio), final_out_budget))
+#
+# All values shown are defaults; override only what you need.
+#
+# summary_n_ctx: 32768
+# summary_safety_margin: 768
+# summary_final_out_budget: 1400
+#
+# summary_segment_ratio: 0.40
+# summary_segment_min_ratio: 0.30
+# summary_segment_max_ratio: 0.55
+# summary_segment_min_floor: 200
+# summary_segment_max_cap: 1800
+#
+# summary_pack_ratio: 0.90
+# summary_pack_min_ratio: 0.80
+# summary_pack_max_ratio: 0.95
+# summary_pack_min_floor: 400
+# summary_pack_batch_max_input_tokens: 12000
+#
+# summary_final_ratio: 0.70
+# summary_final_min_ratio: 0.60
+# summary_final_max_ratio: 0.80

@@ -46,6 +46,8 @@ Install/deploy these separately:
 
 Pipeline includes dedicated `prepare_llama_model` and `prepare_summary_chunks` steps before summary generation. They perform model warm-up and transcript chunk preparation so long tokenization/detokenization is visible as a separate stage.
 
+Summarization uses adaptive token budgeting: token targets for each stage are computed as clamped ratios of the input size rather than fixed paragraph counts. A dedicated `pack_window_notes` step (Stage B) deduplicates and compresses per-window notes before final synthesis when the total exceeds the final-stage context budget. All budget knobs are configurable via `summary_*` settings in `config.yaml`.
+
 ## yt-dlp YouTube auth and diagnostics
 
 When YouTube returns `HTTP 403`, configure `yt-dlp` runtime options in `config.yaml` (or `VTS_*` overrides):
@@ -234,6 +236,8 @@ Naming note:
   - `outputs/transcript.txt`
 - Summary artifacts:
   - `summary/window_01.txt`, `summary/window_02.txt`, ...
+  - `summary/windows.json` (per-window notes index)
+  - `summary/packed_notes.json` (deduped/packed notes; present when Stage B packing was triggered)
   - `summary/final.md`
 
 ## Workflow summary
