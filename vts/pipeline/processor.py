@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +50,7 @@ from vts.services.summarizer import (
     parse_json_response,
 )
 from vts.services.transcription import normalize_whisper_output, transcribe_with_whisper
+from vts.metrics import MetricsEmitter, QualityAnalyzer, aggregate_task_metrics
 
 
 def utcnow() -> datetime:
@@ -68,6 +70,11 @@ class TaskProcessor:
         self.settings = settings
         self.bus = RedisBus(redis, settings)
         self.heavy_slot = HeavySlot(redis, settings)
+        self._task_metrics: dict[str, MetricsEmitter] = {}
+
+    def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
+        """Return the active MetricsEmitter for a task, or None if absent."""
+        return getattr(self, "_task_metrics", {}).get(str(task_id))
 
     def _token_budget_config(self) -> TokenBudgetConfig:
         _defaults = TokenBudgetConfig()
@@ -149,6 +156,21 @@ class TaskProcessor:
             dirs = ensure_task_dirs(task_root)
             logger = self._task_logger(task_id=task.id, log_path=dirs["logs"] / "task.log")
 
+            run_id = str(uuid.uuid4())
+            jsonl_path = (
+                self.settings.metrics_jsonl_path
+                if self.settings.metrics_enabled
+                else None
+            )
+            emitter = MetricsEmitter(
+                task_id=str(task.id),
+                run_id=run_id,
+                jsonl_path=jsonl_path,
+                enabled=self.settings.metrics_enabled,
+            )
+            self._task_metrics[str(task.id)] = emitter
+            _task_wall_t0 = time.monotonic()
+
             try:
                 for step_name in DAG_STEPS:
                     await session.refresh(task)
@@ -183,6 +205,13 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": task.status.value},
                 )
+                _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
+                emitter.emit({
+                    "stage": "task.final",
+                    "status": "ok",
+                    "t_wall_ms": _task_wall_ms,
+                    "aggregates": aggregate_task_metrics(emitter.all_events()),
+                })
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
                 raw_error = str(exc)
@@ -195,6 +224,14 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": TaskStatus.failed.value, "error": raw_error, "failure_code": failure_code},
                 )
+                _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
+                emitter.emit({
+                    "stage": "task.final",
+                    "status": "error",
+                    "t_wall_ms": _task_wall_ms,
+                })
+            finally:
+                self._task_metrics.pop(str(task.id), None)
 
     async def _run_step(
         self,
@@ -239,8 +276,10 @@ class TaskProcessor:
             event="step",
             data={"name": step_name, "status": StepStatus.running.value},
         )
+        _step_t0 = time.monotonic()
         try:
             await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
+            _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
             await repo.set_step_status(step, StepStatus.completed)
             await session.commit()
             await self.bus.publish_event(
@@ -249,7 +288,11 @@ class TaskProcessor:
                 event="step",
                 data={"name": step_name, "status": StepStatus.completed.value},
             )
+            _em = self._get_emitter(task_id)
+            if _em:
+                _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
         except Exception as exc:
+            _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
             await repo.set_step_status(step, StepStatus.failed, message=str(exc))
             await session.commit()
             await self.bus.publish_event(
@@ -258,6 +301,9 @@ class TaskProcessor:
                 event="step",
                 data={"name": step_name, "status": StepStatus.failed.value, "error": str(exc)},
             )
+            _em = self._get_emitter(task_id)
+            if _em:
+                _em.emit({"stage": step_name, "status": "error", "t_wall_ms": _step_wall_ms})
             raise
 
     async def step_download(
@@ -699,18 +745,24 @@ class TaskProcessor:
             if not suspicious_by_index.get(idx - 1, False):
                 initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
             logger.info("waiting for heavy slot: transcribe segment %s", idx)
+            _asr_retries = 0
+            _t_asr_q0 = time.monotonic()
             async with self.heavy_slot:
+                _t_asr_q_ms = round((time.monotonic() - _t_asr_q0) * 1000)
                 logger.info("heavy slot acquired: transcribe segment %s", idx)
+                _t_asr0 = time.monotonic()
                 raw = await transcribe_with_whisper(
                     whisper_url=self.settings.whisper_url,
                     audio_path=segment_path,
                     language=language,
                     initial_prompt=initial_prompt,
                 )
+                _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
             self._log_payload(logger, f"asr response segment={idx}", raw)
             text, words = normalize_whisper_output(raw, segment_offset_sec=start)
             suspicious = self._is_probable_asr_hallucination(text=text, words=words)
             if suspicious:
+                _asr_retries = 1
                 logger.warning("asr segment %s appears repetitive/noisy; retrying without tail prompt", idx)
                 logger.info("waiting for heavy slot: transcribe segment %s retry", idx)
                 async with self.heavy_slot:
@@ -744,6 +796,23 @@ class TaskProcessor:
                         new_score,
                     )
             suspicious_by_index[idx] = suspicious
+            _asr_dur_s = end - start
+            _asr_rtf = (_t_asr_ms / 1000.0) / _asr_dur_s if _asr_dur_s > 0 else None
+            _asr_em = self._get_emitter(task_id)
+            if _asr_em:
+                _asr_em.emit({
+                    "stage": "transcribe.segment",
+                    "status": "ok",
+                    "segment_id": idx,
+                    "audio_start_s": round(start, 3),
+                    "audio_end_s": round(end, 3),
+                    "audio_duration_s": round(_asr_dur_s, 3),
+                    "t_wall_ms": _t_asr_ms,
+                    "t_queue_ms": _t_asr_q_ms,
+                    "rtf": round(_asr_rtf, 4) if _asr_rtf is not None else None,
+                    "retries": _asr_retries,
+                    "artifacts": {"segment_file": str(spec.get("file", ""))},
+                })
             text_by_index[idx] = text
             await self.bus.publish_event(
                 user_id=user_id,
@@ -1109,8 +1178,11 @@ class TaskProcessor:
                 idx, len(chunks), input_tokens, target_tokens, min_out, max_out,
             )
             logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
+            _win_t_q0 = time.monotonic()
             async with self.heavy_slot:
+                _win_t_q_ms = round((time.monotonic() - _win_t_q0) * 1000)
                 logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
+                _win_t0 = time.monotonic()
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
                     model=self.settings.llama_model,
@@ -1120,6 +1192,7 @@ class TaskProcessor:
                     max_tokens=target_tokens,
                     use_json_format=False,
                 )
+                _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
             actual_output_tokens = await count_tokens(
                 text=raw,
                 llama_url=self.settings.llama_url,
@@ -1133,6 +1206,32 @@ class TaskProcessor:
                 actual_output_tokens=actual_output_tokens,
             ))
             self._log_payload(logger, f"llm window response index={idx}", raw)
+            _win_em = self._get_emitter(task_id)
+            if _win_em:
+                _n_ctx = self.settings.summary_n_ctx
+                _win_em.emit({
+                    "stage": "summarize.segment",
+                    "status": "ok",
+                    "segment_id": idx,
+                    "t_wall_ms": _win_t_ms,
+                    "t_queue_ms": _win_t_q_ms,
+                    "llm_prompt_tokens": input_tokens,
+                    "llm_completion_tokens": actual_output_tokens,
+                    "llm_total_tokens": input_tokens + actual_output_tokens,
+                    "llm_tok_per_s": round(actual_output_tokens / (_win_t_ms / 1000), 2) if _win_t_ms > 0 else None,
+                    "llm_ctx_utilization": round(input_tokens / _n_ctx, 4) if _n_ctx > 0 else None,
+                    "retries": 0,
+                    **QualityAnalyzer(
+                        shingle_n=self.settings.metrics_redundancy_shingle_n,
+                        simhash_bits=self.settings.metrics_redundancy_simhash_bits,
+                        max_hamming=self.settings.metrics_redundancy_max_hamming,
+                    ).analyze(
+                        summary_text=raw,
+                        transcript_text=chunk,
+                        prompt_tokens=input_tokens,
+                        completion_tokens=actual_output_tokens,
+                    ),
+                })
             window_path = summary_dir / f"window_{idx:02d}.txt"
             window_path.write_text(raw, encoding="utf-8")
             windows_by_index[idx] = {"window_index": idx, "summary": raw, "path": str(window_path)}
@@ -1481,8 +1580,11 @@ class TaskProcessor:
             total_windows,
             len(merged.encode("utf-8")),
         )
+        _fin_t_q0 = time.monotonic()
         async with self.heavy_slot:
+            _fin_t_q_ms = round((time.monotonic() - _fin_t_q0) * 1000)
             logger.info("heavy slot acquired: final summary")
+            _fin_t0 = time.monotonic()
             raw = await llama_chat_completion(
                 llama_url=self.settings.llama_url,
                 model=self.settings.llama_model,
@@ -1492,6 +1594,7 @@ class TaskProcessor:
                 max_tokens=target_tokens,
                 use_json_format=False,
             )
+            _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 
         actual_output_tokens = await count_tokens(
             text=raw,
@@ -1508,6 +1611,41 @@ class TaskProcessor:
             packing_pass_count=packing_pass_count,
         ))
         self._log_payload(logger, "llm final summary response", raw)
+        _fin_em = self._get_emitter(task_id)
+        if _fin_em:
+            _n_ctx = self.settings.summary_n_ctx
+            # Load transcript text for mismatch comparison
+            _transcript_text = ""
+            _transcript_json = dirs["outputs"] / "transcript.json"
+            if _transcript_json.exists():
+                try:
+                    _transcript_text = json.loads(_transcript_json.read_text(encoding="utf-8")).get("text", "")
+                except Exception:
+                    pass
+            _fin_em.emit({
+                "stage": "summarize.global",
+                "status": "ok",
+                "t_wall_ms": _fin_t_ms,
+                "t_queue_ms": _fin_t_q_ms,
+                "llm_prompt_tokens": input_tokens,
+                "llm_completion_tokens": actual_output_tokens,
+                "llm_total_tokens": input_tokens + actual_output_tokens,
+                "llm_tok_per_s": round(actual_output_tokens / (_fin_t_ms / 1000), 2) if _fin_t_ms > 0 else None,
+                "llm_ctx_utilization": round(input_tokens / _n_ctx, 4) if _n_ctx > 0 else None,
+                "packing_triggered": packing_triggered,
+                "packing_pass_count": packing_pass_count,
+                "retries": 0,
+                **QualityAnalyzer(
+                    shingle_n=self.settings.metrics_redundancy_shingle_n,
+                    simhash_bits=self.settings.metrics_redundancy_simhash_bits,
+                    max_hamming=self.settings.metrics_redundancy_max_hamming,
+                ).analyze(
+                    summary_text=raw,
+                    transcript_text=_transcript_text or merged,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=actual_output_tokens,
+                ),
+            })
         write_json(summary_json, {"raw": raw})
         write_json(dirs["outputs"] / "summary.json", {"raw": raw})
         summary_md.write_text(raw, encoding="utf-8")

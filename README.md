@@ -48,6 +48,36 @@ Pipeline includes dedicated `prepare_llama_model` and `prepare_summary_chunks` s
 
 Summarization uses adaptive token budgeting: token targets for each stage are computed as clamped ratios of the input size rather than fixed paragraph counts. A dedicated `pack_window_notes` step (Stage B) deduplicates and compresses per-window notes before final synthesis when the total exceeds the final-stage context budget. All budget knobs are configurable via `summary_*` settings in `config.yaml`.
 
+## Metrics (JSONL)
+
+Every task run emits structured metrics to a JSONL file (one JSON object per line) and duplicates each event as a single log line.
+
+**Config keys** (all have `VTS_` env prefix):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `metrics_enabled` | `true` | Enable/disable metrics collection |
+| `metrics_jsonl_path` | `/opt/vts/logs/metrics.jsonl` | Path to the JSONL output file |
+| `metrics_redundancy_shingle_n` | `3` | Word n-gram size for SimHash redundancy |
+| `metrics_redundancy_simhash_bits` | `64` | SimHash bit width |
+| `metrics_redundancy_max_hamming` | `3` | Max Hamming distance for near-duplicate detection |
+
+**Event stages emitted per task:**
+
+- `download`, `extract_audio`, `trim_initial_silence`, `segment_audio`, `detect_language`, `transcribe_segments`, `merge_transcript`, `prepare_llama_model`, `prepare_summary_chunks`, `summarize_windows`, `pack_window_notes`, `summarize_final` — wall time per pipeline step
+- `transcribe.segment` — per-segment ASR: `rtf`, `t_wall_ms`, `t_queue_ms`, `retries`
+- `summarize.segment` — per-window LLM: `llm_prompt_tokens`, `llm_completion_tokens`, `llm_tok_per_s`, `compression_ratio`, `redundancy_dup_sentence_ratio`, `number_mismatch_count`, `format`
+- `summarize.global` — final summary: same fields as above + `packing_triggered`
+- `task.final` — aggregates: `p50/p95` for RTF, tok/s, compression ratio, redundancy; worst-3 by number mismatch and redundancy
+
+**Example JSONL line** (`summarize.segment`):
+
+```json
+{"ts":"2026-03-03T12:00:00.000Z","task_id":"abc","run_id":"xyz","stage":"summarize.segment","status":"ok","segment_id":1,"t_wall_ms":9800,"t_queue_ms":120,"llm_prompt_tokens":450,"llm_completion_tokens":180,"llm_total_tokens":630,"llm_tok_per_s":18.37,"llm_ctx_utilization":0.0137,"compression_ratio":0.4,"redundancy_dup_sentence_ratio":0.0,"numbers_in_summary":2,"numbers_in_transcript":3,"number_mismatch_count":0,"dates_in_summary":0,"dates_in_transcript":0,"date_mismatch_count":0,"units_in_summary":1,"units_in_transcript":2,"unit_mismatch_count":0,"format":{"paragraph_count":2,"bullet_ratio":0.0,"heading_count":0,"format_violations":[]},"prompt_version":""}
+```
+
+Read the log: `tail -f /opt/vts/logs/metrics.jsonl | python3 -m json.tool`
+
 ## yt-dlp YouTube auth and diagnostics
 
 When YouTube returns `HTTP 403`, configure `yt-dlp` runtime options in `config.yaml` (or `VTS_*` overrides):

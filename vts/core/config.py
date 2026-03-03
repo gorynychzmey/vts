@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     summary_final_min_ratio: float = 0.60
     summary_final_max_ratio: float = 0.80
 
+    # Metrics collection
+    metrics_enabled: bool = True
+    metrics_jsonl_path: Path = Path("/opt/vts/logs/metrics.jsonl")
+    metrics_redundancy_shingle_n: int = 3
+    metrics_redundancy_simhash_bits: int = 64
+    metrics_redundancy_max_hamming: int = 3
+
     @field_validator("ytdlp_cookies_file", mode="before")
     @classmethod
     def _normalize_optional_cookie_path(cls, value: Any) -> Any:
