@@ -290,7 +290,7 @@ def test_step_segment_audio_publishes_progress_events(
         segment_search_window_seconds=30,
         segment_target_seconds=60,
         segment_overlap_seconds=5,
-        db_write_throttle_ms=0,
+        services_database_write_throttle_ms=0,
     )
     processor.bus = _DummyBus()
 

@@ -1,53 +1,84 @@
-app_name: vts
-environment: prod
-host: 0.0.0.0
-port: 8080
+environment:
+  productive: true
+  host: 0.0.0.0
+  port: 8080
 
-database_url: postgresql+asyncpg://vts:vts@postgres:5432/vts
-redis_url: redis://redis:6379/0
-redis_prefix: "vts:"
+services:
+  database:
+    url: postgresql+asyncpg://vts:vts@postgres:5432/vts
+    write_throttle:
+      ms: 150
+  redis:
+    url: redis://redis:6379/0
+    prefix: "vts:"
+  whisper:
+    url: http://whisper:9000
+  llama:
+    url: http://llama:8000/v1
+    model: Qwen2.5-7B-Instruct-Q4
 
-trusted_proxy_cidrs:
-  - 127.0.0.1/32
-  - ::1/128
-  - 10.0.0.0/8
-  - 172.16.0.0/12
-admin_emails:
-  - admin@example.com
+trusted_proxy:
+  cidrs:
+    - 127.0.0.1/32
+    - ::1/128
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+admin:
+  emails:
+    - admin@example.com
 
-artifacts_root: /srv/vts-data
-config_dir: /opt/vts/config
-prompts_dir: /opt/vts/prompts
+dirs:
+  artifacts: /srv/vts-data
+  prompts: /opt/vts/prompts
+  # Kept for readability/documentation only.
+  # The config loader path is fixed to /opt/vts/config/config.yaml (or local ./config.yaml).
+  config: /opt/vts/config
 
-whisper_url: http://whisper:9000
-llama_url: http://llama:8000/v1
-llama_model: Qwen2.5-7B-Instruct-Q4
 # Optional yt-dlp auth/debug options for YouTube 403 cases.
 # cookies_from_browser format: [browser, profile, keyring, container]
 # examples:
-# ytdlp_cookies_from_browser: ["firefox"]
-# ytdlp_cookies_from_browser: ["chrome", "Default", "basictext"]
-ytdlp_cookies_file: null
-ytdlp_cookies_from_browser: []
+# ytdlp:
+#   cookies_from_browser: ["firefox"]
+#   # or:
+#   cookies_from_browser: ["chrome", "Default", "basictext"]
 # Optional manual override. Normally worker auto-selects and remembers client per user.
-ytdlp_youtube_player_client: null
-ytdlp_youtube_po_token: null
-ytdlp_verbose: false
+ytdlp:
+  cookies_file: null
+  cookies_from_browser: []
+  youtube:
+    player_client: null
+    po_token: null
+  verbose: false
 
-segment_target_seconds: 300
-segment_search_window_seconds: 30
-segment_overlap_seconds: 3
+segment:
+  target_seconds: 300
+  search_window_seconds: 30
+  overlap_seconds: 3
 
-transcribe_parallel_per_task: 2
-heavy_slot_limit: 1
-event_throttle_hz: 4
-db_write_throttle_ms: 150
+trim_silence:
+  threshold_db: -35.0
+  min_duration_sec: 0.4
+  max_seconds: 30.0
 
-night_mode_enabled: false
-night_mode_start_hour: 22
-night_mode_end_hour: 7
+language_detection:
+  confidence_threshold: 0.60
 
-media_ttl_hours: 72
+transcribe:
+  parallel_per_task: 2
+heavy_slot:
+  limit: 1
+event_throttle:
+  hz: 4
+task_cancel_ttl:
+  seconds: 3600
+
+night_mode:
+  enabled: false
+  start_hour: 22
+  end_hour: 7
+
+media_ttl:
+  hours: 72
 
 # ── Adaptive token budgeting for the summarization pipeline ─────────────────
 #
@@ -71,36 +102,39 @@ media_ttl_hours: 72
 #
 # All values shown are defaults; override only what you need.
 #
-# summary_n_ctx: 32768
-# summary_safety_margin: 768
-# summary_final_out_budget: 1400
-#
-# summary_segment_ratio: 0.40
-# summary_segment_min_ratio: 0.30
-# summary_segment_max_ratio: 0.55
-# summary_segment_min_floor: 200
-# summary_segment_max_cap: 1800
-#
-# summary_pack_ratio: 0.90
-# summary_pack_min_ratio: 0.80
-# summary_pack_max_ratio: 0.95
-# summary_pack_min_floor: 400
-# summary_pack_batch_max_input_tokens: 12000
-#
-# summary_final_ratio: 0.70
-# summary_final_min_ratio: 0.60
-# summary_final_max_ratio: 0.80
+# summary:
+#   n_ctx: 32768
+#   safety_margin: 768
+#   final_out_budget: 1400
+#   segment:
+#     ratio: 0.40
+#     min_ratio: 0.30
+#     max_ratio: 0.55
+#     min_floor: 200
+#     max_cap: 1800
+#   pack:
+#     ratio: 0.90
+#     min_ratio: 0.80
+#     max_ratio: 0.95
+#     min_floor: 400
+#     batch_max_input_tokens: 12000
+#   final:
+#     ratio: 0.70
+#     min_ratio: 0.60
+#     max_ratio: 0.80
 
 # ── Metrics collection ───────────────────────────────────────────────────────
 #
-# metrics_enabled: true — write a JSONL event after each pipeline stage.
-# Each line is a JSON object with ts, task_id, run_id, stage, status,
-# t_wall_ms, and stage-specific quality fields (compression_ratio,
-# redundancy_dup_sentence_ratio, number/date/unit mismatch counts, etc.).
+# metrics:
+#   enabled: true  # write a JSONL event after each pipeline stage.
+#   # Each line is a JSON object with ts, task_id, run_id, stage, status,
+#   # t_wall_ms, and stage-specific quality fields (compression_ratio,
+#   # redundancy_dup_sentence_ratio, number/date/unit mismatch counts, etc.).
 #
-# metrics_jsonl_path: /opt/vts/logs/metrics.jsonl
+#   jsonl_path: /opt/vts/logs/metrics.jsonl
 #
-# SimHash redundancy parameters (near-duplicate sentence detection):
-# metrics_redundancy_shingle_n: 3    # word n-gram size
-# metrics_redundancy_simhash_bits: 64
-# metrics_redundancy_max_hamming: 3  # max bit-distance to consider duplicates
+#   # SimHash redundancy parameters (near-duplicate sentence detection):
+#   redundancy:
+#     shingle_n: 3    # word n-gram size
+#     simhash_bits: 64
+#     max_hamming: 3  # max bit-distance to consider duplicates

@@ -195,7 +195,7 @@ class TaskProcessor:
                         task_options,
                     )
                     await session.refresh(task)
-                    await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
+                    await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
                 await self._cleanup_media(dirs["media"])
                 await repo.set_task_status(task, TaskStatus.completed)
                 await session.commit()
@@ -833,7 +833,7 @@ class TaskProcessor:
                 )
                 await repo.replace_asr_words(task_id=task_id, segment_id=seg.id, words=words)
                 await session.commit()
-            await asyncio.sleep(self.settings.db_write_throttle_ms / 1000.0)
+            await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
 
         async with self.session_factory() as session:
             repo = Repo(session)

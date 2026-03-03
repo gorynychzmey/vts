@@ -18,7 +18,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "vts"
     environment: str = "dev"
     host: str = "0.0.0.0"
     port: int = 8080
@@ -30,7 +29,6 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     redis_prefix: str = "vts:"
 
-    config_dir: Path = Path("/opt/vts/config")
     prompts_dir: Path = Path("/opt/vts/prompts")
     artifacts_root: Path = Path("/srv/vts-data")
 
@@ -64,7 +62,7 @@ class Settings(BaseSettings):
     transcribe_parallel_per_task: int = 2
     heavy_slot_limit: int = 1
     event_throttle_hz: int = 4
-    db_write_throttle_ms: int = 150
+    services_database_write_throttle_ms: int = 150
     task_cancel_ttl_seconds: int = 3600
 
     night_mode_enabled: bool = False
@@ -108,10 +106,6 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @property
-    def config_yaml_path(self) -> Path:
-        return self.config_dir / "config.yaml"
-
     def is_trusted_proxy(self, host: str) -> bool:
         remote = ip_address(host)
         return any(remote in ip_network(cidr) for cidr in self.trusted_proxy_cidrs)
@@ -131,7 +125,74 @@ def _load_yaml_overrides() -> dict[str, Any]:
         data = yaml.safe_load(file) or {}
     if not isinstance(data, dict):
         return {}
-    return data
+    return _normalize_yaml_overrides(data)
+
+
+def _flatten_nested_overrides(
+    source: dict[str, Any],
+    *,
+    prefix: str,
+    destination: dict[str, Any],
+) -> None:
+    for key, value in source.items():
+        full_key = f"{prefix}_{key}"
+        if isinstance(value, dict):
+            _flatten_nested_overrides(
+                value,
+                prefix=full_key,
+                destination=destination,
+            )
+            continue
+        destination.setdefault(full_key, value)
+
+
+def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize structured YAML blocks into flat Settings keys.
+
+    Supports nested sections such as:
+      services.database.url -> database_url
+      ytdlp.youtube.player_client -> ytdlp_youtube_player_client
+      metrics.redundancy.shingle_n -> metrics_redundancy_shingle_n
+      summary.segment.ratio -> summary_segment_ratio
+    """
+    normalized: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            _flatten_nested_overrides(
+                value,
+                prefix=key,
+                destination=normalized,
+            )
+    # In the new YAML schema root config is structured; legacy flat keys
+    # (for example, database_url or summary_segment_ratio) are ignored.
+    # Structured aliases for the consolidated directories section.
+    if "dirs_artifacts" in normalized:
+        normalized["artifacts_root"] = normalized["dirs_artifacts"]
+    if "dirs_prompts" in normalized:
+        normalized["prompts_dir"] = normalized["dirs_prompts"]
+    # Structured aliases for the consolidated services section.
+    services_aliases = {
+        "services_database_url": "database_url",
+        "services_redis_url": "redis_url",
+        "services_redis_prefix": "redis_prefix",
+        "services_whisper_url": "whisper_url",
+        "services_llama_url": "llama_url",
+        "services_llama_model": "llama_model",
+        "services_llama_chat_timeout_seconds": "llama_chat_timeout_seconds",
+        "services_llama_final_timeout_seconds": "llama_final_timeout_seconds",
+    }
+    for source_key, target_key in services_aliases.items():
+        if source_key in normalized:
+            normalized[target_key] = normalized[source_key]
+    # Structured aliases for runtime environment settings.
+    if "environment_productive" in normalized:
+        productive = bool(normalized["environment_productive"])
+        normalized["environment"] = "prod" if productive else "dev"
+    if "environment_host" in normalized:
+        normalized["host"] = normalized["environment_host"]
+    if "environment_port" in normalized:
+        normalized["port"] = normalized["environment_port"]
+    return normalized
 
 
 @lru_cache(maxsize=1)
