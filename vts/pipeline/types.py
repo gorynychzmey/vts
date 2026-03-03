@@ -14,5 +14,6 @@ DAG_STEPS: Final[list[str]] = [
     "prepare_llama_model",
     "prepare_summary_chunks",
     "summarize_windows",
+    "pack_window_notes",
     "summarize_final",
 ]

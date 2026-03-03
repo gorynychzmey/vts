@@ -31,8 +31,19 @@ from vts.services.media import (
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import ensure_task_dirs, write_json
+from vts.pipeline.token_budget import (
+    TokenBudgetConfig,
+    SummarizationMetrics,
+    clamp,
+    compute_final_budget,
+    compute_final_in_budget,
+    compute_pack_budget,
+    compute_segment_budget,
+)
 from vts.services.summarizer import (
     chunk_text,
+    count_tokens,
+    inject_budget_vars,
     llama_chat_completion,
     load_prompt,
     parse_json_response,
@@ -57,6 +68,64 @@ class TaskProcessor:
         self.settings = settings
         self.bus = RedisBus(redis, settings)
         self.heavy_slot = HeavySlot(redis, settings)
+
+    def _token_budget_config(self) -> TokenBudgetConfig:
+        _defaults = TokenBudgetConfig()
+        s = self.settings
+
+        def _get(name: str, default: object) -> object:
+            return getattr(s, f"summary_{name}", default)
+
+        return TokenBudgetConfig(
+            n_ctx=int(_get("n_ctx", _defaults.n_ctx)),
+            safety_margin=int(_get("safety_margin", _defaults.safety_margin)),
+            final_out_budget=int(_get("final_out_budget", _defaults.final_out_budget)),
+            segment_ratio=float(_get("segment_ratio", _defaults.segment_ratio)),
+            segment_min_ratio=float(_get("segment_min_ratio", _defaults.segment_min_ratio)),
+            segment_max_ratio=float(_get("segment_max_ratio", _defaults.segment_max_ratio)),
+            segment_min_floor=int(_get("segment_min_floor", _defaults.segment_min_floor)),
+            segment_max_cap=int(_get("segment_max_cap", _defaults.segment_max_cap)),
+            pack_ratio=float(_get("pack_ratio", _defaults.pack_ratio)),
+            pack_min_ratio=float(_get("pack_min_ratio", _defaults.pack_min_ratio)),
+            pack_max_ratio=float(_get("pack_max_ratio", _defaults.pack_max_ratio)),
+            pack_min_floor=int(_get("pack_min_floor", _defaults.pack_min_floor)),
+            pack_batch_max_input_tokens=int(_get("pack_batch_max_input_tokens", _defaults.pack_batch_max_input_tokens)),
+            final_ratio=float(_get("final_ratio", _defaults.final_ratio)),
+            final_min_ratio=float(_get("final_min_ratio", _defaults.final_min_ratio)),
+            final_max_ratio=float(_get("final_max_ratio", _defaults.final_max_ratio)),
+        )
+
+    def _log_metrics(self, logger: logging.Logger, metrics: SummarizationMetrics) -> None:
+        logger.info(
+            "token_budget stage=%s input=%d target=%d actual=%d packing=%s pass_count=%d",
+            metrics.stage_name,
+            metrics.input_tokens,
+            metrics.target_tokens,
+            metrics.actual_output_tokens,
+            metrics.packing_triggered,
+            metrics.packing_pass_count,
+        )
+
+    def _render_prompt_budget_vars(
+        self,
+        prompt: str,
+        *,
+        language: str | None = None,
+        input_tokens: int | None = None,
+        target_tokens: int | None = None,
+        final_in_budget: int | None = None,
+        final_out_budget: int | None = None,
+    ) -> str:
+        if language is not None:
+            prompt = self._render_prompt_with_language(prompt, language)
+        prompt = inject_budget_vars(
+            prompt,
+            input_tokens=input_tokens,
+            target_tokens=target_tokens,
+            final_in_budget=final_in_budget,
+            final_out_budget=final_out_budget,
+        )
+        return prompt
 
     async def process_task(self, task_id: uuid.UUID) -> None:
         async with self.session_factory() as session:
@@ -1005,7 +1074,9 @@ class TaskProcessor:
             return True
 
         logger.info("window summarization started: %s windows", len(chunks))
+        budget_cfg = self._token_budget_config()
         total_parts = len(chunks) + 1
+        timeout_seconds = int(getattr(self.settings, "llama_chat_timeout_seconds", 600))
         for idx, chunk in enumerate(chunks, start=1):
             if idx in windows_by_index:
                 logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
@@ -1018,17 +1089,49 @@ class TaskProcessor:
                 )
                 continue
             logger.info("summarizing window %s/%s", idx, len(chunks))
+
+            # Stage A: adaptive token budget
+            user_prompt = f"Window {idx}/{len(chunks)}\n\n{chunk}"
+            input_tokens = await count_tokens(
+                text=user_prompt,
+                llama_url=self.settings.llama_url,
+                model=self.settings.llama_model,
+                timeout_seconds=timeout_seconds,
+            )
+            target_tokens, min_out, max_out = compute_segment_budget(input_tokens, budget_cfg)
+            budgeted_prompt = self._render_prompt_budget_vars(
+                segment_prompt,
+                input_tokens=input_tokens,
+                target_tokens=target_tokens,
+            )
+            logger.info(
+                "window %s/%s token_budget input=%d target=%d min=%d max=%d",
+                idx, len(chunks), input_tokens, target_tokens, min_out, max_out,
+            )
             logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
             async with self.heavy_slot:
                 logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
                 raw = await llama_chat_completion(
                     llama_url=self.settings.llama_url,
                     model=self.settings.llama_model,
-                    system_prompt=segment_prompt,
-                    user_prompt=f"Window {idx}/{len(chunks)}\n\n{chunk}",
-                    timeout_seconds=int(getattr(self.settings, "llama_chat_timeout_seconds", 600)),
+                    system_prompt=budgeted_prompt,
+                    user_prompt=user_prompt,
+                    timeout_seconds=timeout_seconds,
+                    max_tokens=target_tokens,
                     use_json_format=False,
                 )
+            actual_output_tokens = await count_tokens(
+                text=raw,
+                llama_url=self.settings.llama_url,
+                model=self.settings.llama_model,
+                timeout_seconds=timeout_seconds,
+            )
+            self._log_metrics(logger, SummarizationMetrics(
+                stage_name="segment",
+                input_tokens=input_tokens,
+                target_tokens=target_tokens,
+                actual_output_tokens=actual_output_tokens,
+            ))
             self._log_payload(logger, f"llm window response index={idx}", raw)
             window_path = summary_dir / f"window_{idx:02d}.txt"
             window_path.write_text(raw, encoding="utf-8")
@@ -1047,6 +1150,216 @@ class TaskProcessor:
         write_json(output, {"windows": ordered})
         write_json(output_mirror, {"windows": ordered})
         logger.info("window summaries generated: %s", len(ordered))
+        return True
+
+    async def step_pack_window_notes(
+        self,
+        task_id: uuid.UUID,
+        user_id: str,
+        dirs: dict[str, Path],
+        logger: logging.Logger,
+        task_options: dict[str, Any],
+        dry_run: bool,
+    ) -> bool:
+        """Stage B — pack/dedup window notes so they fit in the final context budget.
+
+        If the total notes tokens already fit within final_in_budget, the step
+        is a no-op (writes the passthrough marker and exits).  Otherwise it
+        compresses notes in batches until they fit.
+        """
+        summary_dir = dirs["root"] / "summary"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        packed_file = summary_dir / "packed_notes.json"
+        if packed_file.exists():
+            return True
+        if dry_run:
+            return False
+
+        # Load window notes
+        windows_file = summary_dir / "windows.json"
+        if not windows_file.exists():
+            windows_file = dirs["outputs"] / "window_summaries.json"
+        if not windows_file.exists():
+            raise RuntimeError("Missing window summaries for packing step")
+        windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
+        if not isinstance(windows, list):
+            raise RuntimeError("Invalid window summaries payload")
+
+        output_language = self._effective_language(task_options, dirs)
+        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
+        budget_cfg = self._token_budget_config()
+
+        # Load final prompt to measure its token cost
+        final_prompt_text = self._render_prompt_budget_vars(
+            self._render_prompt_with_language(
+                load_prompt(
+                    self.settings.prompts_dir,
+                    "global_prompt.md",
+                    "Produce a structured knowledge document from the notes.",
+                ),
+                output_language,
+            ),
+        )
+        final_prompt_tokens = await count_tokens(
+            text=final_prompt_text,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            timeout_seconds=timeout_seconds,
+        )
+        final_in_budget = compute_final_in_budget(budget_cfg, final_prompt_tokens)
+        logger.info(
+            "pack_window_notes: final_prompt_tokens=%d final_in_budget=%d",
+            final_prompt_tokens,
+            final_in_budget,
+        )
+
+        # Count total tokens of all notes
+        notes_texts: list[str] = [self._extract_window_text(w) for w in windows]
+        note_token_counts: list[int] = []
+        for text in notes_texts:
+            tc = await count_tokens(
+                text=text,
+                llama_url=self.settings.llama_url,
+                model=self.settings.llama_model,
+                timeout_seconds=timeout_seconds,
+            )
+            note_token_counts.append(tc)
+        total_notes_tokens = sum(note_token_counts)
+
+        logger.info(
+            "pack_window_notes: total_notes_tokens=%d final_in_budget=%d packing_needed=%s",
+            total_notes_tokens,
+            final_in_budget,
+            total_notes_tokens > final_in_budget,
+        )
+
+        packing_triggered = total_notes_tokens > final_in_budget
+        packing_pass_count = 0
+
+        if packing_triggered:
+            pack_prompt_template = self._render_prompt_with_language(
+                load_prompt(
+                    self.settings.prompts_dir,
+                    "pack_prompt.md",
+                    "Integrate and deduplicate the following notes. "
+                    "Target output: ${TARGET_TOKENS} tokens (input: ${INPUT_TOKENS} tokens).\n"
+                    "Output language: ${LANG}.",
+                ),
+                output_language,
+            )
+
+            current_texts = notes_texts
+            current_token_counts = note_token_counts
+
+            while total_notes_tokens > final_in_budget and len(current_texts) > 0:
+                packing_pass_count += 1
+                logger.info(
+                    "packing pass %d: total_tokens=%d budget=%d notes=%d",
+                    packing_pass_count,
+                    total_notes_tokens,
+                    final_in_budget,
+                    len(current_texts),
+                )
+
+                # Split notes into batches not exceeding pack_batch_max_input_tokens
+                batches: list[list[str]] = []
+                current_batch: list[str] = []
+                current_batch_tokens = 0
+                for note_text, note_tc in zip(current_texts, current_token_counts):
+                    if (
+                        current_batch
+                        and current_batch_tokens + note_tc > budget_cfg.pack_batch_max_input_tokens
+                    ):
+                        batches.append(current_batch)
+                        current_batch = []
+                        current_batch_tokens = 0
+                    current_batch.append(note_text)
+                    current_batch_tokens += note_tc
+                if current_batch:
+                    batches.append(current_batch)
+
+                new_texts: list[str] = []
+                new_token_counts: list[int] = []
+                for b_idx, batch in enumerate(batches, 1):
+                    batch_input = "\n\n".join(batch)
+                    batch_input_tokens = await count_tokens(
+                        text=batch_input,
+                        llama_url=self.settings.llama_url,
+                        model=self.settings.llama_model,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    target_tokens, min_out, max_out = compute_pack_budget(
+                        batch_input_tokens, budget_cfg
+                    )
+                    pack_system_prompt = self._render_prompt_budget_vars(
+                        pack_prompt_template,
+                        input_tokens=batch_input_tokens,
+                        target_tokens=target_tokens,
+                    )
+                    logger.info(
+                        "pack batch %d/%d: input=%d target=%d min=%d max=%d",
+                        b_idx, len(batches), batch_input_tokens, target_tokens, min_out, max_out,
+                    )
+                    async with self.heavy_slot:
+                        packed_text = await llama_chat_completion(
+                            llama_url=self.settings.llama_url,
+                            model=self.settings.llama_model,
+                            system_prompt=pack_system_prompt,
+                            user_prompt=batch_input,
+                            timeout_seconds=timeout_seconds,
+                            max_tokens=target_tokens,
+                            use_json_format=False,
+                        )
+                    packed_tc = await count_tokens(
+                        text=packed_text,
+                        llama_url=self.settings.llama_url,
+                        model=self.settings.llama_model,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    self._log_metrics(logger, SummarizationMetrics(
+                        stage_name="pack",
+                        input_tokens=batch_input_tokens,
+                        target_tokens=target_tokens,
+                        actual_output_tokens=packed_tc,
+                        packing_triggered=True,
+                        packing_pass_count=packing_pass_count,
+                    ))
+                    new_texts.append(packed_text)
+                    new_token_counts.append(packed_tc)
+
+                current_texts = new_texts
+                current_token_counts = new_token_counts
+                total_notes_tokens = sum(current_token_counts)
+
+                # Guard: stop if packing produced a single note and still doesn't fit
+                if len(current_texts) == 1 and total_notes_tokens > final_in_budget:
+                    logger.warning(
+                        "packing converged to a single note but still exceeds budget "
+                        "(%d > %d); proceeding anyway",
+                        total_notes_tokens,
+                        final_in_budget,
+                    )
+                    break
+
+            notes_texts = current_texts
+
+        write_json(
+            packed_file,
+            {
+                "notes": notes_texts,
+                "packing_triggered": packing_triggered,
+                "packing_pass_count": packing_pass_count,
+                "total_notes_tokens": total_notes_tokens,
+                "final_in_budget": final_in_budget,
+            },
+        )
+        logger.info(
+            "pack_window_notes complete: notes=%d total_tokens=%d packing_triggered=%s passes=%d",
+            len(notes_texts),
+            total_notes_tokens,
+            packing_triggered,
+            packing_pass_count,
+        )
         return True
 
     async def step_summarize_final(
@@ -1076,29 +1389,70 @@ class TaskProcessor:
         if dry_run:
             return False
 
-        windows_file = summary_dir / "windows.json"
-        if not windows_file.exists():
-            windows_file = dirs["outputs"] / "window_summaries.json"
-        if not windows_file.exists():
-            raise RuntimeError("Missing window summaries")
-        windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
-        if not isinstance(windows, list):
-            raise RuntimeError("Invalid window summaries payload")
-        total_parts = len(windows) + 1
-        logger.info("final summary generation started: windows=%s", len(windows))
+        output_language = self._effective_language(task_options, dirs)
+        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
+        budget_cfg = self._token_budget_config()
+
+        # Load packed notes if the packing step ran, else fall back to window summaries.
+        # fallback_windows: list passed to _summarize_hierarchical if flat call fails.
+        # merged: the user_prompt for the flat final call.
+        packed_file = summary_dir / "packed_notes.json"
+        if packed_file.exists():
+            packed_payload = json.loads(packed_file.read_text(encoding="utf-8"))
+            packed_notes: list[str] = packed_payload.get("notes", [])
+            if not isinstance(packed_notes, list):
+                packed_notes = []
+            packing_triggered: bool = bool(packed_payload.get("packing_triggered", False))
+            packing_pass_count: int = int(packed_payload.get("packing_pass_count", 0))
+            # Packed notes are plain strings; no [Segment] prefix needed for flat call
+            merged = "\n\n".join(packed_notes)
+            # For hierarchical fallback, wrap each packed note as a synthetic window
+            fallback_windows: list[Any] = [
+                {"window_index": i + 1, "summary": t}
+                for i, t in enumerate(packed_notes)
+            ]
+            total_parts = len(packed_notes) + 1
+            logger.info(
+                "final summary: using packed notes (%d) packing_triggered=%s",
+                len(packed_notes),
+                packing_triggered,
+            )
+        else:
+            windows_file = summary_dir / "windows.json"
+            if not windows_file.exists():
+                windows_file = dirs["outputs"] / "window_summaries.json"
+            if not windows_file.exists():
+                raise RuntimeError("Missing window summaries")
+            windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
+            if not isinstance(windows, list):
+                raise RuntimeError("Invalid window summaries payload")
+            # Build merged with [Segment N] prefix (same as original behaviour)
+            parts: list[str] = []
+            for w in windows:
+                idx = w.get("window_index", "?")
+                text = self._extract_window_text(w)
+                parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
+            merged = "\n\n".join(parts)
+            # Pass original window dicts to hierarchical path so it builds its own [Segment N] prefix
+            fallback_windows = windows
+            packing_triggered = False
+            packing_pass_count = 0
+            total_parts = len(windows) + 1
+
+        total_windows = len(fallback_windows)
+        logger.info("final summary generation started: notes=%s", total_windows)
         await self.bus.publish_event(
             user_id=user_id,
             task_id=str(task_id),
             event="summary_progress",
-            data={"current": len(windows), "total": total_parts},
+            data={"current": total_windows, "total": total_parts},
         )
-        output_language = self._effective_language(task_options, dirs)
-        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
-        global_prompt = self._render_prompt_with_language(
+
+        global_prompt_base = self._render_prompt_with_language(
             load_prompt(
                 self.settings.prompts_dir,
                 "global_prompt.md",
-                "Produce JSON with executive_summary, key_points, risks, decisions.",
+                "Produce a structured knowledge document from the notes.\n\nOutput language: ${LANG}.",
             ),
             output_language,
         )
@@ -1110,16 +1464,36 @@ class TaskProcessor:
             ),
             output_language,
         )
-        selected_windows = list(windows)
-        total_windows = len(windows)
-        parts: list[str] = []
-        for w in selected_windows:
-            idx = w.get("window_index", "?")
-            text = self._extract_window_text(w)
-            parts.append(f"[Segment {idx}]\n{text}" if text else f"[Segment {idx}]")
-        merged = "\n\n".join(parts)
+
+        # Stage C: adaptive token budget
+        input_tokens = await count_tokens(
+            text=merged,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            timeout_seconds=timeout_seconds,
+        )
+        target_tokens, min_out, max_out = compute_final_budget(input_tokens, budget_cfg)
+        final_prompt_tokens = await count_tokens(
+            text=global_prompt_base,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            timeout_seconds=timeout_seconds,
+        )
+        final_in_budget = compute_final_in_budget(budget_cfg, final_prompt_tokens)
+        global_prompt = self._render_prompt_budget_vars(
+            global_prompt_base,
+            input_tokens=input_tokens,
+            target_tokens=target_tokens,
+            final_in_budget=final_in_budget,
+            final_out_budget=budget_cfg.final_out_budget,
+        )
         logger.info(
-            "waiting for heavy slot: final summary (windows=%s payload_bytes=%s)",
+            "final summary token_budget input=%d target=%d min=%d max=%d final_in=%d final_out=%d",
+            input_tokens, target_tokens, min_out, max_out, final_in_budget,
+            budget_cfg.final_out_budget,
+        )
+        logger.info(
+            "waiting for heavy slot: final summary (notes=%s payload_bytes=%s)",
             total_windows,
             len(merged.encode("utf-8")),
         )
@@ -1132,39 +1506,55 @@ class TaskProcessor:
                     system_prompt=global_prompt,
                     user_prompt=merged,
                     timeout_seconds=timeout_seconds,
+                    max_tokens=target_tokens,
                     use_json_format=False,
                 )
         except RuntimeError as exc:
-            request_tokens, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
+            request_tokens_overflow, context_tokens = self._extract_llama_context_overflow_tokens(str(exc))
             is_timeout = "Timeout" in str(exc)
-            if request_tokens is None and not is_timeout:
+            if request_tokens_overflow is None and not is_timeout:
                 raise
-            if len(selected_windows) <= 1:
+            if total_windows <= 1:
                 raise RuntimeError(
-                    "Final summary prompt exceeds model context even with a single window summary."
+                    "Final summary prompt exceeds model context even with a single note."
                 ) from exc
-            if request_tokens is not None:
+            if request_tokens_overflow is not None:
                 max_per_group = self._next_final_summary_window_count(
-                    current_count=len(selected_windows),
-                    request_tokens=request_tokens,
+                    current_count=total_windows,
+                    request_tokens=request_tokens_overflow,
                     context_tokens=context_tokens,
                 )
             else:
-                max_per_group = max(1, len(selected_windows) // 2)
+                max_per_group = max(1, total_windows // 2)
             logger.warning(
                 "flat final summary failed (%s), switching to hierarchical: max_per_group=%s total=%s",
-                "timeout" if is_timeout else f"context overflow {request_tokens}>{context_tokens}",
+                "timeout" if is_timeout else f"context overflow {request_tokens_overflow}>{context_tokens}",
                 max_per_group,
                 total_windows,
             )
             raw = await self._summarize_hierarchical(
-                windows=selected_windows,
+                windows=fallback_windows,
                 max_per_group=max_per_group,
                 intermediate_prompt=intermediate_prompt,
                 final_prompt=global_prompt,
                 timeout_seconds=timeout_seconds,
                 logger=logger,
             )
+
+        actual_output_tokens = await count_tokens(
+            text=raw,
+            llama_url=self.settings.llama_url,
+            model=self.settings.llama_model,
+            timeout_seconds=timeout_seconds,
+        )
+        self._log_metrics(logger, SummarizationMetrics(
+            stage_name="final",
+            input_tokens=input_tokens,
+            target_tokens=target_tokens,
+            actual_output_tokens=actual_output_tokens,
+            packing_triggered=packing_triggered,
+            packing_pass_count=packing_pass_count,
+        ))
         self._log_payload(logger, "llm final summary response", raw)
         write_json(summary_json, {"raw": raw})
         write_json(dirs["outputs"] / "summary.json", {"raw": raw})

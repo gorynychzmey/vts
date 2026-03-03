@@ -580,6 +580,44 @@ async def llama_chat_completion(
     return str(content)
 
 
+async def count_tokens(
+    *,
+    text: str,
+    llama_url: str,
+    model: str,
+    timeout_seconds: int = 120,
+) -> int:
+    """Return the token count of *text* using the llama.cpp tokenize endpoint."""
+    tokens = await llama_tokenize(
+        llama_url=llama_url,
+        model=model,
+        text=text,
+        timeout_seconds=timeout_seconds,
+    )
+    return len(tokens)
+
+
+def inject_budget_vars(
+    prompt: str,
+    *,
+    input_tokens: int | None = None,
+    target_tokens: int | None = None,
+    final_in_budget: int | None = None,
+    final_out_budget: int | None = None,
+) -> str:
+    """Replace ${INPUT_TOKENS}, ${TARGET_TOKENS}, ${FINAL_IN_BUDGET}, ${FINAL_OUT_BUDGET}
+    placeholders in *prompt* with their numeric values."""
+    if input_tokens is not None:
+        prompt = prompt.replace("${INPUT_TOKENS}", str(input_tokens))
+    if target_tokens is not None:
+        prompt = prompt.replace("${TARGET_TOKENS}", str(target_tokens))
+    if final_in_budget is not None:
+        prompt = prompt.replace("${FINAL_IN_BUDGET}", str(final_in_budget))
+    if final_out_budget is not None:
+        prompt = prompt.replace("${FINAL_OUT_BUDGET}", str(final_out_budget))
+    return prompt
+
+
 def parse_json_response(raw: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw)

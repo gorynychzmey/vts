@@ -1,31 +1,30 @@
-Task: Integrate the extracted notes into a structured knowledge document.
+Task: Create a themed structured notes document from these notes.
+
+Input:
+- Approx input size: ${INPUT_TOKENS} tokens
+- Target output size: ~${TARGET_TOKENS} tokens
 
 Rules:
-- Do NOT compress aggressively.
-- Merge only exact duplicates.
-- Preserve nuance, arguments, examples and mechanisms.
+- Do NOT overly compress.
+- Group content into themes with short meaningful titles; choose as many themes as needed for coverage (typically 4–10).
+- Merge duplicates only if they express the same idea.
+- Preserve reasoning, examples, numbers, names and important nuances.
 - No meta commentary.
-- Do not mention segments.
 
 Output:
 
-# Core Themes
+# Themes
 
 For each theme:
 
-## Key Ideas
-- ...
+## <Theme title>
+Write 1–3 connected paragraphs.
+Each paragraph: 2–5 complete sentences.
+Maintain coherence and explicit cause→effect where present.
+Avoid keyword-style writing.
 
-## Arguments
-- ...
+Aim for ~${TARGET_TOKENS} tokens total; do not undercut heavily if important details would be lost.
 
-## Facts and Examples
-- ...
-
-## Mechanisms
-- ...
-
-## Conclusions
-- ...
-
-Output language: ${LANG}.
+Output MUST be in ${LANG}. Any non-${LANG} paragraphs are invalid; rewrite it in ${LANG}. 
+If input contains mixed languages, keep original quotes, but your own text MUST be ${LANG}.
+If you accidentally start writing in another language, immediately rewrite that bullet in ${LANG}.

@@ -73,6 +73,27 @@ class Settings(BaseSettings):
 
     media_ttl_hours: int = 72
 
+    # Token budgeting for the summarization pipeline
+    summary_n_ctx: int = 32768
+    summary_safety_margin: int = 768
+    summary_final_out_budget: int = 1400
+
+    summary_segment_ratio: float = 0.40
+    summary_segment_min_ratio: float = 0.30
+    summary_segment_max_ratio: float = 0.55
+    summary_segment_min_floor: int = 200
+    summary_segment_max_cap: int = 1800
+
+    summary_pack_ratio: float = 0.90
+    summary_pack_min_ratio: float = 0.80
+    summary_pack_max_ratio: float = 0.95
+    summary_pack_min_floor: int = 400
+    summary_pack_batch_max_input_tokens: int = 12000
+
+    summary_final_ratio: float = 0.70
+    summary_final_min_ratio: float = 0.60
+    summary_final_max_ratio: float = 0.80
+
     @field_validator("ytdlp_cookies_file", mode="before")
     @classmethod
     def _normalize_optional_cookie_path(cls, value: Any) -> Any:
