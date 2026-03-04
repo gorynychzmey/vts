@@ -193,6 +193,7 @@ def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_
     processor.settings = SimpleNamespace(
         language_detection_confidence_threshold=0.6,
         whisper_url="http://whisper.local",
+        whisper_backend="asr",
     )
     processor.bus = _DummyBus()
     processor.heavy_slot = _DummyHeavySlot()
@@ -238,6 +239,7 @@ def test_step_detect_language_accepts_missing_confidence_when_language_is_presen
     processor.settings = SimpleNamespace(
         language_detection_confidence_threshold=0.6,
         whisper_url="http://whisper.local",
+        whisper_backend="asr",
     )
     processor.bus = _DummyBus()
     processor.heavy_slot = _DummyHeavySlot()

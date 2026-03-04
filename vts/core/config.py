@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     admin_emails: list[str] = []
 
     whisper_url: str = "http://whisper:9000"
+    whisper_backend: str = "asr"
     llama_url: str = "http://llama:8000/v1"
     llama_model: str = "Qwen2.5-7B-Instruct-Q4"
     llama_chat_timeout_seconds: int = 600
@@ -176,6 +177,7 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_redis_url": "redis_url",
         "services_redis_prefix": "redis_prefix",
         "services_whisper_url": "whisper_url",
+        "services_whisper_backend": "whisper_backend",
         "services_llama_url": "llama_url",
         "services_llama_model": "llama_model",
         "services_llama_chat_timeout_seconds": "llama_chat_timeout_seconds",

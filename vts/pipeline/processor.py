@@ -649,6 +649,7 @@ class TaskProcessor:
             logger.info("heavy slot acquired: detect language")
             raw = await transcribe_with_whisper(
                 whisper_url=self.settings.whisper_url,
+                whisper_backend=self.settings.whisper_backend,
                 audio_path=segment_path,
                 language=None,
                 initial_prompt=None,
@@ -764,13 +765,15 @@ class TaskProcessor:
                 _t_asr0 = time.monotonic()
                 raw = await transcribe_with_whisper(
                     whisper_url=self.settings.whisper_url,
+                    whisper_backend=self.settings.whisper_backend,
                     audio_path=segment_path,
                     language=language,
                     initial_prompt=initial_prompt,
                 )
                 _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
             self._log_payload(logger, f"asr response segment={idx}", raw)
-            text, words = normalize_whisper_output(raw, segment_offset_sec=start)
+            backend = self.settings.whisper_backend
+            text, words = normalize_whisper_output(raw, segment_offset_sec=start, backend=backend)
             suspicious = self._is_probable_asr_hallucination(text=text, words=words)
             if suspicious:
                 _asr_retries = 1
@@ -780,11 +783,12 @@ class TaskProcessor:
                     logger.info("heavy slot acquired: transcribe segment %s retry", idx)
                     retry_raw = await transcribe_with_whisper(
                         whisper_url=self.settings.whisper_url,
+                        whisper_backend=self.settings.whisper_backend,
                         audio_path=segment_path,
                         language=language,
                         initial_prompt=None,
                     )
-                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start)
+                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start, backend=backend)
                 retry_suspicious = self._is_probable_asr_hallucination(text=retry_text, words=retry_words)
                 old_score = self._transcript_quality_score(text, words)
                 new_score = self._transcript_quality_score(retry_text, retry_words)
@@ -1815,9 +1819,17 @@ class TaskProcessor:
         if confidence_raw is None:
             confidence_raw = payload.get("language_confidence")
         if confidence_raw is None:
+            # whisper.cpp verbose_json field
+            confidence_raw = payload.get("detected_language_probability")
+        if confidence_raw is None:
             language_probs = payload.get("language_probs")
             if isinstance(language_probs, dict) and language:
                 confidence_raw = language_probs.get(language)
+        if confidence_raw is None:
+            # whisper.cpp language_probabilities map
+            lang_prob_map = payload.get("language_probabilities")
+            if isinstance(lang_prob_map, dict) and language:
+                confidence_raw = lang_prob_map.get(language)
         if confidence_raw is None:
             confidence_raw = self._extract_confidence_from_word_probabilities(payload)
         confidence: float | None

@@ -13,6 +13,7 @@ services:
     prefix: "vts:"
   whisper:
     url: http://whisper:9000
+    backend: asr  # asr (onerahmet/openai-whisper-asr-webservice) or cpp (whisper.cpp server)
   llama:
     url: http://llama:8000/v1
     model: Qwen2.5-7B-Instruct-Q4
