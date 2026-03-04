@@ -101,12 +101,12 @@ class Repo:
         await self.session.flush()
         return [task.id for task in tasks]
 
-    async def get_tasks_for_user(self, user_id: uuid.UUID, task_ids: list[uuid.UUID]) -> list[Task]:
-        stmt = (
-            select(Task)
-            .options(selectinload(Task.steps))
-            .where(Task.user_id == user_id, Task.id.in_(task_ids))
-        )
+    async def get_tasks_for_user(
+        self, user_id: uuid.UUID, task_ids: list[uuid.UUID], *, load_steps: bool = False
+    ) -> list[Task]:
+        stmt = select(Task).where(Task.user_id == user_id, Task.id.in_(task_ids))
+        if load_steps:
+            stmt = stmt.options(selectinload(Task.steps))
         result = await self.session.scalars(stmt)
         return list(result.all())
 

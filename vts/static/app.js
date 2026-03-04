@@ -1166,8 +1166,8 @@ function renderTasks(tasks) {
         stopLogPolling(root);
       }
     });
-    pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
-    resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
+    pauseBtn.addEventListener("click", () => pauseTask(task.id));
+    resumeBtn.addEventListener("click", () => resumeTask(task.id));
     if (restartSummaryBtn && restartSummaryMenu) {
       restartSummaryBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1291,22 +1291,21 @@ function syncSummaryToggle() {
   form.summary.disabled = false;
 }
 
-async function updateTaskStatus(taskId, action) {
-  if (action === "pause") {
-    await api("/api/tasks/pause", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_ids: [taskId] }),
-    });
-  } else if (action === "resume") {
-    await api("/api/tasks/resume", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_ids: [taskId] }),
-    });
-  } else {
-    await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
-  }
+function apiBatchPost(url, body, method = "POST") {
+  return api(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function pauseTask(taskId) {
+  await apiBatchPost("/api/tasks/pause", { task_ids: [taskId] });
+  await loadTasks();
+}
+
+async function resumeTask(taskId) {
+  await apiBatchPost("/api/tasks/resume", { task_ids: [taskId] });
   await loadTasks();
 }
 
@@ -1315,11 +1314,7 @@ async function removeTask(taskId) {
   if (!confirmed) {
     return;
   }
-  await api("/api/tasks", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task_ids: [taskId] }),
-  });
+  await apiBatchPost("/api/tasks", { task_ids: [taskId] }, "DELETE");
   await loadTasks();
 }
 
@@ -1328,11 +1323,7 @@ async function archiveTask(taskId) {
   if (!confirmed) {
     return;
   }
-  await api("/api/tasks/archive", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task_ids: [taskId] }),
-  });
+  await apiBatchPost("/api/tasks/archive", { task_ids: [taskId] });
   await loadTasks();
 }
 
@@ -1342,11 +1333,7 @@ async function restartSummary(taskId, mode = "full") {
   if (!confirmed) {
     return;
   }
-  await api("/api/tasks/restart_summary", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task_ids: [taskId], mode }),
-  });
+  await apiBatchPost("/api/tasks/restart_summary", { task_ids: [taskId], mode });
   await loadTasks();
 }
 

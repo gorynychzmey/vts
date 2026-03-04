@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
@@ -70,7 +70,7 @@ class TaskIdsRequest(BaseModel):
 
 class RestartSummaryRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1, max_length=100)
-    mode: str = Field(default="full")
+    mode: Literal["full", "final_only"] = "full"
 
 
 class BatchResultOut(BaseModel):

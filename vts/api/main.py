@@ -467,13 +467,12 @@ def create_app() -> FastAPI:
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> BatchResultOut:
-        if request.mode not in ("full", "final_only"):
-            raise HTTPException(status_code=422, detail="mode must be 'full' or 'final_only'")
         repo = Repo(session)
-        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids, load_steps=True)
         task_map = {task.id: task for task in tasks}
         results: dict[str, str] = {}
         bus = RedisBus(redis, settings)
+        artifact_resets: list[asyncio.Task[None]] = []
         for task_id in request.task_ids:
             tid = str(task_id)
             task = task_map.get(task_id)
@@ -485,16 +484,17 @@ def create_app() -> FastAPI:
                     results[tid] = f"cannot_restart_final:{task.status.value}"
                     continue
                 _reset_final_summary_step(task)
-                await asyncio.to_thread(_reset_final_summary_artifacts, task)
+                artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
             else:
                 if not can_restart_summary_task(task):
                     results[tid] = f"cannot_restart:{task.status.value}"
                     continue
                 _reset_summary_steps(task)
-                await asyncio.to_thread(_reset_summary_artifacts, task)
+                artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
             task.summary_path = None
             await repo.set_task_status(task, TaskStatus.queued)
             results[tid] = "queued"
+        await asyncio.gather(*artifact_resets)
         await session.commit()
         for task_id in request.task_ids:
             if results.get(str(task_id)) == "queued":
@@ -569,22 +569,28 @@ def create_app() -> FastAPI:
         results: dict[str, str] = {}
         bus = RedisBus(redis, settings)
         artifacts_to_remove: list[Path] = []
+        tasks_to_delete: list = []
         for task_id in request.task_ids:
             tid = str(task_id)
             task = task_map.get(task_id)
             if task is None:
                 results[tid] = "not_found"
                 continue
-            await bus.request_cancel(task.id)
-            await bus.remove_task_from_queue(task.id)
-            await repo.set_task_status(task, TaskStatus.canceled)
-            artifacts_to_remove.append(Path(task.artifact_dir))
-            await session.delete(task)
+            tasks_to_delete.append(task)
             results[tid] = "deleted"
+        if tasks_to_delete:
+            await asyncio.gather(
+                *[bus.request_cancel(t.id) for t in tasks_to_delete],
+                *[bus.remove_task_from_queue(t.id) for t in tasks_to_delete],
+            )
+            for task in tasks_to_delete:
+                await repo.set_task_status(task, TaskStatus.canceled)
+                artifacts_to_remove.append(Path(task.artifact_dir))
+                await session.delete(task)
         await session.commit()
-        for artifact in artifacts_to_remove:
-            if artifact.exists():
-                await asyncio.to_thread(shutil.rmtree, artifact, True)
+        await asyncio.gather(
+            *[asyncio.to_thread(shutil.rmtree, artifact, True) for artifact in artifacts_to_remove]
+        )
         return BatchResultOut(results=results)
 
     @app.post("/api/tasks/archive", response_model=BatchResultOut)
