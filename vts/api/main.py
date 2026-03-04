@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts import __version__
 from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
-from vts.api.schemas import AdminUsersOut, MeOut, MessageOut, TaskCreateRequest, TaskOut
+from vts.api.schemas import AdminUsersOut, BatchResultOut, MeOut, MessageOut, TaskCreateRequest, TaskIdsRequest, TaskOut
 from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
@@ -198,25 +198,6 @@ def _reset_final_summary_artifacts(task: Task) -> None:
         path.unlink(missing_ok=True)
 
 
-def _read_json_payload(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def _list_count(payload: dict[str, Any] | None, key: str) -> int:
-    if payload is None:
-        return 0
-    value = payload.get(key)
-    return len(value) if isinstance(value, list) else 0
-
-
 def _find_step_status(task: Task, step_name: str) -> StepStatus | None:
     for step in task.steps:
         if step.name == step_name:
@@ -228,34 +209,12 @@ def _summary_progress_for_task(task: Task) -> tuple[int, int]:
     options = task.options if isinstance(task.options, dict) else {}
     if options.get("summary") is False:
         return (0, 0)
-
-    artifact = Path(task.artifact_dir)
-    summary_dir = artifact / "summary"
-    outputs_dir = artifact / "outputs"
-
-    chunks_payload = _read_json_payload(summary_dir / "chunks.json") or _read_json_payload(
-        outputs_dir / "summary_chunks.json"
-    )
-    windows_payload = _read_json_payload(summary_dir / "windows.json") or _read_json_payload(
-        outputs_dir / "window_summaries.json"
-    )
-    window_total = _list_count(chunks_payload, "chunks")
-    window_done = _list_count(windows_payload, "windows")
-    if window_total > 0:
-        window_done = min(window_done, window_total)
-
-    total_parts = window_total + 1 if window_total > 0 else 0
-    final_step = _find_step_status(task, "summarize_final")
-    if total_parts == 0 and final_step in {StepStatus.running, StepStatus.completed}:
-        total_parts = 1
-
-    current = window_done
-    if final_step == StepStatus.running:
-        current = max(current, window_total)
-    elif final_step == StepStatus.completed:
-        current = total_parts
-
-    return (max(current, 0), max(total_parts, 0))
+    prog = task.summary_progress
+    if not isinstance(prog, dict):
+        return (0, 0)
+    current = prog.get("current", 0)
+    total = prog.get("total", 0)
+    return (max(int(current), 0), max(int(total), 0))
 
 
 def _processing_seconds_for_task(task: Task) -> int | None:
@@ -302,6 +261,24 @@ def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
         "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
         "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
     }
+
+
+_QUEUE_POS_CACHE_SUFFIX = "cache:queue_positions"
+_QUEUE_POS_TTL_SECONDS = 2
+
+
+async def _get_cached_queue_positions(
+    redis: Redis, repo: Repo, prefix: str
+) -> dict[uuid.UUID, int]:
+    cache_key = f"{prefix}{_QUEUE_POS_CACHE_SUFFIX}"
+    cached = await redis.get(cache_key)
+    if cached is not None:
+        raw: dict[str, int] = json.loads(cached)
+        return {uuid.UUID(k): v for k, v in raw.items()}
+    positions = await repo.get_global_queue_positions()
+    serializable = {str(k): v for k, v in positions.items()}
+    await redis.setex(cache_key, _QUEUE_POS_TTL_SECONDS, json.dumps(serializable))
+    return positions
 
 
 def serialize_task(
@@ -433,10 +410,8 @@ def create_app() -> FastAPI:
             event="task_status",
             data={"status": task.status.value},
         )
-        task = await repo.get_task_for_user(effective_user_id, task.id)
-        if task is None:
-            raise HTTPException(status_code=500, detail="Task not found after creation")
-        queue_positions = await repo.get_global_queue_positions()
+        task.steps = []
+        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: _summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
@@ -445,26 +420,41 @@ def create_app() -> FastAPI:
     async def list_tasks(
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
     ) -> list[TaskOut]:
         repo = Repo(session)
         tasks = await repo.list_tasks_for_user(uuid.UUID(user.id))
-        queue_positions = await repo.get_global_queue_positions()
+        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         task_ids = [task.id for task in tasks]
         asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
         summary_progress = {task.id: _summary_progress_for_task(task) for task in tasks}
         return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
+
+    @app.get("/api/tasks/queue-positions")
+    async def get_queue_positions(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> JSONResponse:
+        repo = Repo(session)
+        positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        return JSONResponse({str(k): v for k, v in positions.items()})
 
     @app.get("/api/tasks/{task_id}", response_model=TaskOut)
     async def get_task(
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
         repo = Repo(session)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        queue_positions = await repo.get_global_queue_positions()
+        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: _summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
@@ -592,6 +582,117 @@ def create_app() -> FastAPI:
         await session.commit()
         return MessageOut(status="archived")
 
+    @app.post("/api/tasks/pause", response_model=BatchResultOut)
+    async def pause_tasks(
+        request: TaskIdsRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> BatchResultOut:
+        repo = Repo(session)
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        task_map = {task.id: task for task in tasks}
+        results: dict[str, str] = {}
+        for task_id in request.task_ids:
+            tid = str(task_id)
+            task = task_map.get(task_id)
+            if task is None:
+                results[tid] = "not_found"
+                continue
+            if not can_pause_task(task.status):
+                results[tid] = f"cannot_pause:{task.status.value}"
+                continue
+            await repo.set_task_status(task, TaskStatus.paused)
+            results[tid] = "paused"
+        await session.commit()
+        return BatchResultOut(results=results)
+
+    @app.post("/api/tasks/resume", response_model=BatchResultOut)
+    async def resume_tasks(
+        request: TaskIdsRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> BatchResultOut:
+        repo = Repo(session)
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        task_map = {task.id: task for task in tasks}
+        results: dict[str, str] = {}
+        bus = RedisBus(redis, settings)
+        for task_id in request.task_ids:
+            tid = str(task_id)
+            task = task_map.get(task_id)
+            if task is None:
+                results[tid] = "not_found"
+                continue
+            if not can_resume_task(task.status):
+                results[tid] = f"cannot_resume:{task.status.value}"
+                continue
+            await repo.set_task_status(task, TaskStatus.queued)
+            results[tid] = "queued"
+        await session.commit()
+        for task_id in request.task_ids:
+            if results.get(str(task_id)) == "queued":
+                await bus.enqueue_task(task_id)
+        return BatchResultOut(results=results)
+
+    @app.delete("/api/tasks", response_model=BatchResultOut)
+    async def delete_tasks(
+        request: TaskIdsRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> BatchResultOut:
+        repo = Repo(session)
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        task_map = {task.id: task for task in tasks}
+        results: dict[str, str] = {}
+        bus = RedisBus(redis, settings)
+        artifacts_to_remove: list[Path] = []
+        for task_id in request.task_ids:
+            tid = str(task_id)
+            task = task_map.get(task_id)
+            if task is None:
+                results[tid] = "not_found"
+                continue
+            await bus.request_cancel(task.id)
+            await bus.remove_task_from_queue(task.id)
+            await repo.set_task_status(task, TaskStatus.canceled)
+            artifacts_to_remove.append(Path(task.artifact_dir))
+            await session.delete(task)
+            results[tid] = "deleted"
+        await session.commit()
+        for artifact in artifacts_to_remove:
+            if artifact.exists():
+                await asyncio.to_thread(shutil.rmtree, artifact, True)
+        return BatchResultOut(results=results)
+
+    @app.post("/api/tasks/archive", response_model=BatchResultOut)
+    async def archive_tasks(
+        request: TaskIdsRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> BatchResultOut:
+        repo = Repo(session)
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        task_map = {task.id: task for task in tasks}
+        results: dict[str, str] = {}
+        for task_id in request.task_ids:
+            tid = str(task_id)
+            task = task_map.get(task_id)
+            if task is None:
+                results[tid] = "not_found"
+                continue
+            if task.status not in {TaskStatus.completed, TaskStatus.failed}:
+                results[tid] = f"cannot_archive:{task.status.value}"
+                continue
+            await asyncio.to_thread(_archive_task_artifacts, task)
+            await repo.set_task_status(task, TaskStatus.archived)
+            results[tid] = "archived"
+        await session.commit()
+        return BatchResultOut(results=results)
+
     @app.get("/api/tasks/{task_id}/transcript")
     async def get_transcript(
         task_id: uuid.UUID,
@@ -655,7 +756,7 @@ def create_app() -> FastAPI:
             await pubsub.subscribe(channel)
             try:
                 while True:
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
                     if not message:
                         yield "event: ping\ndata: {}\n\n"
                         continue

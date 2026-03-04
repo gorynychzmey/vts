@@ -341,15 +341,15 @@ class TaskProcessor:
                 title = payload.get("media_title")
                 if title and isinstance(title, str):
                     captured_title.append(title.strip())
-            event = "video_progress" if phase == "video" else "audio_progress"
+            merged_data = {"phase": phase, **payload}
             loop.call_soon_threadsafe(
                 lambda: asyncio.create_task(
                     self.bus.publish_event(
                         user_id=user_id,
                         task_id=str(task_id),
-                        event=event,
-                        data=payload,
-                        throttle_key=event,
+                        event="media_progress",
+                        data=merged_data,
+                        throttle_key="media_progress",
                     )
                 )
             )
@@ -887,11 +887,12 @@ class TaskProcessor:
         async with self.session_factory() as session:
             repo = Repo(session)
             segments = await repo.get_task_segments(task_id)
+            words_by_segment = await repo.get_all_asr_words_for_task(task_id)
             entries: list[dict[str, Any]] = []
             merged_tokens: list[str] = []
             previous_segment_end = -1.0
             for segment in segments:
-                words = await repo.get_words_for_segment(segment.id)
+                words = words_by_segment.get(segment.id, [])
                 if words:
                     for word in words:
                         if word.start_sec < previous_segment_end:
@@ -1167,6 +1168,7 @@ class TaskProcessor:
                     data={"current": idx, "total": total_parts},
                     throttle_key="summary_progress",
                 )
+                await self._persist_summary_progress(task_id, idx, total_parts)
                 continue
             logger.info("summarizing window %s/%s", idx, len(chunks))
 
@@ -1256,6 +1258,7 @@ class TaskProcessor:
                 data={"current": idx, "total": total_parts},
                 throttle_key="summary_progress",
             )
+            await self._persist_summary_progress(task_id, idx, total_parts)
         ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
         write_json(output, {"windows": ordered})
         write_json(output_mirror, {"windows": ordered})
@@ -1550,6 +1553,7 @@ class TaskProcessor:
             event="summary_progress",
             data={"current": total_windows, "total": total_parts},
         )
+        await self._persist_summary_progress(task_id, total_windows, total_parts)
 
         global_prompt_base = self._render_prompt_with_language(
             load_prompt(
@@ -1667,6 +1671,7 @@ class TaskProcessor:
             event="summary_progress",
             data={"current": total_parts, "total": total_parts},
         )
+        await self._persist_summary_progress(task_id, total_parts, total_parts)
         logger.info("final summary generated")
 
         async with self.session_factory() as session:
@@ -1726,6 +1731,15 @@ class TaskProcessor:
         async with self.session_factory() as session:
             repo = Repo(session)
             await repo.set_user_preferred_ytdlp_client(user_id, player_client)
+            await session.commit()
+
+    async def _persist_summary_progress(self, task_id: uuid.UUID, current: int, total: int) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            await repo.set_task_summary_progress(task, current, total)
             await session.commit()
 
     async def _save_task_source_title(self, task_id: uuid.UUID, title: str) -> None:

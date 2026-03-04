@@ -101,6 +101,15 @@ class Repo:
         await self.session.flush()
         return [task.id for task in tasks]
 
+    async def get_tasks_for_user(self, user_id: uuid.UUID, task_ids: list[uuid.UUID]) -> list[Task]:
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.steps))
+            .where(Task.user_id == user_id, Task.id.in_(task_ids))
+        )
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Task | None:
         stmt = (
             select(Task)
@@ -122,6 +131,11 @@ class Repo:
     ) -> None:
         task.status = status
         task.error_message = error_message
+        task.updated_at = utcnow()
+        await self.session.flush()
+
+    async def set_task_summary_progress(self, task: Task, current: int, total: int) -> None:
+        task.summary_progress = {"current": current, "total": total}
         task.updated_at = utcnow()
         await self.session.flush()
 
@@ -262,6 +276,19 @@ class Repo:
         stmt = select(AsrWord).where(AsrWord.segment_id == segment_id).order_by(AsrWord.start_sec.asc())
         result = await self.session.scalars(stmt)
         return list(result.all())
+
+    async def get_all_asr_words_for_task(self, task_id: uuid.UUID) -> dict[uuid.UUID, list[AsrWord]]:
+        """Fetch all words for a task in one query, grouped by segment_id."""
+        stmt = (
+            select(AsrWord)
+            .where(AsrWord.task_id == task_id)
+            .order_by(AsrWord.segment_id, AsrWord.start_sec.asc())
+        )
+        result = await self.session.scalars(stmt)
+        grouped: dict[uuid.UUID, list[AsrWord]] = {}
+        for word in result.all():
+            grouped.setdefault(word.segment_id, []).append(word)
+        return grouped
 
     async def clear_asr_for_task(self, task_id: uuid.UUID) -> None:
         await self.session.execute(delete(AsrWord).where(AsrWord.task_id == task_id))

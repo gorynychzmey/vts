@@ -64,6 +64,14 @@ class TaskOut(BaseModel):
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
 
 
+class TaskIdsRequest(BaseModel):
+    task_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class BatchResultOut(BaseModel):
+    results: dict[str, str]
+
+
 class MessageOut(BaseModel):
     status: str
 

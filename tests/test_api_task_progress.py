@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -27,7 +26,13 @@ def _step(
     )
 
 
-def _task(artifact_dir: Path, *, steps: list[SimpleNamespace], options: dict[str, object] | None = None) -> SimpleNamespace:
+def _task(
+    artifact_dir: Path,
+    *,
+    steps: list[SimpleNamespace],
+    options: dict[str, object] | None = None,
+    summary_progress: dict[str, int] | None = None,
+) -> SimpleNamespace:
     now = datetime.now(tz=timezone.utc)
     return SimpleNamespace(
         id=uuid.uuid4(),
@@ -38,6 +43,7 @@ def _task(artifact_dir: Path, *, steps: list[SimpleNamespace], options: dict[str
         transcript_path=None,
         summary_path=None,
         error_message=None,
+        summary_progress=summary_progress,
         created_at=now,
         updated_at=now,
         artifact_dir=str(artifact_dir),
@@ -45,25 +51,37 @@ def _task(artifact_dir: Path, *, steps: list[SimpleNamespace], options: dict[str
     )
 
 
-def test_summary_progress_uses_windows_and_final_running(tmp_path: Path) -> None:
-    summary_dir = tmp_path / "summary"
-    summary_dir.mkdir(parents=True, exist_ok=True)
-    (summary_dir / "chunks.json").write_text(
-        json.dumps({"chunks": ["c1", "c2", "c3"]}),
-        encoding="utf-8",
-    )
-    (summary_dir / "windows.json").write_text(
-        json.dumps({"windows": [{"window_index": 1}, {"window_index": 2}]}),
-        encoding="utf-8",
-    )
+def test_summary_progress_reads_from_db_field(tmp_path: Path) -> None:
     task = _task(
         tmp_path,
-        steps=[_step("summarize_windows", StepStatus.completed), _step("summarize_final", StepStatus.running)],
+        steps=[],
+        summary_progress={"current": 3, "total": 4},
     )
 
     current, total = _summary_progress_for_task(task)
 
     assert (current, total) == (3, 4)
+
+
+def test_summary_progress_returns_zero_when_field_missing(tmp_path: Path) -> None:
+    task = _task(tmp_path, steps=[])
+
+    current, total = _summary_progress_for_task(task)
+
+    assert (current, total) == (0, 0)
+
+
+def test_summary_progress_returns_zero_when_summary_disabled(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[],
+        options={"transcript": True, "summary": False},
+        summary_progress={"current": 3, "total": 4},
+    )
+
+    current, total = _summary_progress_for_task(task)
+
+    assert (current, total) == (0, 0)
 
 
 def test_serialize_task_includes_transcribe_and_summary_progress(tmp_path: Path) -> None:

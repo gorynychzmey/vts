@@ -52,6 +52,11 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
     processor.heavy_slot = _DummyHeavySlot()
     processor._log_payload = lambda *args, **kwargs: None
 
+    async def _noop_persist_summary_progress(*args: object, **kwargs: object) -> None:
+        return None
+
+    processor._persist_summary_progress = _noop_persist_summary_progress
+
     dirs = _make_dirs(tmp_path)
     summary_dir = dirs["root"] / "summary"
     windows_file = summary_dir / "windows.json"
@@ -433,6 +438,9 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
 
         async def get_task_by_id(self, task_id: uuid.UUID) -> _DummyTask:
             return dummy_task
+
+        async def set_task_summary_progress(self, task: object, current: int, total: int) -> None:
+            return None
 
     monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
     return processor, dummy_task

@@ -9,7 +9,7 @@ const adminResetBtn = document.getElementById("admin-reset-btn");
 const appVersionLabel = document.getElementById("app-version");
 const refreshBtn = document.getElementById("refresh-btn");
 const BUILD_VERSION = String(window.__VTS_BUILD_VERSION__ || "0.0.0");
-const VERSION_CHECK_INTERVAL_MS = 30000;
+const VERSION_CHECK_INTERVAL_MS = 300000;
 const QUEUE_POLL_INTERVAL_MS = 5000;
 const LOG_POLL_INTERVAL_MS = 2000;
 const ARCHIVED_LOG_MARKER = "__VTS_LOG_ARCHIVED__";
@@ -1292,7 +1292,21 @@ function syncSummaryToggle() {
 }
 
 async function updateTaskStatus(taskId, action) {
-  await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
+  if (action === "pause") {
+    await api("/api/tasks/pause", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_ids: [taskId] }),
+    });
+  } else if (action === "resume") {
+    await api("/api/tasks/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_ids: [taskId] }),
+    });
+  } else {
+    await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
+  }
   await loadTasks();
 }
 
@@ -1301,7 +1315,11 @@ async function removeTask(taskId) {
   if (!confirmed) {
     return;
   }
-  await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+  await api("/api/tasks", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [taskId] }),
+  });
   await loadTasks();
 }
 
@@ -1310,7 +1328,11 @@ async function archiveTask(taskId) {
   if (!confirmed) {
     return;
   }
-  await api(`/api/tasks/${taskId}/archive`, { method: "POST" });
+  await api("/api/tasks/archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [taskId] }),
+  });
   await loadTasks();
 }
 
@@ -1517,48 +1539,17 @@ async function refreshQueuePositions() {
   }
   state.queueRefreshInFlight = true;
   try {
-    const tasks = await api("/api/tasks");
-    const byId = new Map(tasks.map((task) => [String(task.id), task]));
+    const positions = await api("/api/tasks/queue-positions");
     document.querySelectorAll(".task").forEach((taskEl) => {
       const runtime = taskEl._runtime;
       if (!runtime) {
         return;
       }
-      const task = byId.get(taskEl.dataset.taskId || "");
-      if (!task) {
-        return;
-      }
-      runtime.baseStatus = String(task.status || runtime.baseStatus);
-      runtime.queuePosition = parseQueuePosition(task.queue_position);
-      runtime.failureError = parseErrorMessage(task.error_message);
-      runtime.failureCode = parseFailureCode(task.failure_code) || detectFailureCode(runtime.failureError);
-      runtime.transcriptReady = Boolean(task.transcript_path);
-      runtime.summaryReady = Boolean(task.summary_path) || (runtime.summaryExpected && runtime.baseStatus === "completed");
-      runtime.stepStatusByName = buildStepStatusMap(task);
-      runtime.stats = parseTaskStats(task);
-      const transcribeProgress = readStageProgress(task, "transcribe");
-      const summaryProgress = readStageProgress(task, "summary");
-      runtime.transcribe.current = transcribeProgress.current;
-      runtime.transcribe.total = transcribeProgress.total;
-      runtime.summary.current = summaryProgress.current;
-      runtime.summary.total = summaryProgress.total;
-      const runningStep = findStep(task, "running");
-      const failedStep = findStep(task, "failed");
-      if (runningStep) {
-        runtime.currentStepName = String(runningStep.name || "");
-      } else if (runtime.baseStatus === "failed" && failedStep) {
-        runtime.currentStepName = String(failedStep.name || "");
-      } else if (runtime.baseStatus !== "running") {
-        runtime.currentStepName = "";
-      }
-      runtime.currentStepStartedAt = runningStep ? parseIsoMs(runningStep.started_at) : null;
-      runtime.failedStepName = failedStep ? String(failedStep.name || "") : "";
-      if (runtime.baseStatus !== "running") {
-        runtime.taskStartedAt = computeTaskStartedAt(task);
-      }
+      const taskId = taskEl.dataset.taskId || "";
+      const pos = positions[taskId];
+      runtime.queuePosition = parseQueuePosition(pos !== undefined ? pos : null);
       renderTaskRuntime(taskEl);
     });
-    updateQueueWatcher(tasks);
   } catch {
     // Ignore transient API errors in queue polling.
   } finally {
@@ -1579,13 +1570,10 @@ function connectEvents() {
   }
   state.eventSource = new EventSource(url.toString(), { withCredentials: false });
 
-  state.eventSource.addEventListener("video_progress", (event) => {
+  state.eventSource.addEventListener("media_progress", (event) => {
     const payload = JSON.parse(event.data);
-    patchTaskProgress(payload.task_id, "video", payload.data || {});
-  });
-  state.eventSource.addEventListener("audio_progress", (event) => {
-    const payload = JSON.parse(event.data);
-    patchTaskProgress(payload.task_id, "audio", payload.data || {});
+    const phase = String((payload.data && payload.data.phase) || "");
+    patchTaskProgress(payload.task_id, phase, payload.data || {});
   });
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
