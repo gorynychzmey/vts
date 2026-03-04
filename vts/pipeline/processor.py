@@ -826,6 +826,7 @@ class TaskProcessor:
                     "t_queue_ms": _t_asr_q_ms,
                     "rtf": round(_asr_rtf, 4) if _asr_rtf is not None else None,
                     "retries": _asr_retries,
+                    "whisper_backend": self.settings.whisper_backend,
                     "artifacts": {"segment_file": str(spec.get("file", ""))},
                 })
             text_by_index[idx] = text
