@@ -1013,11 +1013,20 @@ function renderTaskRuntime(taskEl) {
   const canRestartSummary =
     runtime.summaryExpected &&
     (runtime.baseStatus === "completed" || (runtime.baseStatus === "failed" && Boolean(failedSummaryStep)));
+  const windowsCompleted = runtime.stepStatusByName["summarize_windows"] === "completed";
+  const finalFailed = runtime.stepStatusByName["summarize_final"] === "failed";
+  const canRestartFinalSummary =
+    runtime.summaryExpected &&
+    windowsCompleted &&
+    (runtime.baseStatus === "completed" || (runtime.baseStatus === "failed" && finalFailed));
   const canArchive = runtime.baseStatus === "completed" || runtime.baseStatus === "failed";
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   if (elements.restartSummaryBtn) {
     elements.restartSummaryBtn.disabled = !canRestartSummary;
+  }
+  if (elements.restartSummaryFinalBtn) {
+    elements.restartSummaryFinalBtn.disabled = !canRestartFinalSummary;
   }
   if (elements.archiveBtn) {
     elements.archiveBtn.disabled = !canArchive;
@@ -1092,6 +1101,9 @@ function renderTasks(tasks) {
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
     const restartSummaryBtn = root.querySelector(".restart-summary-btn");
+    const restartSummaryMenu = root.querySelector(".restart-summary-menu");
+    const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
+    const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
     const archiveBtn = root.querySelector(".archive-btn");
     const deleteBtn = root.querySelector(".delete-btn");
     const transcriptPre = root.querySelector(".tab-content.transcript");
@@ -1116,6 +1128,12 @@ function renderTasks(tasks) {
     if (restartSummaryBtn) {
       restartSummaryBtn.title = t("action.restart_summary");
       restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
+    }
+    if (restartSummaryFullBtn) {
+      restartSummaryFullBtn.textContent = t("action.restart_summary_full");
+    }
+    if (restartSummaryFinalBtn) {
+      restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
     }
     if (archiveBtn) {
       archiveBtn.title = t("action.archive");
@@ -1150,8 +1168,27 @@ function renderTasks(tasks) {
     });
     pauseBtn.addEventListener("click", () => updateTaskStatus(task.id, "pause"));
     resumeBtn.addEventListener("click", () => updateTaskStatus(task.id, "resume"));
-    if (restartSummaryBtn) {
-      restartSummaryBtn.addEventListener("click", () => restartSummary(task.id));
+    if (restartSummaryBtn && restartSummaryMenu) {
+      restartSummaryBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = restartSummaryMenu.classList.contains("open");
+        document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+        if (!isOpen) {
+          restartSummaryMenu.classList.add("open");
+        }
+      });
+    }
+    if (restartSummaryFullBtn) {
+      restartSummaryFullBtn.addEventListener("click", () => {
+        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+        restartSummary(task.id, "full");
+      });
+    }
+    if (restartSummaryFinalBtn) {
+      restartSummaryFinalBtn.addEventListener("click", () => {
+        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+        restartSummary(task.id, "final_only");
+      });
     }
     if (archiveBtn) {
       archiveBtn.addEventListener("click", () => archiveTask(task.id));
@@ -1185,6 +1222,8 @@ function renderTasks(tasks) {
       pauseBtn,
       resumeBtn,
       restartSummaryBtn,
+      restartSummaryMenu,
+      restartSummaryFinalBtn,
       archiveBtn,
       transcriptTabBtn,
       summaryTabBtn,
@@ -1271,12 +1310,13 @@ async function archiveTask(taskId) {
   await loadTasks();
 }
 
-async function restartSummary(taskId) {
-  const confirmed = window.confirm(t("confirm.restart_summary"));
+async function restartSummary(taskId, mode = "full") {
+  const confirmKey = mode === "final_only" ? "confirm.restart_summary_final" : "confirm.restart_summary";
+  const confirmed = window.confirm(t(confirmKey));
   if (!confirmed) {
     return;
   }
-  await api(`/api/tasks/${taskId}/restart_summary`, { method: "POST" });
+  await api(`/api/tasks/${taskId}/restart_summary?mode=${mode}`, { method: "POST" });
   await loadTasks();
 }
 
@@ -1662,6 +1702,10 @@ async function refreshAll() {
   startVersionWatcher();
   startDurationTicker();
 }
+
+document.addEventListener("click", () => {
+  document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+});
 
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);

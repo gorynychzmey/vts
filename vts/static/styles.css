@@ -241,6 +241,47 @@ button:hover {
   color: var(--danger);
 }
 
+.btn-menu-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.btn-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  min-width: 200px;
+  background: #fff;
+  border: 1px solid #d8d0c4;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  display: none;
+}
+
+.btn-menu.open {
+  display: block;
+}
+
+.btn-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 1rem;
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-menu button:hover {
+  background: #f5f0e8;
+}
+
 .task-list {
   display: grid;
   gap: 0.7rem;

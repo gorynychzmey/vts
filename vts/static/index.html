@@ -178,19 +178,25 @@
                   <path d="m8 6 10 6-10 6z" />
                 </svg>
               </button>
-              <button
-                class="icon-btn ghost restart-summary-btn"
-                type="button"
-                title="Restart summary"
-                aria-label="Restart summary"
-                data-i18n-title="action.restart_summary"
-                data-i18n-aria-label="action.restart_summary"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
-                  <path d="M3 3v5h5" />
-                </svg>
-              </button>
+              <div class="btn-menu-wrapper">
+                <button
+                  class="icon-btn ghost restart-summary-btn"
+                  type="button"
+                  title="Restart summary"
+                  aria-label="Restart summary"
+                  data-i18n-title="action.restart_summary"
+                  data-i18n-aria-label="action.restart_summary"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
+                    <path d="M3 3v5h5" />
+                  </svg>
+                </button>
+                <div class="btn-menu restart-summary-menu">
+                  <button class="restart-summary-full-btn" type="button">Restart summary from scratch</button>
+                  <button class="restart-summary-final-btn" type="button">Restart final summary only</button>
+                </div>
+              </div>
               <button
                 class="icon-btn ghost archive-btn"
                 type="button"

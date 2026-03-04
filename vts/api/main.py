@@ -55,6 +55,20 @@ def can_restart_summary_task(task: Task) -> bool:
     return any(step.name in SUMMARY_STEP_NAMES and step.status == StepStatus.failed for step in task.steps)
 
 
+def can_restart_final_summary_task(task: Task) -> bool:
+    options = task.options if isinstance(task.options, dict) else {}
+    if options.get("summary") is False:
+        return False
+    summarize_windows_status = _find_step_status(task, "summarize_windows")
+    if summarize_windows_status != StepStatus.completed:
+        return False
+    if task.status == TaskStatus.completed:
+        return True
+    if task.status != TaskStatus.failed:
+        return False
+    return _find_step_status(task, "summarize_final") == StepStatus.failed
+
+
 ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
 
 
@@ -156,6 +170,32 @@ def _reset_summary_steps(task: Task) -> None:
         step.started_at = None
         step.finished_at = None
         step.message = None
+
+
+def _reset_final_summary_step(task: Task) -> None:
+    for step in task.steps:
+        if step.name != "summarize_final":
+            continue
+        step.status = StepStatus.pending
+        step.attempt = 0
+        step.started_at = None
+        step.finished_at = None
+        step.message = None
+
+
+def _reset_final_summary_artifacts(task: Task) -> None:
+    artifact_root = Path(task.artifact_dir)
+    if not artifact_root.exists():
+        return
+    summary_dir = artifact_root / "summary"
+    outputs_dir = artifact_root / "outputs"
+    for path in (
+        summary_dir / "final.json",
+        summary_dir / "final.md",
+        outputs_dir / "summary.json",
+        outputs_dir / "summary.md",
+    ):
+        path.unlink(missing_ok=True)
 
 
 def _read_json_payload(path: Path) -> dict[str, Any] | None:
@@ -473,23 +513,35 @@ def create_app() -> FastAPI:
     @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
     async def restart_summary_task(
         task_id: uuid.UUID,
+        mode: str = "full",
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> MessageOut:
+        if mode not in ("full", "final_only"):
+            raise HTTPException(status_code=422, detail="mode must be 'full' or 'final_only'")
         repo = Repo(session)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        if not can_restart_summary_task(task):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot restart summary for task with status '{task.status.value}'",
-            )
-        _reset_summary_steps(task)
+        if mode == "final_only":
+            if not can_restart_final_summary_task(task):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot restart final summary for task with status '{task.status.value}'",
+                )
+            _reset_final_summary_step(task)
+            await asyncio.to_thread(_reset_final_summary_artifacts, task)
+        else:
+            if not can_restart_summary_task(task):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot restart summary for task with status '{task.status.value}'",
+                )
+            _reset_summary_steps(task)
+            await asyncio.to_thread(_reset_summary_artifacts, task)
         task.summary_path = None
-        await asyncio.to_thread(_reset_summary_artifacts, task)
         await repo.set_task_status(task, TaskStatus.queued)
         await session.commit()
         bus = RedisBus(redis, settings)
