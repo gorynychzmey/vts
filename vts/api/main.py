@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
@@ -410,7 +411,7 @@ def create_app() -> FastAPI:
             event="task_status",
             data={"status": task.status.value},
         )
-        task.steps = []
+        set_committed_value(task, "steps", [])
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: _summary_progress_for_task(task)}
