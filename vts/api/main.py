@@ -459,48 +459,6 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: _summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
-    @app.post("/api/tasks/{task_id}/pause", response_model=MessageOut)
-    async def pause_task(
-        task_id: uuid.UUID,
-        user: AuthenticatedUser = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session_dep),
-    ) -> MessageOut:
-        repo = Repo(session)
-        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if not can_pause_task(task.status):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot pause task with status '{task.status.value}'",
-            )
-        await repo.set_task_status(task, TaskStatus.paused)
-        await session.commit()
-        return MessageOut(status="paused")
-
-    @app.post("/api/tasks/{task_id}/resume", response_model=MessageOut)
-    async def resume_task(
-        task_id: uuid.UUID,
-        user: AuthenticatedUser = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session_dep),
-        redis: Redis = Depends(get_redis),
-        settings: Settings = Depends(get_settings_dep),
-    ) -> MessageOut:
-        repo = Repo(session)
-        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if not can_resume_task(task.status):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot resume task with status '{task.status.value}'",
-            )
-        await repo.set_task_status(task, TaskStatus.queued)
-        await session.commit()
-        bus = RedisBus(redis, settings)
-        await bus.enqueue_task(task.id)
-        return MessageOut(status="queued")
-
     @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
     async def restart_summary_task(
         task_id: uuid.UUID,
@@ -538,49 +496,6 @@ def create_app() -> FastAPI:
         bus = RedisBus(redis, settings)
         await bus.enqueue_task(task.id)
         return MessageOut(status="queued")
-
-    @app.delete("/api/tasks/{task_id}", response_model=MessageOut)
-    async def delete_task(
-        task_id: uuid.UUID,
-        user: AuthenticatedUser = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session_dep),
-        redis: Redis = Depends(get_redis),
-        settings: Settings = Depends(get_settings_dep),
-    ) -> MessageOut:
-        repo = Repo(session)
-        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        bus = RedisBus(redis, settings)
-        await bus.request_cancel(task.id)
-        await bus.remove_task_from_queue(task.id)
-        await repo.set_task_status(task, TaskStatus.canceled)
-        artifact = Path(task.artifact_dir)
-        await session.delete(task)
-        await session.commit()
-        if artifact.exists():
-            await asyncio.to_thread(shutil.rmtree, artifact, True)
-        return MessageOut(status="deleted")
-
-    @app.post("/api/tasks/{task_id}/archive", response_model=MessageOut)
-    async def archive_task(
-        task_id: uuid.UUID,
-        user: AuthenticatedUser = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session_dep),
-    ) -> MessageOut:
-        repo = Repo(session)
-        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if task.status not in {TaskStatus.completed, TaskStatus.failed}:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot archive task with status '{task.status.value}'",
-            )
-        await asyncio.to_thread(_archive_task_artifacts, task)
-        await repo.set_task_status(task, TaskStatus.archived)
-        await session.commit()
-        return MessageOut(status="archived")
 
     @app.post("/api/tasks/pause", response_model=BatchResultOut)
     async def pause_tasks(
