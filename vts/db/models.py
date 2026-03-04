@@ -64,6 +64,7 @@ class Task(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus, name="task_status", native_enum=False),
         nullable=False,

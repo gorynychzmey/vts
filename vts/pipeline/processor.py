@@ -323,7 +323,10 @@ class TaskProcessor:
         if not audio_only and video_file.exists() and audio_file:
             return True
         if dry_run:
-            return False
+            # Media files may have been cleaned up after a completed run.
+            # If audio segments already exist, download is not needed again.
+            return any(dirs["segments"].glob("*.wav"))
+
 
         source_url = await self._task_url(task_id)
         user_uuid = uuid.UUID(user_id)
@@ -331,8 +334,13 @@ class TaskProcessor:
         if preferred_youtube_client:
             logger.info("using saved yt-dlp youtube client for user: %s", preferred_youtube_client)
         loop = asyncio.get_running_loop()
+        captured_title: list[str] = []
 
         def sync_progress(phase: str, payload: dict[str, Any]) -> None:
+            if not captured_title:
+                title = payload.get("media_title")
+                if title and isinstance(title, str):
+                    captured_title.append(title.strip())
             event = "video_progress" if phase == "video" else "audio_progress"
             loop.call_soon_threadsafe(
                 lambda: asyncio.create_task(
@@ -376,6 +384,8 @@ class TaskProcessor:
         if selected_youtube_client and selected_youtube_client != preferred_youtube_client:
             await self._set_user_preferred_ytdlp_client(user_uuid, selected_youtube_client)
             logger.info("saved yt-dlp youtube client for user: %s", selected_youtube_client)
+        if captured_title:
+            await self._save_task_source_title(task_id, captured_title[0])
         logger.info("download finished")
         return True
 
@@ -397,7 +407,8 @@ class TaskProcessor:
         if output.exists():
             return True
         if dry_run:
-            return False
+            # Media files may have been cleaned up after a completed run.
+            return any(dirs["segments"].glob("*.wav"))
         audio_file = next(dirs["media"].glob("audio.original.*"), None)
         if not audio_file:
             raise RuntimeError("Missing downloaded audio file")
@@ -1715,6 +1726,15 @@ class TaskProcessor:
         async with self.session_factory() as session:
             repo = Repo(session)
             await repo.set_user_preferred_ytdlp_client(user_id, player_client)
+            await session.commit()
+
+    async def _save_task_source_title(self, task_id: uuid.UUID, title: str) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            task.source_title = title
             await session.commit()
 
     async def _persist_detected_language(self, task_id: uuid.UUID, language: str, confidence: float) -> None:

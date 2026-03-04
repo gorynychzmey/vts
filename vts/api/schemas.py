@@ -49,6 +49,7 @@ class TaskStatsOut(BaseModel):
 class TaskOut(BaseModel):
     id: UUID
     source_url: str
+    source_title: str | None = None
     status: str
     queue_position: int | None = Field(default=None, ge=1)
     options: dict[str, Any]

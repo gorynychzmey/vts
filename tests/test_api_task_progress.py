@@ -32,6 +32,7 @@ def _task(artifact_dir: Path, *, steps: list[SimpleNamespace], options: dict[str
     return SimpleNamespace(
         id=uuid.uuid4(),
         source_url="https://example.com/video",
+        source_title=None,
         status=TaskStatus.running,
         options=options if options is not None else {"transcript": True, "summary": True},
         transcript_path=None,

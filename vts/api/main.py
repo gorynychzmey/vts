@@ -323,6 +323,7 @@ def serialize_task(
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
+        source_title=task.source_title,
         status=task.status.value,
         queue_position=queue_position,
         options=task.options,

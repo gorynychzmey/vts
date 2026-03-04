@@ -766,7 +766,7 @@ function createRuntime(task) {
   const summaryProgress = readStageProgress(task, "summary");
   return {
     sourceUrl: String(task.source_url || ""),
-    displayName: "",
+    displayName: typeof task.source_title === "string" ? task.source_title.trim() : "",
     baseStatus: String(task.status || ""),
     failureCode: parseFailureCode(task.failure_code),
     failureError: parseErrorMessage(task.error_message),
