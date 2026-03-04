@@ -1342,7 +1342,11 @@ async function restartSummary(taskId, mode = "full") {
   if (!confirmed) {
     return;
   }
-  await api(`/api/tasks/${taskId}/restart_summary?mode=${mode}`, { method: "POST" });
+  await api("/api/tasks/restart_summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: [taskId], mode }),
+  });
   await loadTasks();
 }
 

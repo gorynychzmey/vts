@@ -68,6 +68,11 @@ class TaskIdsRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1, max_length=100)
 
 
+class RestartSummaryRequest(BaseModel):
+    task_ids: list[UUID] = Field(min_length=1, max_length=100)
+    mode: str = Field(default="full")
+
+
 class BatchResultOut(BaseModel):
     results: dict[str, str]
 

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts import __version__
 from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
-from vts.api.schemas import AdminUsersOut, BatchResultOut, MeOut, MessageOut, TaskCreateRequest, TaskIdsRequest, TaskOut
+from vts.api.schemas import AdminUsersOut, BatchResultOut, MeOut, RestartSummaryRequest, TaskCreateRequest, TaskIdsRequest, TaskOut
 from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
@@ -459,43 +459,47 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: _summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
-    @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
-    async def restart_summary_task(
-        task_id: uuid.UUID,
-        mode: str = "full",
+    @app.post("/api/tasks/restart_summary", response_model=BatchResultOut)
+    async def restart_summary_tasks(
+        request: RestartSummaryRequest,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
-    ) -> MessageOut:
-        if mode not in ("full", "final_only"):
+    ) -> BatchResultOut:
+        if request.mode not in ("full", "final_only"):
             raise HTTPException(status_code=422, detail="mode must be 'full' or 'final_only'")
         repo = Repo(session)
-        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if mode == "final_only":
-            if not can_restart_final_summary_task(task):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Cannot restart final summary for task with status '{task.status.value}'",
-                )
-            _reset_final_summary_step(task)
-            await asyncio.to_thread(_reset_final_summary_artifacts, task)
-        else:
-            if not can_restart_summary_task(task):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Cannot restart summary for task with status '{task.status.value}'",
-                )
-            _reset_summary_steps(task)
-            await asyncio.to_thread(_reset_summary_artifacts, task)
-        task.summary_path = None
-        await repo.set_task_status(task, TaskStatus.queued)
-        await session.commit()
+        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
+        task_map = {task.id: task for task in tasks}
+        results: dict[str, str] = {}
         bus = RedisBus(redis, settings)
-        await bus.enqueue_task(task.id)
-        return MessageOut(status="queued")
+        for task_id in request.task_ids:
+            tid = str(task_id)
+            task = task_map.get(task_id)
+            if task is None:
+                results[tid] = "not_found"
+                continue
+            if request.mode == "final_only":
+                if not can_restart_final_summary_task(task):
+                    results[tid] = f"cannot_restart_final:{task.status.value}"
+                    continue
+                _reset_final_summary_step(task)
+                await asyncio.to_thread(_reset_final_summary_artifacts, task)
+            else:
+                if not can_restart_summary_task(task):
+                    results[tid] = f"cannot_restart:{task.status.value}"
+                    continue
+                _reset_summary_steps(task)
+                await asyncio.to_thread(_reset_summary_artifacts, task)
+            task.summary_path = None
+            await repo.set_task_status(task, TaskStatus.queued)
+            results[tid] = "queued"
+        await session.commit()
+        for task_id in request.task_ids:
+            if results.get(str(task_id)) == "queued":
+                await bus.enqueue_task(task_id)
+        return BatchResultOut(results=results)
 
     @app.post("/api/tasks/pause", response_model=BatchResultOut)
     async def pause_tasks(
