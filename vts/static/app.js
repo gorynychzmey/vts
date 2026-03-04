@@ -1174,7 +1174,11 @@ function renderTasks(tasks) {
         const isOpen = restartSummaryMenu.classList.contains("open");
         document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
         if (!isOpen) {
+          const rect = restartSummaryBtn.getBoundingClientRect();
+          restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
+          restartSummaryMenu.style.left = "0px";
           restartSummaryMenu.classList.add("open");
+          restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
         }
       });
     }
