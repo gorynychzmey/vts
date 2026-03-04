@@ -90,38 +90,7 @@ def normalize_whisper_output(
     payload: dict[str, Any],
     *,
     segment_offset_sec: float,
-    backend: WhisperBackend = "asr",
-) -> tuple[str, list[dict[str, Any]]]:
-    if backend == "cpp":
-        return _normalize_cpp(payload, segment_offset_sec=segment_offset_sec)
-    return _normalize_asr(payload, segment_offset_sec=segment_offset_sec)
-
-
-def _normalize_asr(
-    payload: dict[str, Any],
-    *,
-    segment_offset_sec: float,
-) -> tuple[str, list[dict[str, Any]]]:
-    raw_segments = payload.get("segments", [])
-    text = str(payload.get("text", "")).strip()
-    words: list[dict[str, Any]] = []
-    for seg in raw_segments if isinstance(raw_segments, list) else []:
-        for word in seg.get("words", []) if isinstance(seg, dict) else []:
-            words.append(
-                {
-                    "word": str(word.get("word", "")).strip(),
-                    "start": float(word.get("start", 0.0)) + segment_offset_sec,
-                    "end": float(word.get("end", 0.0)) + segment_offset_sec,
-                    "confidence": word.get("probability"),
-                }
-            )
-    return text, words
-
-
-def _normalize_cpp(
-    payload: dict[str, Any],
-    *,
-    segment_offset_sec: float,
+    whisper_backend: WhisperBackend = "asr",
 ) -> tuple[str, list[dict[str, Any]]]:
     raw_segments = payload.get("segments", [])
     text = str(payload.get("text", "")).strip()
@@ -129,7 +98,6 @@ def _normalize_cpp(
     for seg in raw_segments if isinstance(raw_segments, list) else []:
         if not isinstance(seg, dict):
             continue
-        # whisper.cpp verbose_json: segments have a "words" array
         for word in seg.get("words", []):
             if not isinstance(word, dict):
                 continue

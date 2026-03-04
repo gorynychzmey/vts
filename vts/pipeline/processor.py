@@ -748,6 +748,8 @@ class TaskProcessor:
             for seg in existing_segments.values()
             if seg.text.strip()
         }
+        whisper_url = self.settings.whisper_url
+        whisper_backend = self.settings.whisper_backend
         for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
@@ -764,16 +766,15 @@ class TaskProcessor:
                 logger.info("heavy slot acquired: transcribe segment %s", idx)
                 _t_asr0 = time.monotonic()
                 raw = await transcribe_with_whisper(
-                    whisper_url=self.settings.whisper_url,
-                    whisper_backend=self.settings.whisper_backend,
+                    whisper_url=whisper_url,
+                    whisper_backend=whisper_backend,
                     audio_path=segment_path,
                     language=language,
                     initial_prompt=initial_prompt,
                 )
                 _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
             self._log_payload(logger, f"asr response segment={idx}", raw)
-            backend = self.settings.whisper_backend
-            text, words = normalize_whisper_output(raw, segment_offset_sec=start, backend=backend)
+            text, words = normalize_whisper_output(raw, segment_offset_sec=start, whisper_backend=whisper_backend)
             suspicious = self._is_probable_asr_hallucination(text=text, words=words)
             if suspicious:
                 _asr_retries = 1
@@ -782,13 +783,13 @@ class TaskProcessor:
                 async with self.heavy_slot:
                     logger.info("heavy slot acquired: transcribe segment %s retry", idx)
                     retry_raw = await transcribe_with_whisper(
-                        whisper_url=self.settings.whisper_url,
-                        whisper_backend=self.settings.whisper_backend,
+                        whisper_url=whisper_url,
+                        whisper_backend=whisper_backend,
                         audio_path=segment_path,
                         language=language,
                         initial_prompt=None,
                     )
-                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start, backend=backend)
+                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start, whisper_backend=whisper_backend)
                 retry_suspicious = self._is_probable_asr_hallucination(text=retry_text, words=retry_words)
                 old_score = self._transcript_quality_score(text, words)
                 new_score = self._transcript_quality_score(retry_text, retry_words)
@@ -826,7 +827,7 @@ class TaskProcessor:
                     "t_queue_ms": _t_asr_q_ms,
                     "rtf": round(_asr_rtf, 4) if _asr_rtf is not None else None,
                     "retries": _asr_retries,
-                    "whisper_backend": self.settings.whisper_backend,
+                    "whisper_backend": whisper_backend,
                     "artifacts": {"segment_file": str(spec.get("file", ""))},
                 })
             text_by_index[idx] = text
