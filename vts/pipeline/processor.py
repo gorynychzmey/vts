@@ -49,7 +49,7 @@ from vts.services.summarizer import (
     load_prompt,
     parse_json_response,
 )
-from vts.services.transcription import normalize_whisper_output, transcribe_with_whisper
+from vts.services.transcription import detect_language_with_cpp, normalize_whisper_output, transcribe_with_whisper
 from vts.metrics import MetricsEmitter, QualityAnalyzer, aggregate_task_metrics
 
 
@@ -644,17 +644,27 @@ class TaskProcessor:
                 return True
             raise RuntimeError("Missing first segment for language detection")
 
-        logger.info("waiting for heavy slot: detect language")
-        async with self.heavy_slot:
-            logger.info("heavy slot acquired: detect language")
-            raw = await transcribe_with_whisper(
-                whisper_url=self.settings.whisper_url,
-                whisper_backend=self.settings.whisper_backend,
-                audio_path=segment_path,
-                language=None,
-                initial_prompt=None,
-            )
-        self._log_payload(logger, "asr language probe response", raw)
+        if self.settings.whisper_backend == "cpp":
+            logger.info("waiting for heavy slot: detect language (cpp detect_language)")
+            async with self.heavy_slot:
+                logger.info("heavy slot acquired: detect language (cpp)")
+                raw = await detect_language_with_cpp(
+                    whisper_url=self.settings.whisper_url,
+                    audio_path=segment_path,
+                )
+            self._log_payload(logger, "cpp detect_language response", raw)
+        else:
+            logger.info("waiting for heavy slot: detect language")
+            async with self.heavy_slot:
+                logger.info("heavy slot acquired: detect language")
+                raw = await transcribe_with_whisper(
+                    whisper_url=self.settings.whisper_url,
+                    whisper_backend=self.settings.whisper_backend,
+                    audio_path=segment_path,
+                    language=None,
+                    initial_prompt=None,
+                )
+            self._log_payload(logger, "asr language probe response", raw)
         language, confidence = self._extract_detected_language(raw)
         threshold = self.settings.language_detection_confidence_threshold
         if not language:
