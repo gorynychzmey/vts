@@ -673,7 +673,8 @@ function parseTaskStats(task) {
   return {
     processingSeconds: parseNonNegativeInt(stats && stats.processing_seconds),
     transcriptChars: parseNonNegativeInt(stats && stats.transcript_chars),
-    summaryChars: parseNonNegativeInt(stats && stats.summary_chars)
+    summaryChars: parseNonNegativeInt(stats && stats.summary_chars),
+    redactedChars: parseNonNegativeInt(stats && stats.redacted_chars)
   };
 }
 
@@ -734,6 +735,7 @@ function resolveCompletedMessage(runtime) {
   return t("success.completed_stats", {
     time: formatMetricDuration(runtime.stats.processingSeconds),
     transcript: formatMetricChars(runtime.stats.transcriptChars),
+    redacted: formatMetricChars(runtime.stats.redactedChars),
     summary: formatMetricChars(runtime.stats.summaryChars)
   });
 }

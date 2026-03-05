@@ -258,10 +258,12 @@ def _text_length_from_path(path_value: str | None, *, prefer_json_text_field: bo
 
 
 def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
+    redacted_path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
     return {
         "processing_seconds": _processing_seconds_for_task(task),
         "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
         "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
+        "redacted_chars": _text_length_from_path(str(redacted_path), prefer_json_text_field=False),
     }
 
 

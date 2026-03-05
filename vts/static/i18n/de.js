@@ -69,7 +69,7 @@ window.__VTS_I18N.de = {
 "failure.download_live_not_started":
   "Der YouTube-Livestream ist noch nicht verfuegbar. Nutzen Sie Resume spaeter, sobald der Stream gestartet ist.",
 "failure.with_error": "{message} Technisches Detail: {error}",
-"success.completed_stats": "Fertig. Gesamtdauer: {time}. Transkript: {transcript}. Zusammenfassung: {summary}.",
+"success.completed_stats": "Fertig. Gesamtdauer: {time}. Transkript: {transcript}. Gekürzt: {redacted}. Zusammenfassung: {summary}.",
 "stats.chars": "{count} Zeichen",
 "stats.unknown": "k.A.",
 "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",

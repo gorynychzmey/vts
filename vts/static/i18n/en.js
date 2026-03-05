@@ -68,7 +68,7 @@ window.__VTS_I18N.en = {
 "failure.download_live_not_started":
   "The YouTube live stream is not available yet. Use Resume later, once the stream has started.",
 "failure.with_error": "{message} Technical detail: {error}",
-"success.completed_stats": "Done. Total time: {time}. Transcript: {transcript}. Summary: {summary}.",
+"success.completed_stats": "Done. Total time: {time}. Transcript: {transcript}. Redacted: {redacted}. Summary: {summary}.",
 "stats.chars": "{count} chars",
 "stats.unknown": "n/a",
 "confirm.delete": "Delete task? This action cannot be undone.",

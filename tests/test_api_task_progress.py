@@ -125,10 +125,13 @@ def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
     outputs_dir.mkdir(parents=True, exist_ok=True)
     transcript_path = outputs_dir / "transcript.txt"
     summary_path = outputs_dir / "summary.md"
+    redacted_path = outputs_dir / "redacted_transcript.txt"
     transcript_text = "Hello world"
     summary_text = "Summary body"
+    redacted_text = "Segment one\nSegment two\n"
     transcript_path.write_text(transcript_text, encoding="utf-8")
     summary_path.write_text(summary_text, encoding="utf-8")
+    redacted_path.write_text(redacted_text, encoding="utf-8")
 
     started = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
     finished = started + timedelta(minutes=2, seconds=5)
@@ -148,6 +151,7 @@ def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
     assert payload.stats.processing_seconds == 125
     assert payload.stats.transcript_chars == len(transcript_text)
     assert payload.stats.summary_chars == len(summary_text)
+    assert payload.stats.redacted_chars == len(redacted_text.strip())
 
 
 def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> None:
