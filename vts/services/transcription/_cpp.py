@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from ._base import WhisperBackend
+
+_log = logging.getLogger(__name__)
 
 
 class CppBackend(WhisperBackend):
@@ -45,6 +48,7 @@ class CppBackend(WhisperBackend):
             timeout_seconds=timeout_seconds,
             error_context="whisper.cpp detect_language",
         )
+        _log.debug("detect_language raw response: %s", raw)
         language = raw.get("language")
         probability: float | None = None
         for key in ("detected_language_probability", "language_probability", "language_confidence"):
