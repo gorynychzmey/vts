@@ -698,7 +698,7 @@ class TaskProcessor:
         missing.sort(key=lambda spec: int(spec["segment_index"]))
         text_by_index = {seg.segment_index: seg.text for seg in existing_segments.values() if seg.text.strip()}
         suspicious_by_index: dict[int, bool] = {
-            seg.segment_index: self._is_probable_asr_hallucination(text=seg.text, words=[])
+            seg.segment_index: self._is_probable_asr_hallucination(seg.text)
             for seg in existing_segments.values()
             if seg.text.strip()
         }
@@ -724,8 +724,8 @@ class TaskProcessor:
                 )
                 _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
             self._log_payload(logger, f"asr response segment={idx}", raw)
-            text, words = self.whisper.normalize_output(raw, segment_offset_sec=start)
-            suspicious = self._is_probable_asr_hallucination(text=text, words=words)
+            text = self.whisper.normalize_output(raw)
+            suspicious = self._is_probable_asr_hallucination(text)
             if suspicious:
                 _asr_retries = 1
                 logger.warning("asr segment %s appears repetitive/noisy; retrying without tail prompt", idx)
@@ -737,14 +737,13 @@ class TaskProcessor:
                         language=language,
                         initial_prompt=None,
                     )
-                retry_text, retry_words = self.whisper.normalize_output(retry_raw, segment_offset_sec=start)
-                retry_suspicious = self._is_probable_asr_hallucination(text=retry_text, words=retry_words)
-                old_score = self._transcript_quality_score(text, words)
-                new_score = self._transcript_quality_score(retry_text, retry_words)
+                retry_text = self.whisper.normalize_output(retry_raw)
+                retry_suspicious = self._is_probable_asr_hallucination(retry_text)
+                old_score = self._transcript_quality_score(text)
+                new_score = self._transcript_quality_score(retry_text)
                 if (not retry_suspicious) or (new_score > old_score):
                     raw = retry_raw
                     text = retry_text
-                    words = retry_words
                     suspicious = retry_suspicious
                     logger.info(
                         "asr retry accepted for segment %s (old_score=%.3f, new_score=%.3f)",
@@ -1771,7 +1770,7 @@ class TaskProcessor:
         }
         return mapping.get(lang, lang)
 
-    def _is_probable_asr_hallucination(self, *, text: str, words: list[dict[str, Any]]) -> bool:
+    def _is_probable_asr_hallucination(self, text: str) -> bool:
         normalized = re.sub(r"\s+", " ", text).strip().lower()
         if not normalized:
             return False
@@ -1804,12 +1803,6 @@ class TaskProcessor:
                     break
             repeated_edge = max(head_repeats, tail_repeats) >= 5
 
-        low_confidence_ratio = 0.0
-        if words:
-            confidences = [float(item.get("confidence")) for item in words if item.get("confidence") is not None]
-            if confidences:
-                low_confidence_ratio = sum(1 for value in confidences if value < 0.35) / float(len(confidences))
-
         signals = 0
         if unique_ratio < 0.30:
             signals += 1
@@ -1817,11 +1810,9 @@ class TaskProcessor:
             signals += 1
         if repeated_edge:
             signals += 1
-        if low_confidence_ratio > 0.75:
-            signals += 1
         return signals >= 2
 
-    def _transcript_quality_score(self, text: str, words: list[dict[str, Any]]) -> float:
+    def _transcript_quality_score(self, text: str) -> float:
         normalized = re.sub(r"\s+", " ", text).strip().lower()
         if not normalized:
             return 0.0
@@ -1830,12 +1821,7 @@ class TaskProcessor:
         if not tokens:
             return 0.0
         unique_ratio = len(set(tokens)) / float(len(tokens))
-        score = len(tokens) * unique_ratio
-        if words:
-            confidences = [float(item.get("confidence")) for item in words if item.get("confidence") is not None]
-            if confidences:
-                score += sum(confidences) / float(len(confidences)) * 10.0
-        return score
+        return len(tokens) * unique_ratio
 
     def _normalize_token(self, value: str) -> str:
         return re.sub(r"[^\wа-яА-ЯёЁ]+", "", value, flags=re.UNICODE).strip().lower()

@@ -29,30 +29,8 @@ class WhisperBackend(ABC):
         timeout_seconds: int = 120,
     ) -> dict[str, Any]: ...
 
-    def normalize_output(
-        self,
-        payload: dict[str, Any],
-        *,
-        segment_offset_sec: float,
-    ) -> tuple[str, list[dict[str, Any]]]:
-        raw_segments = payload.get("segments", [])
-        text = str(payload.get("text", "")).strip()
-        words: list[dict[str, Any]] = []
-        for seg in raw_segments if isinstance(raw_segments, list) else []:
-            if not isinstance(seg, dict):
-                continue
-            for word in seg.get("words", []):
-                if not isinstance(word, dict):
-                    continue
-                words.append(
-                    {
-                        "word": str(word.get("word", "")).strip(),
-                        "start": float(word.get("start", 0.0)) + segment_offset_sec,
-                        "end": float(word.get("end", 0.0)) + segment_offset_sec,
-                        "confidence": word.get("probability"),
-                    }
-                )
-        return text, words
+    def normalize_output(self, payload: dict[str, Any]) -> str:
+        return str(payload.get("text", "")).strip()
 
     async def _post_audio(
         self,

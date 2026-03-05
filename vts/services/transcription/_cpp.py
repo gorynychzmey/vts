@@ -9,17 +9,6 @@ from ._base import WhisperBackend
 class CppBackend(WhisperBackend):
     backend_name = "cpp"
 
-    def normalize_output(
-        self,
-        payload: dict[str, Any],
-        *,
-        segment_offset_sec: float,
-    ) -> tuple[str, list[dict[str, Any]]]:
-        # whisper.cpp returns subword tokens in `words`, not actual words.
-        # Use the top-level `text` field directly and return no words.
-        text = str(payload.get("text", "")).strip()
-        return text, []
-
     async def transcribe(
         self,
         audio_path: Path,
