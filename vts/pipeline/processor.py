@@ -1805,8 +1805,10 @@ class TaskProcessor:
         return "ru" if cyr >= lat else "en"
 
     def _extract_detected_language(self, payload: dict[str, Any]) -> tuple[str | None, float | None]:
-        language = self._normalize_language(payload.get("language"))
+        language = self._normalize_language(payload.get("language") or payload.get("language_code"))
         confidence_raw = payload.get("language_probability")
+        if confidence_raw is None:
+            confidence_raw = payload.get("confidence")
         if confidence_raw is None:
             confidence_raw = payload.get("language_confidence")
         if confidence_raw is None:
