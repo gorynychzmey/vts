@@ -231,7 +231,7 @@ def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_
     assert marker["language"] == "ru"
 
 
-def test_step_detect_language_accepts_missing_confidence_when_language_is_present(
+def test_step_detect_language_raises_when_confidence_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,14 +245,9 @@ def test_step_detect_language_accepts_missing_confidence_when_language_is_presen
     processor.heavy_slot = _DummyHeavySlot()
     processor._log_payload = lambda *args, **kwargs: None
 
-    async def _persist_detected_language(*args: object, **kwargs: object) -> None:
-        return None
-
-    processor._persist_detected_language = _persist_detected_language
-
     class _FakeWhisper:
         async def detect_language(self, **kwargs: object) -> dict[str, object]:
-            return {"language": "ru"}
+            return {"language": "ru"}  # no language_probability
 
     processor.whisper = _FakeWhisper()  # type: ignore[assignment]
 
@@ -267,26 +262,18 @@ def test_step_detect_language_accepts_missing_confidence_when_language_is_presen
     )
     (segments / "0001.wav").write_bytes(b"wav")
 
-    task_options: dict[str, object] = {}
-    success = asyncio.run(
-        TaskProcessor.step_detect_language(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs={"root": root, "outputs": outputs, "segments": segments},
-            logger=logging.getLogger("test_step_detect_language_missing_confidence"),
-            task_options=task_options,
-            dry_run=False,
+    with pytest.raises(RuntimeError, match="language_probability missing"):
+        asyncio.run(
+            TaskProcessor.step_detect_language(
+                processor,
+                task_id=uuid.uuid4(),
+                user_id="user-1",
+                dirs={"root": root, "outputs": outputs, "segments": segments},
+                logger=logging.getLogger("test_step_detect_language_missing_confidence"),
+                task_options={},
+                dry_run=False,
+            )
         )
-    )
-
-    assert success is True
-    assert task_options["detected_language"] == "ru"
-    marker = json.loads((outputs / "language_detection.json").read_text(encoding="utf-8"))
-    assert marker["source"] == "whisper_first_segment"
-    assert marker["language"] == "ru"
-    assert marker["confidence"] == 0.6
-    assert marker["confidence_source"] == "assumed_threshold"
 
 
 def test_step_segment_audio_publishes_progress_events(

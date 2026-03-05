@@ -656,14 +656,9 @@ class TaskProcessor:
         threshold = self.settings.language_detection_confidence_threshold
         if not language:
             raise RuntimeError("Auto language detection failed: language not recognized")
-        confidence_source = "whisper_payload"
         if confidence is None:
-            confidence = float(threshold)
-            confidence_source = "assumed_threshold"
-            logger.warning(
-                "language detection confidence is missing for language=%s; using threshold fallback=%.3f",
-                language,
-                confidence,
+            raise RuntimeError(
+                f"Auto language detection failed: language_probability missing for language={language}"
             )
         if confidence < threshold:
             raise RuntimeError(
@@ -677,13 +672,12 @@ class TaskProcessor:
                 "source": "whisper_first_segment",
                 "language": language,
                 "confidence": confidence,
-                "confidence_source": confidence_source,
                 "threshold": threshold,
                 "detected_at": utcnow().isoformat(),
             },
         )
         await self._persist_detected_language(task_id, language, confidence)
-        logger.info("language detected: %s (confidence=%.3f, source=%s)", language, confidence, confidence_source)
+        logger.info("language detected: %s (confidence=%.3f)", language, confidence)
         await self.bus.publish_event(
             user_id=user_id,
             task_id=str(task_id),
@@ -693,7 +687,6 @@ class TaskProcessor:
                 "status": "done",
                 "language": language,
                 "confidence": confidence,
-                "confidence_source": confidence_source,
             },
         )
         return True
