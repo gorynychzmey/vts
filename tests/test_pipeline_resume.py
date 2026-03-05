@@ -186,7 +186,7 @@ def test_step_extract_audio_dry_run_accepts_trimmed_output(tmp_path: Path) -> No
     assert success is True
 
 
-def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_exists(
+def test_step_detect_language_raises_when_first_segment_missing(
     tmp_path: Path,
 ) -> None:
     processor = TaskProcessor.__new__(TaskProcessor)
@@ -208,27 +208,20 @@ def test_step_detect_language_fallback_when_segments_are_missing_but_transcript_
         json.dumps({"segments": [{"segment_index": 1, "file": "0001.wav"}]}),
         encoding="utf-8",
     )
-    (outputs / "transcript.json").write_text(
-        json.dumps({"text": "Это пример русского текста для теста."}),
-        encoding="utf-8",
-    )
+    # segment file is missing — no fallback, should raise
 
-    success = asyncio.run(
-        TaskProcessor.step_detect_language(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs={"root": root, "outputs": outputs, "segments": segments},
-            logger=logging.getLogger("test_step_detect_language_resume_fallback"),
-            task_options={},
-            dry_run=False,
+    with pytest.raises(RuntimeError, match="Missing first segment"):
+        asyncio.run(
+            TaskProcessor.step_detect_language(
+                processor,
+                task_id=uuid.uuid4(),
+                user_id="user-1",
+                dirs={"root": root, "outputs": outputs, "segments": segments},
+                logger=logging.getLogger("test_step_detect_language_missing_segment"),
+                task_options={},
+                dry_run=False,
+            )
         )
-    )
-
-    assert success is True
-    marker = json.loads((outputs / "language_detection.json").read_text(encoding="utf-8"))
-    assert marker["source"] == "resume_transcript_fallback"
-    assert marker["language"] == "ru"
 
 
 def test_step_detect_language_raises_when_confidence_missing(
