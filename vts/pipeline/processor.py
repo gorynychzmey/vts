@@ -650,7 +650,9 @@ class TaskProcessor:
             logger.info("heavy slot acquired: detect language")
             raw = await self.whisper.detect_language(audio_path=segment_path)
         self._log_payload(logger, "detect_language response", raw)
-        language, confidence = self._extract_detected_language(raw)
+        language = self._normalize_language(raw.get("language"))
+        _conf_raw = raw.get("language_probability")
+        confidence: float | None = float(_conf_raw) if isinstance(_conf_raw, (int, float)) else None
         threshold = self.settings.language_detection_confidence_threshold
         if not language:
             raise RuntimeError("Auto language detection failed: language not recognized")
@@ -1804,58 +1806,6 @@ class TaskProcessor:
             return None
         return "ru" if cyr >= lat else "en"
 
-    def _extract_detected_language(self, payload: dict[str, Any]) -> tuple[str | None, float | None]:
-        language = self._normalize_language(payload.get("language"))
-        confidence_raw = payload.get("language_probability")
-        if confidence_raw is None:
-            confidence_raw = payload.get("language_confidence")
-        if confidence_raw is None:
-            # whisper.cpp verbose_json field
-            confidence_raw = payload.get("detected_language_probability")
-        if confidence_raw is None:
-            language_probs = payload.get("language_probs")
-            if isinstance(language_probs, dict) and language:
-                confidence_raw = language_probs.get(language)
-        if confidence_raw is None:
-            # whisper.cpp language_probabilities map
-            lang_prob_map = payload.get("language_probabilities")
-            if isinstance(lang_prob_map, dict) and language:
-                confidence_raw = lang_prob_map.get(language)
-        if confidence_raw is None:
-            confidence_raw = self._extract_confidence_from_word_probabilities(payload)
-        confidence: float | None
-        if isinstance(confidence_raw, (int, float)):
-            confidence = float(confidence_raw)
-        else:
-            confidence = None
-        return language, confidence
-
-    def _extract_confidence_from_word_probabilities(self, payload: dict[str, Any]) -> float | None:
-        segments = payload.get("segments")
-        if not isinstance(segments, list):
-            return None
-        probabilities: list[float] = []
-        for segment in segments:
-            if not isinstance(segment, dict):
-                continue
-            words = segment.get("words")
-            if not isinstance(words, list):
-                continue
-            for word in words:
-                if not isinstance(word, dict):
-                    continue
-                probability = word.get("probability")
-                if isinstance(probability, (int, float)):
-                    value = float(probability)
-                    if 0.0 <= value <= 1.0:
-                        probabilities.append(value)
-                if len(probabilities) >= 64:
-                    break
-            if len(probabilities) >= 64:
-                break
-        if not probabilities:
-            return None
-        return sum(probabilities) / float(len(probabilities))
 
     def _render_prompt_with_language(self, prompt: str, language: str | None) -> str:
         value = self._language_display_name(language)

@@ -35,7 +35,9 @@ class CppBackend(WhisperBackend):
         audio_path: Path,
         timeout_seconds: int = 120,
     ) -> dict[str, Any]:
-        return await self._post_audio(
+        # whisper.cpp returns: {"language": "ru", "language_probs": {...}} or
+        # {"language": "ru", "language_probabilities": {...}, "detected_language_probability": 0.99}
+        raw = await self._post_audio(
             self._url + "/inference",
             audio_path,
             "file",
@@ -43,3 +45,19 @@ class CppBackend(WhisperBackend):
             timeout_seconds=timeout_seconds,
             error_context="whisper.cpp detect_language",
         )
+        language = raw.get("language")
+        probability: float | None = None
+        for key in ("detected_language_probability", "language_probability", "language_confidence"):
+            val = raw.get(key)
+            if isinstance(val, (int, float)):
+                probability = float(val)
+                break
+        if probability is None:
+            for map_key in ("language_probs", "language_probabilities"):
+                prob_map = raw.get(map_key)
+                if isinstance(prob_map, dict) and language:
+                    val = prob_map.get(language)
+                    if isinstance(val, (int, float)):
+                        probability = float(val)
+                        break
+        return {"language": language, "language_probability": probability}
