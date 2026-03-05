@@ -1365,6 +1365,14 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
     runtime.summaryReady = true;
     void refreshQueuePositions();
   }
+  if (runtime.baseStatus === "completed" || runtime.baseStatus === "failed") {
+    void api(`/api/tasks/${taskId}`).then((task) => {
+      if (taskEl._runtime === runtime && task && task.stats) {
+        runtime.stats = parseTaskStats(task);
+        renderTaskRuntime(taskEl);
+      }
+    }).catch(() => {});
+  }
   renderTaskRuntime(taskEl);
   updateQueueWatcherFromDom();
   if (runtime.baseStatus === "queued") {
