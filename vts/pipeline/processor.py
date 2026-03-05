@@ -841,13 +841,11 @@ class TaskProcessor:
             segments = await repo.get_task_segments(task_id)
             entries: list[dict[str, Any]] = []
             merged_tokens: list[str] = []
-            previous_segment_end = -1.0
             for segment in segments:
                 text = segment.text.strip()
-                if text and segment.start_sec >= previous_segment_end:
+                if text:
                     merged_tokens.append(text)
                     entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
-                previous_segment_end = max(previous_segment_end, segment.end_sec)
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = self._trim_repetitive_edges(merged_text)
             write_json(
