@@ -49,6 +49,7 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_JUMP_HOST: ${{ secrets.DEPLOY_JUMP_HOST }}
         run: |
           set -euo pipefail
           mkdir -p "${HOME}/.ssh"
@@ -57,11 +58,17 @@ jobs:
           chmod 600 "${HOME}/.ssh/deploy_key"
           printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
+          if [[ -n "${DEPLOY_JUMP_HOST}" ]]; then
+            printf 'Host jump\n  HostName %s\n  IdentityFile %s/.ssh/deploy_key\n  StrictHostKeyChecking yes\n  UserKnownHostsFile %s/.ssh/known_hosts\n' \
+              "${DEPLOY_JUMP_HOST}" "${HOME}" "${HOME}" >"${HOME}/.ssh/config"
+            chmod 600 "${HOME}/.ssh/config"
+          fi
 
       - name: Deploy on server
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_JUMP_HOST: ${{ secrets.DEPLOY_JUMP_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_REMOTE_DIR: ${{ vars.DEPLOY_REMOTE_DIR }}
@@ -77,10 +84,16 @@ jobs:
           webapi_service="${WEBAPI_SERVICE:-vts-webapi.service}"
           worker_service="${WORKER_SERVICE:-vts-worker.service}"
 
+          proxy_args=()
+          if [[ -n "${DEPLOY_JUMP_HOST:-}" ]]; then
+            proxy_args=(-o ProxyJump=jump)
+          fi
+
           ssh -i "${HOME}/.ssh/deploy_key" \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
             -p "${deploy_port}" \
+            "${proxy_args[@]}" \
             "${deploy_user}@${DEPLOY_HOST}" \
             "REMOTE_DIR='${remote_dir}' ENV_FILE='${env_file}' WEBAPI_SERVICE='${webapi_service}' WORKER_SERVICE='${worker_service}' bash -s" <<'REMOTE'
           set -euo pipefail
