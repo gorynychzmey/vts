@@ -49,7 +49,7 @@ from vts.services.summarizer import (
     load_prompt,
     parse_json_response,
 )
-from vts.services.transcription import detect_language_with_cpp, normalize_whisper_output, transcribe_with_whisper
+from vts.services.transcription import WhisperBackend, create_whisper_backend
 from vts.metrics import MetricsEmitter, QualityAnalyzer, aggregate_task_metrics
 
 
@@ -70,6 +70,7 @@ class TaskProcessor:
         self.settings = settings
         self.bus = RedisBus(redis, settings)
         self.heavy_slot = HeavySlot(redis, settings)
+        self.whisper: WhisperBackend = create_whisper_backend(settings.whisper_url, settings.whisper_backend)
         self._task_metrics: dict[str, MetricsEmitter] = {}
 
     def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
@@ -644,27 +645,11 @@ class TaskProcessor:
                 return True
             raise RuntimeError("Missing first segment for language detection")
 
-        if self.settings.whisper_backend == "cpp":
-            logger.info("waiting for heavy slot: detect language (cpp detect_language)")
-            async with self.heavy_slot:
-                logger.info("heavy slot acquired: detect language (cpp)")
-                raw = await detect_language_with_cpp(
-                    whisper_url=self.settings.whisper_url,
-                    audio_path=segment_path,
-                )
-            self._log_payload(logger, "cpp detect_language response", raw)
-        else:
-            logger.info("waiting for heavy slot: detect language")
-            async with self.heavy_slot:
-                logger.info("heavy slot acquired: detect language")
-                raw = await transcribe_with_whisper(
-                    whisper_url=self.settings.whisper_url,
-                    whisper_backend=self.settings.whisper_backend,
-                    audio_path=segment_path,
-                    language=None,
-                    initial_prompt=None,
-                )
-            self._log_payload(logger, "asr language probe response", raw)
+        logger.info("waiting for heavy slot: detect language")
+        async with self.heavy_slot:
+            logger.info("heavy slot acquired: detect language")
+            raw = await self.whisper.detect_language(audio_path=segment_path)
+        self._log_payload(logger, "detect_language response", raw)
         language, confidence = self._extract_detected_language(raw)
         threshold = self.settings.language_detection_confidence_threshold
         if not language:
@@ -758,8 +743,6 @@ class TaskProcessor:
             for seg in existing_segments.values()
             if seg.text.strip()
         }
-        whisper_url = self.settings.whisper_url
-        whisper_backend = self.settings.whisper_backend
         for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
@@ -775,16 +758,14 @@ class TaskProcessor:
                 _t_asr_q_ms = round((time.monotonic() - _t_asr_q0) * 1000)
                 logger.info("heavy slot acquired: transcribe segment %s", idx)
                 _t_asr0 = time.monotonic()
-                raw = await transcribe_with_whisper(
-                    whisper_url=whisper_url,
-                    whisper_backend=whisper_backend,
+                raw = await self.whisper.transcribe(
                     audio_path=segment_path,
                     language=language,
                     initial_prompt=initial_prompt,
                 )
                 _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
             self._log_payload(logger, f"asr response segment={idx}", raw)
-            text, words = normalize_whisper_output(raw, segment_offset_sec=start, whisper_backend=whisper_backend)
+            text, words = self.whisper.normalize_output(raw, segment_offset_sec=start)
             suspicious = self._is_probable_asr_hallucination(text=text, words=words)
             if suspicious:
                 _asr_retries = 1
@@ -792,14 +773,12 @@ class TaskProcessor:
                 logger.info("waiting for heavy slot: transcribe segment %s retry", idx)
                 async with self.heavy_slot:
                     logger.info("heavy slot acquired: transcribe segment %s retry", idx)
-                    retry_raw = await transcribe_with_whisper(
-                        whisper_url=whisper_url,
-                        whisper_backend=whisper_backend,
+                    retry_raw = await self.whisper.transcribe(
                         audio_path=segment_path,
                         language=language,
                         initial_prompt=None,
                     )
-                retry_text, retry_words = normalize_whisper_output(retry_raw, segment_offset_sec=start, whisper_backend=whisper_backend)
+                retry_text, retry_words = self.whisper.normalize_output(retry_raw, segment_offset_sec=start)
                 retry_suspicious = self._is_probable_asr_hallucination(text=retry_text, words=retry_words)
                 old_score = self._transcript_quality_score(text, words)
                 new_score = self._transcript_quality_score(retry_text, retry_words)
@@ -837,7 +816,7 @@ class TaskProcessor:
                     "t_queue_ms": _t_asr_q_ms,
                     "rtf": round(_asr_rtf, 4) if _asr_rtf is not None else None,
                     "retries": _asr_retries,
-                    "whisper_backend": whisper_backend,
+                    "whisper_backend": self.settings.whisper_backend,
                     "artifacts": {"segment_file": str(spec.get("file", ""))},
                 })
             text_by_index[idx] = text

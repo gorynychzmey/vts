@@ -250,10 +250,11 @@ def test_step_detect_language_accepts_missing_confidence_when_language_is_presen
 
     processor._persist_detected_language = _persist_detected_language
 
-    async def _fake_transcribe_with_whisper(**kwargs: object) -> dict[str, object]:
-        return {"language": "ru"}
+    class _FakeWhisper:
+        async def detect_language(self, **kwargs: object) -> dict[str, object]:
+            return {"language": "ru"}
 
-    monkeypatch.setattr("vts.pipeline.processor.transcribe_with_whisper", _fake_transcribe_with_whisper)
+    processor.whisper = _FakeWhisper()  # type: ignore[assignment]
 
     root = tmp_path / "task"
     outputs = root / "outputs"
