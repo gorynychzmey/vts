@@ -35,10 +35,16 @@ class AsrBackend(WhisperBackend):
         audio_path: Path,
         timeout_seconds: int = 120,
     ) -> dict[str, Any]:
-        return await self._post_audio(
+        # ASR /detect-language returns: {"detected_language": "russian", "language_code": "ru", "confidence": 0.99}
+        # Normalize to canonical: {"language": <code>, "language_probability": <float>}
+        raw = await self._post_audio(
             self._url + "/detect-language",
             audio_path,
             "audio_file",
             timeout_seconds=timeout_seconds,
             error_context="whisper-asr detect-language",
         )
+        return {
+            "language": raw.get("language_code") or raw.get("language"),
+            "language_probability": raw.get("confidence") or raw.get("language_probability"),
+        }
