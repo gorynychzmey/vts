@@ -693,6 +693,7 @@ def create_app() -> FastAPI:
         settings: Settings = Depends(get_settings_dep),
     ) -> StreamingResponse:
         async def event_generator() -> Any:
+            yield f"event: server_version\ndata: {json.dumps({'version': __version__}, ensure_ascii=True)}\n\n"
             pubsub = redis.pubsub()
             channel = f"{settings.redis_prefix}events"
             await pubsub.subscribe(channel)

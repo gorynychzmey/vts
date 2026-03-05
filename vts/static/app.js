@@ -1610,6 +1610,15 @@ function connectEvents() {
   }
   state.eventSource = new EventSource(url.toString(), { withCredentials: false });
 
+  state.eventSource.addEventListener("server_version", (event) => {
+    const payload = JSON.parse(event.data);
+    const serverVersion = String(payload.version || "");
+    setVersionLabel(serverVersion || BUILD_VERSION);
+    if (serverVersion && serverVersion !== BUILD_VERSION) {
+      forceReloadToVersion(serverVersion);
+    }
+  });
+
   state.eventSource.addEventListener("media_progress", (event) => {
     const payload = JSON.parse(event.data);
     const phase = String((payload.data && payload.data.phase) || "");
