@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vts.db.models import AsrSegment, AsrWord, Step, StepStatus, Task, TaskStatus, User
+from vts.db.models import AsrSegment, Step, StepStatus, Task, TaskStatus, User
 
 
 def utcnow() -> datetime:
@@ -227,27 +227,6 @@ class Repo:
         await self.session.flush()
         return segment
 
-    async def add_asr_words(
-        self, task_id: uuid.UUID, segment_id: uuid.UUID, words: list[dict[str, object]]
-    ) -> None:
-        for word in words:
-            record = AsrWord(
-                task_id=task_id,
-                segment_id=segment_id,
-                word=str(word.get("word", "")).strip(),
-                start_sec=float(word.get("start", 0.0)),
-                end_sec=float(word.get("end", 0.0)),
-                confidence=float(word["confidence"]) if word.get("confidence") is not None else None,
-            )
-            self.session.add(record)
-        await self.session.flush()
-
-    async def replace_asr_words(
-        self, task_id: uuid.UUID, segment_id: uuid.UUID, words: list[dict[str, object]]
-    ) -> None:
-        await self.session.execute(delete(AsrWord).where(AsrWord.segment_id == segment_id))
-        await self.add_asr_words(task_id=task_id, segment_id=segment_id, words=words)
-
     async def get_task_segments(self, task_id: uuid.UUID) -> list[AsrSegment]:
         stmt = select(AsrSegment).where(AsrSegment.task_id == task_id).order_by(AsrSegment.segment_index.asc())
         result = await self.session.scalars(stmt)
@@ -267,30 +246,6 @@ class Repo:
             progress[task_id] = (done, total)
         return progress
 
-    async def get_task_words(self, task_id: uuid.UUID) -> list[AsrWord]:
-        stmt = select(AsrWord).where(AsrWord.task_id == task_id).order_by(AsrWord.start_sec.asc())
-        result = await self.session.scalars(stmt)
-        return list(result.all())
-
-    async def get_words_for_segment(self, segment_id: uuid.UUID) -> list[AsrWord]:
-        stmt = select(AsrWord).where(AsrWord.segment_id == segment_id).order_by(AsrWord.start_sec.asc())
-        result = await self.session.scalars(stmt)
-        return list(result.all())
-
-    async def get_all_asr_words_for_task(self, task_id: uuid.UUID) -> dict[uuid.UUID, list[AsrWord]]:
-        """Fetch all words for a task in one query, grouped by segment_id."""
-        stmt = (
-            select(AsrWord)
-            .where(AsrWord.task_id == task_id)
-            .order_by(AsrWord.segment_id, AsrWord.start_sec.asc())
-        )
-        result = await self.session.scalars(stmt)
-        grouped: dict[uuid.UUID, list[AsrWord]] = {}
-        for word in result.all():
-            grouped.setdefault(word.segment_id, []).append(word)
-        return grouped
-
     async def clear_asr_for_task(self, task_id: uuid.UUID) -> None:
-        await self.session.execute(delete(AsrWord).where(AsrWord.task_id == task_id))
         await self.session.execute(delete(AsrSegment).where(AsrSegment.task_id == task_id))
         await self.session.flush()

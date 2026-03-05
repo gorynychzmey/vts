@@ -84,8 +84,6 @@ class Task(Base):
     user: Mapped[User] = relationship(back_populates="tasks")
     steps: Mapped[list["Step"]] = relationship(back_populates="task", cascade="all, delete-orphan")
     asr_segments: Mapped[list["AsrSegment"]] = relationship(back_populates="task", cascade="all, delete-orphan")
-    asr_words: Mapped[list["AsrWord"]] = relationship(back_populates="task", cascade="all, delete-orphan")
-
     __table_args__ = (
         Index("ix_tasks_user_created", "user_id", "created_at"),
         Index("ix_tasks_status_created", "status", "created_at"),
@@ -130,33 +128,8 @@ class AsrSegment(Base):
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     task: Mapped[Task] = relationship(back_populates="asr_segments")
-    words: Mapped[list["AsrWord"]] = relationship(back_populates="segment", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("task_id", "segment_index", name="uq_asr_segments_task_segment"),
         Index("ix_asr_segments_task_start", "task_id", "start_sec"),
-    )
-
-
-class AsrWord(Base):
-    __tablename__ = "asr_words"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
-    )
-    segment_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("asr_segments.id", ondelete="CASCADE"), nullable=False
-    )
-    word: Mapped[str] = mapped_column(String(128), nullable=False)
-    start_sec: Mapped[float] = mapped_column(Float, nullable=False)
-    end_sec: Mapped[float] = mapped_column(Float, nullable=False)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-    task: Mapped[Task] = relationship(back_populates="asr_words")
-    segment: Mapped[AsrSegment] = relationship(back_populates="words")
-
-    __table_args__ = (
-        Index("ix_asr_words_task_start", "task_id", "start_sec"),
-        Index("ix_asr_words_segment", "segment_id"),
     )

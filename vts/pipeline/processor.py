@@ -796,7 +796,6 @@ class TaskProcessor:
                     text=text,
                     raw_json=raw,
                 )
-                await repo.replace_asr_words(task_id=task_id, segment_id=seg.id, words=words)
                 await session.commit()
             await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
 
@@ -841,28 +840,16 @@ class TaskProcessor:
         async with self.session_factory() as session:
             repo = Repo(session)
             segments = await repo.get_task_segments(task_id)
-            words_by_segment = await repo.get_all_asr_words_for_task(task_id)
             entries: list[dict[str, Any]] = []
             merged_tokens: list[str] = []
             previous_segment_end = -1.0
             for segment in segments:
-                words = words_by_segment.get(segment.id, [])
-                if words:
-                    for word in words:
-                        if word.start_sec < previous_segment_end:
-                            continue
-                        token = word.word.strip()
-                        if not token:
-                            continue
-                        merged_tokens.append(token)
-                        entries.append({"start": word.start_sec, "end": word.end_sec, "word": token})
-                else:
-                    fallback_text = segment.text.strip()
-                    if fallback_text and segment.start_sec >= previous_segment_end:
-                        merged_tokens.append(fallback_text)
-                        entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": fallback_text})
+                text = segment.text.strip()
+                if text and segment.start_sec >= previous_segment_end:
+                    merged_tokens.append(text)
+                    entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
                 previous_segment_end = max(previous_segment_end, segment.end_sec)
-            merged_text = " ".join(token for token in merged_tokens if token).strip()
+            merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = self._trim_repetitive_edges(merged_text)
             write_json(
                 transcript_json,
