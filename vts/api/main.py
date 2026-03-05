@@ -230,12 +230,10 @@ def _processing_seconds_for_task(task: Task) -> int | None:
     return int(duration)
 
 
-def _text_length_from_path(path_value: str | None, *, prefer_json_text_field: bool = False) -> int | None:
+def _text_length_from_path(path_value: str | Path | None, *, prefer_json_text_field: bool = False) -> int | None:
     if not path_value:
         return None
     path = Path(path_value)
-    if not path.exists() or not path.is_file():
-        return None
     try:
         raw_text = path.read_text(encoding="utf-8")
     except OSError:
@@ -263,7 +261,7 @@ def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
         "processing_seconds": _processing_seconds_for_task(task),
         "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
         "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
-        "redacted_chars": _text_length_from_path(str(redacted_path), prefer_json_text_field=False),
+        "redacted_chars": _text_length_from_path(redacted_path, prefer_json_text_field=False),
     }
 
 
