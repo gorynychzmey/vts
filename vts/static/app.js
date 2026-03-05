@@ -344,7 +344,7 @@ function isTabEnabled(taskEl, tabName) {
 }
 
 function getFirstEnabledTab(taskEl) {
-  const orderedTabs = ["transcript", "summary", "redacted", "log"];
+  const orderedTabs = ["transcript", "redacted", "summary", "log"];
   for (const tabName of orderedTabs) {
     if (isTabEnabled(taskEl, tabName)) {
       return tabName;
