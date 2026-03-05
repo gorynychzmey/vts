@@ -8,7 +8,9 @@ from ._cpp import CppBackend
 def create_whisper_backend(whisper_url: str, whisper_backend: str) -> WhisperBackend:
     if whisper_backend == "cpp":
         return CppBackend(whisper_url)
-    return AsrBackend(whisper_url)
+    if whisper_backend == "asr":
+        return AsrBackend(whisper_url)
+    raise ValueError(f"Unknown whisper backend: {whisper_backend!r}. Expected 'asr' or 'cpp'.")
 
 
 __all__ = [
