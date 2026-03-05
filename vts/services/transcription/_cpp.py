@@ -38,13 +38,14 @@ class CppBackend(WhisperBackend):
         audio_path: Path,
         timeout_seconds: int = 120,
     ) -> dict[str, Any]:
-        # whisper.cpp returns: {"language": "ru", "language_probs": {...}} or
-        # {"language": "ru", "language_probabilities": {...}, "detected_language_probability": 0.99}
+        # whisper.cpp /inference with detect_language=true may return {"text": ""} without
+        # a language field in some versions. Use verbose_json transcription instead, which
+        # always includes the detected language.
         raw = await self._post_audio(
             self._url + "/inference",
             audio_path,
             "file",
-            data={"detect_language": "true"},
+            data={"detect_language": "true", "response_format": "verbose_json"},
             timeout_seconds=timeout_seconds,
             error_context="whisper.cpp detect_language",
         )
