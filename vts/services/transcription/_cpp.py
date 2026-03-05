@@ -48,7 +48,7 @@ class CppBackend(WhisperBackend):
             timeout_seconds=timeout_seconds,
             error_context="whisper.cpp detect_language",
         )
-        _log.debug("detect_language raw response: %s", raw)
+        _log.info("detect_language raw response: %s", raw)
         language = raw.get("language")
         probability: float | None = None
         for key in ("detected_language_probability", "language_probability", "language_confidence"):
