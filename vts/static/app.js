@@ -344,7 +344,7 @@ function isTabEnabled(taskEl, tabName) {
 }
 
 function getFirstEnabledTab(taskEl) {
-  const orderedTabs = ["transcript", "summary", "log"];
+  const orderedTabs = ["transcript", "summary", "redacted", "log"];
   for (const tabName of orderedTabs) {
     if (isTabEnabled(taskEl, tabName)) {
       return tabName;
@@ -444,7 +444,7 @@ async function loadTabContent(taskEl, taskId, tabName) {
     taskEl._lastLogText = value;
     return value;
   }
-  const endpoint = tabName === "transcript" ? "transcript" : tabName === "summary" ? "summary" : "";
+  const endpoint = tabName === "transcript" ? "transcript" : tabName === "summary" ? "summary" : tabName === "redacted" ? "redacted" : "";
   if (!endpoint) {
     return "";
   }
@@ -518,7 +518,7 @@ async function activateTaskTab(taskEl, taskId, tabName) {
     return;
   }
   stopLogPolling(taskEl);
-  if (tab === "transcript" || tab === "summary") {
+  if (tab === "transcript" || tab === "summary" || tab === "redacted") {
     await loadTabContent(taskEl, taskId, tab);
   }
 }
@@ -776,6 +776,7 @@ function createRuntime(task) {
     transcriptReady: Boolean(task.transcript_path),
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
+    redactedReady: false,
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
@@ -1039,6 +1040,12 @@ function renderTaskRuntime(taskEl) {
   elements.summaryTabBtn.disabled = !canOpenSummary;
   elements.summaryTabBtn.title = canOpenSummary ? t("tab.summary") : t("tab.summary_pending");
   elements.summaryTabBtn.setAttribute("aria-label", elements.summaryTabBtn.title);
+  if (elements.redactedTabBtn) {
+    const canOpenRedacted = runtime.redactedReady;
+    elements.redactedTabBtn.disabled = !canOpenRedacted;
+    elements.redactedTabBtn.title = canOpenRedacted ? t("tab.redacted") : t("tab.redacted_pending");
+    elements.redactedTabBtn.setAttribute("aria-label", elements.redactedTabBtn.title);
+  }
   ensureActiveTabSelection(taskEl);
 
   if (runtime.baseStatus === "running") {
@@ -1108,9 +1115,11 @@ function renderTasks(tasks) {
     const deleteBtn = root.querySelector(".delete-btn");
     const transcriptPre = root.querySelector(".tab-content.transcript");
     const summaryPre = root.querySelector(".tab-content.summary");
+    const redactedPre = root.querySelector(".tab-content.redacted");
     const logPre = root.querySelector(".tab-content.log");
     const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
     const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
+    const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
     const copyTabBtn = root.querySelector(".tab-copy-btn");
     const saveTabBtn = root.querySelector(".tab-save-btn");
 
@@ -1119,6 +1128,9 @@ function renderTasks(tasks) {
     root.dataset.taskId = task.id;
     transcriptPre.textContent = t("tab.prompt_transcript");
     summaryPre.textContent = t("tab.prompt_summary");
+    if (redactedPre) {
+      redactedPre.textContent = t("tab.prompt_redacted");
+    }
     logPre.textContent = t("tab.prompt_log");
 
     pauseBtn.title = t("action.pause");
@@ -1231,10 +1243,12 @@ function renderTasks(tasks) {
       archiveBtn,
       transcriptTabBtn,
       summaryTabBtn,
+      redactedTabBtn,
       copyTabBtn,
       saveTabBtn,
       transcriptPanel: transcriptPre,
       summaryPanel: summaryPre,
+      redactedPanel: redactedPre,
       logPanel: logPre,
       stepLabelEl: root.querySelector(".step-label"),
       stepTimeEl: root.querySelector(".step-time"),
@@ -1506,6 +1520,31 @@ function patchSummaryProgress(taskId, current, total) {
   renderTaskRuntime(taskEl);
 }
 
+function appendRedactedSegment(taskId, text) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  if (!runtime.redactedReady) {
+    runtime.redactedReady = true;
+    renderTaskRuntime(taskEl);
+  }
+  const panel = taskEl._elements && taskEl._elements.redactedPanel;
+  if (!panel) {
+    return;
+  }
+  const promptKey = "tab.prompt_redacted";
+  if (panel.textContent === t(promptKey)) {
+    panel.textContent = "";
+  }
+  const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
+  panel.textContent += String(text || "") + "\n";
+  if (nearBottom) {
+    panel.scrollTop = panel.scrollHeight;
+  }
+}
+
 function updateQueueWatcher(tasks) {
   const hasQueued = (tasks || []).some((task) => String(task.status || "") === "queued");
   if (hasQueued && !state.queueTimer) {
@@ -1601,6 +1640,10 @@ function connectEvents() {
   state.eventSource.addEventListener("summary_progress", (event) => {
     const payload = JSON.parse(event.data);
     patchSummaryProgress(payload.task_id, payload.data.current, payload.data.total);
+  });
+  state.eventSource.addEventListener("segment_summary_text", (event) => {
+    const payload = JSON.parse(event.data);
+    appendRedactedSegment(payload.task_id, payload.data.text);
   });
   state.eventSource.onerror = () => {
     if (state.eventSource) {

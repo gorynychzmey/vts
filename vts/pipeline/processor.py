@@ -1105,6 +1105,11 @@ class TaskProcessor:
             ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
             write_json(output, {"windows": ordered})
             write_json(output_mirror, {"windows": ordered})
+            redacted_path = dirs["outputs"] / "redacted_transcript.txt"
+            redacted_path.write_text(
+                "".join(str(w.get("summary", "")) + "\n" for w in ordered),
+                encoding="utf-8",
+            )
             logger.info("window summaries already complete: %s", total_windows)
             return True
 
@@ -1112,6 +1117,14 @@ class TaskProcessor:
         budget_cfg = self._token_budget_config()
         total_parts = len(chunks) + 1
         timeout_seconds = int(getattr(self.settings, "llama_chat_timeout_seconds", 600))
+        redacted_path = dirs["outputs"] / "redacted_transcript.txt"
+        redacted_path.write_text(
+            "".join(
+                str(windows_by_index[i].get("summary", "")) + "\n"
+                for i in sorted(windows_by_index)
+            ),
+            encoding="utf-8",
+        )
         for idx, chunk in enumerate(chunks, start=1):
             if idx in windows_by_index:
                 logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
@@ -1205,6 +1218,15 @@ class TaskProcessor:
             ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
             write_json(output, {"windows": ordered})
             write_json(output_mirror, {"windows": ordered})
+            redacted_path = dirs["outputs"] / "redacted_transcript.txt"
+            with redacted_path.open("a", encoding="utf-8") as rf:
+                rf.write(raw + "\n")
+            await self.bus.publish_event(
+                user_id=user_id,
+                task_id=str(task_id),
+                event="segment_summary_text",
+                data={"index": idx, "total": total_windows, "text": raw},
+            )
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),

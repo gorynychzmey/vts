@@ -126,7 +126,9 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
     assert isinstance(windows[1]["summary"], str) and "second" in windows[1]["summary"]
     assert isinstance(windows[2]["summary"], str) and "third" in windows[2]["summary"]
     assert (dirs["outputs"] / "window_summaries.json").exists()
-    assert len(processor.bus.events) == 3
+    # 1 summary_progress for already-skipped window 1
+    # + 2 × (segment_summary_text + summary_progress) for windows 2 and 3 = 5
+    assert len(processor.bus.events) == 5
 
 
 def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) -> None:

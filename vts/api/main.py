@@ -158,6 +158,7 @@ def _reset_summary_artifacts(task: Task) -> None:
         outputs_dir / "window_summaries.json",
         outputs_dir / "summary.json",
         outputs_dir / "summary.md",
+        outputs_dir / "redacted_transcript.txt",
     ):
         path.unlink(missing_ok=True)
 
@@ -654,6 +655,21 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Summary file missing")
         media_type = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
         return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
+
+    @app.get("/api/tasks/{task_id}/redacted")
+    async def get_redacted_transcript(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
+        return Response(content=path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
 
     @app.get("/api/tasks/{task_id}/log")
     async def get_log(
