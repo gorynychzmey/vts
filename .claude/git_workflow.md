@@ -1,5 +1,9 @@
 # Git Workflow — VTS (see also [PROJECT_RULES.md](../PROJECT_RULES.md))
 
+## Key paths
+- Commit script: `bash scripts/prepare_commit.sh` (in project root, NOT `./prepare_commit.sh`)
+- Tests: `.venv/bin/python3 -m pytest` (NOT `python` or `python3`)
+
 ## One-time local setup (if .venv missing)
 ```
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
@@ -17,14 +21,12 @@ After commit+push: `git tag build-X.Y.Z && git push origin build-X.Y.Z` (X.Y.Z =
 ## Subagent prompt (model: haiku)
 
 ```
-Working directory: /path/to/vts
-Task: commit and push changes for this session.
-1. bash scripts/prepare_commit.sh
-2. git status && git log -3 --oneline
-3. git add <relevant files>
-4. git diff --cached
-5. git commit -m "<message>\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-6. git push
-7. Report commit hash and new version.
-Context: <describe changes>
+In /path/to/vts:
+1. Run `bash scripts/prepare_commit.sh`
+2. Run `git add <relevant files>`
+3. Commit with message: "<message>"
+4. Push to origin
+Report the result.
 ```
+
+Note: always specify `bash scripts/prepare_commit.sh` exactly — the script is in `scripts/`, not in the project root.
