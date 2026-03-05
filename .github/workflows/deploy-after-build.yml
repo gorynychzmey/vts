@@ -49,7 +49,6 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          DEPLOY_JUMP_HOST: ${{ secrets.DEPLOY_JUMP_HOST }}
         run: |
           set -euo pipefail
           mkdir -p "${HOME}/.ssh"
@@ -58,11 +57,6 @@ jobs:
           chmod 600 "${HOME}/.ssh/deploy_key"
           printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
-          if [[ -n "${DEPLOY_JUMP_HOST}" ]]; then
-            printf 'Host jump\n  HostName %s\n  IdentityFile %s/.ssh/deploy_key\n  StrictHostKeyChecking yes\n  UserKnownHostsFile %s/.ssh/known_hosts\n' \
-              "${DEPLOY_JUMP_HOST}" "${HOME}" "${HOME}" >"${HOME}/.ssh/config"
-            chmod 600 "${HOME}/.ssh/config"
-          fi
 
       - name: Deploy on server
         shell: bash
@@ -86,6 +80,9 @@ jobs:
 
           proxy_args=()
           if [[ -n "${DEPLOY_JUMP_HOST:-}" ]]; then
+            printf 'Host jump\n  HostName %s\n  User %s\n  IdentityFile %s/.ssh/deploy_key\n  StrictHostKeyChecking yes\n  UserKnownHostsFile %s/.ssh/known_hosts\n' \
+              "${DEPLOY_JUMP_HOST}" "${deploy_user}" "${HOME}" "${HOME}" >"${HOME}/.ssh/config"
+            chmod 600 "${HOME}/.ssh/config"
             proxy_args=(-o ProxyJump=jump)
           fi
 
