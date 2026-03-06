@@ -1522,54 +1522,36 @@ function patchSummaryProgress(taskId, current, total) {
   renderTaskRuntime(taskEl);
 }
 
-function appendTranscriptSegment(taskId, text) {
+function appendStreamingText(taskId, readyFlag, panelKey, promptKey, text, separator) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
     return;
   }
   const runtime = taskEl._runtime;
-  if (!runtime.transcriptReady) {
-    runtime.transcriptReady = true;
+  if (!runtime[readyFlag]) {
+    runtime[readyFlag] = true;
     renderTaskRuntime(taskEl);
   }
-  const panel = taskEl._elements && taskEl._elements.transcriptPanel;
+  const panel = taskEl._elements && taskEl._elements[panelKey];
   if (!panel) {
     return;
   }
-  const promptKey = "tab.prompt_transcript";
   if (panel.textContent === t(promptKey)) {
     panel.textContent = "";
   }
   const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
-  panel.textContent += String(text || "") + " ";
+  panel.textContent += String(text || "") + separator;
   if (nearBottom) {
     panel.scrollTop = panel.scrollHeight;
   }
 }
 
+function appendTranscriptSegment(taskId, text) {
+  appendStreamingText(taskId, "transcriptReady", "transcriptPanel", "tab.prompt_transcript", text, " ");
+}
+
 function appendRedactedSegment(taskId, text) {
-  const taskEl = findTaskEl(taskId);
-  if (!taskEl || !taskEl._runtime) {
-    return;
-  }
-  const runtime = taskEl._runtime;
-  if (!runtime.redactedReady) {
-    runtime.redactedReady = true;
-    renderTaskRuntime(taskEl);
-  }
-  const panel = taskEl._elements && taskEl._elements.redactedPanel;
-  if (!panel) {
-    return;
-  }
-  const promptKey = "tab.prompt_redacted";
-  if (panel.textContent === t(promptKey)) {
-    panel.textContent = "";
-  }
-  const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
-  panel.textContent += String(text || "") + "\n";
-  if (nearBottom) {
-    panel.scrollTop = panel.scrollHeight;
-  }
+  appendStreamingText(taskId, "redactedReady", "redactedPanel", "tab.prompt_redacted", text, "\n");
 }
 
 function updateQueueWatcher(tasks) {
