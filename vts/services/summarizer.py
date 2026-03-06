@@ -135,6 +135,7 @@ def _build_chat_payload(
     top_p: float | None = None,
     min_p: float | None = None,
     repeat_penalty: float | None = None,
+    cache_prompt: bool = False,
     max_tokens_key: str = "max_tokens",
     include_model: bool = True,
     model_override: str | None = None,
@@ -152,6 +153,8 @@ def _build_chat_payload(
         payload["min_p"] = min_p
     if repeat_penalty is not None:
         payload["repeat_penalty"] = repeat_penalty
+    if cache_prompt:
+        payload["cache_prompt"] = True
     if include_response_format:
         payload["response_format"] = {"type": "json_object"}
     selected_model = model_override if model_override is not None else model
@@ -433,6 +436,7 @@ async def llama_chat_completion(
     top_p: float | None = None,
     min_p: float | None = None,
     repeat_penalty: float | None = None,
+    cache_prompt: bool = False,
     request_attempts: int = 3,
     use_json_format: bool = True,
 ) -> str:
@@ -459,6 +463,7 @@ async def llama_chat_completion(
             top_p=top_p,
             min_p=min_p,
             repeat_penalty=repeat_penalty,
+            cache_prompt=cache_prompt,
             include_response_format=use_json_format,
         ),
     )
@@ -476,6 +481,7 @@ async def llama_chat_completion(
                 top_p=top_p,
                 min_p=min_p,
                 repeat_penalty=repeat_penalty,
+                cache_prompt=cache_prompt,
                 include_response_format=use_json_format,
             ),
         )
@@ -491,6 +497,7 @@ async def llama_chat_completion(
                 top_p=top_p,
                 min_p=min_p,
                 repeat_penalty=repeat_penalty,
+                cache_prompt=cache_prompt,
                 include_response_format=False,
             ),
         )
@@ -507,6 +514,7 @@ async def llama_chat_completion(
                     top_p=top_p,
                     min_p=min_p,
                     repeat_penalty=repeat_penalty,
+                    cache_prompt=cache_prompt,
                     include_response_format=False,
                     max_tokens_key="max_completion_tokens",
                 ),
@@ -522,6 +530,7 @@ async def llama_chat_completion(
             top_p=top_p,
             min_p=min_p,
             repeat_penalty=repeat_penalty,
+            cache_prompt=cache_prompt,
             include_response_format=False,
         ),
     )
@@ -537,6 +546,7 @@ async def llama_chat_completion(
                 top_p=top_p,
                 min_p=min_p,
                 repeat_penalty=repeat_penalty,
+                cache_prompt=cache_prompt,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
             ),
@@ -552,6 +562,7 @@ async def llama_chat_completion(
             top_p=top_p,
             min_p=min_p,
             repeat_penalty=repeat_penalty,
+            cache_prompt=cache_prompt,
             include_response_format=False,
             include_model=False,
         ),
@@ -568,6 +579,7 @@ async def llama_chat_completion(
                 top_p=top_p,
                 min_p=min_p,
                 repeat_penalty=repeat_penalty,
+                cache_prompt=cache_prompt,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
                 include_model=False,
@@ -623,6 +635,7 @@ async def llama_chat_completion(
                             top_p=top_p,
                             min_p=min_p,
                             repeat_penalty=repeat_penalty,
+                            cache_prompt=cache_prompt,
                             include_response_format=False,
                         ),
                     )
@@ -639,6 +652,7 @@ async def llama_chat_completion(
                                 top_p=top_p,
                                 min_p=min_p,
                                 repeat_penalty=repeat_penalty,
+                                cache_prompt=cache_prompt,
                                 include_response_format=False,
                                 max_tokens_key="max_completion_tokens",
                             ),

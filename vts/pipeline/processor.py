@@ -1166,6 +1166,7 @@ class TaskProcessor:
                     top_p=self.settings.llama_top_p,
                     min_p=self.settings.llama_min_p,
                     repeat_penalty=self.settings.llama_repeat_penalty,
+                    cache_prompt=True,
                     use_json_format=False,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
@@ -1393,6 +1394,7 @@ class TaskProcessor:
                             top_p=self.settings.llama_top_p,
                             min_p=self.settings.llama_min_p,
                             repeat_penalty=self.settings.llama_repeat_penalty,
+                            cache_prompt=True,
                             use_json_format=False,
                         )
                     packed_tc = await count_tokens(
