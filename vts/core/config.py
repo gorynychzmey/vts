@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     summary_final_min_ratio: float = 0.60
     summary_final_max_ratio: float = 0.80
 
+    # Feature flags
+    features_donor_clone: bool = False
+
     # Metrics collection
     metrics_enabled: bool = True
     metrics_jsonl_path: Path = Path("/opt/vts/logs/metrics.jsonl")
