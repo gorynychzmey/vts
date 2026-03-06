@@ -915,6 +915,9 @@ class TaskProcessor:
                     timeout_seconds=1200,
                     max_tokens=32,
                     temperature=self.settings.llama_temperature,
+                    top_p=self.settings.llama_top_p,
+                    min_p=self.settings.llama_min_p,
+                    repeat_penalty=self.settings.llama_repeat_penalty,
                 )
             self._log_payload(logger, "llama warmup response", raw)
         except Exception as exc:
@@ -1151,6 +1154,9 @@ class TaskProcessor:
                     timeout_seconds=timeout_seconds,
                     max_tokens=target_tokens,
                     temperature=self.settings.llama_temperature,
+                    top_p=self.settings.llama_top_p,
+                    min_p=self.settings.llama_min_p,
+                    repeat_penalty=self.settings.llama_repeat_penalty,
                     use_json_format=False,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
@@ -1375,6 +1381,9 @@ class TaskProcessor:
                             timeout_seconds=timeout_seconds,
                             max_tokens=target_tokens,
                             temperature=self.settings.llama_temperature,
+                            top_p=self.settings.llama_top_p,
+                            min_p=self.settings.llama_min_p,
+                            repeat_penalty=self.settings.llama_repeat_penalty,
                             use_json_format=False,
                         )
                     packed_tc = await count_tokens(
@@ -1556,6 +1565,9 @@ class TaskProcessor:
                 timeout_seconds=timeout_seconds,
                 max_tokens=target_tokens,
                 temperature=self.settings.llama_temperature,
+                top_p=self.settings.llama_top_p,
+                min_p=self.settings.llama_min_p,
+                repeat_penalty=self.settings.llama_repeat_penalty,
                 use_json_format=False,
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)

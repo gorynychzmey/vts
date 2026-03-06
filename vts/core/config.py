@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     llama_url: str = "http://llama:8000/v1"
     llama_model: str = "Qwen2.5-7B-Instruct-Q4"
     llama_temperature: float = 0.2
+    llama_top_p: float | None = None
+    llama_min_p: float | None = None
+    llama_repeat_penalty: float | None = None
     llama_chat_timeout_seconds: int = 600
     llama_final_timeout_seconds: int = 1800
     ytdlp_cookies_file: Path | None = None
@@ -181,6 +184,9 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llama_url": "llama_url",
         "services_llama_model": "llama_model",
         "services_llama_temperature": "llama_temperature",
+        "services_llama_top_p": "llama_top_p",
+        "services_llama_min_p": "llama_min_p",
+        "services_llama_repeat_penalty": "llama_repeat_penalty",
         "services_llama_chat_timeout_seconds": "llama_chat_timeout_seconds",
         "services_llama_final_timeout_seconds": "llama_final_timeout_seconds",
     }

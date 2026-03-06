@@ -132,6 +132,9 @@ def _build_chat_payload(
     max_tokens: int | None,
     include_response_format: bool,
     temperature: float,
+    top_p: float | None = None,
+    min_p: float | None = None,
+    repeat_penalty: float | None = None,
     max_tokens_key: str = "max_tokens",
     include_model: bool = True,
     model_override: str | None = None,
@@ -143,6 +146,12 @@ def _build_chat_payload(
         ],
         "temperature": temperature,
     }
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if min_p is not None:
+        payload["min_p"] = min_p
+    if repeat_penalty is not None:
+        payload["repeat_penalty"] = repeat_penalty
     if include_response_format:
         payload["response_format"] = {"type": "json_object"}
     selected_model = model_override if model_override is not None else model
@@ -399,6 +408,9 @@ async def llama_chat_completion(
     timeout_seconds: int = 600,
     max_tokens: int | None = None,
     temperature: float = 0.2,
+    top_p: float | None = None,
+    min_p: float | None = None,
+    repeat_penalty: float | None = None,
     request_attempts: int = 3,
     use_json_format: bool = True,
 ) -> str:
@@ -422,6 +434,9 @@ async def llama_chat_completion(
             user_prompt=user_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            min_p=min_p,
+            repeat_penalty=repeat_penalty,
             include_response_format=use_json_format,
         ),
     )
@@ -436,6 +451,9 @@ async def llama_chat_completion(
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                repeat_penalty=repeat_penalty,
                 include_response_format=use_json_format,
             ),
         )
@@ -448,6 +466,9 @@ async def llama_chat_completion(
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                repeat_penalty=repeat_penalty,
                 include_response_format=False,
             ),
         )
@@ -461,6 +482,9 @@ async def llama_chat_completion(
                     user_prompt=user_prompt,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    top_p=top_p,
+                    min_p=min_p,
+                    repeat_penalty=repeat_penalty,
                     include_response_format=False,
                     max_tokens_key="max_completion_tokens",
                 ),
@@ -473,6 +497,9 @@ async def llama_chat_completion(
             user_prompt=user_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            min_p=min_p,
+            repeat_penalty=repeat_penalty,
             include_response_format=False,
         ),
     )
@@ -485,6 +512,9 @@ async def llama_chat_completion(
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                repeat_penalty=repeat_penalty,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
             ),
@@ -497,6 +527,9 @@ async def llama_chat_completion(
             user_prompt=user_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            min_p=min_p,
+            repeat_penalty=repeat_penalty,
             include_response_format=False,
             include_model=False,
         ),
@@ -510,6 +543,9 @@ async def llama_chat_completion(
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                repeat_penalty=repeat_penalty,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
                 include_model=False,
@@ -562,6 +598,9 @@ async def llama_chat_completion(
                             user_prompt=user_prompt,
                             max_tokens=max_tokens,
                             temperature=temperature,
+                            top_p=top_p,
+                            min_p=min_p,
+                            repeat_penalty=repeat_penalty,
                             include_response_format=False,
                         ),
                     )
@@ -575,6 +614,9 @@ async def llama_chat_completion(
                                 user_prompt=user_prompt,
                                 max_tokens=max_tokens,
                                 temperature=temperature,
+                                top_p=top_p,
+                                min_p=min_p,
+                                repeat_penalty=repeat_penalty,
                                 include_response_format=False,
                                 max_tokens_key="max_completion_tokens",
                             ),
