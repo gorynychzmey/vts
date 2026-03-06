@@ -1086,7 +1086,7 @@ class TaskProcessor:
             write_json(output_mirror, {"windows": ordered})
             redacted_path = dirs["outputs"] / "redacted_transcript.txt"
             redacted_path.write_text(
-                "".join(str(w.get("summary", "")) + "\n" for w in ordered),
+                "".join(str(w.get("summary", "")).rstrip("\n") + "\n\n" for w in ordered),
                 encoding="utf-8",
             )
             logger.info("window summaries already complete: %s", total_windows)
@@ -1099,7 +1099,7 @@ class TaskProcessor:
         redacted_path = dirs["outputs"] / "redacted_transcript.txt"
         redacted_path.write_text(
             "".join(
-                str(windows_by_index[i].get("summary", "")) + "\n"
+                str(windows_by_index[i].get("summary", "")).rstrip("\n") + "\n\n"
                 for i in sorted(windows_by_index)
             ),
             encoding="utf-8",
@@ -1199,7 +1199,7 @@ class TaskProcessor:
             write_json(output_mirror, {"windows": ordered})
             redacted_path = dirs["outputs"] / "redacted_transcript.txt"
             with redacted_path.open("a", encoding="utf-8") as rf:
-                rf.write(raw + "\n")
+                rf.write(raw.rstrip("\n") + "\n\n")
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),
