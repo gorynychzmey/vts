@@ -789,6 +789,10 @@ class TaskProcessor:
                 data={"segment_index": idx, "total": len(specs)},
                 throttle_key="transcribe_progress",
             )
+            transcript_txt = dirs["outputs"] / "transcript.txt"
+            is_first_segment = not transcript_txt.exists()
+            with transcript_txt.open("a", encoding="utf-8") as tf:
+                tf.write(text.strip() + " ")
             async with self.session_factory() as session:
                 repo = Repo(session)
                 seg = await repo.upsert_asr_segment_payload(
@@ -799,7 +803,17 @@ class TaskProcessor:
                     text=text,
                     raw_json=raw,
                 )
+                if is_first_segment:
+                    task_row = await repo.get_task_by_id(task_id)
+                    if task_row is not None:
+                        task_row.transcript_path = str(transcript_txt)
                 await session.commit()
+            await self.bus.publish_event(
+                user_id=user_id,
+                task_id=str(task_id),
+                event="transcript_segment_text",
+                data={"index": idx, "total": len(specs), "text": text.strip()},
+            )
             await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
 
         async with self.session_factory() as session:
@@ -871,7 +885,8 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 raise RuntimeError("task not found during merge")
-            task.transcript_path = str(transcript_txt)
+            if not task.transcript_path:
+                task.transcript_path = str(transcript_txt)
             await session.commit()
 
         for path in dirs["segments"].glob("*.wav"):

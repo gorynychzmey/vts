@@ -1522,6 +1522,31 @@ function patchSummaryProgress(taskId, current, total) {
   renderTaskRuntime(taskEl);
 }
 
+function appendTranscriptSegment(taskId, text) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  if (!runtime.transcriptReady) {
+    runtime.transcriptReady = true;
+    renderTaskRuntime(taskEl);
+  }
+  const panel = taskEl._elements && taskEl._elements.transcriptPanel;
+  if (!panel) {
+    return;
+  }
+  const promptKey = "tab.prompt_transcript";
+  if (panel.textContent === t(promptKey)) {
+    panel.textContent = "";
+  }
+  const nearBottom = panel.scrollHeight - (panel.scrollTop + panel.clientHeight) <= 24;
+  panel.textContent += String(text || "") + " ";
+  if (nearBottom) {
+    panel.scrollTop = panel.scrollHeight;
+  }
+}
+
 function appendRedactedSegment(taskId, text) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
@@ -1651,6 +1676,10 @@ function connectEvents() {
   state.eventSource.addEventListener("summary_progress", (event) => {
     const payload = JSON.parse(event.data);
     patchSummaryProgress(payload.task_id, payload.data.current, payload.data.total);
+  });
+  state.eventSource.addEventListener("transcript_segment_text", (event) => {
+    const payload = JSON.parse(event.data);
+    appendTranscriptSegment(payload.task_id, payload.data.text);
   });
   state.eventSource.addEventListener("segment_summary_text", (event) => {
     const payload = JSON.parse(event.data);
