@@ -131,7 +131,7 @@ def _build_chat_payload(
     user_prompt: str,
     max_tokens: int | None,
     include_response_format: bool,
-    temperature: float = 0.2,
+    temperature: float,
     max_tokens_key: str = "max_tokens",
     include_model: bool = True,
     model_override: str | None = None,
