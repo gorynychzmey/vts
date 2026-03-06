@@ -160,21 +160,38 @@ class TaskProcessor:
             task_options = self._task_options(task.options)
 
             # --- donor clone check ---
-            donor = await repo.find_completed_donor(
-                source_url=task.source_url,
-                options=task.options,
-                exclude_user_id=task.user_id,
-            )
-            if donor is not None:
-                await self._clone_from_donor(session, repo, task, donor)
-                await session.commit()
-                await self.bus.publish_event(
-                    user_id=str(task.user_id),
-                    task_id=str(task.id),
-                    event="task_status",
-                    data={"status": TaskStatus.completed.value},
+            _clone_logger = logging.getLogger(f"vts.clone.{task.id}")
+            try:
+                donor = await repo.find_completed_donor(
+                    source_url=task.source_url,
+                    options=task.options,
+                    exclude_user_id=task.user_id,
                 )
-                return
+            except Exception as _exc:
+                donor = None
+                _clone_logger.warning("donor lookup failed, falling back to normal pipeline: %s", _exc)
+            if donor is not None:
+                try:
+                    await self._clone_from_donor(session, repo, task, donor)
+                    await session.commit()
+                    await self.bus.publish_event(
+                        user_id=str(task.user_id),
+                        task_id=str(task.id),
+                        event="task_status",
+                        data={"status": TaskStatus.completed.value},
+                    )
+                    return
+                except Exception as _exc:
+                    _clone_logger.warning(
+                        "donor clone failed (donor=%s), falling back to normal pipeline: %s",
+                        donor.id,
+                        _exc,
+                    )
+                    await session.rollback()
+                    # Reload task after rollback
+                    task = await repo.get_task_by_id(task_id)
+                    if task is None:
+                        return
             # --- end donor clone check ---
 
             await repo.set_task_status(task, TaskStatus.running)
