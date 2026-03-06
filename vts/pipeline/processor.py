@@ -777,7 +777,7 @@ class TaskProcessor:
                     initial_prompt=initial_prompt,
                 )
                 _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
-            self._log_payload(logger, f"asr response segment={idx}", raw)
+            self._log_payload(logger, f"asr response segment={idx}", raw, max_chars=200)
             text = self.whisper.normalize_output(raw)
             suspicious = self._is_probable_asr_hallucination(text)
             if suspicious:
@@ -1246,7 +1246,7 @@ class TaskProcessor:
                 target_tokens=target_tokens,
                 actual_output_tokens=actual_output_tokens,
             ))
-            self._log_payload(logger, f"llm window response index={idx}", raw)
+            self._log_payload(logger, f"llm window response index={idx}", raw, max_chars=200)
             _win_em = self._get_emitter(task_id)
             if _win_em:
                 _n_ctx = budget_cfg.n_ctx
@@ -1661,7 +1661,7 @@ class TaskProcessor:
             packing_triggered=packing_triggered,
             packing_pass_count=packing_pass_count,
         ))
-        self._log_payload(logger, "llm final summary response", raw)
+        self._log_payload(logger, "llm final summary response", raw, max_chars=200)
         _fin_em = self._get_emitter(task_id)
         if _fin_em:
             _n_ctx = budget_cfg.n_ctx
