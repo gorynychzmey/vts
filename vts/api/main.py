@@ -498,6 +498,7 @@ def create_app() -> FastAPI:
                 _reset_summary_steps(task)
                 artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
             task.summary_path = None
+            await repo.set_task_summary_progress(task, 0, 0)
             await repo.set_task_status(task, TaskStatus.queued)
             results[tid] = "queued"
         await asyncio.gather(*artifact_resets)
