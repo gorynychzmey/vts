@@ -4,7 +4,6 @@ from vts.core.config import Settings, _normalize_yaml_overrides
 def test_normalize_yaml_overrides_flattens_summary_tree() -> None:
     raw = {
         "summary": {
-            "n_ctx": 4096,
             "segment": {
                 "ratio": 0.42,
                 "min_ratio": 0.31,
@@ -30,7 +29,6 @@ def test_normalize_yaml_overrides_flattens_summary_tree() -> None:
     normalized = _normalize_yaml_overrides(raw)
 
     assert "summary" not in normalized
-    assert normalized["summary_n_ctx"] == 4096
     assert normalized["summary_segment_ratio"] == 0.42
     assert normalized["summary_segment_min_ratio"] == 0.31
     assert normalized["summary_segment_max_ratio"] == 0.56

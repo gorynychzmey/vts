@@ -46,6 +46,7 @@ from vts.services.summarizer import (
     count_tokens,
     inject_budget_vars,
     llama_chat_completion,
+    llama_get_n_ctx,
     load_prompt,
     parse_json_response,
 )
@@ -77,15 +78,23 @@ class TaskProcessor:
         """Return the active MetricsEmitter for a task, or None if absent."""
         return getattr(self, "_task_metrics", {}).get(str(task_id))
 
-    def _token_budget_config(self) -> TokenBudgetConfig:
+    async def _token_budget_config(self) -> TokenBudgetConfig:
         _defaults = TokenBudgetConfig()
         s = self.settings
 
         def _get(name: str, default: object) -> object:
             return getattr(s, f"summary_{name}", default)
 
+        _log = logging.getLogger(__name__)
+        fetched_n_ctx = await llama_get_n_ctx(llama_url=s.llama_url)
+        n_ctx = fetched_n_ctx if fetched_n_ctx is not None else int(_get("n_ctx", _defaults.n_ctx))
+        if fetched_n_ctx is not None:
+            _log.info("token budget: n_ctx=%d (from /props)", n_ctx)
+        else:
+            _log.warning("token budget: /props unavailable, using fallback n_ctx=%d", n_ctx)
+
         return TokenBudgetConfig(
-            n_ctx=int(_get("n_ctx", _defaults.n_ctx)),
+            n_ctx=n_ctx,
             safety_margin=int(_get("safety_margin", _defaults.safety_margin)),
             segment_ratio=float(_get("segment_ratio", _defaults.segment_ratio)),
             segment_min_ratio=float(_get("segment_min_ratio", _defaults.segment_min_ratio)),
@@ -1097,7 +1106,7 @@ class TaskProcessor:
             return True
 
         logger.info("window summarization started: %s windows", len(chunks))
-        budget_cfg = self._token_budget_config()
+        budget_cfg = await self._token_budget_config()
         total_parts = len(chunks) + 1
         timeout_seconds = int(getattr(self.settings, "llama_chat_timeout_seconds", 600))
         redacted_path = dirs["outputs"] / "redacted_transcript.txt"
@@ -1175,7 +1184,7 @@ class TaskProcessor:
             self._log_payload(logger, f"llm window response index={idx}", raw)
             _win_em = self._get_emitter(task_id)
             if _win_em:
-                _n_ctx = self.settings.summary_n_ctx
+                _n_ctx = budget_cfg.n_ctx
                 _win_em.emit({
                     "stage": "summarize.segment",
                     "status": "ok",
@@ -1263,7 +1272,7 @@ class TaskProcessor:
 
         output_language = self._effective_language(task_options, dirs)
         timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
-        budget_cfg = self._token_budget_config()
+        budget_cfg = await self._token_budget_config()
 
         # Load final prompt to measure its token cost
         final_prompt_text = self._render_prompt_budget_vars(
@@ -1465,7 +1474,7 @@ class TaskProcessor:
 
         output_language = self._effective_language(task_options, dirs)
         timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
-        budget_cfg = self._token_budget_config()
+        budget_cfg = await self._token_budget_config()
 
         # Load packed notes if the packing step ran, else fall back to window summaries.
         # fallback_windows: list passed to _summarize_hierarchical if flat call fails.
@@ -1589,7 +1598,7 @@ class TaskProcessor:
         self._log_payload(logger, "llm final summary response", raw)
         _fin_em = self._get_emitter(task_id)
         if _fin_em:
-            _n_ctx = self.settings.summary_n_ctx
+            _n_ctx = budget_cfg.n_ctx
             # Load transcript text for mismatch comparison
             _transcript_text = ""
             _transcript_json = dirs["outputs"] / "transcript.json"

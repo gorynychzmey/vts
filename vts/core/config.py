@@ -77,7 +77,6 @@ class Settings(BaseSettings):
     media_ttl_hours: int = 72
 
     # Token budgeting for the summarization pipeline
-    summary_n_ctx: int = 32768
     summary_safety_margin: int = 768
 
     summary_segment_ratio: float = 0.40

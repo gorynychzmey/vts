@@ -188,6 +188,28 @@ def _model_name_variants(model: str) -> list[str]:
     return candidates
 
 
+async def llama_get_n_ctx(
+    *,
+    llama_url: str,
+    timeout_seconds: int = 30,
+) -> int | None:
+    """Return the loaded model's context size from GET /props, or None on failure."""
+    endpoint = _llama_server_base(llama_url) + "/props"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.get(endpoint)
+    except httpx.HTTPError:
+        return None
+    if not response.is_success:
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+    n_ctx = payload.get("n_ctx") if isinstance(payload, dict) else None
+    return int(n_ctx) if isinstance(n_ctx, int) and n_ctx > 0 else None
+
+
 async def _list_chat_models(
     *,
     client: httpx.AsyncClient,
