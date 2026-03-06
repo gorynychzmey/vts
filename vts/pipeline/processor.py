@@ -73,25 +73,35 @@ class TaskProcessor:
         self.heavy_slot = HeavySlot(redis, settings)
         self.whisper: WhisperBackend = create_whisper_backend(settings.whisper_url, settings.whisper_backend)
         self._task_metrics: dict[str, MetricsEmitter] = {}
+        self._task_n_ctx: dict[str, int] = {}
 
     def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
         """Return the active MetricsEmitter for a task, or None if absent."""
         return getattr(self, "_task_metrics", {}).get(str(task_id))
 
-    async def _token_budget_config(self) -> TokenBudgetConfig:
+    async def _get_n_ctx(self, task_id: uuid.UUID, logger: logging.Logger) -> int:
+        """Fetch n_ctx from llama /props once per task run, caching the result."""
+        if not hasattr(self, "_task_n_ctx"):
+            self._task_n_ctx = {}
+        key = str(task_id)
+        if key in self._task_n_ctx:
+            return self._task_n_ctx[key]
+        fetched = await llama_get_n_ctx(llama_url=self.settings.llama_url)
+        _defaults = TokenBudgetConfig()
+        n_ctx = fetched if fetched is not None else _defaults.n_ctx
+        if fetched is not None:
+            logger.info("token budget: n_ctx=%d (from /props)", n_ctx)
+        else:
+            logger.warning("token budget: /props unavailable, using fallback n_ctx=%d", n_ctx)
+        self._task_n_ctx[key] = n_ctx
+        return n_ctx
+
+    def _token_budget_config(self, n_ctx: int) -> TokenBudgetConfig:
         _defaults = TokenBudgetConfig()
         s = self.settings
 
         def _get(name: str, default: object) -> object:
             return getattr(s, f"summary_{name}", default)
-
-        _log = logging.getLogger(__name__)
-        fetched_n_ctx = await llama_get_n_ctx(llama_url=s.llama_url)
-        n_ctx = fetched_n_ctx if fetched_n_ctx is not None else int(_get("n_ctx", _defaults.n_ctx))
-        if fetched_n_ctx is not None:
-            _log.info("token budget: n_ctx=%d (from /props)", n_ctx)
-        else:
-            _log.warning("token budget: /props unavailable, using fallback n_ctx=%d", n_ctx)
 
         return TokenBudgetConfig(
             n_ctx=n_ctx,
@@ -237,6 +247,7 @@ class TaskProcessor:
                 })
             finally:
                 self._task_metrics.pop(str(task.id), None)
+                self._task_n_ctx.pop(str(task.id), None)
 
     async def _run_step(
         self,
@@ -706,6 +717,8 @@ class TaskProcessor:
             for seg in existing_segments.values()
             if seg.text.strip()
         }
+        transcript_txt = dirs["outputs"] / "transcript.txt"
+        _need_set_transcript_path = not transcript_txt.exists()
         for spec in missing:
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
@@ -789,8 +802,6 @@ class TaskProcessor:
                 data={"segment_index": idx, "total": len(specs)},
                 throttle_key="transcribe_progress",
             )
-            transcript_txt = dirs["outputs"] / "transcript.txt"
-            is_first_segment = not transcript_txt.exists()
             with transcript_txt.open("a", encoding="utf-8") as tf:
                 tf.write(text.strip() + " ")
             async with self.session_factory() as session:
@@ -803,10 +814,11 @@ class TaskProcessor:
                     text=text,
                     raw_json=raw,
                 )
-                if is_first_segment:
+                if _need_set_transcript_path:
                     task_row = await repo.get_task_by_id(task_id)
                     if task_row is not None:
                         task_row.transcript_path = str(transcript_txt)
+                    _need_set_transcript_path = False
                 await session.commit()
             await self.bus.publish_event(
                 user_id=user_id,
@@ -1121,7 +1133,7 @@ class TaskProcessor:
             return True
 
         logger.info("window summarization started: %s windows", len(chunks))
-        budget_cfg = await self._token_budget_config()
+        budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
         total_parts = len(chunks) + 1
         timeout_seconds = int(getattr(self.settings, "llama_chat_timeout_seconds", 600))
         redacted_path = dirs["outputs"] / "redacted_transcript.txt"
@@ -1288,7 +1300,7 @@ class TaskProcessor:
 
         output_language = self._effective_language(task_options, dirs)
         timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
-        budget_cfg = await self._token_budget_config()
+        budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
 
         # Load final prompt to measure its token cost
         final_prompt_text = self._render_prompt_budget_vars(
@@ -1491,7 +1503,7 @@ class TaskProcessor:
 
         output_language = self._effective_language(task_options, dirs)
         timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
-        budget_cfg = await self._token_budget_config()
+        budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
 
         # Load packed notes if the packing step ran, else fall back to window summaries.
         # fallback_windows: list passed to _summarize_hierarchical if flat call fails.
