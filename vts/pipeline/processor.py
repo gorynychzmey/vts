@@ -914,6 +914,7 @@ class TaskProcessor:
                     user_prompt="Warm up model for upcoming summarization.",
                     timeout_seconds=1200,
                     max_tokens=32,
+                    temperature=self.settings.llama_temperature,
                 )
             self._log_payload(logger, "llama warmup response", raw)
         except Exception as exc:
@@ -1149,6 +1150,7 @@ class TaskProcessor:
                     user_prompt=user_prompt,
                     timeout_seconds=timeout_seconds,
                     max_tokens=target_tokens,
+                    temperature=self.settings.llama_temperature,
                     use_json_format=False,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
@@ -1372,6 +1374,7 @@ class TaskProcessor:
                             user_prompt=batch_input,
                             timeout_seconds=timeout_seconds,
                             max_tokens=target_tokens,
+                            temperature=self.settings.llama_temperature,
                             use_json_format=False,
                         )
                     packed_tc = await count_tokens(
@@ -1552,6 +1555,7 @@ class TaskProcessor:
                 user_prompt=merged,
                 timeout_seconds=timeout_seconds,
                 max_tokens=target_tokens,
+                temperature=self.settings.llama_temperature,
                 use_json_format=False,
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)

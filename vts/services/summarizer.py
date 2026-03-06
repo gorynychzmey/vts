@@ -131,6 +131,7 @@ def _build_chat_payload(
     user_prompt: str,
     max_tokens: int | None,
     include_response_format: bool,
+    temperature: float = 0.2,
     max_tokens_key: str = "max_tokens",
     include_model: bool = True,
     model_override: str | None = None,
@@ -140,7 +141,7 @@ def _build_chat_payload(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
+        "temperature": temperature,
     }
     if include_response_format:
         payload["response_format"] = {"type": "json_object"}
@@ -397,6 +398,7 @@ async def llama_chat_completion(
     user_prompt: str,
     timeout_seconds: int = 600,
     max_tokens: int | None = None,
+    temperature: float = 0.2,
     request_attempts: int = 3,
     use_json_format: bool = True,
 ) -> str:
@@ -419,6 +421,7 @@ async def llama_chat_completion(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
+            temperature=temperature,
             include_response_format=use_json_format,
         ),
     )
@@ -432,6 +435,7 @@ async def llama_chat_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
+                temperature=temperature,
                 include_response_format=use_json_format,
             ),
         )
@@ -443,6 +447,7 @@ async def llama_chat_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
+                temperature=temperature,
                 include_response_format=False,
             ),
         )
@@ -455,6 +460,7 @@ async def llama_chat_completion(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     max_tokens=max_tokens,
+                    temperature=temperature,
                     include_response_format=False,
                     max_tokens_key="max_completion_tokens",
                 ),
@@ -466,6 +472,7 @@ async def llama_chat_completion(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
+            temperature=temperature,
             include_response_format=False,
         ),
     )
@@ -477,6 +484,7 @@ async def llama_chat_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
+                temperature=temperature,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
             ),
@@ -488,6 +496,7 @@ async def llama_chat_completion(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
+            temperature=temperature,
             include_response_format=False,
             include_model=False,
         ),
@@ -500,6 +509,7 @@ async def llama_chat_completion(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
+                temperature=temperature,
                 include_response_format=False,
                 max_tokens_key="max_completion_tokens",
                 include_model=False,
@@ -551,6 +561,7 @@ async def llama_chat_completion(
                             system_prompt=system_prompt,
                             user_prompt=user_prompt,
                             max_tokens=max_tokens,
+                            temperature=temperature,
                             include_response_format=False,
                         ),
                     )
@@ -563,6 +574,7 @@ async def llama_chat_completion(
                                 system_prompt=system_prompt,
                                 user_prompt=user_prompt,
                                 max_tokens=max_tokens,
+                                temperature=temperature,
                                 include_response_format=False,
                                 max_tokens_key="max_completion_tokens",
                             ),

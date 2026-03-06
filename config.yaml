@@ -17,6 +17,7 @@ services:
   llama:
     url: http://llama:8000/v1
     model: Qwen2.5-7B-Instruct-Q4
+    temperature: 0.2
 
 trusted_proxy:
   cidrs:

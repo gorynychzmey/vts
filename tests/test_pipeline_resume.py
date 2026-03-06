@@ -47,6 +47,7 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
         prompts_dir=tmp_path / "prompts",
         llama_url="http://llama.local/v1",
         llama_model="Qwen2.5-7B-Instruct-Q4_K_M",
+        llama_temperature=0.2,
     )
     processor.bus = _DummyBus()
     processor.heavy_slot = _DummyHeavySlot()
@@ -137,6 +138,7 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
         prompts_dir=tmp_path / "prompts",
         llama_url="http://llama.local/v1",
         llama_model="Qwen2.5-7B-Instruct-Q4_K_M",
+        llama_temperature=0.2,
     )
     processor.bus = _DummyBus()
     processor.heavy_slot = _DummyHeavySlot()
@@ -386,6 +388,7 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
         prompts_dir=tmp_path / "prompts",
         llama_url="http://llama.local/v1",
         llama_model="Qwen2.5-7B-Instruct-Q4_K_M",
+        llama_temperature=0.2,
         llama_final_timeout_seconds=120,
     )
     processor.bus = _DummyBus()
