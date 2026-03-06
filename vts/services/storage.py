@@ -33,3 +33,21 @@ def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
+
+def cow_copy_dir(src: Path, dst: Path) -> None:
+    """Copy src directory to dst using CoW (reflink) when supported, falling back to regular copy.
+
+    dst must already exist as an empty directory.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["cp", "-a", "--reflink=auto", f"{src}/.", str(dst)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        # Fallback: pure-Python copy (no reflink)
+        import shutil
+
+        shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+

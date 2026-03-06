@@ -87,6 +87,7 @@ class Task(Base):
     __table_args__ = (
         Index("ix_tasks_user_created", "user_id", "created_at"),
         Index("ix_tasks_status_created", "status", "created_at"),
+        Index("ix_tasks_source_url_status", "source_url", "status"),
     )
 
 

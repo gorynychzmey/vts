@@ -31,7 +31,7 @@ from vts.services.media import (
     trim_initial_silence,
 )
 from vts.services.redis_bus import RedisBus
-from vts.services.storage import ensure_task_dirs, write_json
+from vts.services.storage import cow_copy_dir, ensure_task_dirs, write_json
 from vts.pipeline.token_budget import (
     TokenBudgetConfig,
     SummarizationMetrics,
@@ -158,6 +158,25 @@ class TaskProcessor:
             if task.status in {TaskStatus.canceled, TaskStatus.completed, TaskStatus.archived}:
                 return
             task_options = self._task_options(task.options)
+
+            # --- donor clone check ---
+            donor = await repo.find_completed_donor(
+                source_url=task.source_url,
+                options=task.options,
+                exclude_user_id=task.user_id,
+            )
+            if donor is not None:
+                await self._clone_from_donor(session, repo, task, donor)
+                await session.commit()
+                await self.bus.publish_event(
+                    user_id=str(task.user_id),
+                    task_id=str(task.id),
+                    event="task_status",
+                    data={"status": TaskStatus.completed.value},
+                )
+                return
+            # --- end donor clone check ---
+
             await repo.set_task_status(task, TaskStatus.running)
             await session.commit()
             await self.bus.publish_event(
@@ -1931,6 +1950,68 @@ class TaskProcessor:
 
     def _task_options(self, raw_options: dict[str, Any] | None) -> dict[str, Any]:
         return dict(raw_options or {})
+
+    async def _clone_from_donor(
+        self,
+        session: AsyncSession,
+        repo: Repo,
+        task: Any,
+        donor: Any,
+    ) -> None:
+        """Clone a completed donor task into the current task (CoW file copy + DB metadata)."""
+        logger = logging.getLogger(f"vts.clone.{task.id}")
+
+        donor_dir = Path(donor.artifact_dir)
+        task_dir = Path(task.artifact_dir)
+
+        logger.info(
+            "cloning from donor task %s (user %s) -> task %s (user %s)",
+            donor.id,
+            donor.user_id,
+            task.id,
+            task.user_id,
+        )
+
+        # CoW-copy all artifacts from donor dir to task dir
+        if donor_dir.exists():
+            await asyncio.to_thread(cow_copy_dir, donor_dir, task_dir)
+
+        # Fix up paths that are stored as absolute strings pointing to donor dir
+        def _remap(path_str: str | None) -> str | None:
+            if path_str is None:
+                return None
+            try:
+                rel = Path(path_str).relative_to(donor_dir)
+                return str(task_dir / rel)
+            except ValueError:
+                return path_str
+
+        task.source_title = donor.source_title
+        task.transcript_path = _remap(donor.transcript_path)
+        task.summary_path = _remap(donor.summary_path)
+
+        # Copy steps (mark all as skipped / cloned)
+        from vts.db.models import Step, StepStatus
+
+        for donor_step in donor.steps:
+            step = Step(
+                task_id=task.id,
+                name=donor_step.name,
+                status=StepStatus.skipped,
+                attempt=0,
+                message="cloned from donor",
+            )
+            session.add(step)
+
+        # Copy ASR segments
+        await repo.clone_asr_segments(donor.id, task.id)
+
+        # Mark task as completed
+        task.status = TaskStatus.completed
+        task.error_message = None
+        from vts.db.models import utcnow as _utcnow
+        task.updated_at = _utcnow()
+        await session.flush()
 
     def _task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:
         value = options.get(key, default)

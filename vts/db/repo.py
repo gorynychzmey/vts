@@ -249,3 +249,46 @@ class Repo:
     async def clear_asr_for_task(self, task_id: uuid.UUID) -> None:
         await self.session.execute(delete(AsrSegment).where(AsrSegment.task_id == task_id))
         await self.session.flush()
+
+    async def find_completed_donor(
+        self,
+        source_url: str,
+        options: dict,
+        exclude_user_id: uuid.UUID,
+    ) -> Task | None:
+        """Find a completed task from another user with the same source_url and options."""
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.steps))
+            .where(
+                Task.source_url == source_url,
+                Task.status == TaskStatus.completed,
+                Task.user_id != exclude_user_id,
+            )
+            .order_by(Task.updated_at.desc())
+            .limit(1)
+        )
+        candidate = await self.session.scalar(stmt)
+        if candidate is None:
+            return None
+        # Compare options exactly
+        if candidate.options != options:
+            return None
+        return candidate
+
+    async def clone_asr_segments(self, src_task_id: uuid.UUID, dst_task_id: uuid.UUID) -> None:
+        """Copy all ASR segments from src task to dst task."""
+        stmt = select(AsrSegment).where(AsrSegment.task_id == src_task_id).order_by(AsrSegment.segment_index.asc())
+        result = await self.session.scalars(stmt)
+        segments = list(result.all())
+        for seg in segments:
+            new_seg = AsrSegment(
+                task_id=dst_task_id,
+                segment_index=seg.segment_index,
+                start_sec=seg.start_sec,
+                end_sec=seg.end_sec,
+                text=seg.text,
+                raw_json=seg.raw_json,
+            )
+            self.session.add(new_seg)
+        await self.session.flush()
