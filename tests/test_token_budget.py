@@ -10,9 +10,9 @@ from vts.pipeline.token_budget import (
     TokenBudgetConfig,
     clamp,
     compute_final_budget,
-    compute_final_in_budget,
     compute_pack_budget,
     compute_segment_budget,
+    fits_in_context,
 )
 from vts.pipeline.types import DAG_STEPS
 from vts.services.summarizer import inject_budget_vars
@@ -135,26 +135,17 @@ def test_final_budget_typical() -> None:
     # 2000 tokens
     # raw = 2000 * 0.70 = 1400
     # min = ceil(2000 * 0.60) = 1200
-    # max = min(floor(2000 * 0.80), 1400) = min(1600, 1400) = 1400
-    # target = clamp(1400, 1200, 1400) = 1400
+    # max = floor(2000 * 0.80) = 1600
+    # target = clamp(1400, 1200, 1600) = 1400
     target, min_out, max_out = compute_final_budget(2000, cfg)
     assert min_out == 1200
-    assert max_out == 1400
+    assert max_out == 1600
     assert target == 1400
-
-
-def test_final_budget_capped_by_final_out_budget() -> None:
-    cfg = TokenBudgetConfig(final_out_budget=500)
-    # 4000 tokens: raw=2800, min=2400, max=min(3200, 500)=500
-    # target = clamp(2800, 2400, 500) → degenerate, returns 2400
-    target, min_out, max_out = compute_final_budget(4000, cfg)
-    assert max_out == 500
-    assert target == 2400   # min > max → clamp returns min
 
 
 def test_final_budget_small_input() -> None:
     cfg = TokenBudgetConfig()
-    # 100 tokens: raw=70, min=ceil(60)=60, max=min(80, 1400)=80
+    # 100 tokens: raw=70, min=ceil(60)=60, max=floor(80)=80
     # target = clamp(70, 60, 80) = 70
     target, min_out, max_out = compute_final_budget(100, cfg)
     assert target == 70
@@ -163,32 +154,34 @@ def test_final_budget_small_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# compute_final_in_budget
+# fits_in_context
 # ---------------------------------------------------------------------------
 
 
-def test_final_in_budget_calculation() -> None:
-    cfg = TokenBudgetConfig(n_ctx=32768, safety_margin=768, final_out_budget=1400)
-    result = compute_final_in_budget(cfg, final_prompt_tokens=500)
-    assert result == 32768 - 500 - 1400 - 768  # = 30100
+def test_fits_in_context_fits() -> None:
+    # prompt=500, input=1000, estimated_out=ceil(1000*0.80)=800, safety=768
+    # total = 500 + 1000 + 800 + 768 = 3068 <= 32768
+    cfg = TokenBudgetConfig(n_ctx=32768, safety_margin=768)
+    assert fits_in_context(cfg, prompt_tokens=500, input_tokens=1000) is True
 
 
-def test_final_in_budget_with_large_prompt() -> None:
-    cfg = TokenBudgetConfig(n_ctx=4096, safety_margin=256, final_out_budget=512)
-    result = compute_final_in_budget(cfg, final_prompt_tokens=1024)
-    assert result == 4096 - 1024 - 512 - 256  # = 2304
+def test_fits_in_context_does_not_fit() -> None:
+    # prompt=200, input=800, estimated_out=ceil(800*0.80)=640, safety=100
+    # total = 200 + 800 + 640 + 100 = 1740 > 1000
+    cfg = TokenBudgetConfig(n_ctx=1000, safety_margin=100)
+    assert fits_in_context(cfg, prompt_tokens=200, input_tokens=800) is False
 
 
-def test_packing_trigger_logic() -> None:
-    """Verify that packing is triggered when total_notes_tokens > final_in_budget."""
-    cfg = TokenBudgetConfig(n_ctx=1000, safety_margin=100, final_out_budget=200)
-    budget = compute_final_in_budget(cfg, final_prompt_tokens=100)
-    assert budget == 600
+def test_fits_in_context_exact_boundary() -> None:
+    # prompt=100, input=500, estimated_out=ceil(500*0.80)=400, safety=100
+    # total = 100 + 500 + 400 + 100 = 1100 > 1100? no, == 1100 <= 1100
+    cfg = TokenBudgetConfig(n_ctx=1100, safety_margin=100)
+    assert fits_in_context(cfg, prompt_tokens=100, input_tokens=500) is True
 
-    # Fits → no packing needed
-    assert 600 <= budget
-    # Doesn't fit → packing needed
-    assert 601 > budget
+
+def test_fits_in_context_one_over_boundary() -> None:
+    cfg = TokenBudgetConfig(n_ctx=1099, safety_margin=100)
+    assert fits_in_context(cfg, prompt_tokens=100, input_tokens=500) is False
 
 
 # ---------------------------------------------------------------------------
@@ -197,15 +190,13 @@ def test_packing_trigger_logic() -> None:
 
 
 def test_inject_budget_vars_replaces_all_placeholders() -> None:
-    prompt = "Input: ${INPUT_TOKENS}, Target: ${TARGET_TOKENS}, In: ${FINAL_IN_BUDGET}, Out: ${FINAL_OUT_BUDGET}"
+    prompt = "Input: ${INPUT_TOKENS}, Target: ${TARGET_TOKENS}"
     result = inject_budget_vars(
         prompt,
         input_tokens=1000,
         target_tokens=400,
-        final_in_budget=30000,
-        final_out_budget=1400,
     )
-    assert result == "Input: 1000, Target: 400, In: 30000, Out: 1400"
+    assert result == "Input: 1000, Target: 400"
 
 
 def test_inject_budget_vars_skips_none_values() -> None:
@@ -246,7 +237,6 @@ def test_token_budget_config_defaults() -> None:
     cfg = TokenBudgetConfig()
     assert cfg.n_ctx == 32768
     assert cfg.safety_margin == 768
-    assert cfg.final_out_budget == 1400
     assert cfg.segment_ratio == pytest.approx(0.40)
     assert cfg.segment_min_ratio == pytest.approx(0.30)
     assert cfg.segment_max_ratio == pytest.approx(0.55)

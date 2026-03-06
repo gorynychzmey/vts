@@ -602,19 +602,12 @@ def inject_budget_vars(
     *,
     input_tokens: int | None = None,
     target_tokens: int | None = None,
-    final_in_budget: int | None = None,
-    final_out_budget: int | None = None,
 ) -> str:
-    """Replace ${INPUT_TOKENS}, ${TARGET_TOKENS}, ${FINAL_IN_BUDGET}, ${FINAL_OUT_BUDGET}
-    placeholders in *prompt* with their numeric values."""
+    """Replace ${INPUT_TOKENS} and ${TARGET_TOKENS} placeholders in *prompt* with their numeric values."""
     if input_tokens is not None:
         prompt = prompt.replace("${INPUT_TOKENS}", str(input_tokens))
     if target_tokens is not None:
         prompt = prompt.replace("${TARGET_TOKENS}", str(target_tokens))
-    if final_in_budget is not None:
-        prompt = prompt.replace("${FINAL_IN_BUDGET}", str(final_in_budget))
-    if final_out_budget is not None:
-        prompt = prompt.replace("${FINAL_OUT_BUDGET}", str(final_out_budget))
     return prompt
 
 

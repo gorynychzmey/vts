@@ -89,8 +89,8 @@ media_ttl:
 #             min(floor(input * segment_max_ratio), segment_max_cap))
 #
 # Stage B (pack_window_notes): batch-pack window notes until they fit in the
-#   final context.  Triggered when sum(note_tokens) > final_in_budget, where
-#   final_in_budget = n_ctx − final_prompt_tokens − final_out_budget − safety_margin.
+#   final context.  Triggered when:
+#     final_prompt_tokens + total_notes_tokens + ceil(total_notes_tokens * final_max_ratio) + safety_margin > n_ctx
 #   Batches are limited to pack_batch_max_input_tokens tokens each.
 #   target  = clamp(input * pack_ratio,
 #             max(ceil(input * pack_min_ratio), pack_min_floor),
@@ -99,14 +99,13 @@ media_ttl:
 # Stage C (summarize_final): final themed synthesis.
 #   target  = clamp(input * final_ratio,
 #             ceil(input * final_min_ratio),
-#             min(floor(input * final_max_ratio), final_out_budget))
+#             floor(input * final_max_ratio))
 #
 # All values shown are defaults; override only what you need.
 #
 # summary:
 #   n_ctx: 32768
 #   safety_margin: 768
-#   final_out_budget: 1400
 #   segment:
 #     ratio: 0.40
 #     min_ratio: 0.30

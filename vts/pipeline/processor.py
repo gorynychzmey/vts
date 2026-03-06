@@ -37,9 +37,9 @@ from vts.pipeline.token_budget import (
     SummarizationMetrics,
     clamp,
     compute_final_budget,
-    compute_final_in_budget,
     compute_pack_budget,
     compute_segment_budget,
+    fits_in_context,
 )
 from vts.services.summarizer import (
     chunk_text,
@@ -87,7 +87,6 @@ class TaskProcessor:
         return TokenBudgetConfig(
             n_ctx=int(_get("n_ctx", _defaults.n_ctx)),
             safety_margin=int(_get("safety_margin", _defaults.safety_margin)),
-            final_out_budget=int(_get("final_out_budget", _defaults.final_out_budget)),
             segment_ratio=float(_get("segment_ratio", _defaults.segment_ratio)),
             segment_min_ratio=float(_get("segment_min_ratio", _defaults.segment_min_ratio)),
             segment_max_ratio=float(_get("segment_max_ratio", _defaults.segment_max_ratio)),
@@ -121,8 +120,6 @@ class TaskProcessor:
         language: str | None = None,
         input_tokens: int | None = None,
         target_tokens: int | None = None,
-        final_in_budget: int | None = None,
-        final_out_budget: int | None = None,
     ) -> str:
         if language is not None:
             prompt = self._render_prompt_with_language(prompt, language)
@@ -130,8 +127,6 @@ class TaskProcessor:
             prompt,
             input_tokens=input_tokens,
             target_tokens=target_tokens,
-            final_in_budget=final_in_budget,
-            final_out_budget=final_out_budget,
         )
         return prompt
 
@@ -1279,11 +1274,9 @@ class TaskProcessor:
             model=self.settings.llama_model,
             timeout_seconds=timeout_seconds,
         )
-        final_in_budget = compute_final_in_budget(budget_cfg, final_prompt_tokens)
         logger.info(
-            "pack_window_notes: final_prompt_tokens=%d final_in_budget=%d",
+            "pack_window_notes: final_prompt_tokens=%d",
             final_prompt_tokens,
-            final_in_budget,
         )
 
         # Count total tokens of all notes
@@ -1299,14 +1292,13 @@ class TaskProcessor:
             note_token_counts.append(tc)
         total_notes_tokens = sum(note_token_counts)
 
+        packing_triggered = not fits_in_context(budget_cfg, final_prompt_tokens, total_notes_tokens)
         logger.info(
-            "pack_window_notes: total_notes_tokens=%d final_in_budget=%d packing_needed=%s",
+            "pack_window_notes: total_notes_tokens=%d packing_needed=%s",
             total_notes_tokens,
-            final_in_budget,
-            total_notes_tokens > final_in_budget,
+            packing_triggered,
         )
 
-        packing_triggered = total_notes_tokens > final_in_budget
         packing_pass_count = 0
 
         if packing_triggered:
@@ -1324,13 +1316,12 @@ class TaskProcessor:
             current_texts = notes_texts
             current_token_counts = note_token_counts
 
-            while total_notes_tokens > final_in_budget and len(current_texts) > 0:
+            while not fits_in_context(budget_cfg, final_prompt_tokens, total_notes_tokens) and len(current_texts) > 0:
                 packing_pass_count += 1
                 logger.info(
-                    "packing pass %d: total_tokens=%d budget=%d notes=%d",
+                    "packing pass %d: total_tokens=%d notes=%d",
                     packing_pass_count,
                     total_notes_tokens,
-                    final_in_budget,
                     len(current_texts),
                 )
 
@@ -1405,12 +1396,11 @@ class TaskProcessor:
                 total_notes_tokens = sum(current_token_counts)
 
                 # Guard: stop if packing produced a single note and still doesn't fit
-                if len(current_texts) == 1 and total_notes_tokens > final_in_budget:
+                if len(current_texts) == 1 and not fits_in_context(budget_cfg, final_prompt_tokens, total_notes_tokens):
                     logger.warning(
                         "packing converged to a single note but still exceeds budget "
-                        "(%d > %d); proceeding anyway",
+                        "(%d tokens); proceeding anyway",
                         total_notes_tokens,
-                        final_in_budget,
                     )
                     break
 
@@ -1423,7 +1413,6 @@ class TaskProcessor:
                 "packing_triggered": packing_triggered,
                 "packing_pass_count": packing_pass_count,
                 "total_notes_tokens": total_notes_tokens,
-                "final_in_budget": final_in_budget,
             },
         )
         logger.info(
@@ -1537,18 +1526,14 @@ class TaskProcessor:
             model=self.settings.llama_model,
             timeout_seconds=timeout_seconds,
         )
-        final_in_budget = compute_final_in_budget(budget_cfg, final_prompt_tokens)
         global_prompt = self._render_prompt_budget_vars(
             global_prompt_base,
             input_tokens=input_tokens,
             target_tokens=target_tokens,
-            final_in_budget=final_in_budget,
-            final_out_budget=budget_cfg.final_out_budget,
         )
         logger.info(
-            "final summary token_budget input=%d target=%d min=%d max=%d final_in=%d final_out=%d",
-            input_tokens, target_tokens, min_out, max_out, final_in_budget,
-            budget_cfg.final_out_budget,
+            "final summary token_budget input=%d target=%d min=%d max=%d",
+            input_tokens, target_tokens, min_out, max_out,
         )
         logger.info(
             "waiting for heavy slot: final summary (notes=%s payload_bytes=%s)",

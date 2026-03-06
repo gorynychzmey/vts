@@ -13,7 +13,6 @@ class TokenBudgetConfig:
     # Model / context
     n_ctx: int = 32768
     safety_margin: int = 768
-    final_out_budget: int = 1400
 
     # Stage A — segment summarization
     segment_ratio: float = 0.40
@@ -102,17 +101,20 @@ def compute_final_budget(
     """
     raw_target = input_tokens * cfg.final_ratio
     min_out = math.ceil(input_tokens * cfg.final_min_ratio)
-    max_out = min(
-        math.floor(input_tokens * cfg.final_max_ratio),
-        cfg.final_out_budget,
-    )
+    max_out = math.floor(input_tokens * cfg.final_max_ratio)
     target_tokens = clamp(raw_target, min_out, max_out)
     return target_tokens, min_out, max_out
 
 
-def compute_final_in_budget(cfg: TokenBudgetConfig, final_prompt_tokens: int) -> int:
-    """Return the maximum token budget available for the final stage's input.
+def fits_in_context(
+    cfg: TokenBudgetConfig,
+    prompt_tokens: int,
+    input_tokens: int,
+) -> bool:
+    """Return True if prompt + input + estimated output + safety margin fit in n_ctx.
 
-    final_in_budget = n_ctx − final_prompt_tokens − final_out_budget − safety_margin
+    Estimated output = ceil(input_tokens * final_max_ratio), which is the
+    worst-case output size for the final synthesis stage.
     """
-    return cfg.n_ctx - final_prompt_tokens - cfg.final_out_budget - cfg.safety_margin
+    estimated_out = math.ceil(input_tokens * cfg.final_max_ratio)
+    return prompt_tokens + input_tokens + estimated_out + cfg.safety_margin <= cfg.n_ctx

@@ -75,7 +75,6 @@ class Settings(BaseSettings):
     # Token budgeting for the summarization pipeline
     summary_n_ctx: int = 32768
     summary_safety_margin: int = 768
-    summary_final_out_budget: int = 1400
 
     summary_segment_ratio: float = 0.40
     summary_segment_min_ratio: float = 0.30
