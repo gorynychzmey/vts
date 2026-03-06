@@ -1231,8 +1231,8 @@ class TaskProcessor:
     ) -> bool:
         """Stage B — pack/dedup window notes so they fit in the final context budget.
 
-        If the total notes tokens already fit within final_in_budget, the step
-        is a no-op (writes the passthrough marker and exits).  Otherwise it
+        If prompt + notes + estimated output + safety margin already fit within n_ctx,
+        the step is a no-op (writes the passthrough marker and exits).  Otherwise it
         compresses notes in batches until they fit.
         """
         summary_dir = dirs["root"] / "summary"
