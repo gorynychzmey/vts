@@ -33,22 +33,21 @@ const SUMMARY_STEPS = new Set([
   "summarize_windows",
   "summarize_final"
 ]);
-// Relative per-step weights (in seconds) derived from a real pipeline run log.
-// Final summary failed in that run, so its weight is estimated separately.
+// Relative per-step weights (in seconds) averaged over the last 4 completed pipeline runs.
 const STEP_WEIGHT_SECONDS = {
-  download: 15.147,
-  extract_audio: 19.606,
-  trim_initial_silence: 1.482,
-  segment_audio: 19.697,
-  detect_language: 267.314,
-  transcribe_segments: 7601.477,
-  merge_transcript: 0.81,
-  prepare_llama_model: 8.589,
-  prepare_summary_chunks: 0.396,
-  summarize_windows: 7345.851
+  download: 14.5,
+  extract_audio: 6.8,
+  trim_initial_silence: 0.5,
+  segment_audio: 4.7,
+  detect_language: 2.7,
+  transcribe_segments: 399.8,
+  merge_transcript: 0.1,
+  prepare_llama_model: 4.9,
+  prepare_summary_chunks: 0.2,
+  summarize_windows: 1171.2
 };
-// Fallback equals average duration of one summarize window from the same run.
-const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 408.101;
+// Fallback equals average summarize_final duration over the last 4 runs.
+const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 369.2;
 
 window.__VTS_I18N = window.__VTS_I18N || {};
 const I18N = window.__VTS_I18N || {};
