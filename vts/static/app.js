@@ -1672,7 +1672,10 @@ function connectEvents() {
       state.eventSource.close();
       state.eventSource = null;
     }
-    setTimeout(connectEvents, 2000);
+    setTimeout(() => {
+      connectEvents();
+      void loadTasks();
+    }, 2000);
   };
 }
 
