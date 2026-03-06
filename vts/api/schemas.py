@@ -56,6 +56,7 @@ class TaskOut(BaseModel):
     options: dict[str, Any]
     transcript_path: str | None
     summary_path: str | None
+    redacted_path: str | None = None
     error_message: str | None
     failure_code: str | None
     created_at: datetime

@@ -778,7 +778,7 @@ function createRuntime(task) {
     transcriptReady: Boolean(task.transcript_path),
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
-    redactedReady: false,
+    redactedReady: Boolean(task.redacted_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,

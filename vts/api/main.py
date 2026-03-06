@@ -308,6 +308,10 @@ def serialize_task(
         options=task.options,
         transcript_path=task.transcript_path,
         summary_path=task.summary_path,
+        redacted_path=str(Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt")
+        if task.artifact_dir
+        and (Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt").exists()
+        else None,
         error_message=task.error_message,
         failure_code=failure_code,
         created_at=task.created_at,
