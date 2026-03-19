@@ -157,6 +157,8 @@ Triggers:
 - Team convention (strict): `build` after commit/push always means the commit must be accompanied by pushed git tag `build-*`.
 - Mandatory rule: before pushing `build-*`, bump version in `vts/__init__.py` and push that commit first.
 - Mandatory rule: `build-*` tag version must match current project version.
+- Mandatory rule: immediately after pushing `build-*`, start GitHub Actions monitoring in a background subagent.
+- Mandatory rule: the subagent must watch the triggered workflow until final status and report the result back into the task.
 
 Tag-trigger example:
 

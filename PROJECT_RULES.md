@@ -28,6 +28,8 @@ Keyword: `build` (after push)
 1. Ensure version matches `vts/__init__.py`
 2. `git tag build-X.Y.Z`
 3. `git push origin build-X.Y.Z`
+4. Start GitHub Actions monitoring in a background subagent immediately after tag push
+5. Keep monitoring until the triggered workflow reaches final status and report result back in the task
 
 Do **NOT** run `build.sh` locally unless explicitly required.
 
