@@ -1,3 +1,8 @@
+# Workflow rules
+
+- **Commit + push after every task**: when a task is done, bump the version in `vts/__init__.py`, commit all changed files, and push to `origin/main`.
+- **Build only on explicit request**: never run `/build` or push a `build-X.Y.Z` tag unless the user explicitly asks.
+
 # context-mode — MANDATORY routing rules
 
 You have context-mode MCP tools available. These rules are NOT optional — they protect your context window from flooding. A single unrouted command can dump 56 KB into context and waste the entire session.
