@@ -30,6 +30,7 @@ window.__VTS_I18N.en = {
 "action.restart_summary": "Restart summary",
 "action.restart_summary_full": "Restart summary from scratch",
 "action.restart_summary_final": "Restart final summary only",
+"action.download_media": "Download media",
 "action.archive": "Archive task",
 "action.delete": "Delete",
 "action.copy_tab": "Copy active tab",

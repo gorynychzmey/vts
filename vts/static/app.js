@@ -778,6 +778,7 @@ function createRuntime(task) {
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
     redactedReady: Boolean(task.redacted_path),
+    mediaReady: Boolean(task.media_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
@@ -1030,6 +1031,9 @@ function renderTaskRuntime(taskEl) {
   if (elements.restartSummaryFinalBtn) {
     elements.restartSummaryFinalBtn.disabled = !canRestartFinalSummary;
   }
+  if (elements.downloadMediaBtn) {
+    elements.downloadMediaBtn.disabled = !runtime.mediaReady;
+  }
   if (elements.archiveBtn) {
     elements.archiveBtn.disabled = !canArchive;
   }
@@ -1112,6 +1116,7 @@ function renderTasks(tasks) {
     const restartSummaryMenu = root.querySelector(".restart-summary-menu");
     const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
     const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
+    const downloadMediaBtn = root.querySelector(".download-media-btn");
     const archiveBtn = root.querySelector(".archive-btn");
     const deleteBtn = root.querySelector(".delete-btn");
     const transcriptPre = root.querySelector(".tab-content.transcript");
@@ -1147,6 +1152,10 @@ function renderTasks(tasks) {
     }
     if (restartSummaryFinalBtn) {
       restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
+    }
+    if (downloadMediaBtn) {
+      downloadMediaBtn.title = t("action.download_media");
+      downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
     }
     if (archiveBtn) {
       archiveBtn.title = t("action.archive");
@@ -1207,6 +1216,9 @@ function renderTasks(tasks) {
         restartSummary(task.id, "final_only");
       });
     }
+    if (downloadMediaBtn) {
+      downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title));
+    }
     if (archiveBtn) {
       archiveBtn.addEventListener("click", () => archiveTask(task.id));
     }
@@ -1241,6 +1253,7 @@ function renderTasks(tasks) {
       restartSummaryBtn,
       restartSummaryMenu,
       restartSummaryFinalBtn,
+      downloadMediaBtn,
       archiveBtn,
       transcriptTabBtn,
       summaryTabBtn,
@@ -1333,6 +1346,34 @@ async function removeTask(taskId) {
   await loadTasks();
 }
 
+function buildMediaFilename(taskId, sourceTitle, serverFilename) {
+  const ext = serverFilename ? serverFilename.replace(/^.*(\.[^.]+)$/, "$1") : "";
+  const base = sourceTitle && sourceTitle.trim()
+    ? sourceTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 200)
+    : String(taskId || "media").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 36) || "media";
+  return base + ext;
+}
+
+async function downloadMedia(taskId, sourceTitle) {
+  const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/media`);
+  if (!resp.ok) {
+    return;
+  }
+  const disposition = resp.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename\*?=['"]?(?:UTF-8'')?([^'";]+)['"]?/i);
+  const serverFilename = match ? decodeURIComponent(match[1]) : "";
+  const filename = buildMediaFilename(taskId, sourceTitle, serverFilename);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function archiveTask(taskId) {
   const confirmed = window.confirm(t("confirm.archive"));
   if (!confirmed) {
@@ -1382,8 +1423,9 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
   }
   if (runtime.baseStatus === "completed" || runtime.baseStatus === "failed") {
     void api(`/api/tasks/${taskId}`).then((task) => {
-      if (taskEl._runtime === runtime && task && task.stats) {
-        runtime.stats = parseTaskStats(task);
+      if (taskEl._runtime === runtime && task) {
+        if (task.stats) runtime.stats = parseTaskStats(task);
+        runtime.mediaReady = Boolean(task.media_path);
         renderTaskRuntime(taskEl);
       }
     }).catch(() => {});

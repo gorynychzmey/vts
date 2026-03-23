@@ -30,6 +30,7 @@ window.__VTS_I18N.ru = {
 "action.restart_summary": "Перезапустить summary",
 "action.restart_summary_full": "Перезапустить саммари целиком",
 "action.restart_summary_final": "Перезапустить итоговое саммари",
+"action.download_media": "Скачать медиафайл",
 "action.archive": "Архивировать задачу",
 "action.delete": "Удалить",
 "action.copy_tab": "Скопировать вкладку",

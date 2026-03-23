@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -283,6 +283,17 @@ async def _get_cached_queue_positions(
     return positions
 
 
+def _find_media_file(artifact_dir: str | None) -> Path | None:
+    if not artifact_dir:
+        return None
+    media_dir = Path(artifact_dir) / "media"
+    for pattern in ("video.mkv", "audio.original.*"):
+        matches = sorted(media_dir.glob(pattern)) if media_dir.exists() else []
+        if matches:
+            return matches[-1]
+    return None
+
+
 def serialize_task(
     task: Task,
     queue_positions: dict[uuid.UUID, int] | None = None,
@@ -312,6 +323,7 @@ def serialize_task(
         if task.artifact_dir
         and (Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt").exists()
         else None,
+        media_path=str(_mf) if (_mf := _find_media_file(task.artifact_dir)) else None,
         error_message=task.error_message,
         failure_code=failure_code,
         created_at=task.created_at,
@@ -690,6 +702,21 @@ def create_app() -> FastAPI:
         if not path.exists():
             return PlainTextResponse("", status_code=200)
         return PlainTextResponse(path.read_text(encoding="utf-8"))
+
+    @app.get("/api/tasks/{task_id}/media")
+    async def get_media(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> FileResponse:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        media_file = _find_media_file(task.artifact_dir)
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not available")
+        return FileResponse(path=str(media_file), filename=media_file.name, media_type="application/octet-stream")
 
     @app.get("/api/events")
     async def get_events(

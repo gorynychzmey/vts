@@ -30,6 +30,7 @@ window.__VTS_I18N.de = {
 "action.restart_summary": "Summary neu starten",
 "action.restart_summary_full": "Summary komplett neu starten",
 "action.restart_summary_final": "Nur finale Zusammenfassung neu starten",
+"action.download_media": "Mediadatei herunterladen",
 "action.archive": "Aufgabe archivieren",
 "action.delete": "Löschen",
 "action.copy_tab": "Aktiven Tab kopieren",
