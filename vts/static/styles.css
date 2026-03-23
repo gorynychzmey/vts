@@ -241,6 +241,31 @@ button:hover {
   color: var(--danger);
 }
 
+.icon-btn.loading {
+  cursor: not-allowed;
+  pointer-events: none;
+  position: relative;
+}
+
+.icon-btn.loading svg {
+  opacity: 0;
+}
+
+.icon-btn.loading::after {
+  content: "";
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: icon-btn-spin 0.7s linear infinite;
+}
+
+@keyframes icon-btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 .btn-menu-wrapper {
   display: inline-flex;
 }

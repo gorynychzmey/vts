@@ -1217,7 +1217,7 @@ function renderTasks(tasks) {
       });
     }
     if (downloadMediaBtn) {
-      downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title));
+      downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title, downloadMediaBtn));
     }
     if (archiveBtn) {
       archiveBtn.addEventListener("click", () => archiveTask(task.id));
@@ -1354,25 +1354,30 @@ function buildMediaFilename(taskId, sourceTitle, serverFilename) {
   return base + ext;
 }
 
-async function downloadMedia(taskId, sourceTitle) {
-  const headers = { "X-Forwarded-User": state.authUser };
-  const resp = await fetch(buildPath(`/api/tasks/${encodeURIComponent(taskId)}/media`), { headers });
-  if (!resp.ok) {
-    return;
+async function downloadMedia(taskId, sourceTitle, btn) {
+  if (btn) btn.classList.add("loading");
+  try {
+    const headers = { "X-Forwarded-User": state.authUser };
+    const resp = await fetch(buildPath(`/api/tasks/${encodeURIComponent(taskId)}/media`), { headers });
+    if (!resp.ok) {
+      return;
+    }
+    const disposition = resp.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename\*?=['"]?(?:UTF-8'')?([^'";]+)['"]?/i);
+    const serverFilename = match ? decodeURIComponent(match[1]) : "";
+    const filename = buildMediaFilename(taskId, sourceTitle, serverFilename);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  } finally {
+    if (btn) btn.classList.remove("loading");
   }
-  const disposition = resp.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename\*?=['"]?(?:UTF-8'')?([^'";]+)['"]?/i);
-  const serverFilename = match ? decodeURIComponent(match[1]) : "";
-  const filename = buildMediaFilename(taskId, sourceTitle, serverFilename);
-  const blob = await resp.blob();
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
 
 async function archiveTask(taskId) {
