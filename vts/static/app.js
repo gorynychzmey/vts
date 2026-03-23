@@ -1355,7 +1355,8 @@ function buildMediaFilename(taskId, sourceTitle, serverFilename) {
 }
 
 async function downloadMedia(taskId, sourceTitle) {
-  const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/media`);
+  const headers = { "X-Forwarded-User": state.authUser };
+  const resp = await fetch(buildPath(`/api/tasks/${encodeURIComponent(taskId)}/media`), { headers });
   if (!resp.ok) {
     return;
   }
