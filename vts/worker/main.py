@@ -47,29 +47,24 @@ async def worker_loop() -> None:
 
         while True:
             if running_task is None:
-                # Try to claim a queued task from Postgres
                 async with SessionLocal() as session:
                     repo = Repo(session)
                     task_id = await repo.dequeue_task()
                     await session.commit()
 
                 if task_id is None:
-                    # Nothing queued — wait for a notify or poll every 5s
                     try:
-                        await asyncio.wait_for(pubsub.get_message(ignore_subscribe_messages=True, timeout=5), timeout=5.5)
-                    except (asyncio.TimeoutError, Exception):
+                        await asyncio.wait_for(pubsub.get_message(ignore_subscribe_messages=True), timeout=5)
+                    except asyncio.TimeoutError:
                         pass
                     continue
 
                 if await bus.is_cancel_requested(task_id):
                     await bus.clear_cancel_request(task_id)
                     log.info("skipping canceled task %s before start", task_id)
-                    # Mark it canceled in DB
                     async with SessionLocal() as session:
                         repo = Repo(session)
-                        task = await repo.get_task_by_id(task_id)
-                        if task is not None:
-                            await repo.set_task_status(task, TaskStatus.canceled)
+                        await repo.set_task_status_by_id(task_id, TaskStatus.canceled)
                         await session.commit()
                     continue
 

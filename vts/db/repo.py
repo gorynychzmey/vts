@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -103,11 +103,21 @@ class Repo:
         if task_id is None:
             return None
         await self.session.execute(
-            text("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = :id"),
-            {"id": task_id},
+            update(Task)
+            .where(Task.id == task_id)
+            .values(status=TaskStatus.running, updated_at=utcnow()),
         )
         await self.session.flush()
         return task_id
+
+    async def set_task_status_by_id(self, task_id: uuid.UUID, status: TaskStatus) -> None:
+        """Update task status by id without loading the full task object."""
+        await self.session.execute(
+            update(Task)
+            .where(Task.id == task_id)
+            .values(status=status, updated_at=utcnow()),
+        )
+        await self.session.flush()
 
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
         stmt = select(Task).where(Task.status == TaskStatus.running)
