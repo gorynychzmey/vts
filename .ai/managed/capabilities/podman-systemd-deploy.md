@@ -5,6 +5,6 @@ Reusable deployment pattern for Podman-backed services managed by systemd.
 
 ## Replaces
 
-- systemd/vts-webapi.service
-- systemd/vts-worker.service
-- systemd/vts.env.example
+- systemd/service-web.service
+- systemd/service-worker.service
+- systemd/service.env.example

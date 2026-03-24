@@ -5,4 +5,4 @@ Reads semantic version from a Python `__init__.py` assignment using a regex-base
 
 ## Replaces
 
-- vts/__init__.py
+- app/__init__.py

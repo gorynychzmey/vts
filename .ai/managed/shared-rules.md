@@ -1,16 +1,20 @@
 <!-- internal-standards:managed -->
 # Shared Rules
 
-Generated from `internal-standards` version `{standards_version}`.
+Generated from `internal-standards` version `0.1.0`.
 
-## Shared Engineering Policy
-{shared_engineering_policy}
+Keep this file as the compact index. Load linked files only when the task needs their details.
 
-## Definition Of Done
-{definition_of_done}
+## Core References
 
-## Shared Context Routing
-{context_mode_routing}
+- `.ai/managed/shared-engineering-policy.md`
+- `.ai/managed/definition-of-done.md`
+- `.ai/managed/context-mode-routing.md`
+- `.ai/managed/capabilities/index.md`
 
-## Enabled Capabilities
-{enabled_capabilities}
+## Capability Summary
+
+See `.ai/managed/capabilities/index.md` for the full capability list and per-capability details.
+
+### Enabled Count
+12

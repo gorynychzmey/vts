@@ -1,11 +1,15 @@
 <!-- internal-standards:managed -->
-# {tool_name} Rules
+# Claude Rules
 
-Generated from `internal-standards` version `{standards_version}`.
+Generated from `internal-standards` version `0.1.0`.
 
 ## Tool-Specific Guidance
-{tool_specific_guidance}
+# Claude-Specific Guidance
+
+- Prefer planning and routing discipline before deep execution.
+- Use subagents for long-running remote monitoring when available.
+- Keep tool usage compact and avoid flooding the session with raw command output.
 
 ## Shared Reference
 
-See `.ai/managed/shared-rules.md` for the common policy layer.
+Start with `.ai/managed/shared-rules.md`, then open linked shared references only when needed.
