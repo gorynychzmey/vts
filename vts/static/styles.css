@@ -616,6 +616,13 @@ button:hover {
     flex-wrap: nowrap;
     width: 100%;
     justify-content: space-between;
+    overflow: hidden;
+  }
+
+  .task-right-bottom {
+    overflow-x: auto;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .url-row {
