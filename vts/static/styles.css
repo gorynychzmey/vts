@@ -353,10 +353,16 @@ button:hover {
 
 .task-right {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.task-right-bottom {
+  display: flex;
   align-items: center;
   gap: 0.45rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .task-status {
@@ -414,6 +420,7 @@ button:hover {
 .task-actions-inline {
   display: inline-flex;
   gap: 0.3rem;
+  flex-wrap: nowrap;
 }
 
 .toggle-btn svg {
@@ -604,7 +611,11 @@ button:hover {
   }
 
   .task-right {
-    justify-content: flex-start;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+    width: 100%;
+    justify-content: space-between;
   }
 
   .url-row {
