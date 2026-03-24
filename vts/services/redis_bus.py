@@ -31,6 +31,13 @@ class RedisBus:
         added = await self.redis.sadd(self.queue_index_key, raw_task_id)
         if added:
             await self.redis.lpush(self.queue_key, raw_task_id)
+        else:
+            # Guard against set/list desync: if the task is in the index but
+            # not in the list (e.g. after a crash between sadd and lpush),
+            # push it unconditionally so the worker can pick it up.
+            in_list = await self.redis.lpos(self.queue_key, raw_task_id)
+            if in_list is None:
+                await self.redis.lpush(self.queue_key, raw_task_id)
 
     async def remove_task_from_queue(self, task_id: uuid.UUID) -> None:
         raw_task_id = str(task_id)
