@@ -1111,6 +1111,8 @@ function renderTasks(tasks) {
     const body = node.querySelector(".task-body");
     const toggleBtn = root.querySelector(".toggle-btn");
     const taskRightTop = root.querySelector(".task-right-top");
+    const toolbarWrap = root.querySelector(".task-toolbar-wrap");
+    const toolbarScroll = root.querySelector(".task-right-bottom");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
     const restartSummaryBtn = root.querySelector(".restart-summary-btn");
@@ -1191,6 +1193,14 @@ function renderTasks(tasks) {
     };
     taskRightTop.addEventListener("click", doToggle);
     toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
+    if (toolbarWrap && toolbarScroll) {
+      const updateFade = () => {
+        const atEnd = toolbarScroll.scrollLeft + toolbarScroll.clientWidth >= toolbarScroll.scrollWidth - 1;
+        toolbarWrap.classList.toggle("scrolled-end", atEnd);
+      };
+      toolbarScroll.addEventListener("scroll", updateFade, { passive: true });
+      updateFade();
+    }
     pauseBtn.addEventListener("click", () => pauseTask(task.id));
     resumeBtn.addEventListener("click", () => resumeTask(task.id));
     if (restartSummaryBtn && restartSummaryMenu) {

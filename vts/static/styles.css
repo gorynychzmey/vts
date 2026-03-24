@@ -626,10 +626,30 @@ button:hover {
     overflow: hidden;
   }
 
-  .task-right-bottom {
-    overflow-x: auto;
+  .task-toolbar-wrap {
+    position: relative;
     flex-shrink: 1;
     min-width: 0;
+  }
+
+  .task-toolbar-wrap::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 2rem;
+    height: 100%;
+    background: linear-gradient(to right, transparent, #fff8e8);
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+
+  .task-toolbar-wrap.scrolled-end::after {
+    opacity: 0;
+  }
+
+  .task-right-bottom {
+    overflow-x: auto;
     scrollbar-width: none;
   }
 
