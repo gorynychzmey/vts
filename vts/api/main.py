@@ -421,7 +421,7 @@ def create_app() -> FastAPI:
         )
         await session.commit()
         bus = RedisBus(redis, settings)
-        await bus.enqueue_task(task.id)
+        await bus.notify_queued()
         await bus.publish_event(
             user_id=str(task.user_id),
             task_id=str(task.id),
@@ -515,9 +515,8 @@ def create_app() -> FastAPI:
             results[tid] = "queued"
         await asyncio.gather(*artifact_resets)
         await session.commit()
-        for task_id in request.task_ids:
-            if results.get(str(task_id)) == "queued":
-                await bus.enqueue_task(task_id)
+        if any(v == "queued" for v in results.values()):
+            await bus.notify_queued()
         return BatchResultOut(results=results)
 
     @app.post("/api/tasks/pause", response_model=BatchResultOut)
@@ -569,9 +568,8 @@ def create_app() -> FastAPI:
             await repo.set_task_status(task, TaskStatus.queued)
             results[tid] = "queued"
         await session.commit()
-        for task_id in request.task_ids:
-            if results.get(str(task_id)) == "queued":
-                await bus.enqueue_task(task_id)
+        if any(v == "queued" for v in results.values()):
+            await bus.notify_queued()
         return BatchResultOut(results=results)
 
     @app.delete("/api/tasks", response_model=BatchResultOut)
@@ -600,7 +598,6 @@ def create_app() -> FastAPI:
         if tasks_to_delete:
             await asyncio.gather(
                 *[bus.request_cancel(t.id) for t in tasks_to_delete],
-                *[bus.remove_task_from_queue(t.id) for t in tasks_to_delete],
             )
             for task in tasks_to_delete:
                 await repo.set_task_status(task, TaskStatus.canceled)

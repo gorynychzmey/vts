@@ -15,19 +15,13 @@ from vts.pipeline.processor import TaskProcessor
 from vts.services.redis_bus import RedisBus
 
 
-async def recover_pending_tasks(bus: RedisBus, log: logging.Logger) -> None:
+async def recover_pending_tasks(log: logging.Logger) -> None:
     async with SessionLocal() as session:
         repo = Repo(session)
         recovered_running = await repo.requeue_running_tasks()
-        queued_ids = await repo.list_task_ids_for_statuses([TaskStatus.queued])
         await session.commit()
-    for task_id in queued_ids:
-        await bus.remove_task_from_queue(task_id)
-        await bus.enqueue_task(task_id)
     if recovered_running:
         log.info("recovered running tasks: %s", len(recovered_running))
-    if queued_ids:
-        log.info("queued tasks restored on startup: %s", len(queued_ids))
 
 
 async def worker_loop() -> None:
@@ -37,24 +31,48 @@ async def worker_loop() -> None:
     processor = TaskProcessor(session_factory=SessionLocal, redis=redis, settings=settings)
     log = logging.getLogger("vts.worker")
     heavy_slot_key = f"{settings.redis_prefix}heavy_slots"
+    notify_channel = f"{settings.redis_prefix}queue:notify"
 
     try:
         await redis.set(heavy_slot_key, 0)
         log.info("heavy slot counter reset on startup")
-        await recover_pending_tasks(bus, log)
+        await recover_pending_tasks(log)
+
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(notify_channel)
+
         running_task_id = None
         running_task: asyncio.Task[None] | None = None
         cancel_sent = False
+
         while True:
             if running_task is None:
-                task_id = await bus.dequeue_task(timeout_seconds=5)
+                # Try to claim a queued task from Postgres
+                async with SessionLocal() as session:
+                    repo = Repo(session)
+                    task_id = await repo.dequeue_task()
+                    await session.commit()
+
                 if task_id is None:
-                    await asyncio.sleep(0.2)
+                    # Nothing queued — wait for a notify or poll every 5s
+                    try:
+                        await asyncio.wait_for(pubsub.get_message(ignore_subscribe_messages=True, timeout=5), timeout=5.5)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
                     continue
+
                 if await bus.is_cancel_requested(task_id):
                     await bus.clear_cancel_request(task_id)
                     log.info("skipping canceled task %s before start", task_id)
+                    # Mark it canceled in DB
+                    async with SessionLocal() as session:
+                        repo = Repo(session)
+                        task = await repo.get_task_by_id(task_id)
+                        if task is not None:
+                            await repo.set_task_status(task, TaskStatus.canceled)
+                        await session.commit()
                     continue
+
                 await bus.clear_cancel_request(task_id)
                 running_task_id = task_id
                 running_task = asyncio.create_task(processor.process_task(task_id))
@@ -90,6 +108,9 @@ async def worker_loop() -> None:
             running_task.cancel()
             with suppress(BaseException):
                 await running_task
+        with suppress(Exception):
+            await pubsub.unsubscribe(notify_channel)
+            await pubsub.aclose()
         await redis.aclose()
 
 

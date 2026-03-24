@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -89,6 +89,25 @@ class Repo:
         result = await self.session.scalars(stmt)
         queued_ids = list(result.all())
         return {task_id: index for index, task_id in enumerate(queued_ids, start=1)}
+
+    async def dequeue_task(self) -> uuid.UUID | None:
+        """Atomically claim the oldest queued task. Returns its id or None."""
+        stmt = (
+            select(Task.id)
+            .where(Task.status == TaskStatus.queued)
+            .order_by(Task.created_at.asc(), Task.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        task_id = await self.session.scalar(stmt)
+        if task_id is None:
+            return None
+        await self.session.execute(
+            text("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = :id"),
+            {"id": task_id},
+        )
+        await self.session.flush()
+        return task_id
 
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
         stmt = select(Task).where(Task.status == TaskStatus.running)
