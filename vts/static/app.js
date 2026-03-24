@@ -1110,7 +1110,7 @@ function renderTasks(tasks) {
     const root = node.querySelector(".task");
     const body = node.querySelector(".task-body");
     const toggleBtn = root.querySelector(".toggle-btn");
-    const taskStatus = root.querySelector(".task-status");
+    const taskRightTop = root.querySelector(".task-right-top");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
     const restartSummaryBtn = root.querySelector(".restart-summary-btn");
@@ -1173,8 +1173,7 @@ function renderTasks(tasks) {
       btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
     });
 
-    taskStatus.addEventListener("click", () => toggleBtn.click());
-    toggleBtn.addEventListener("click", () => {
+    const doToggle = () => {
       body.classList.toggle("hidden");
       const expanded = !body.classList.contains("hidden");
       toggleBtn.classList.toggle("expanded", expanded);
@@ -1189,7 +1188,9 @@ function renderTasks(tasks) {
       } else {
         stopLogPolling(root);
       }
-    });
+    };
+    taskRightTop.addEventListener("click", doToggle);
+    toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
     pauseBtn.addEventListener("click", () => pauseTask(task.id));
     resumeBtn.addEventListener("click", () => resumeTask(task.id));
     if (restartSummaryBtn && restartSummaryMenu) {

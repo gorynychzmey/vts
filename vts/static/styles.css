@@ -380,7 +380,6 @@ button:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
   text-transform: lowercase;
-  cursor: pointer;
 }
 
 .task-status.status-running {
