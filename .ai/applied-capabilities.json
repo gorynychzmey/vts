@@ -1,0 +1,177 @@
+{
+  "applied": [
+    {
+      "name": "git-task-completion-policy",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "semantic-version-workflow",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "build-tag-release-flow",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "docker-image-version-tagging",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "github-actions-build-images",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "ssh-post-build-deploy",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "python-init-version-provider",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "container-build-with-tests",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "podman-systemd-deploy",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "postgres-bootstrap-script",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "agent-build-command",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    },
+    {
+      "name": "context-mode-agent-routing",
+      "version": "0.1.0",
+      "applied_at": "2026-03-24T20:32:36+00:00"
+    }
+  ],
+  "skipped": [],
+  "disabled": [
+    {
+      "name": "execution-memory"
+    },
+    {
+      "name": "node-package-version-provider"
+    }
+  ],
+  "superseded": [
+    {
+      "path": "CLAUDE.md",
+      "replaced_by": ".ai/managed/CLAUDE.local.md",
+      "action": "migrate_local",
+      "note": "existing wrapper content moved to local extension"
+    },
+    {
+      "path": "PROJECT_RULES.md",
+      "replaced_by": ".ai/managed/capabilities/git-task-completion-policy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "scripts/bump_version.py",
+      "replaced_by": ".ai/managed/capabilities/semantic-version-workflow.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "scripts/get_version.py",
+      "replaced_by": ".ai/managed/capabilities/semantic-version-workflow.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "scripts/prepare_commit.sh",
+      "replaced_by": ".ai/managed/capabilities/semantic-version-workflow.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": ".claude/commands/build.md",
+      "replaced_by": ".ai/managed/capabilities/build-tag-release-flow.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "build.sh",
+      "replaced_by": ".ai/managed/capabilities/docker-image-version-tagging.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": ".github/workflows/build-images.yml",
+      "replaced_by": ".ai/managed/capabilities/github-actions-build-images.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": ".github/workflows/deploy-after-build.yml",
+      "replaced_by": ".ai/managed/capabilities/ssh-post-build-deploy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "deploy.sh",
+      "replaced_by": ".ai/managed/capabilities/ssh-post-build-deploy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "vts/__init__.py",
+      "replaced_by": ".ai/managed/capabilities/python-init-version-provider.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "build.sh",
+      "replaced_by": ".ai/managed/capabilities/container-build-with-tests.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "systemd/vts-webapi.service",
+      "replaced_by": ".ai/managed/capabilities/podman-systemd-deploy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "systemd/vts-worker.service",
+      "replaced_by": ".ai/managed/capabilities/podman-systemd-deploy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "systemd/vts.env.example",
+      "replaced_by": ".ai/managed/capabilities/podman-systemd-deploy.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": "scripts/setup_postgres.sh",
+      "replaced_by": ".ai/managed/capabilities/postgres-bootstrap-script.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    },
+    {
+      "path": ".claude/commands/build.md",
+      "replaced_by": ".ai/managed/capabilities/agent-build-command.md",
+      "action": "mark_superseded",
+      "note": "local duplicate retained only as superseded backup"
+    }
+  ]
+}

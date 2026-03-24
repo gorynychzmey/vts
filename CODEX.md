@@ -1,13 +1,13 @@
 <!-- internal-standards:managed -->
-# Managed Claude Guidance
+# Managed Codex Guidance
 
 This file is managed by `internal-standards`.
 
 Primary source:
 
 - `.ai/managed/shared-rules.md`
-- `.ai/managed/claude-rules.md`
+- `.ai/managed/codex-rules.md`
 
 Optional local extension:
 
-- `.ai/local/CLAUDE.local.md`
+- `.ai/local/CODEX.local.md`

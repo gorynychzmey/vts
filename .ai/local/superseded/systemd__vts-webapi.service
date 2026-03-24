@@ -1,0 +1,23 @@
+[Unit]
+Description=VTS Web API Container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/vts/config/vts.env
+ExecStartPre=/usr/bin/podman pull ${VTS_IMAGE}
+ExecStart=/usr/bin/podman run --rm --name vts-webapi \
+  --env-file /opt/vts/config/vts.env \
+  -e VTS_ROLE=webapi \
+  -v /opt/vts/config:/opt/vts/config:ro \
+  -v /opt/vts/prompts:/opt/vts/prompts:ro \
+  -v /srv/vts-data:/srv/vts-data \
+  -p 8080:8080 \
+  ${VTS_IMAGE}
+ExecStop=/usr/bin/podman stop -t 20 vts-webapi
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

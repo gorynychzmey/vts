@@ -1,0 +1,58 @@
+{
+  "project_type": "service",
+  "language": "python",
+  "runtime": "python3.13",
+  "ci": {
+    "provider": "github_actions"
+  },
+  "deployment": {
+    "mode": "ssh",
+    "runtime": "systemd"
+  },
+  "containerization": {
+    "engine": "podman",
+    "orchestrator": "compose"
+  },
+  "ai": {
+    "claude_code": true,
+    "codex": true
+  },
+  "features": {
+    "github_actions": true,
+    "ghcr": true,
+    "docker_hub": true,
+    "ssh_deploy": true,
+    "build_tags": true,
+    "systemd": true,
+    "db_bootstrap": true,
+    "db_migrations": true
+  },
+  "versioning": {
+    "provider": "python-init-regex",
+    "path": "vts/__init__.py",
+    "field": "__version__",
+    "regex": "__version__\\s*=\\s*\"(\\d+\\.\\d+\\.\\d+)\"",
+    "read_command": "python3 scripts/get_version.py",
+    "bump_command": "python3 scripts/bump_version.py patch"
+  },
+  "capabilities": {
+    "enabled": [
+      "git-task-completion-policy",
+      "semantic-version-workflow",
+      "build-tag-release-flow",
+      "docker-image-version-tagging",
+      "github-actions-build-images",
+      "ssh-post-build-deploy",
+      "python-init-version-provider",
+      "container-build-with-tests",
+      "podman-systemd-deploy",
+      "postgres-bootstrap-script",
+      "agent-build-command",
+      "context-mode-agent-routing"
+    ],
+    "disabled": [
+      "execution-memory",
+      "node-package-version-provider"
+    ]
+  }
+}
