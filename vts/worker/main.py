@@ -22,6 +22,7 @@ async def recover_pending_tasks(bus: RedisBus, log: logging.Logger) -> None:
         queued_ids = await repo.list_task_ids_for_statuses([TaskStatus.queued])
         await session.commit()
     for task_id in queued_ids:
+        await bus.remove_task_from_queue(task_id)
         await bus.enqueue_task(task_id)
     if recovered_running:
         log.info("recovered running tasks: %s", len(recovered_running))
