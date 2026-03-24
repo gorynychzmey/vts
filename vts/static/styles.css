@@ -365,6 +365,13 @@ button:hover {
   gap: 0.45rem;
 }
 
+.task-right-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
 .task-status {
   border-radius: 999px;
   padding: 0.24rem 0.58rem;
@@ -373,6 +380,7 @@ button:hover {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
   text-transform: lowercase;
+  cursor: pointer;
 }
 
 .task-status.status-running {
@@ -623,6 +631,11 @@ button:hover {
     overflow-x: auto;
     flex-shrink: 1;
     min-width: 0;
+    scrollbar-width: none;
+  }
+
+  .task-right-bottom::-webkit-scrollbar {
+    display: none;
   }
 
   .url-row {

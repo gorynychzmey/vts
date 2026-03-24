@@ -1110,6 +1110,7 @@ function renderTasks(tasks) {
     const root = node.querySelector(".task");
     const body = node.querySelector(".task-body");
     const toggleBtn = root.querySelector(".toggle-btn");
+    const taskStatus = root.querySelector(".task-status");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
     const restartSummaryBtn = root.querySelector(".restart-summary-btn");
@@ -1172,6 +1173,7 @@ function renderTasks(tasks) {
       btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
     });
 
+    taskStatus.addEventListener("click", () => toggleBtn.click());
     toggleBtn.addEventListener("click", () => {
       body.classList.toggle("hidden");
       const expanded = !body.classList.contains("hidden");

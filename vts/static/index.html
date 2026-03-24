@@ -151,7 +151,21 @@
             <div class="task-source mono hidden"></div>
           </div>
           <div class="task-right">
-            <span class="task-status"></span>
+            <div class="task-right-top">
+              <span class="task-status"></span>
+              <button
+                class="icon-btn ghost toggle-btn"
+                type="button"
+                title="Expand"
+                aria-label="Expand"
+                data-i18n-title="action.expand"
+                data-i18n-aria-label="action.expand"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+            </div>
             <div class="task-right-bottom">
             <span class="task-runtime mono"></span>
             <div class="task-actions-inline">
@@ -241,18 +255,6 @@
                 </svg>
               </button>
             </div>
-            <button
-              class="icon-btn ghost toggle-btn"
-              type="button"
-              title="Expand"
-              aria-label="Expand"
-              data-i18n-title="action.expand"
-              data-i18n-aria-label="action.expand"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            </button>
             </div>
           </div>
         </div>
