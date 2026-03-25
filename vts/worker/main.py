@@ -40,6 +40,13 @@ async def worker_loop() -> None:
 
         pubsub = redis.pubsub()
         await pubsub.subscribe(notify_channel)
+        wakeup = asyncio.Event()
+
+        async def _pump() -> None:
+            async for _ in pubsub.listen():
+                wakeup.set()
+
+        pump_task = asyncio.create_task(_pump())
 
         running_task_id = None
         running_task: asyncio.Task[None] | None = None
@@ -53,8 +60,9 @@ async def worker_loop() -> None:
                     await session.commit()
 
                 if task_id is None:
+                    wakeup.clear()
                     try:
-                        await asyncio.wait_for(pubsub.get_message(ignore_subscribe_messages=True), timeout=5)
+                        await asyncio.wait_for(wakeup.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
                         pass
                     continue
@@ -103,6 +111,9 @@ async def worker_loop() -> None:
             running_task.cancel()
             with suppress(BaseException):
                 await running_task
+        pump_task.cancel()
+        with suppress(BaseException):
+            await pump_task
         with suppress(Exception):
             await pubsub.unsubscribe(notify_channel)
             await pubsub.aclose()
