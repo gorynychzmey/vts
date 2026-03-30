@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -415,6 +415,74 @@ def create_app() -> FastAPI:
         task = await repo.create_task(
             user_id=effective_user_id,
             source_url=request.url,
+            options=options,
+            artifact_dir=str(artifact),
+            task_id=task_id,
+        )
+        await session.commit()
+        bus = RedisBus(redis, settings)
+        await bus.notify_queued()
+        await bus.publish_event(
+            user_id=str(task.user_id),
+            task_id=str(task.id),
+            event="task_status",
+            data={"status": task.status.value},
+        )
+        set_committed_value(task, "steps", [])
+        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        asr_progress = await repo.get_asr_progress_for_tasks([task.id])
+        summary_progress = {task.id: _summary_progress_for_task(task)}
+        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+
+    _ALLOWED_UPLOAD_SUFFIXES = frozenset(
+        {
+            ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v",
+            ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".wma",
+        }
+    )
+
+    @app.post("/api/tasks/upload", response_model=TaskOut)
+    async def upload_task(
+        file: UploadFile = File(...),
+        language: str | None = Form(default=None),
+        audio_only: bool = Form(default=False),
+        transcript: bool = Form(default=True),
+        summary: bool = Form(default=True),
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> TaskOut:
+        if summary and not transcript:
+            raise HTTPException(status_code=422, detail="summary requires transcript")
+        original_filename = file.filename or "upload"
+        suffix = Path(original_filename).suffix.lower()
+        if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
+
+        repo = Repo(session)
+        effective_user_id = uuid.UUID(user.id)
+        task_id = uuid.uuid4()
+        artifact = task_dir(settings.artifacts_root, user.username, task_id)
+        artifact.mkdir(parents=True, exist_ok=True)
+        media_dir = artifact / "media"
+        media_dir.mkdir(exist_ok=True)
+
+        safe_name = "upload" + suffix
+        dest = media_dir / safe_name
+        content = await file.read()
+        await asyncio.to_thread(dest.write_bytes, content)
+
+        source_url = f"file://{dest}"
+        options = {
+            "language": language or None,
+            "audio_only": audio_only,
+            "transcript": transcript,
+            "summary": summary,
+        }
+        task = await repo.create_task(
+            user_id=effective_user_id,
+            source_url=source_url,
             options=options,
             artifact_dir=str(artifact),
             task_id=task_id,

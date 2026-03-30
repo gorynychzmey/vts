@@ -1,6 +1,7 @@
 const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
+const sourceTypeSelect = document.getElementById("source-type");
 const authUserLabel = document.getElementById("auth-user");
 const adminControls = document.getElementById("admin-controls");
 const adminSelect = document.getElementById("admin-user-select");
@@ -1302,24 +1303,55 @@ async function loadTasks() {
   renderTasks(tasks);
 }
 
+function syncSourceType() {
+  const isFile = sourceTypeSelect && sourceTypeSelect.value === "file";
+  const urlInput = form.url;
+  const fileInput = document.getElementById("file-input");
+  if (!fileInput) return;
+  if (isFile) {
+    urlInput.classList.add("hidden");
+    urlInput.required = false;
+    fileInput.classList.remove("hidden");
+    fileInput.required = true;
+  } else {
+    urlInput.classList.remove("hidden");
+    urlInput.required = true;
+    fileInput.classList.add("hidden");
+    fileInput.required = false;
+  }
+}
+
 async function createTask(event) {
   event.preventDefault();
-  const payload = {
-    url: form.url.value,
-    language: form.language.value || null,
-    audio_only: form.audio_only.checked,
-    transcript: form.transcript.checked,
-    summary: form.summary.checked
-  };
-  await api("/api/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+  const isFile = sourceTypeSelect && sourceTypeSelect.value === "file";
+  const fileInput = document.getElementById("file-input");
+  if (isFile && fileInput) {
+    const fd = new FormData();
+    fd.append("file", fileInput.files[0]);
+    if (form.language.value) fd.append("language", form.language.value);
+    fd.append("audio_only", form.audio_only.checked ? "true" : "false");
+    fd.append("transcript", form.transcript.checked ? "true" : "false");
+    fd.append("summary", form.summary.checked ? "true" : "false");
+    await api("/api/tasks/upload", { method: "POST", body: fd });
+  } else {
+    const payload = {
+      url: form.url.value,
+      language: form.language.value || null,
+      audio_only: form.audio_only.checked,
+      transcript: form.transcript.checked,
+      summary: form.summary.checked
+    };
+    await api("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  }
   form.reset();
   form.transcript.checked = true;
   form.summary.checked = true;
   syncSummaryToggle();
+  syncSourceType();
   await loadTasks();
 }
 
@@ -1829,6 +1861,9 @@ document.addEventListener("click", () => {
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
 form.transcript.addEventListener("change", syncSummaryToggle);
+if (sourceTypeSelect) {
+  sourceTypeSelect.addEventListener("change", syncSourceType);
+}
 if (adminApplyBtn) {
   adminApplyBtn.addEventListener("click", applyAdminUser);
 }
@@ -1841,6 +1876,7 @@ async function bootstrap() {
   applyI18nToPage();
   setVersionLabel(BUILD_VERSION);
   syncSummaryToggle();
+  syncSourceType();
   await refreshAll();
 }
 

@@ -68,9 +68,21 @@
       </section>
 
       <section class="card">
-        <h2 data-i18n="new_task.title">New Task</h2>
+        <div class="new-task-header">
+          <h2 data-i18n="new_task.title">New Task</h2>
+          <select
+            id="source-type"
+            class="source-type-select"
+            aria-label="Source type"
+            data-i18n-aria-label="new_task.source_type_label"
+          >
+            <option value="url" data-i18n="new_task.source_url">URL</option>
+            <option value="file" data-i18n="new_task.source_file">File</option>
+          </select>
+        </div>
         <form id="task-form">
           <label for="url" class="sr-only" data-i18n="new_task.url_label">Video URL</label>
+          <label for="file-input" class="sr-only" data-i18n="new_task.file_label">Video / audio file</label>
           <div class="url-row">
             <input
               id="url"
@@ -79,6 +91,13 @@
               required
               placeholder="https://youtube.com/watch?v=..."
               data-i18n-placeholder="new_task.url_placeholder"
+            />
+            <input
+              id="file-input"
+              name="file"
+              type="file"
+              accept=".mp4,.mkv,.webm,.avi,.mov,.wmv,.flv,.ts,.m4v,.mp3,.m4a,.aac,.ogg,.opus,.flac,.wav,.wma"
+              class="hidden"
             />
             <button
               class="icon-btn primary"

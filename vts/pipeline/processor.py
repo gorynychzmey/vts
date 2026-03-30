@@ -383,8 +383,16 @@ class TaskProcessor:
             # If audio segments already exist, download is not needed again.
             return any(dirs["segments"].glob("*.wav"))
 
-
         source_url = await self._task_url(task_id)
+
+        # Uploaded file: already in place, skip yt-dlp download entirely.
+        if source_url.startswith("file://"):
+            uploaded_path = Path(source_url[len("file://"):])
+            if uploaded_path.exists():
+                logger.info("skipping download — using uploaded file: %s", uploaded_path)
+                return True
+            raise RuntimeError(f"Uploaded file not found: {uploaded_path}")
+
         user_uuid = uuid.UUID(user_id)
         preferred_youtube_client = await self._get_user_preferred_ytdlp_client(user_uuid)
         if preferred_youtube_client:
