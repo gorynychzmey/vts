@@ -71,15 +71,16 @@
       <section class="card">
         <div class="new-task-header">
           <h2 data-i18n="new_task.title">New Task</h2>
-          <select
-            id="source-type"
-            class="source-type-select"
-            aria-label="Source type"
-            data-i18n-aria-label="new_task.source_type_label"
-          >
-            <option value="url" data-i18n="new_task.source_url">URL</option>
-            <option value="file" data-i18n="new_task.source_file">File</option>
-          </select>
+          <div class="source-type-radio-group" role="group" aria-label="Source type" data-i18n-aria-label="new_task.source_type_label">
+            <label>
+              <input type="radio" id="source-type-url" name="source-type" value="url" checked />
+              <span data-i18n="new_task.source_url">URL</span>
+            </label>
+            <label>
+              <input type="radio" id="source-type-file" name="source-type" value="file" />
+              <span data-i18n="new_task.source_file">File</span>
+            </label>
+          </div>
         </div>
         <form id="task-form">
           <label for="url" class="sr-only" data-i18n="new_task.url_label">Video URL</label>

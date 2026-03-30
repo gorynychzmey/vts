@@ -1,7 +1,10 @@
 const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
-const sourceTypeSelect = document.getElementById("source-type");
+function getSourceType() {
+  const checked = document.querySelector('input[name="source-type"]:checked');
+  return checked ? checked.value : "url";
+}
 const authUserLabel = document.getElementById("auth-user");
 const adminControls = document.getElementById("admin-controls");
 const adminSelect = document.getElementById("admin-user-select");
@@ -1304,7 +1307,7 @@ async function loadTasks() {
 }
 
 function syncSourceType() {
-  const isFile = sourceTypeSelect && sourceTypeSelect.value === "file";
+  const isFile = getSourceType() === "file";
   const urlInput = form.url;
   const fileInput = document.getElementById("file-input");
   if (!fileInput) return;
@@ -1323,7 +1326,7 @@ function syncSourceType() {
 
 async function createTask(event) {
   event.preventDefault();
-  const isFile = sourceTypeSelect && sourceTypeSelect.value === "file";
+  const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
   if (isFile && fileInput) {
     const fd = new FormData();
@@ -1861,9 +1864,9 @@ document.addEventListener("click", () => {
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
 form.transcript.addEventListener("change", syncSummaryToggle);
-if (sourceTypeSelect) {
-  sourceTypeSelect.addEventListener("change", syncSourceType);
-}
+document.querySelectorAll('input[name="source-type"]').forEach((el) => {
+  el.addEventListener("change", syncSourceType);
+});
 if (adminApplyBtn) {
   adminApplyBtn.addEventListener("click", applyAdminUser);
 }
