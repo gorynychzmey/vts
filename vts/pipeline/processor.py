@@ -387,11 +387,11 @@ class TaskProcessor:
 
         # Uploaded file: already in place, skip yt-dlp download entirely.
         if source_url.startswith("file://"):
-            uploaded_path = Path(source_url[len("file://"):])
-            if uploaded_path.exists():
-                logger.info("skipping download — using uploaded file: %s", uploaded_path)
+            audio_file = next(dirs["media"].glob("audio.original.*"), None)
+            if audio_file:
+                logger.info("skipping download — using uploaded file: %s", source_url)
                 return True
-            raise RuntimeError(f"Uploaded file not found: {uploaded_path}")
+            raise RuntimeError(f"Uploaded file not found in media dir: {dirs['media']}")
 
         user_uuid = uuid.UUID(user_id)
         preferred_youtube_client = await self._get_user_preferred_ytdlp_client(user_uuid)

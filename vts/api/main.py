@@ -473,7 +473,7 @@ def create_app() -> FastAPI:
         content = await file.read()
         await asyncio.to_thread(dest.write_bytes, content)
 
-        source_url = f"file://{dest}"
+        source_url = f"file://{Path(original_filename).name}"
         options = {
             "language": language or None,
             "audio_only": audio_only,
