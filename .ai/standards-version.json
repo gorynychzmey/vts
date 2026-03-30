@@ -1,7 +1,7 @@
 {
   "standards_name": "internal-standards",
   "standards_version": "0.1.0",
-  "applied_at": "2026-03-30T07:25:06+00:00",
+  "applied_at": "2026-03-30T12:14:14+00:00",
   "source_path": "/path/to/internal-standards",
-  "project_version": "0.4.13"
+  "project_version": "0.5.1"
 }
