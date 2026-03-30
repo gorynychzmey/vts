@@ -42,14 +42,16 @@ class Settings(BaseSettings):
 
     whisper_url: str = "http://whisper:9000"
     whisper_backend: str = "asr"
-    llama_url: str = "http://llama:8000/v1"
-    llama_model: str = "Qwen2.5-7B-Instruct-Q4"
-    llama_temperature: float = 0.2
-    llama_top_p: float | None = None
-    llama_min_p: float | None = None
-    llama_repeat_penalty: float | None = None
-    llama_chat_timeout_seconds: int = 600
-    llama_final_timeout_seconds: int = 1800
+    llm_url: str = "http://llama:8000/v1"
+    llm_api_key: str | None = None
+    llm_model: str = "Qwen2.5-7B-Instruct-Q4"
+    llm_tokenizer_path: Path | None = None
+    llm_temperature: float = 0.2
+    llm_top_p: float | None = None
+    llm_min_p: float | None = None
+    llm_repeat_penalty: float | None = None
+    llm_chat_timeout_seconds: int = 600
+    llm_final_timeout_seconds: int = 1800
     ytdlp_cookies_file: Path | None = None
     ytdlp_cookies_from_browser: list[str] = Field(default_factory=list)
     ytdlp_youtube_player_client: str | None = None
@@ -183,14 +185,26 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_redis_prefix": "redis_prefix",
         "services_whisper_url": "whisper_url",
         "services_whisper_backend": "whisper_backend",
-        "services_llama_url": "llama_url",
-        "services_llama_model": "llama_model",
-        "services_llama_temperature": "llama_temperature",
-        "services_llama_top_p": "llama_top_p",
-        "services_llama_min_p": "llama_min_p",
-        "services_llama_repeat_penalty": "llama_repeat_penalty",
-        "services_llama_chat_timeout_seconds": "llama_chat_timeout_seconds",
-        "services_llama_final_timeout_seconds": "llama_final_timeout_seconds",
+        "services_llm_url": "llm_url",
+        "services_llm_api_key": "llm_api_key",
+        "services_llm_model": "llm_model",
+        "services_llm_temperature": "llm_temperature",
+        "services_llm_top_p": "llm_top_p",
+        "services_llm_min_p": "llm_min_p",
+        "services_llm_repeat_penalty": "llm_repeat_penalty",
+        "services_llm_chat_timeout_seconds": "llm_chat_timeout_seconds",
+        "services_llm_final_timeout_seconds": "llm_final_timeout_seconds",
+        "services_llm_tokenizer_path": "llm_tokenizer_path",
+        # Legacy aliases kept for backwards compatibility
+        "services_llama_url": "llm_url",
+        "services_llama_model": "llm_model",
+        "services_llama_temperature": "llm_temperature",
+        "services_llama_top_p": "llm_top_p",
+        "services_llama_min_p": "llm_min_p",
+        "services_llama_repeat_penalty": "llm_repeat_penalty",
+        "services_llama_chat_timeout_seconds": "llm_chat_timeout_seconds",
+        "services_llama_final_timeout_seconds": "llm_final_timeout_seconds",
+        "services_llama_tokenizer_path": "llm_tokenizer_path",
     }
     for source_key, target_key in services_aliases.items():
         if source_key in normalized:

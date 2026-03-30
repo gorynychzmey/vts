@@ -14,10 +14,11 @@ services:
   whisper:
     url: http://whisper:9000
     backend: asr  # asr (onerahmet/openai-whisper-asr-webservice) or cpp (whisper.cpp server)
-  llama:
+  llm:
     url: http://llama:8000/v1
     model: Qwen2.5-7B-Instruct-Q4
     temperature: 0.2
+    # api_key: sk-...
 
 trusted_proxy:
   cidrs:
@@ -104,8 +105,8 @@ media_ttl:
 #
 # All values shown are defaults; override only what you need.
 #
-# summary:
-#   n_ctx: 32768
+summary:
+  n_ctx: 32768  # set to your model's actual context size
 #   safety_margin: 768
 #   segment:
 #     ratio: 0.40

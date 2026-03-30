@@ -42,11 +42,8 @@ from vts.pipeline.token_budget import (
     fits_in_context,
 )
 from vts.services.summarizer import (
-    chunk_text,
-    count_tokens,
+    LLMClient,
     inject_budget_vars,
-    llama_chat_completion,
-    llama_get_n_ctx,
     load_prompt,
     parse_json_response,
 )
@@ -74,6 +71,7 @@ class TaskProcessor:
         self.whisper: WhisperBackend = create_whisper_backend(settings.whisper_url, settings.whisper_backend)
         self._task_metrics: dict[str, MetricsEmitter] = {}
         self._task_n_ctx: dict[str, int] = {}
+        self._llm = LLMClient(url=settings.llm_url, api_key=settings.llm_api_key)
 
     def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
         """Return the active MetricsEmitter for a task, or None if absent."""
@@ -86,7 +84,7 @@ class TaskProcessor:
         key = str(task_id)
         if key in self._task_n_ctx:
             return self._task_n_ctx[key]
-        fetched = await llama_get_n_ctx(llama_url=self.settings.llama_url)
+        fetched = await self._llm.get_n_ctx()
         _defaults = TokenBudgetConfig()
         n_ctx = fetched if fetched is not None else _defaults.n_ctx
         if fetched is not None:
@@ -120,6 +118,11 @@ class TaskProcessor:
             final_min_ratio=float(_get("final_min_ratio", _defaults.final_min_ratio)),
             final_max_ratio=float(_get("final_max_ratio", _defaults.final_max_ratio)),
         )
+
+    @property
+    def _tokenizer_path(self) -> str | None:
+        p = self.settings.llm_tokenizer_path
+        return str(p) if p is not None else None
 
     def _log_metrics(self, logger: logging.Logger, metrics: SummarizationMetrics) -> None:
         logger.info(
@@ -958,7 +961,7 @@ class TaskProcessor:
         dry_run: bool,
     ) -> bool:
         marker = dirs["outputs"] / "llama_model_ready.json"
-        target_model = self.settings.llama_model
+        target_model = self.settings.llm_model
         if marker.exists():
             try:
                 payload = json.loads(marker.read_text(encoding="utf-8"))
@@ -980,17 +983,16 @@ class TaskProcessor:
             logger.info("waiting for heavy slot: llama warmup")
             async with self.heavy_slot:
                 logger.info("heavy slot acquired: llama warmup")
-                raw = await llama_chat_completion(
-                    llama_url=self.settings.llama_url,
+                raw = await self._llm.chat_completion(
                     model=target_model,
                     system_prompt='Return compact JSON: {"status":"ready"}.',
                     user_prompt="Warm up model for upcoming summarization.",
                     timeout_seconds=1200,
                     max_tokens=32,
-                    temperature=self.settings.llama_temperature,
-                    top_p=self.settings.llama_top_p,
-                    min_p=self.settings.llama_min_p,
-                    repeat_penalty=self.settings.llama_repeat_penalty,
+                    temperature=self.settings.llm_temperature,
+                    top_p=self.settings.llm_top_p,
+                    min_p=self.settings.llm_min_p,
+                    repeat_penalty=self.settings.llm_repeat_penalty,
                 )
             self._log_payload(logger, "llama warmup response", raw)
         except Exception as exc:
@@ -1048,12 +1050,12 @@ class TaskProcessor:
             return True
 
         logger.info("summary chunk preparation started")
-        chunks = await chunk_text(
+        chunks = await self._llm.chunk_text(
             text=transcript,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
+            model=self.settings.llm_model,
             window_tokens=2000,
             overlap_ratio=0.15,
+            tokenizer_path=self._tokenizer_path,
         )
         logger.info("summary chunk preparation finished: %s windows", len(chunks))
         write_json(chunks_file, {"chunks": chunks})
@@ -1172,7 +1174,7 @@ class TaskProcessor:
         logger.info("window summarization started: %s windows", len(chunks))
         budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
         total_parts = len(chunks) + 1
-        timeout_seconds = int(getattr(self.settings, "llama_chat_timeout_seconds", 600))
+        timeout_seconds = int(getattr(self.settings, "llm_chat_timeout_seconds", 600))
         redacted_path = dirs["outputs"] / "redacted_transcript.txt"
         redacted_path.write_text(
             "".join(
@@ -1197,11 +1199,11 @@ class TaskProcessor:
 
             # Stage A: adaptive token budget
             user_prompt = f"Window {idx}/{len(chunks)}\n\n{chunk}"
-            input_tokens = await count_tokens(
+            input_tokens = await self._llm.count_tokens(
                 text=user_prompt,
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
+                model=self.settings.llm_model,
                 timeout_seconds=timeout_seconds,
+                tokenizer_path=self._tokenizer_path,
             )
             target_tokens, min_out, max_out = compute_segment_budget(input_tokens, budget_cfg)
             budgeted_prompt = self._render_prompt_budget_vars(
@@ -1219,26 +1221,25 @@ class TaskProcessor:
                 _win_t_q_ms = round((time.monotonic() - _win_t_q0) * 1000)
                 logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
                 _win_t0 = time.monotonic()
-                raw = await llama_chat_completion(
-                    llama_url=self.settings.llama_url,
-                    model=self.settings.llama_model,
+                raw = await self._llm.chat_completion(
+                    model=self.settings.llm_model,
                     system_prompt=budgeted_prompt,
                     user_prompt=user_prompt,
                     timeout_seconds=timeout_seconds,
                     max_tokens=target_tokens,
-                    temperature=self.settings.llama_temperature,
-                    top_p=self.settings.llama_top_p,
-                    min_p=self.settings.llama_min_p,
-                    repeat_penalty=self.settings.llama_repeat_penalty,
+                    temperature=self.settings.llm_temperature,
+                    top_p=self.settings.llm_top_p,
+                    min_p=self.settings.llm_min_p,
+                    repeat_penalty=self.settings.llm_repeat_penalty,
                     cache_prompt=True,
                     use_json_format=False,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
-            actual_output_tokens = await count_tokens(
+            actual_output_tokens = await self._llm.count_tokens(
                 text=raw,
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
+                model=self.settings.llm_model,
                 timeout_seconds=timeout_seconds,
+                tokenizer_path=self._tokenizer_path,
             )
             self._log_metrics(logger, SummarizationMetrics(
                 stage_name="segment",
@@ -1336,7 +1337,7 @@ class TaskProcessor:
             raise RuntimeError("Invalid window summaries payload")
 
         output_language = self._effective_language(task_options, dirs)
-        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
+        timeout_seconds = int(getattr(self.settings, "llm_final_timeout_seconds", 1800))
         budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
 
         # Load final prompt to measure its token cost
@@ -1350,11 +1351,11 @@ class TaskProcessor:
                 output_language,
             ),
         )
-        final_prompt_tokens = await count_tokens(
+        final_prompt_tokens = await self._llm.count_tokens(
             text=final_prompt_text,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
+            model=self.settings.llm_model,
             timeout_seconds=timeout_seconds,
+            tokenizer_path=self._tokenizer_path,
         )
         logger.info(
             "pack_window_notes: final_prompt_tokens=%d",
@@ -1365,11 +1366,11 @@ class TaskProcessor:
         notes_texts: list[str] = [self._extract_window_text(w) for w in windows]
         note_token_counts: list[int] = []
         for text in notes_texts:
-            tc = await count_tokens(
+            tc = await self._llm.count_tokens(
                 text=text,
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
+                model=self.settings.llm_model,
                 timeout_seconds=timeout_seconds,
+                tokenizer_path=self._tokenizer_path,
             )
             note_token_counts.append(tc)
         total_notes_tokens = sum(note_token_counts)
@@ -1428,11 +1429,11 @@ class TaskProcessor:
                 new_token_counts: list[int] = []
                 for b_idx, batch in enumerate(batches, 1):
                     batch_input = "\n\n".join(batch)
-                    batch_input_tokens = await count_tokens(
+                    batch_input_tokens = await self._llm.count_tokens(
                         text=batch_input,
-                        llama_url=self.settings.llama_url,
-                        model=self.settings.llama_model,
+                        model=self.settings.llm_model,
                         timeout_seconds=timeout_seconds,
+                        tokenizer_path=self._tokenizer_path,
                     )
                     target_tokens, min_out, max_out = compute_pack_budget(
                         batch_input_tokens, budget_cfg
@@ -1447,25 +1448,24 @@ class TaskProcessor:
                         b_idx, len(batches), batch_input_tokens, target_tokens, min_out, max_out,
                     )
                     async with self.heavy_slot:
-                        packed_text = await llama_chat_completion(
-                            llama_url=self.settings.llama_url,
-                            model=self.settings.llama_model,
+                        packed_text = await self._llm.chat_completion(
+                            model=self.settings.llm_model,
                             system_prompt=pack_system_prompt,
                             user_prompt=batch_input,
                             timeout_seconds=timeout_seconds,
                             max_tokens=target_tokens,
-                            temperature=self.settings.llama_temperature,
-                            top_p=self.settings.llama_top_p,
-                            min_p=self.settings.llama_min_p,
-                            repeat_penalty=self.settings.llama_repeat_penalty,
+                            temperature=self.settings.llm_temperature,
+                            top_p=self.settings.llm_top_p,
+                            min_p=self.settings.llm_min_p,
+                            repeat_penalty=self.settings.llm_repeat_penalty,
                             cache_prompt=True,
                             use_json_format=False,
                         )
-                    packed_tc = await count_tokens(
+                    packed_tc = await self._llm.count_tokens(
                         text=packed_text,
-                        llama_url=self.settings.llama_url,
-                        model=self.settings.llama_model,
+                        model=self.settings.llm_model,
                         timeout_seconds=timeout_seconds,
+                        tokenizer_path=self._tokenizer_path,
                     )
                     self._log_metrics(logger, SummarizationMetrics(
                         stage_name="pack",
@@ -1539,7 +1539,7 @@ class TaskProcessor:
             return False
 
         output_language = self._effective_language(task_options, dirs)
-        timeout_seconds = int(getattr(self.settings, "llama_final_timeout_seconds", 1800))
+        timeout_seconds = int(getattr(self.settings, "llm_final_timeout_seconds", 1800))
         budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
 
         # Load packed notes if the packing step ran, else fall back to window summaries.
@@ -1600,18 +1600,18 @@ class TaskProcessor:
             output_language,
         )
         # Stage C: adaptive token budget
-        input_tokens = await count_tokens(
+        input_tokens = await self._llm.count_tokens(
             text=merged,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
+            model=self.settings.llm_model,
             timeout_seconds=timeout_seconds,
+            tokenizer_path=self._tokenizer_path,
         )
         target_tokens, min_out, max_out = compute_final_budget(input_tokens, budget_cfg)
-        final_prompt_tokens = await count_tokens(
+        final_prompt_tokens = await self._llm.count_tokens(
             text=global_prompt_base,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
+            model=self.settings.llm_model,
             timeout_seconds=timeout_seconds,
+            tokenizer_path=self._tokenizer_path,
         )
         global_prompt = self._render_prompt_budget_vars(
             global_prompt_base,
@@ -1632,26 +1632,25 @@ class TaskProcessor:
             _fin_t_q_ms = round((time.monotonic() - _fin_t_q0) * 1000)
             logger.info("heavy slot acquired: final summary")
             _fin_t0 = time.monotonic()
-            raw = await llama_chat_completion(
-                llama_url=self.settings.llama_url,
-                model=self.settings.llama_model,
+            raw = await self._llm.chat_completion(
+                model=self.settings.llm_model,
                 system_prompt=global_prompt,
                 user_prompt=merged,
                 timeout_seconds=timeout_seconds,
                 max_tokens=target_tokens,
-                temperature=self.settings.llama_temperature,
-                top_p=self.settings.llama_top_p,
-                min_p=self.settings.llama_min_p,
-                repeat_penalty=self.settings.llama_repeat_penalty,
+                temperature=self.settings.llm_temperature,
+                top_p=self.settings.llm_top_p,
+                min_p=self.settings.llm_min_p,
+                repeat_penalty=self.settings.llm_repeat_penalty,
                 use_json_format=False,
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 
-        actual_output_tokens = await count_tokens(
+        actual_output_tokens = await self._llm.count_tokens(
             text=raw,
-            llama_url=self.settings.llama_url,
-            model=self.settings.llama_model,
+            model=self.settings.llm_model,
             timeout_seconds=timeout_seconds,
+            tokenizer_path=self._tokenizer_path,
         )
         self._log_metrics(logger, SummarizationMetrics(
             stage_name="final",
@@ -2048,6 +2047,7 @@ class TaskProcessor:
             "prepare_llama_model",
             "prepare_summary_chunks",
             "summarize_windows",
+            "pack_window_notes",
             "summarize_final",
         }:
             return False

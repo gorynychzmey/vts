@@ -91,7 +91,7 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
             },
             "redis": {"url": "redis://cache:6379/1", "prefix": "custom:"},
             "whisper": {"url": "http://whisper-internal:9000"},
-            "llama": {
+            "llm": {
                 "url": "http://llama-internal:8000/v1",
                 "model": "Qwen2.5-14B-Instruct-Q4",
             },
@@ -148,8 +148,8 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
     assert settings.redis_url == "redis://cache:6379/1"
     assert settings.redis_prefix == "custom:"
     assert settings.whisper_url == "http://whisper-internal:9000"
-    assert settings.llama_url == "http://llama-internal:8000/v1"
-    assert settings.llama_model == "Qwen2.5-14B-Instruct-Q4"
+    assert settings.llm_url == "http://llama-internal:8000/v1"
+    assert settings.llm_model == "Qwen2.5-14B-Instruct-Q4"
     assert settings.segment_target_seconds == 240
     assert settings.segment_search_window_seconds == 20
     assert settings.segment_overlap_seconds == 2

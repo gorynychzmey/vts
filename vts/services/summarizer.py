@@ -2,14 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 
-def _llama_server_base(llama_url: str) -> str:
-    url = llama_url.rstrip("/")
+@lru_cache(maxsize=4)
+def _load_tokenizer(path: str) -> "tokenizers.Tokenizer":  # type: ignore[name-defined]
+    import tokenizers  # noqa: PLC0415
+
+    return tokenizers.Tokenizer.from_file(path)
+
+
+def _tokenize_local(path: str, text: str) -> list[int]:
+    enc = _load_tokenizer(path).encode(text)
+    return enc.ids
+
+
+def _detokenize_local(path: str, token_ids: list[int]) -> str:
+    return _load_tokenizer(path).decode(token_ids)
+
+
+def _llama_server_base(url: str) -> str:
+    url = url.rstrip("/")
     if url.endswith("/v1"):
         return url[: -len("/v1")]
     return url
@@ -191,289 +208,268 @@ def _model_name_variants(model: str) -> list[str]:
     return candidates
 
 
-async def llama_get_n_ctx(
-    *,
-    llama_url: str,
-    timeout_seconds: int = 30,
-) -> int | None:
-    """Return the loaded model's context size from GET /props, or None on failure."""
-    endpoint = _llama_server_base(llama_url) + "/props"
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+class LLMClient:
+    def __init__(self, *, url: str, api_key: str | None = None) -> None:
+        self.url = url
+        self._headers: dict[str, str] = (
+            {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        )
+
+    def _client(self, timeout_seconds: int) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=timeout_seconds, headers=self._headers)
+
+    async def get_n_ctx(self, *, timeout_seconds: int = 30) -> int | None:
+        """Return the loaded model's context size from GET /props, or None on failure."""
+        endpoint = _llama_server_base(self.url) + "/props"
+        try:
+            async with self._client(timeout_seconds) as client:
+                response = await client.get(endpoint)
+        except httpx.HTTPError:
+            return None
+        if not response.is_success:
+            return None
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError):
+            return None
+        n_ctx = payload.get("n_ctx") if isinstance(payload, dict) else None
+        return int(n_ctx) if isinstance(n_ctx, int) and n_ctx > 0 else None
+
+    async def _list_models(self, *, client: httpx.AsyncClient) -> list[str]:
+        endpoint = self.url.rstrip("/") + "/models"
+        try:
             response = await client.get(endpoint)
-    except httpx.HTTPError:
-        return None
-    if not response.is_success:
-        return None
-    try:
-        payload = response.json()
-    except (json.JSONDecodeError, ValueError):
-        return None
-    n_ctx = payload.get("n_ctx") if isinstance(payload, dict) else None
-    return int(n_ctx) if isinstance(n_ctx, int) and n_ctx > 0 else None
+        except httpx.HTTPError:
+            return []
+        if not response.is_success:
+            return []
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError):
+            return []
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            return []
+        result: list[str] = []
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            model_id = entry.get("id")
+            if isinstance(model_id, str) and model_id.strip():
+                result.append(model_id.strip())
+        return result
 
-
-async def _list_chat_models(
-    *,
-    client: httpx.AsyncClient,
-    llama_url: str,
-) -> list[str]:
-    endpoint = llama_url.rstrip("/") + "/models"
-    try:
-        response = await client.get(endpoint)
-    except httpx.HTTPError:
-        return []
-    if not response.is_success:
-        return []
-    try:
-        payload = response.json()
-    except (json.JSONDecodeError, ValueError):
-        return []
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, list):
-        return []
-    result: list[str] = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        model_id = entry.get("id")
-        if isinstance(model_id, str) and model_id.strip():
-            result.append(model_id.strip())
-    return result
-
-
-async def llama_tokenize(
-    *,
-    llama_url: str,
-    model: str,
-    text: str,
-    timeout_seconds: int = 120,
-) -> list[int]:
-    endpoint = _llama_server_base(llama_url) + "/tokenize"
-    payload: dict[str, Any] = {"content": text}
-    if model:
-        payload["model"] = model
-    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await _post_with_loading_retry(
-            client=client,
-            endpoint=endpoint,
-            payload=payload,
-            loading_wait_seconds=loading_wait_seconds,
-        )
-        if response.status_code == 400 and model:
-            retry_response = await _post_with_loading_retry(
+    async def tokenize(
+        self,
+        *,
+        model: str,
+        text: str,
+        timeout_seconds: int = 120,
+        tokenizer_path: str | None = None,
+    ) -> list[int]:
+        if tokenizer_path:
+            return _tokenize_local(tokenizer_path, text)
+        endpoint = _llama_server_base(self.url) + "/tokenize"
+        payload: dict[str, Any] = {"content": text}
+        if model:
+            payload["model"] = model
+        loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
+        async with self._client(timeout_seconds) as client:
+            response = await _post_with_loading_retry(
                 client=client,
                 endpoint=endpoint,
-                payload={"content": text},
+                payload=payload,
                 loading_wait_seconds=loading_wait_seconds,
             )
-            if retry_response.is_success:
-                response = retry_response
-            else:
-                recovered = False
-                for variant in _model_name_variants(model)[1:]:
-                    model_retry = await _post_with_loading_retry(
-                        client=client,
-                        endpoint=endpoint,
-                        payload={"content": text, "model": variant},
-                        loading_wait_seconds=loading_wait_seconds,
-                    )
-                    if model_retry.is_success:
-                        response = model_retry
-                        recovered = True
-                        break
-                if not recovered:
-                    available_models = await _list_chat_models(client=client, llama_url=llama_url)
-                    if available_models and model not in available_models:
-                        server_model = available_models[0]
+            if response.status_code == 400 and model:
+                retry_response = await _post_with_loading_retry(
+                    client=client,
+                    endpoint=endpoint,
+                    payload={"content": text},
+                    loading_wait_seconds=loading_wait_seconds,
+                )
+                if retry_response.is_success:
+                    response = retry_response
+                else:
+                    recovered = False
+                    for variant in _model_name_variants(model)[1:]:
                         model_retry = await _post_with_loading_retry(
                             client=client,
                             endpoint=endpoint,
-                            payload={"content": text, "model": server_model},
+                            payload={"content": text, "model": variant},
                             loading_wait_seconds=loading_wait_seconds,
                         )
                         if model_retry.is_success:
                             response = model_retry
                             recovered = True
-                        else:
-                            _raise_with_response_details(
-                                model_retry,
-                                context=f"llama tokenize (retry with model={server_model})",
+                            break
+                    if not recovered:
+                        available_models = await self._list_models(client=client)
+                        if available_models and model not in available_models:
+                            server_model = available_models[0]
+                            model_retry = await _post_with_loading_retry(
+                                client=client,
+                                endpoint=endpoint,
+                                payload={"content": text, "model": server_model},
+                                loading_wait_seconds=loading_wait_seconds,
                             )
-                if not recovered:
-                    _raise_with_response_details(
-                        retry_response,
-                        context="llama tokenize (retry without model)",
-                    )
-    if not response.is_success:
-        _raise_with_response_details(response, context="llama tokenize")
-    data = response.json()
-    tokens = data.get("tokens")
-    if not isinstance(tokens, list):
-        raise RuntimeError("Invalid llama.cpp tokenize response format")
-    return [int(token) for token in tokens]
+                            if model_retry.is_success:
+                                response = model_retry
+                                recovered = True
+                            else:
+                                _raise_with_response_details(
+                                    model_retry,
+                                    context=f"llama tokenize (retry with model={server_model})",
+                                )
+                    if not recovered:
+                        _raise_with_response_details(
+                            retry_response,
+                            context="llama tokenize (retry without model)",
+                        )
+        if not response.is_success:
+            _raise_with_response_details(response, context="llama tokenize")
+        data = response.json()
+        tokens = data.get("tokens")
+        if not isinstance(tokens, list):
+            raise RuntimeError("Invalid llama.cpp tokenize response format")
+        return [int(token) for token in tokens]
 
-
-async def llama_detokenize(
-    *,
-    llama_url: str,
-    model: str,
-    tokens: list[int],
-    timeout_seconds: int = 120,
-) -> str:
-    endpoint = _llama_server_base(llama_url) + "/detokenize"
-    payload: dict[str, Any] = {"tokens": tokens}
-    if model:
-        payload["model"] = model
-    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await _post_with_loading_retry(
-            client=client,
-            endpoint=endpoint,
-            payload=payload,
-            loading_wait_seconds=loading_wait_seconds,
-        )
-        if response.status_code == 400 and model:
-            retry_response = await _post_with_loading_retry(
+    async def detokenize(
+        self,
+        *,
+        model: str,
+        tokens: list[int],
+        timeout_seconds: int = 120,
+        tokenizer_path: str | None = None,
+    ) -> str:
+        if tokenizer_path:
+            return _detokenize_local(tokenizer_path, tokens)
+        endpoint = _llama_server_base(self.url) + "/detokenize"
+        payload: dict[str, Any] = {"tokens": tokens}
+        if model:
+            payload["model"] = model
+        loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=90.0)
+        async with self._client(timeout_seconds) as client:
+            response = await _post_with_loading_retry(
                 client=client,
                 endpoint=endpoint,
-                payload={"tokens": tokens},
+                payload=payload,
                 loading_wait_seconds=loading_wait_seconds,
             )
-            if retry_response.is_success:
-                response = retry_response
-            else:
-                recovered = False
-                for variant in _model_name_variants(model)[1:]:
-                    model_retry = await _post_with_loading_retry(
-                        client=client,
-                        endpoint=endpoint,
-                        payload={"tokens": tokens, "model": variant},
-                        loading_wait_seconds=loading_wait_seconds,
-                    )
-                    if model_retry.is_success:
-                        response = model_retry
-                        recovered = True
-                        break
-                if not recovered:
-                    available_models = await _list_chat_models(client=client, llama_url=llama_url)
-                    if available_models and model not in available_models:
-                        server_model = available_models[0]
+            if response.status_code == 400 and model:
+                retry_response = await _post_with_loading_retry(
+                    client=client,
+                    endpoint=endpoint,
+                    payload={"tokens": tokens},
+                    loading_wait_seconds=loading_wait_seconds,
+                )
+                if retry_response.is_success:
+                    response = retry_response
+                else:
+                    recovered = False
+                    for variant in _model_name_variants(model)[1:]:
                         model_retry = await _post_with_loading_retry(
                             client=client,
                             endpoint=endpoint,
-                            payload={"tokens": tokens, "model": server_model},
+                            payload={"tokens": tokens, "model": variant},
                             loading_wait_seconds=loading_wait_seconds,
                         )
                         if model_retry.is_success:
                             response = model_retry
                             recovered = True
-                        else:
-                            _raise_with_response_details(
-                                model_retry,
-                                context=f"llama detokenize (retry with model={server_model})",
+                            break
+                    if not recovered:
+                        available_models = await self._list_models(client=client)
+                        if available_models and model not in available_models:
+                            server_model = available_models[0]
+                            model_retry = await _post_with_loading_retry(
+                                client=client,
+                                endpoint=endpoint,
+                                payload={"tokens": tokens, "model": server_model},
+                                loading_wait_seconds=loading_wait_seconds,
                             )
-                if not recovered:
-                    _raise_with_response_details(
-                        retry_response,
-                        context="llama detokenize (retry without model)",
-                    )
-    if not response.is_success:
-        _raise_with_response_details(response, context="llama detokenize")
-    data = response.json()
-    content = data.get("content")
-    if not isinstance(content, str):
-        raise RuntimeError("Invalid llama.cpp detokenize response format")
-    return content
+                            if model_retry.is_success:
+                                response = model_retry
+                                recovered = True
+                            else:
+                                _raise_with_response_details(
+                                    model_retry,
+                                    context=f"llama detokenize (retry with model={server_model})",
+                                )
+                    if not recovered:
+                        _raise_with_response_details(
+                            retry_response,
+                            context="llama detokenize (retry without model)",
+                        )
+        if not response.is_success:
+            _raise_with_response_details(response, context="llama detokenize")
+        data = response.json()
+        content = data.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("Invalid llama.cpp detokenize response format")
+        return content
 
+    async def chunk_text(
+        self,
+        *,
+        text: str,
+        model: str,
+        window_tokens: int = 2000,
+        overlap_ratio: float = 0.15,
+        tokenizer_path: str | None = None,
+    ) -> list[str]:
+        if not text.strip():
+            return []
+        tokens = await self.tokenize(model=model, text=text, tokenizer_path=tokenizer_path)
+        if not tokens:
+            return []
 
-async def chunk_text(
-    *,
-    text: str,
-    llama_url: str,
-    model: str,
-    window_tokens: int = 2000,
-    overlap_ratio: float = 0.15,
-) -> list[str]:
-    if not text.strip():
-        return []
-    tokens = await llama_tokenize(llama_url=llama_url, model=model, text=text)
-    if not tokens:
-        return []
+        overlap = max(int(window_tokens * overlap_ratio), 1)
+        step = max(window_tokens - overlap, 1)
+        chunks: list[str] = []
+        cursor = 0
+        while cursor < len(tokens):
+            part = tokens[cursor : cursor + window_tokens]
+            chunk = await self.detokenize(model=model, tokens=part, tokenizer_path=tokenizer_path)
+            if chunk.strip():
+                chunks.append(chunk)
+            if cursor + window_tokens >= len(tokens):
+                break
+            cursor += step
+        return chunks
 
-    overlap = max(int(window_tokens * overlap_ratio), 1)
-    step = max(window_tokens - overlap, 1)
-    chunks: list[str] = []
-    cursor = 0
-    while cursor < len(tokens):
-        part = tokens[cursor : cursor + window_tokens]
-        chunk = await llama_detokenize(llama_url=llama_url, model=model, tokens=part)
-        if chunk.strip():
-            chunks.append(chunk)
-        if cursor + window_tokens >= len(tokens):
-            break
-        cursor += step
-    return chunks
+    async def chat_completion(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        timeout_seconds: int = 600,
+        max_tokens: int | None = None,
+        temperature: float = 0.2,
+        top_p: float | None = None,
+        min_p: float | None = None,
+        repeat_penalty: float | None = None,
+        cache_prompt: bool = False,
+        request_attempts: int = 3,
+        use_json_format: bool = True,
+    ) -> str:
+        endpoint = self.url.rstrip("/") + "/chat/completions"
+        loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
+        queue: list[tuple[str, dict[str, Any]]] = []
+        seen_payloads: set[str] = set()
 
+        def enqueue(label: str, payload: dict[str, Any]) -> None:
+            key = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            if key in seen_payloads:
+                return
+            seen_payloads.add(key)
+            queue.append((label, payload))
 
-def load_prompt(prompts_dir: Path, filename: str, fallback: str) -> str:
-    path = prompts_dir / filename
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return fallback
-
-
-async def llama_chat_completion(
-    *,
-    llama_url: str,
-    model: str,
-    system_prompt: str,
-    user_prompt: str,
-    timeout_seconds: int = 600,
-    max_tokens: int | None = None,
-    temperature: float = 0.2,
-    top_p: float | None = None,
-    min_p: float | None = None,
-    repeat_penalty: float | None = None,
-    cache_prompt: bool = False,
-    request_attempts: int = 3,
-    use_json_format: bool = True,
-) -> str:
-    endpoint = llama_url.rstrip("/") + "/chat/completions"
-    loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
-    queue: list[tuple[str, dict[str, Any]]] = []
-    seen_payloads: set[str] = set()
-
-    def enqueue(label: str, payload: dict[str, Any]) -> None:
-        key = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        if key in seen_payloads:
-            return
-        seen_payloads.add(key)
-        queue.append((label, payload))
-
-    enqueue(
-        "default",
-        _build_chat_payload(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            min_p=min_p,
-            repeat_penalty=repeat_penalty,
-            cache_prompt=cache_prompt,
-            include_response_format=use_json_format,
-        ),
-    )
-    model_variants = _model_name_variants(model)
-    for variant in model_variants[1:]:
         enqueue(
-            f"default_model_variant:{variant}",
+            "default",
             _build_chat_payload(
                 model=model,
-                model_override=variant,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -485,11 +481,62 @@ async def llama_chat_completion(
                 include_response_format=use_json_format,
             ),
         )
+        model_variants = _model_name_variants(model)
+        for variant in model_variants[1:]:
+            enqueue(
+                f"default_model_variant:{variant}",
+                _build_chat_payload(
+                    model=model,
+                    model_override=variant,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    min_p=min_p,
+                    repeat_penalty=repeat_penalty,
+                    cache_prompt=cache_prompt,
+                    include_response_format=use_json_format,
+                ),
+            )
+            enqueue(
+                f"without_response_format_model_variant:{variant}",
+                _build_chat_payload(
+                    model=model,
+                    model_override=variant,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    min_p=min_p,
+                    repeat_penalty=repeat_penalty,
+                    cache_prompt=cache_prompt,
+                    include_response_format=False,
+                ),
+            )
+            if max_tokens is not None:
+                enqueue(
+                    f"without_response_format_model_variant:{variant}:max_completion_tokens",
+                    _build_chat_payload(
+                        model=model,
+                        model_override=variant,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        min_p=min_p,
+                        repeat_penalty=repeat_penalty,
+                        cache_prompt=cache_prompt,
+                        include_response_format=False,
+                        max_tokens_key="max_completion_tokens",
+                    ),
+                )
         enqueue(
-            f"without_response_format_model_variant:{variant}",
+            "without_response_format",
             _build_chat_payload(
                 model=model,
-                model_override=variant,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -503,10 +550,9 @@ async def llama_chat_completion(
         )
         if max_tokens is not None:
             enqueue(
-                f"without_response_format_model_variant:{variant}:max_completion_tokens",
+                "without_response_format_max_completion_tokens",
                 _build_chat_payload(
                     model=model,
-                    model_override=variant,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     max_tokens=max_tokens,
@@ -519,24 +565,8 @@ async def llama_chat_completion(
                     max_tokens_key="max_completion_tokens",
                 ),
             )
-    enqueue(
-        "without_response_format",
-        _build_chat_payload(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            min_p=min_p,
-            repeat_penalty=repeat_penalty,
-            cache_prompt=cache_prompt,
-            include_response_format=False,
-        ),
-    )
-    if max_tokens is not None:
         enqueue(
-            "without_response_format_max_completion_tokens",
+            "without_response_format_without_model",
             _build_chat_payload(
                 model=model,
                 system_prompt=system_prompt,
@@ -548,100 +578,66 @@ async def llama_chat_completion(
                 repeat_penalty=repeat_penalty,
                 cache_prompt=cache_prompt,
                 include_response_format=False,
-                max_tokens_key="max_completion_tokens",
-            ),
-        )
-    enqueue(
-        "without_response_format_without_model",
-        _build_chat_payload(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            min_p=min_p,
-            repeat_penalty=repeat_penalty,
-            cache_prompt=cache_prompt,
-            include_response_format=False,
-            include_model=False,
-        ),
-    )
-    if max_tokens is not None:
-        enqueue(
-            "without_response_format_without_model_max_completion_tokens",
-            _build_chat_payload(
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                min_p=min_p,
-                repeat_penalty=repeat_penalty,
-                cache_prompt=cache_prompt,
-                include_response_format=False,
-                max_tokens_key="max_completion_tokens",
                 include_model=False,
             ),
         )
-
-    failures: list[str] = []
-    discovered_model_fallback = False
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        while queue:
-            label, payload = queue.pop(0)
-            try:
-                response = await _post_with_transient_retry(
-                    client=client,
-                    endpoint=endpoint,
-                    payload=payload,
-                    loading_wait_seconds=loading_wait_seconds,
-                    max_attempts=request_attempts,
-                )
-            except Exception as exc:
-                if _is_transient_http_error(exc):
-                    failures.append(f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})")
-                    if isinstance(exc, httpx.TimeoutException):
-                        # server timeout — trying more payload variants won't help
-                        attempts = "; ".join(failures)
-                        raise RuntimeError(
-                            f"llama chat completion failed after retries for {endpoint}: {attempts}"
-                        ) from exc
-                    continue
-                raise
-            if response.is_success:
-                data = response.json()
-                break
-            failures.append(
-                f"{label}: HTTP {response.status_code} ({_response_error_detail(response)})"
+        if max_tokens is not None:
+            enqueue(
+                "without_response_format_without_model_max_completion_tokens",
+                _build_chat_payload(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    min_p=min_p,
+                    repeat_penalty=repeat_penalty,
+                    cache_prompt=cache_prompt,
+                    include_response_format=False,
+                    max_tokens_key="max_completion_tokens",
+                    include_model=False,
+                ),
             )
-            if response.status_code != 400:
-                _raise_with_response_details(response, context="llama chat completion")
-            if not discovered_model_fallback and model.strip():
-                discovered_model_fallback = True
-                available_models = await _list_chat_models(client=client, llama_url=llama_url)
-                if available_models and model not in available_models:
-                    server_model = available_models[0]
-                    enqueue(
-                        f"server_model:{server_model}",
-                        _build_chat_payload(
-                            model=model,
-                            model_override=server_model,
-                            system_prompt=system_prompt,
-                            user_prompt=user_prompt,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                            min_p=min_p,
-                            repeat_penalty=repeat_penalty,
-                            cache_prompt=cache_prompt,
-                            include_response_format=False,
-                        ),
+
+        failures: list[str] = []
+        discovered_model_fallback = False
+        async with self._client(timeout_seconds) as client:
+            while queue:
+                label, payload = queue.pop(0)
+                try:
+                    response = await _post_with_transient_retry(
+                        client=client,
+                        endpoint=endpoint,
+                        payload=payload,
+                        loading_wait_seconds=loading_wait_seconds,
+                        max_attempts=request_attempts,
                     )
-                    if max_tokens is not None:
+                except Exception as exc:
+                    if _is_transient_http_error(exc):
+                        failures.append(f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})")
+                        if isinstance(exc, httpx.TimeoutException):
+                            attempts = "; ".join(failures)
+                            raise RuntimeError(
+                                f"llama chat completion failed after retries for {endpoint}: {attempts}"
+                            ) from exc
+                        continue
+                    raise
+                if response.is_success:
+                    data = response.json()
+                    break
+                failures.append(
+                    f"{label}: HTTP {response.status_code} ({_response_error_detail(response)})"
+                )
+                if response.status_code != 400:
+                    _raise_with_response_details(response, context="llama chat completion")
+                if not discovered_model_fallback and model.strip():
+                    discovered_model_fallback = True
+                    available_models = await self._list_models(client=client)
+                    if available_models and model not in available_models:
+                        server_model = available_models[0]
                         enqueue(
-                            f"server_model:{server_model}:max_completion_tokens",
+                            f"server_model:{server_model}",
                             _build_chat_payload(
                                 model=model,
                                 model_override=server_model,
@@ -654,37 +650,60 @@ async def llama_chat_completion(
                                 repeat_penalty=repeat_penalty,
                                 cache_prompt=cache_prompt,
                                 include_response_format=False,
-                                max_tokens_key="max_completion_tokens",
                             ),
                         )
-        else:
-            attempts = "; ".join(failures) if failures else "no attempts executed"
-            raise RuntimeError(
-                f"llama chat completion failed after retries for {endpoint}: {attempts}"
-            )
+                        if max_tokens is not None:
+                            enqueue(
+                                f"server_model:{server_model}:max_completion_tokens",
+                                _build_chat_payload(
+                                    model=model,
+                                    model_override=server_model,
+                                    system_prompt=system_prompt,
+                                    user_prompt=user_prompt,
+                                    max_tokens=max_tokens,
+                                    temperature=temperature,
+                                    top_p=top_p,
+                                    min_p=min_p,
+                                    repeat_penalty=repeat_penalty,
+                                    cache_prompt=cache_prompt,
+                                    include_response_format=False,
+                                    max_tokens_key="max_completion_tokens",
+                                ),
+                            )
+            else:
+                attempts = "; ".join(failures) if failures else "no attempts executed"
+                raise RuntimeError(
+                    f"llama chat completion failed after retries for {endpoint}: {attempts}"
+                )
 
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("Invalid llama.cpp response format") from exc
-    return str(content)
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("Invalid llama.cpp response format") from exc
+        return str(content)
+
+    async def count_tokens(
+        self,
+        *,
+        text: str,
+        model: str,
+        timeout_seconds: int = 120,
+        tokenizer_path: str | None = None,
+    ) -> int:
+        tokens = await self.tokenize(
+            model=model,
+            text=text,
+            timeout_seconds=timeout_seconds,
+            tokenizer_path=tokenizer_path,
+        )
+        return len(tokens)
 
 
-async def count_tokens(
-    *,
-    text: str,
-    llama_url: str,
-    model: str,
-    timeout_seconds: int = 120,
-) -> int:
-    """Return the token count of *text* using the llama.cpp tokenize endpoint."""
-    tokens = await llama_tokenize(
-        llama_url=llama_url,
-        model=model,
-        text=text,
-        timeout_seconds=timeout_seconds,
-    )
-    return len(tokens)
+def load_prompt(prompts_dir: Path, filename: str, fallback: str) -> str:
+    path = prompts_dir / filename
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return fallback
 
 
 def inject_budget_vars(

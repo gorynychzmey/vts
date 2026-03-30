@@ -1,9 +1,15 @@
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from vts.services.summarizer import llama_chat_completion, llama_tokenize
+from vts.services.summarizer import (
+    LLMClient,
+    _load_tokenizer,
+    _tokenize_local,
+    _detokenize_local,
+)
 
 
 def _response(
@@ -15,6 +21,10 @@ def _response(
 ) -> httpx.Response:
     request = httpx.Request(method, url)
     return httpx.Response(status_code, json=payload, request=request)
+
+
+def _client(url: str = "http://llama.local/v1") -> LLMClient:
+    return LLMClient(url=url)
 
 
 def test_llama_chat_completion_retries_without_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,8 +61,7 @@ def test_llama_chat_completion_retries_without_response_format(monkeypatch: pyte
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     raw = asyncio.run(
-        llama_chat_completion(
-            llama_url="http://llama.local/v1",
+        _client().chat_completion(
             model="Qwen2.5-7B-Instruct-Q4",
             system_prompt='Return compact JSON: {"status":"ready"}.',
             user_prompt="Warm up model for upcoming summarization.",
@@ -127,8 +136,7 @@ def test_llama_chat_completion_uses_model_from_models_endpoint(monkeypatch: pyte
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     raw = asyncio.run(
-        llama_chat_completion(
-            llama_url="http://llama.local/v1",
+        _client().chat_completion(
             model="unknown-model",
             system_prompt='Return compact JSON: {"status":"ready"}.',
             user_prompt="Warm up model for upcoming summarization.",
@@ -181,8 +189,7 @@ def test_llama_chat_completion_retries_with_gguf_model_variant(
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     raw = asyncio.run(
-        llama_chat_completion(
-            llama_url="http://llama.local/v1",
+        _client().chat_completion(
             model="Qwen2.5-7B-Instruct-Q4_K_M",
             system_prompt='Return compact JSON: {"status":"ready"}.',
             user_prompt="Warm up model for upcoming summarization.",
@@ -231,8 +238,7 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
 
     with pytest.raises(RuntimeError) as excinfo:
         asyncio.run(
-            llama_chat_completion(
-                llama_url="http://llama.local/v1",
+            _client().chat_completion(
                 model="Qwen2.5-7B-Instruct-Q4",
                 system_prompt='Return compact JSON: {"status":"ready"}.',
                 user_prompt="Warm up model for upcoming summarization.",
@@ -275,8 +281,7 @@ def test_llama_chat_completion_retries_on_read_timeout(monkeypatch: pytest.Monke
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     raw = asyncio.run(
-        llama_chat_completion(
-            llama_url="http://llama.local/v1",
+        _client().chat_completion(
             model="Qwen2.5-7B-Instruct-Q4",
             system_prompt='Return compact JSON: {"status":"ready"}.',
             user_prompt="Warm up model for upcoming summarization.",
@@ -321,8 +326,7 @@ def test_llama_tokenize_retries_without_model(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     tokens = asyncio.run(
-        llama_tokenize(
-            llama_url="http://llama.local/v1",
+        _client().tokenize(
             model="Qwen2.5-7B-Instruct-Q4",
             text="hello",
         )
@@ -395,8 +399,7 @@ def test_llama_tokenize_retries_with_server_model(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     tokens = asyncio.run(
-        llama_tokenize(
-            llama_url="http://llama.local/v1",
+        _client().tokenize(
             model="model-name-without-match",
             text="hello",
         )
@@ -453,8 +456,7 @@ def test_llama_tokenize_retries_when_model_loading(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("vts.services.summarizer.asyncio.sleep", _fake_sleep)
 
     tokens = asyncio.run(
-        llama_tokenize(
-            llama_url="http://llama.local/v1",
+        _client().tokenize(
             model="Qwen2.5-7B-Instruct-Q4_K_M",
             text="hello",
         )
@@ -491,8 +493,7 @@ def test_llama_chat_completion_stops_variants_on_persistent_timeout(monkeypatch:
 
     with pytest.raises(RuntimeError, match="ReadTimeout"):
         asyncio.run(
-            llama_chat_completion(
-                llama_url="http://llama.local/v1",
+            _client().chat_completion(
                 model="Qwen2.5-7B-Instruct-Q4",
                 system_prompt="Summarize.",
                 user_prompt="Very long text.",
@@ -534,8 +535,7 @@ def test_llama_chat_completion_no_response_format_when_use_json_format_false(
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
     raw = asyncio.run(
-        llama_chat_completion(
-            llama_url="http://llama.local/v1",
+        _client().chat_completion(
             model="Qwen2.5-7B-Instruct-Q4",
             system_prompt="Extract knowledge as markdown.",
             user_prompt="Segment text here.",
@@ -549,3 +549,114 @@ def test_llama_chat_completion_no_response_format_when_use_json_format_false(
         for call in post_calls
         if isinstance(call["json"], dict)
     )
+
+
+def _make_stub_tokenizer(encode_ids: list[int], decode_text: str) -> MagicMock:
+    enc = MagicMock()
+    enc.ids = encode_ids
+    tok = MagicMock()
+    tok.encode.return_value = enc
+    tok.decode.return_value = decode_text
+    return tok
+
+
+def test_tokenize_local_uses_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _make_stub_tokenizer([10, 20, 30], "hello")
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: stub)
+    result = _tokenize_local("/fake/tokenizer.json", "hello world")
+    stub.encode.assert_called_once_with("hello world")
+    assert result == [10, 20, 30]
+
+
+def test_detokenize_local_uses_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _make_stub_tokenizer([], "hello world")
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: stub)
+    result = _detokenize_local("/fake/tokenizer.json", [10, 20, 30])
+    stub.decode.assert_called_once_with([10, 20, 30])
+    assert result == "hello world"
+
+
+def test_llama_tokenize_uses_local_when_tokenizer_path_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _make_stub_tokenizer([1, 2, 3], "")
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: stub)
+    tokens = asyncio.run(
+        _client().tokenize(
+            model="any-model",
+            text="test input",
+            tokenizer_path="/fake/tokenizer.json",
+        )
+    )
+    assert tokens == [1, 2, 3]
+    stub.encode.assert_called_once_with("test input")
+
+
+def test_llama_tokenize_skips_http_when_tokenizer_path_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No HTTP calls should be made when tokenizer_path is provided."""
+    stub = _make_stub_tokenizer([7], "")
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: stub)
+
+    http_called = []
+
+    class StubAsyncClient:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *a: object) -> bool:
+            return False
+
+        async def post(self, url: str, json: object) -> None:
+            http_called.append(url)
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+    asyncio.run(
+        _client().tokenize(
+            model="any-model",
+            text="hello",
+            tokenizer_path="/fake/tokenizer.json",
+        )
+    )
+    assert http_called == []
+
+
+def test_count_tokens_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _make_stub_tokenizer([1, 2, 3, 4, 5], "")
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: stub)
+    n = asyncio.run(
+        _client().count_tokens(
+            text="some text",
+            model="any-model",
+            tokenizer_path="/fake/tokenizer.json",
+        )
+    )
+    assert n == 5
+
+
+def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 5 tokens total, window=3, overlap_ratio=0 → 2 chunks
+    all_tokens = [10, 20, 30, 40, 50]
+    decode_map = {
+        (10, 20, 30): "chunk one",
+        (30, 40, 50): "chunk two",
+    }
+
+    enc = MagicMock()
+    enc.ids = all_tokens
+    tok = MagicMock()
+    tok.encode.return_value = enc
+    tok.decode.side_effect = lambda ids: decode_map[tuple(ids)]
+
+    monkeypatch.setattr("vts.services.summarizer._load_tokenizer", lambda path: tok)
+
+    chunks = asyncio.run(
+        _client().chunk_text(
+            text="some long text",
+            model="any-model",
+            window_tokens=3,
+            overlap_ratio=0.0,
+            tokenizer_path="/fake/tokenizer.json",
+        )
+    )
+    assert chunks == ["chunk one", "chunk two"]
