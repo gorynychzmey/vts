@@ -468,7 +468,7 @@ def create_app() -> FastAPI:
         media_dir = artifact / "media"
         media_dir.mkdir(exist_ok=True)
 
-        safe_name = "upload" + suffix
+        safe_name = "audio.original" + suffix
         dest = media_dir / safe_name
         content = await file.read()
         await asyncio.to_thread(dest.write_bytes, content)
