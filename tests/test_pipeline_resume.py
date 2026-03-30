@@ -89,24 +89,23 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
 
     monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "segment prompt")
 
-    async def _fake_count_tokens(**kwargs: object) -> int:
-        return 500
-
-    monkeypatch.setattr("vts.pipeline.processor.count_tokens", _fake_count_tokens)
-
     calls: list[dict[str, object]] = []
 
-    async def _fake_chat_completion(**kwargs: object) -> str:
-        calls.append(kwargs)
-        assert kwargs.get("use_json_format") is False, "segment calls must not use JSON format"
-        user_prompt = str(kwargs.get("user_prompt", ""))
-        if "Window 2/" in user_prompt:
-            return "## Topics\n- second\n\n## Facts and Examples\n- b"
-        if "Window 3/" in user_prompt:
-            return "## Topics\n- third\n\n## Facts and Examples\n- c"
-        raise AssertionError(f"unexpected prompt: {user_prompt}")
+    class _FakeLLM:
+        async def count_tokens(self, **kwargs: object) -> int:
+            return 500
 
-    monkeypatch.setattr("vts.pipeline.processor.llama_chat_completion", _fake_chat_completion)
+        async def chat_completion(self, **kwargs: object) -> str:
+            calls.append(kwargs)
+            assert kwargs.get("use_json_format") is False, "segment calls must not use JSON format"
+            user_prompt = str(kwargs.get("user_prompt", ""))
+            if "Window 2/" in user_prompt:
+                return "## Topics\n- second\n\n## Facts and Examples\n- b"
+            if "Window 3/" in user_prompt:
+                return "## Topics\n- third\n\n## Facts and Examples\n- c"
+            raise AssertionError(f"unexpected prompt: {user_prompt}")
+
+    processor._llm = _FakeLLM()
 
     success = asyncio.run(
         TaskProcessor.step_summarize_windows(
@@ -410,10 +409,14 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
     processor._render_prompt_with_language = lambda prompt, language: prompt
     monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "prompt")
 
-    async def _fake_count_tokens(**kwargs: object) -> int:
-        return 100
+    class _FakeLLM:
+        async def count_tokens(self, **kwargs: object) -> int:
+            return 100
 
-    monkeypatch.setattr("vts.pipeline.processor.count_tokens", _fake_count_tokens)
+        async def chat_completion(self, **kwargs: object) -> str:
+            raise AssertionError("chat_completion not expected in this test")
+
+    processor._llm = _FakeLLM()
 
     class _DummySession:
         async def __aenter__(self) -> "_DummySession":
