@@ -102,6 +102,7 @@
               class="hidden"
             />
             <button
+              id="submit-btn"
               class="icon-btn primary"
               type="submit"
               title="Create task"
@@ -109,8 +110,13 @@
               data-i18n-title="action.create"
               data-i18n-aria-label="action.create"
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
+              <svg class="submit-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" />
+              </svg>
+              <svg class="submit-progress hidden" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="submit-progress-track" cx="12" cy="12" r="9" fill="none" stroke-width="2.5"/>
+                <circle class="submit-progress-fill" cx="12" cy="12" r="9" fill="none" stroke-width="2.5"
+                  stroke-dasharray="56.55" stroke-dashoffset="56.55" stroke-linecap="round"/>
               </svg>
             </button>
           </div>

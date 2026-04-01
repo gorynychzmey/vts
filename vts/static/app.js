@@ -1324,6 +1324,49 @@ function syncSourceType() {
   }
 }
 
+function uploadFileWithProgress(fd) {
+  const btn = document.getElementById("submit-btn");
+  const icon = btn && btn.querySelector(".submit-icon");
+  const ring = btn && btn.querySelector(".submit-progress");
+  const fill = ring && ring.querySelector(".submit-progress-fill");
+  const circumference = 56.55;
+
+  if (btn) btn.disabled = true;
+  if (icon) icon.classList.add("hidden");
+  if (ring) ring.classList.remove("hidden");
+  if (fill) fill.style.strokeDashoffset = circumference;
+
+  function setProgress(ratio) {
+    if (fill) fill.style.strokeDashoffset = circumference * (1 - ratio);
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", buildPath("/api/tasks/upload"));
+    xhr.setRequestHeader("X-Forwarded-User", state.authUser);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      setProgress(1);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        let msg = `HTTP ${xhr.status}`;
+        try { msg = JSON.parse(xhr.responseText)?.detail || msg; } catch (_) {}
+        reject(new Error(msg));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload failed"));
+    xhr.send(fd);
+  }).finally(() => {
+    if (btn) btn.disabled = false;
+    if (icon) icon.classList.remove("hidden");
+    if (ring) ring.classList.add("hidden");
+    if (fill) fill.style.strokeDashoffset = circumference;
+  });
+}
+
 async function createTask(event) {
   event.preventDefault();
   const isFile = getSourceType() === "file";
@@ -1335,7 +1378,7 @@ async function createTask(event) {
     fd.append("audio_only", form.audio_only.checked ? "true" : "false");
     fd.append("transcript", form.transcript.checked ? "true" : "false");
     fd.append("summary", form.summary.checked ? "true" : "false");
-    await api("/api/tasks/upload", { method: "POST", body: fd });
+    await uploadFileWithProgress(fd);
   } else {
     const payload = {
       url: form.url.value,

@@ -329,6 +329,19 @@ input[type="file"] {
   to { transform: rotate(360deg); }
 }
 
+.submit-progress {
+  transform: rotate(-90deg);
+}
+
+.submit-progress-track {
+  stroke: rgba(255, 255, 255, 0.3);
+}
+
+.submit-progress-fill {
+  stroke: #fff;
+  transition: stroke-dashoffset 0.15s linear;
+}
+
 .btn-menu-wrapper {
   display: inline-flex;
 }
