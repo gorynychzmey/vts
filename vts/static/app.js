@@ -1316,11 +1316,14 @@ function syncSourceType() {
     urlInput.required = false;
     fileInput.classList.remove("hidden");
     fileInput.required = true;
+    form.audio_only.disabled = true;
+    form.audio_only.checked = false;
   } else {
     urlInput.classList.remove("hidden");
     urlInput.required = true;
     fileInput.classList.add("hidden");
     fileInput.required = false;
+    form.audio_only.disabled = false;
   }
 }
 
