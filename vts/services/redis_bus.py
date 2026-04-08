@@ -24,6 +24,9 @@ class RedisBus:
     def _cancel_key(self, task_id: uuid.UUID) -> str:
         return f"{self.settings.redis_prefix}task:{task_id}:cancel"
 
+    def _pause_key(self, task_id: uuid.UUID) -> str:
+        return f"{self.settings.redis_prefix}task:{task_id}:pause"
+
     async def notify_queued(self) -> None:
         """Wake the worker up via pub/sub after a task is committed to queued status."""
         await self.redis.publish(f"{self.settings.redis_prefix}queue:notify", "1")
@@ -37,6 +40,15 @@ class RedisBus:
 
     async def is_cancel_requested(self, task_id: uuid.UUID) -> bool:
         return bool(await self.redis.exists(self._cancel_key(task_id)))
+
+    async def request_pause(self, task_id: uuid.UUID) -> None:
+        await self.redis.set(self._pause_key(task_id), "1", ex=self.settings.task_cancel_ttl_seconds)
+
+    async def clear_pause_request(self, task_id: uuid.UUID) -> None:
+        await self.redis.delete(self._pause_key(task_id))
+
+    async def is_pause_requested(self, task_id: uuid.UUID) -> bool:
+        return bool(await self.redis.exists(self._pause_key(task_id)))
 
     async def publish_event(
         self,

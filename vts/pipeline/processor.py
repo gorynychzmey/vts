@@ -55,6 +55,10 @@ def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+class TaskPaused(Exception):
+    """Raised when the processor detects a pause request mid-step."""
+
+
 class TaskProcessor:
     def __init__(
         self,
@@ -72,6 +76,11 @@ class TaskProcessor:
         self._task_metrics: dict[str, MetricsEmitter] = {}
         self._task_n_ctx: dict[str, int] = {}
         self._llm = LLMClient(url=settings.llm_url, api_key=settings.llm_api_key)
+
+    async def _check_paused(self, task_id: uuid.UUID) -> None:
+        """Raise TaskPaused if a pause has been requested for this task."""
+        if await self.bus.is_pause_requested(task_id):
+            raise TaskPaused()
 
     def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
         """Return the active MetricsEmitter for a task, or None if absent."""
@@ -228,15 +237,8 @@ class TaskProcessor:
 
             try:
                 for step_name in DAG_STEPS:
+                    await self._check_paused(task.id)
                     await session.refresh(task)
-                    if task.status == TaskStatus.paused:
-                        await self.bus.publish_event(
-                            user_id=str(task.user_id),
-                            task_id=str(task.id),
-                            event="task_status",
-                            data={"status": "paused"},
-                        )
-                        return
                     if task.status == TaskStatus.canceled:
                         return
                     await self._run_step(
@@ -267,6 +269,19 @@ class TaskProcessor:
                     "t_wall_ms": _task_wall_ms,
                     "aggregates": aggregate_task_metrics(emitter.all_events()),
                 })
+            except TaskPaused:
+                logger.info("task paused: %s", task.id)
+                await self.bus.clear_pause_request(task.id)
+                await session.refresh(task)
+                if task.status != TaskStatus.paused:
+                    await repo.set_task_status(task, TaskStatus.paused)
+                    await session.commit()
+                await self.bus.publish_event(
+                    user_id=str(task.user_id),
+                    task_id=str(task.id),
+                    event="task_status",
+                    data={"status": "paused"},
+                )
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
                 raw_error = str(exc)
@@ -768,6 +783,7 @@ class TaskProcessor:
         transcript_txt = dirs["outputs"] / "transcript.txt"
         _need_set_transcript_path = not transcript_txt.exists()
         for spec in missing:
+            await self._check_paused(task_id)
             idx = int(spec["segment_index"])
             segment_path = dirs["segments"] / str(spec["file"])
             start = float(spec["start"])
@@ -1193,6 +1209,7 @@ class TaskProcessor:
             encoding="utf-8",
         )
         for idx, chunk in enumerate(chunks, start=1):
+            await self._check_paused(task_id)
             if idx in windows_by_index:
                 logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
                 await self.bus.publish_event(
@@ -1438,6 +1455,7 @@ class TaskProcessor:
                 new_texts: list[str] = []
                 new_token_counts: list[int] = []
                 for b_idx, batch in enumerate(batches, 1):
+                    await self._check_paused(task_id)
                     batch_input = "\n\n".join(batch)
                     batch_input_tokens = await self._llm.count_tokens(
                         text=batch_input,

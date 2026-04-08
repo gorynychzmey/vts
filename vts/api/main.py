@@ -592,8 +592,11 @@ def create_app() -> FastAPI:
         request: TaskIdsRequest,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
     ) -> BatchResultOut:
         repo = Repo(session)
+        bus = RedisBus(redis, settings)
         tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids)
         task_map = {task.id: task for task in tasks}
         results: dict[str, str] = {}
@@ -607,6 +610,7 @@ def create_app() -> FastAPI:
                 results[tid] = f"cannot_pause:{task.status.value}"
                 continue
             await repo.set_task_status(task, TaskStatus.paused)
+            await bus.request_pause(task_id)
             results[tid] = "paused"
         await session.commit()
         return BatchResultOut(results=results)
@@ -633,6 +637,7 @@ def create_app() -> FastAPI:
             if not can_resume_task(task.status):
                 results[tid] = f"cannot_resume:{task.status.value}"
                 continue
+            await bus.clear_pause_request(task_id)
             await repo.set_task_status(task, TaskStatus.queued)
             results[tid] = "queued"
         await session.commit()

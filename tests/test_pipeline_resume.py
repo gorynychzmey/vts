@@ -17,6 +17,9 @@ class _DummyBus:
     async def publish_event(self, **kwargs: object) -> None:
         self.events.append(kwargs)
 
+    async def is_pause_requested(self, task_id: object) -> bool:
+        return False
+
 
 class _DummyHeavySlot:
     async def __aenter__(self) -> "_DummyHeavySlot":
