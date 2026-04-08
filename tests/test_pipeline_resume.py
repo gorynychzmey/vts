@@ -51,6 +51,7 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
         llm_top_p=None,
         llm_min_p=None,
         llm_repeat_penalty=None,
+        llm_thinking=None,
         llm_api_key=None,
         llm_tokenizer_path=None,
     )
@@ -149,6 +150,7 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
         llm_top_p=None,
         llm_min_p=None,
         llm_repeat_penalty=None,
+        llm_thinking=None,
         llm_api_key=None,
         llm_tokenizer_path=None,
     )
@@ -404,6 +406,7 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
         llm_top_p=None,
         llm_min_p=None,
         llm_repeat_penalty=None,
+        llm_thinking=None,
         llm_api_key=None,
         llm_tokenizer_path=None,
         llm_final_timeout_seconds=120,
