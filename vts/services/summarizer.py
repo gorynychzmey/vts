@@ -156,6 +156,7 @@ def _build_chat_payload(
     max_tokens_key: str = "max_tokens",
     include_model: bool = True,
     model_override: str | None = None,
+    thinking: bool | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "messages": [
@@ -164,6 +165,8 @@ def _build_chat_payload(
         ],
         "temperature": temperature,
     }
+    if thinking is not None:
+        payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
     if top_p is not None:
         payload["top_p"] = top_p
     if min_p is not None:
@@ -453,6 +456,7 @@ class LLMClient:
         cache_prompt: bool = False,
         request_attempts: int = 3,
         use_json_format: bool = True,
+        thinking: bool | None = None,
     ) -> str:
         endpoint = self.url.rstrip("/") + "/chat/completions"
         loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
@@ -479,6 +483,7 @@ class LLMClient:
                 repeat_penalty=repeat_penalty,
                 cache_prompt=cache_prompt,
                 include_response_format=use_json_format,
+                thinking=thinking,
             ),
         )
         model_variants = _model_name_variants(model)
@@ -546,6 +551,7 @@ class LLMClient:
                 repeat_penalty=repeat_penalty,
                 cache_prompt=cache_prompt,
                 include_response_format=False,
+                thinking=thinking,
             ),
         )
         if max_tokens is not None:
@@ -563,6 +569,7 @@ class LLMClient:
                     cache_prompt=cache_prompt,
                     include_response_format=False,
                     max_tokens_key="max_completion_tokens",
+                    thinking=thinking,
                 ),
             )
         enqueue(
@@ -578,6 +585,7 @@ class LLMClient:
                 repeat_penalty=repeat_penalty,
                 cache_prompt=cache_prompt,
                 include_response_format=False,
+                thinking=thinking,
                 include_model=False,
             ),
         )
@@ -596,6 +604,7 @@ class LLMClient:
                     cache_prompt=cache_prompt,
                     include_response_format=False,
                     max_tokens_key="max_completion_tokens",
+                    thinking=thinking,
                     include_model=False,
                 ),
             )

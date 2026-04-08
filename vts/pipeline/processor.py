@@ -1001,6 +1001,7 @@ class TaskProcessor:
                     top_p=self.settings.llm_top_p,
                     min_p=self.settings.llm_min_p,
                     repeat_penalty=self.settings.llm_repeat_penalty,
+                    thinking=self.settings.llm_thinking,
                 )
             self._log_payload(logger, "llama warmup response", raw)
         except Exception as exc:
@@ -1241,6 +1242,7 @@ class TaskProcessor:
                     repeat_penalty=self.settings.llm_repeat_penalty,
                     cache_prompt=True,
                     use_json_format=False,
+                    thinking=self.settings.llm_thinking,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
             actual_output_tokens = await self._llm.count_tokens(
@@ -1468,6 +1470,7 @@ class TaskProcessor:
                             repeat_penalty=self.settings.llm_repeat_penalty,
                             cache_prompt=True,
                             use_json_format=False,
+                            thinking=self.settings.llm_thinking,
                         )
                     packed_tc = await self._llm.count_tokens(
                         text=packed_text,
@@ -1651,6 +1654,7 @@ class TaskProcessor:
                 min_p=self.settings.llm_min_p,
                 repeat_penalty=self.settings.llm_repeat_penalty,
                 use_json_format=False,
+                thinking=self.settings.llm_thinking,
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 

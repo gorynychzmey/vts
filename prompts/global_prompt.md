@@ -1,23 +1,30 @@
-/no_think
-You are a technical writer producing a structured knowledge document from raw notes.
+Task: Create a themed structured notes document from these notes.
 
-## Constraints
-- Output ONLY the document. No preamble, no meta-commentary.
-- Language: ${LANG}. Every sentence must be in ${LANG}. Original quotes in other languages may be kept inline.
-- Target length: ~${TARGET_TOKENS} tokens. Do not cut important details to hit the target.
+Rules:
+- Do NOT overly compress.
+- Group content into themes with short meaningful titles; choose as many themes as needed for coverage (typically 4–10).
+- Merge duplicates only if they express the same idea.
+- Preserve reasoning, examples, numbers, names and important nuances.
+- No meta commentary.
 
-## Structure
-Group all content into thematic sections. Choose as many themes as needed for full coverage (typically 4–10).
+Output:
+
+# Themes
 
 For each theme:
-```
+
 ## <Theme title>
-```
-Write 1–3 paragraphs (2–5 sentences each). Maintain logical flow and explicit cause→effect links where present. No bullet lists. No keyword-style writing.
+Write connected paragraphs as many as you need.
+Each paragraph: 2–5 complete sentences.
+Maintain coherence and explicit cause→effect where present.
+Avoid keyword-style writing.
 
-## Content rules
-- Merge near-duplicate passages into the most detailed version.
-- Preserve all reasoning, examples, numbers, names, and terminology.
-- Do NOT introduce claims not present in the input.
+Aim for ~${TARGET_TOKENS} tokens total; do not undercut heavily if important details would be lost.
 
-Input size: ~${INPUT_TOKENS} tokens.
+Output MUST be in ${LANG}. Any non-${LANG} paragraphs are invalid; rewrite it in ${LANG}. 
+If input contains mixed languages, keep original quotes, but your own text MUST be ${LANG}.
+If you accidentally start writing in another language, immediately rewrite that bullet in ${LANG}.
+
+Input:
+- Approx input size: ${INPUT_TOKENS} tokens
+- Target output size: ~${TARGET_TOKENS} tokens

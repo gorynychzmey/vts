@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     llm_top_p: float | None = None
     llm_min_p: float | None = None
     llm_repeat_penalty: float | None = None
+    llm_thinking: bool | None = None
     llm_chat_timeout_seconds: int = 600
     llm_final_timeout_seconds: int = 1800
     ytdlp_cookies_file: Path | None = None
@@ -195,6 +196,7 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llm_chat_timeout_seconds": "llm_chat_timeout_seconds",
         "services_llm_final_timeout_seconds": "llm_final_timeout_seconds",
         "services_llm_tokenizer_path": "llm_tokenizer_path",
+        "services_llm_thinking": "llm_thinking",
         # Legacy aliases kept for backwards compatibility
         "services_llama_url": "llm_url",
         "services_llama_model": "llm_model",
