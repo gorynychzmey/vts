@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     night_mode_start_hour: int = 22
     night_mode_end_hour: int = 7
 
-    timezone: str = "UTC"
+    timezone: str | None = None
 
     media_ttl_hours: int = 72
 
