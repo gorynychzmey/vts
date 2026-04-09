@@ -1261,6 +1261,7 @@ class TaskProcessor:
                     cache_prompt=True,
                     use_json_format=False,
                     thinking=self.settings.llm_thinking,
+                    num_ctx=budget_cfg.n_ctx,
                 )
                 _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
             actual_output_tokens = await self._llm.count_tokens(
@@ -1490,6 +1491,7 @@ class TaskProcessor:
                             cache_prompt=True,
                             use_json_format=False,
                             thinking=self.settings.llm_thinking,
+                            num_ctx=budget_cfg.n_ctx,
                         )
                     packed_tc = await self._llm.count_tokens(
                         text=packed_text,
@@ -1674,6 +1676,7 @@ class TaskProcessor:
                 repeat_penalty=self.settings.llm_repeat_penalty,
                 use_json_format=False,
                 thinking=self.settings.llm_thinking,
+                num_ctx=budget_cfg.n_ctx,
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 

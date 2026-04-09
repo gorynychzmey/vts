@@ -157,6 +157,7 @@ def _build_chat_payload(
     include_model: bool = True,
     model_override: str | None = None,
     thinking: bool | None = None,
+    num_ctx: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "messages": [
@@ -182,6 +183,8 @@ def _build_chat_payload(
         payload["model"] = selected_model
     if max_tokens is not None:
         payload[max_tokens_key] = max_tokens
+    if num_ctx is not None:
+        payload["num_ctx"] = num_ctx
     return payload
 
 
@@ -457,6 +460,7 @@ class LLMClient:
         request_attempts: int = 3,
         use_json_format: bool = True,
         thinking: bool | None = None,
+        num_ctx: int | None = None,
     ) -> str:
         endpoint = self.url.rstrip("/") + "/chat/completions"
         loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
@@ -470,144 +474,32 @@ class LLMClient:
             seen_payloads.add(key)
             queue.append((label, payload))
 
-        enqueue(
-            "default",
-            _build_chat_payload(
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                min_p=min_p,
-                repeat_penalty=repeat_penalty,
-                cache_prompt=cache_prompt,
-                include_response_format=use_json_format,
-                thinking=thinking,
-            ),
+        common = dict(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            min_p=min_p,
+            repeat_penalty=repeat_penalty,
+            cache_prompt=cache_prompt,
+            num_ctx=num_ctx,
         )
+
+        enqueue("default", _build_chat_payload(**common, include_response_format=use_json_format, thinking=thinking))
         model_variants = _model_name_variants(model)
         for variant in model_variants[1:]:
-            enqueue(
-                f"default_model_variant:{variant}",
-                _build_chat_payload(
-                    model=model,
-                    model_override=variant,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    min_p=min_p,
-                    repeat_penalty=repeat_penalty,
-                    cache_prompt=cache_prompt,
-                    include_response_format=use_json_format,
-                ),
-            )
-            enqueue(
-                f"without_response_format_model_variant:{variant}",
-                _build_chat_payload(
-                    model=model,
-                    model_override=variant,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    min_p=min_p,
-                    repeat_penalty=repeat_penalty,
-                    cache_prompt=cache_prompt,
-                    include_response_format=False,
-                ),
-            )
+            enqueue(f"default_model_variant:{variant}", _build_chat_payload(**common, model_override=variant, include_response_format=use_json_format))
+            enqueue(f"without_response_format_model_variant:{variant}", _build_chat_payload(**common, model_override=variant, include_response_format=False))
             if max_tokens is not None:
-                enqueue(
-                    f"without_response_format_model_variant:{variant}:max_completion_tokens",
-                    _build_chat_payload(
-                        model=model,
-                        model_override=variant,
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        min_p=min_p,
-                        repeat_penalty=repeat_penalty,
-                        cache_prompt=cache_prompt,
-                        include_response_format=False,
-                        max_tokens_key="max_completion_tokens",
-                    ),
-                )
-        enqueue(
-            "without_response_format",
-            _build_chat_payload(
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                min_p=min_p,
-                repeat_penalty=repeat_penalty,
-                cache_prompt=cache_prompt,
-                include_response_format=False,
-                thinking=thinking,
-            ),
-        )
+                enqueue(f"without_response_format_model_variant:{variant}:max_completion_tokens", _build_chat_payload(**common, model_override=variant, include_response_format=False, max_tokens_key="max_completion_tokens"))
+        enqueue("without_response_format", _build_chat_payload(**common, include_response_format=False, thinking=thinking))
         if max_tokens is not None:
-            enqueue(
-                "without_response_format_max_completion_tokens",
-                _build_chat_payload(
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    min_p=min_p,
-                    repeat_penalty=repeat_penalty,
-                    cache_prompt=cache_prompt,
-                    include_response_format=False,
-                    max_tokens_key="max_completion_tokens",
-                    thinking=thinking,
-                ),
-            )
-        enqueue(
-            "without_response_format_without_model",
-            _build_chat_payload(
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                min_p=min_p,
-                repeat_penalty=repeat_penalty,
-                cache_prompt=cache_prompt,
-                include_response_format=False,
-                thinking=thinking,
-                include_model=False,
-            ),
-        )
+            enqueue("without_response_format_max_completion_tokens", _build_chat_payload(**common, include_response_format=False, max_tokens_key="max_completion_tokens", thinking=thinking))
+        enqueue("without_response_format_without_model", _build_chat_payload(**common, include_response_format=False, thinking=thinking, include_model=False))
         if max_tokens is not None:
-            enqueue(
-                "without_response_format_without_model_max_completion_tokens",
-                _build_chat_payload(
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    min_p=min_p,
-                    repeat_penalty=repeat_penalty,
-                    cache_prompt=cache_prompt,
-                    include_response_format=False,
-                    max_tokens_key="max_completion_tokens",
-                    thinking=thinking,
-                    include_model=False,
-                ),
-            )
+            enqueue("without_response_format_without_model_max_completion_tokens", _build_chat_payload(**common, include_response_format=False, max_tokens_key="max_completion_tokens", thinking=thinking, include_model=False))
 
         failures: list[str] = []
         discovered_model_fallback = False
@@ -645,40 +537,9 @@ class LLMClient:
                     available_models = await self._list_models(client=client)
                     if available_models and model not in available_models:
                         server_model = available_models[0]
-                        enqueue(
-                            f"server_model:{server_model}",
-                            _build_chat_payload(
-                                model=model,
-                                model_override=server_model,
-                                system_prompt=system_prompt,
-                                user_prompt=user_prompt,
-                                max_tokens=max_tokens,
-                                temperature=temperature,
-                                top_p=top_p,
-                                min_p=min_p,
-                                repeat_penalty=repeat_penalty,
-                                cache_prompt=cache_prompt,
-                                include_response_format=False,
-                            ),
-                        )
+                        enqueue(f"server_model:{server_model}", _build_chat_payload(**common, model_override=server_model, include_response_format=False))
                         if max_tokens is not None:
-                            enqueue(
-                                f"server_model:{server_model}:max_completion_tokens",
-                                _build_chat_payload(
-                                    model=model,
-                                    model_override=server_model,
-                                    system_prompt=system_prompt,
-                                    user_prompt=user_prompt,
-                                    max_tokens=max_tokens,
-                                    temperature=temperature,
-                                    top_p=top_p,
-                                    min_p=min_p,
-                                    repeat_penalty=repeat_penalty,
-                                    cache_prompt=cache_prompt,
-                                    include_response_format=False,
-                                    max_tokens_key="max_completion_tokens",
-                                ),
-                            )
+                            enqueue(f"server_model:{server_model}:max_completion_tokens", _build_chat_payload(**common, model_override=server_model, include_response_format=False, max_tokens_key="max_completion_tokens"))
             else:
                 attempts = "; ".join(failures) if failures else "no attempts executed"
                 raise RuntimeError(
