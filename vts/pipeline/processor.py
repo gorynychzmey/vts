@@ -152,6 +152,7 @@ class TaskProcessor:
         language: str | None = None,
         input_tokens: int | None = None,
         target_tokens: int | None = None,
+        target_ratio: float | None = None,
     ) -> str:
         if language is not None:
             prompt = self._render_prompt_with_language(prompt, language)
@@ -159,6 +160,7 @@ class TaskProcessor:
             prompt,
             input_tokens=input_tokens,
             target_tokens=target_tokens,
+            target_ratio=target_ratio,
         )
         return prompt
 
@@ -1237,6 +1239,7 @@ class TaskProcessor:
                 segment_prompt,
                 input_tokens=input_tokens,
                 target_tokens=target_tokens,
+                target_ratio=budget_cfg.segment_ratio,
             )
             logger.info(
                 "window %s/%s token_budget input=%d target=%d min=%d max=%d",
@@ -1253,7 +1256,6 @@ class TaskProcessor:
                     system_prompt=budgeted_prompt,
                     user_prompt=user_prompt,
                     timeout_seconds=timeout_seconds,
-                    max_tokens=target_tokens,
                     temperature=self.settings.llm_temperature,
                     top_p=self.settings.llm_top_p,
                     min_p=self.settings.llm_min_p,
@@ -1419,7 +1421,7 @@ class TaskProcessor:
                     self.settings.prompts_dir,
                     "pack_prompt.md",
                     "Integrate and deduplicate the following notes. "
-                    "Target output: ${TARGET_TOKENS} tokens (input: ${INPUT_TOKENS} tokens).\n"
+                    "Target output: ~${TARGET_WORDS} words (~${TARGET_RATIO}% of input, input: ~${INPUT_WORDS} words).\n"
                     "Output language: ${LANG}.",
                 ),
                 output_language,
@@ -1472,6 +1474,7 @@ class TaskProcessor:
                         pack_prompt_template,
                         input_tokens=batch_input_tokens,
                         target_tokens=target_tokens,
+                        target_ratio=budget_cfg.pack_ratio,
                     )
                     logger.info(
                         "pack batch %d/%d: input=%d target=%d min=%d max=%d",
@@ -1483,7 +1486,6 @@ class TaskProcessor:
                             system_prompt=pack_system_prompt,
                             user_prompt=batch_input,
                             timeout_seconds=timeout_seconds,
-                            max_tokens=target_tokens,
                             temperature=self.settings.llm_temperature,
                             top_p=self.settings.llm_top_p,
                             min_p=self.settings.llm_min_p,
@@ -1649,6 +1651,7 @@ class TaskProcessor:
             global_prompt_base,
             input_tokens=input_tokens,
             target_tokens=target_tokens,
+            target_ratio=budget_cfg.final_ratio,
         )
         logger.info(
             "final summary token_budget input=%d target=%d min=%d max=%d",
@@ -1669,7 +1672,6 @@ class TaskProcessor:
                 system_prompt=global_prompt,
                 user_prompt=merged,
                 timeout_seconds=timeout_seconds,
-                max_tokens=target_tokens,
                 temperature=self.settings.llm_temperature,
                 top_p=self.settings.llm_top_p,
                 min_p=self.settings.llm_min_p,

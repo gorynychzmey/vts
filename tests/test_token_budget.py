@@ -190,20 +190,21 @@ def test_fits_in_context_one_over_boundary() -> None:
 
 
 def test_inject_budget_vars_replaces_all_placeholders() -> None:
-    prompt = "Input: ${INPUT_TOKENS}, Target: ${TARGET_TOKENS}"
+    prompt = "Input: ${INPUT_WORDS}, Target: ${TARGET_WORDS}, Ratio: ${TARGET_RATIO}%"
     result = inject_budget_vars(
         prompt,
         input_tokens=1000,
         target_tokens=400,
+        target_ratio=0.40,
     )
-    assert result == "Input: 1000, Target: 400"
+    assert result == "Input: 750, Target: 300, Ratio: 40%"
 
 
 def test_inject_budget_vars_skips_none_values() -> None:
-    prompt = "Target: ${TARGET_TOKENS}, Other: ${INPUT_TOKENS}"
+    prompt = "Target: ${TARGET_WORDS}, Other: ${INPUT_WORDS}"
     result = inject_budget_vars(prompt, target_tokens=400)
-    assert "${TARGET_TOKENS}" not in result
-    assert "${INPUT_TOKENS}" in result  # not substituted
+    assert "${TARGET_WORDS}" not in result
+    assert "${INPUT_WORDS}" in result  # not substituted
 
 
 def test_inject_budget_vars_no_placeholders_in_prompt() -> None:

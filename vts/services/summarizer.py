@@ -576,17 +576,29 @@ def load_prompt(prompts_dir: Path, filename: str, fallback: str) -> str:
     return fallback
 
 
+def tokens_to_words(tokens: int) -> int:
+    """Approximate word count from a token count (≈0.75 words per token)."""
+    return max(1, round(tokens * 0.75))
+
+
 def inject_budget_vars(
     prompt: str,
     *,
     input_tokens: int | None = None,
     target_tokens: int | None = None,
+    target_ratio: float | None = None,
 ) -> str:
-    """Replace ${INPUT_TOKENS} and ${TARGET_TOKENS} placeholders in *prompt* with their numeric values."""
+    """Replace budget placeholders in *prompt*.
+
+    Supported placeholders: ``${INPUT_WORDS}``, ``${TARGET_WORDS}``,
+    ``${TARGET_RATIO}``.
+    """
     if input_tokens is not None:
-        prompt = prompt.replace("${INPUT_TOKENS}", str(input_tokens))
+        prompt = prompt.replace("${INPUT_WORDS}", str(tokens_to_words(input_tokens)))
     if target_tokens is not None:
-        prompt = prompt.replace("${TARGET_TOKENS}", str(target_tokens))
+        prompt = prompt.replace("${TARGET_WORDS}", str(tokens_to_words(target_tokens)))
+    if target_ratio is not None:
+        prompt = prompt.replace("${TARGET_RATIO}", str(round(target_ratio * 100)))
     return prompt
 
 

@@ -19,12 +19,12 @@ Each paragraph: 2–5 complete sentences.
 Maintain coherence and explicit cause→effect where present.
 Avoid keyword-style writing.
 
-Aim for ~${TARGET_TOKENS} tokens total; do not undercut heavily if important details would be lost.
+Aim for ~${TARGET_WORDS} words total (~${TARGET_RATIO}% of input); do not undercut heavily if important details would be lost.
 
 Output MUST be in ${LANG}. Any non-${LANG} paragraphs are invalid; rewrite it in ${LANG}. 
 If input contains mixed languages, keep original quotes, but your own text MUST be ${LANG}.
 If you accidentally start writing in another language, immediately rewrite that bullet in ${LANG}.
 
 Input:
-- Approx input size: ${INPUT_TOKENS} tokens
-- Target output size: ~${TARGET_TOKENS} tokens
+- Approx input size: ${INPUT_WORDS} words
+- Target output size: ~${TARGET_WORDS} words (~${TARGET_RATIO}% of input)
