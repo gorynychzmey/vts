@@ -8,6 +8,7 @@ import re
 import shutil
 import time
 import uuid
+import zoneinfo
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -2103,7 +2104,10 @@ class TaskProcessor:
         logger.propagate = True
         if not any(isinstance(handler, logging.FileHandler) and handler.baseFilename == str(log_path) for handler in logger.handlers):
             handler = logging.FileHandler(log_path, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+            tz = zoneinfo.ZoneInfo(self.settings.timezone)
+            fmt.converter = lambda secs: datetime.fromtimestamp(secs, tz=tz).timetuple()
+            handler.setFormatter(fmt)
             logger.addHandler(handler)
         return logger
 

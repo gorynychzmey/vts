@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     night_mode_start_hour: int = 22
     night_mode_end_hour: int = 7
 
+    timezone: str = "UTC"
+
     media_ttl_hours: int = 72
 
     # Token budgeting for the summarization pipeline
@@ -219,6 +221,8 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         normalized["host"] = normalized["environment_host"]
     if "environment_port" in normalized:
         normalized["port"] = normalized["environment_port"]
+    if "environment_timezone" in normalized:
+        normalized["timezone"] = normalized["environment_timezone"]
     return normalized
 
 
