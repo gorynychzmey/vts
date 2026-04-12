@@ -398,8 +398,9 @@ class TaskProcessor:
             return True
         if dry_run:
             # Media files may have been cleaned up after a completed run.
-            # If audio segments already exist, download is not needed again.
-            return any(dirs["segments"].glob("*.wav"))
+            # If transcript or audio segments already exist, download is not needed.
+            transcript_json = dirs["outputs"] / "transcript.json"
+            return transcript_json.exists() or any(dirs["segments"].glob("*.wav"))
 
         source_url = await self._task_url(task_id)
 
@@ -490,7 +491,8 @@ class TaskProcessor:
             return True
         if dry_run:
             # Media files may have been cleaned up after a completed run.
-            return any(dirs["segments"].glob("*.wav"))
+            transcript_json = dirs["outputs"] / "transcript.json"
+            return transcript_json.exists() or any(dirs["segments"].glob("*.wav"))
         audio_file = next(dirs["media"].glob("audio.original.*"), None)
         if not audio_file:
             raise RuntimeError("Missing downloaded audio file")
@@ -524,7 +526,9 @@ class TaskProcessor:
         if output.exists() and marker.exists():
             return True
         if dry_run:
-            return False
+            # Media files may have been cleaned up after a completed run.
+            transcript_json = dirs["outputs"] / "transcript.json"
+            return transcript_json.exists() or any(dirs["segments"].glob("*.wav"))
         if not source.exists():
             raise RuntimeError("Missing extracted WAV")
 
@@ -569,7 +573,9 @@ class TaskProcessor:
         if manifest_path.exists():
             return True
         if dry_run:
-            return False
+            # Transcript exists means segmentation output was already consumed.
+            transcript_json = dirs["outputs"] / "transcript.json"
+            return transcript_json.exists()
 
         audio_wav = self._transcribe_audio_path(dirs)
         if not audio_wav.exists():
@@ -748,7 +754,9 @@ class TaskProcessor:
         manifest_path = dirs["outputs"] / "segments_manifest.json"
         if not manifest_path.exists():
             if dry_run:
-                return False
+                # Transcript exists means transcription was already merged.
+                transcript_json = dirs["outputs"] / "transcript.json"
+                return transcript_json.exists()
             raise RuntimeError("Missing segment manifest")
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         specs: list[dict[str, Any]] = payload.get("segments", [])
