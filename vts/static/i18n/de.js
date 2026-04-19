@@ -41,6 +41,8 @@ window.__VTS_I18N.de = {
 "action.save_tab": "Aktiven Tab speichern",
 "action.expand": "Erweitern",
 "action.collapse": "Einklappen",
+"action.enable_notifications": "Benachrichtigungen aktivieren",
+"action.disable_notifications": "Benachrichtigungen deaktivieren",
 "tab.transcript": "Rohtranskript",
 "tab.transcript_pending": "Rohtranskript ist noch nicht bereit",
 "tab.summary": "Zusammenfassung",

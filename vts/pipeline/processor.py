@@ -31,6 +31,7 @@ from vts.services.media import (
     probe_duration,
     trim_initial_silence,
 )
+from vts.services.push import notify_user as push_notify_user
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import cow_copy_dir, ensure_task_dirs, write_json
 from vts.pipeline.token_budget import (
@@ -265,6 +266,15 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": task.status.value},
                 )
+                await self._send_push_safe(
+                    session,
+                    task.user_id,
+                    {
+                        "task_id": str(task.id),
+                        "status": TaskStatus.completed.value,
+                        "title": task.source_title or task.source_url,
+                    },
+                )
                 _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
                 emitter.emit({
                     "stage": "task.final",
@@ -296,6 +306,17 @@ class TaskProcessor:
                     task_id=str(task.id),
                     event="task_status",
                     data={"status": TaskStatus.failed.value, "error": raw_error, "failure_code": failure_code},
+                )
+                await self._send_push_safe(
+                    session,
+                    task.user_id,
+                    {
+                        "task_id": str(task.id),
+                        "status": TaskStatus.failed.value,
+                        "title": task.source_title or task.source_url,
+                        "error": raw_error,
+                        "failure_code": failure_code,
+                    },
                 )
                 _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
                 emitter.emit({
@@ -1783,6 +1804,18 @@ class TaskProcessor:
             elif isinstance(val, str) and val.strip():
                 parts.append(f"{key}: {val.strip()}")
         return "\n".join(parts)
+
+    async def _send_push_safe(
+        self,
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        payload: dict[str, Any],
+    ) -> None:
+        # Push notifications must never block or break the pipeline.
+        try:
+            await push_notify_user(session, self.settings, user_id, payload)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("push: notify_user failed: %s", exc)
 
     async def _cleanup_media(self, media_dir: Path) -> None:
         cutoff = utcnow() - timedelta(hours=self.settings.media_ttl_hours)

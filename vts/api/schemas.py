@@ -92,3 +92,24 @@ class MeOut(BaseModel):
 
 class AdminUsersOut(BaseModel):
     users: list[str]
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=10)
+    p256dh: str = Field(min_length=1)
+    auth: str = Field(min_length=1)
+    user_agent: str | None = None
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10)
+
+
+class PushConfigOut(BaseModel):
+    enabled: bool
+    public_key: str | None = None
+
+
+class PushStatusOut(BaseModel):
+    subscribed: bool
+    endpoint: str | None = None

@@ -30,12 +30,38 @@
   ],
   "share_target": {
     "action": "/share",
-    "method": "GET",
-    "enctype": "application/x-www-form-urlencoded",
+    "method": "POST",
+    "enctype": "multipart/form-data",
     "params": {
       "title": "title",
       "text": "text",
-      "url": "url"
+      "url": "url",
+      "files": [
+        {
+          "name": "file",
+          "accept": [
+            "audio/*",
+            "video/*",
+            ".mp4",
+            ".mkv",
+            ".webm",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".flv",
+            ".ts",
+            ".m4v",
+            ".mp3",
+            ".m4a",
+            ".aac",
+            ".ogg",
+            ".opus",
+            ".flac",
+            ".wav",
+            ".wma"
+          ]
+        }
+      ]
     }
   }
 }

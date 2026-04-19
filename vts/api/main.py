@@ -17,13 +17,32 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
-from vts.api.schemas import AdminUsersOut, BatchResultOut, MeOut, RestartSummaryRequest, TaskCreateRequest, TaskIdsRequest, TaskOut
+from vts.api.schemas import (
+    AdminUsersOut,
+    BatchResultOut,
+    MeOut,
+    PushConfigOut,
+    PushStatusOut,
+    PushSubscriptionIn,
+    PushUnsubscribeIn,
+    RestartSummaryRequest,
+    TaskCreateRequest,
+    TaskIdsRequest,
+    TaskOut,
+)
 from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
+from vts.services.push import (
+    SubscriptionPayload,
+    delete_subscription,
+    is_push_enabled,
+    list_subscriptions,
+    upsert_subscription,
+)
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
 
@@ -391,6 +410,14 @@ def create_app() -> FastAPI:
             headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
         )
 
+    @app.post("/share", include_in_schema=False)
+    async def share_target_post() -> RedirectResponse:
+        # POST /share is normally intercepted by the service worker, which
+        # stashes any shared file and redirects the client. If the SW isn't
+        # active yet (first launch after install), fall back to the root so
+        # the user at least lands in the app.
+        return RedirectResponse(url="/?share_error=sw_not_ready", status_code=303)
+
     @app.get("/share", include_in_schema=False)
     async def share_target(
         url: str | None = None,
@@ -421,6 +448,55 @@ def create_app() -> FastAPI:
     @app.get("/api/me", response_model=MeOut)
     async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeOut:
         return MeOut(requested_by=user.requested_by, acting_as=user.acting_as, is_admin=user.is_admin)
+
+    @app.get("/api/push/config", response_model=PushConfigOut)
+    async def push_config(settings: Settings = Depends(get_settings_dep)) -> PushConfigOut:
+        if not is_push_enabled(settings):
+            return PushConfigOut(enabled=False, public_key=None)
+        return PushConfigOut(enabled=True, public_key=settings.vapid_public_key)
+
+    @app.get("/api/push/status", response_model=PushStatusOut)
+    async def push_status(
+        endpoint: str | None = None,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PushStatusOut:
+        subs = await list_subscriptions(session, uuid.UUID(user.id))
+        if endpoint:
+            match = next((s for s in subs if s.endpoint == endpoint), None)
+            return PushStatusOut(subscribed=match is not None, endpoint=endpoint if match else None)
+        first = subs[0] if subs else None
+        return PushStatusOut(subscribed=first is not None, endpoint=first.endpoint if first else None)
+
+    @app.post("/api/push/subscribe", response_model=PushStatusOut)
+    async def push_subscribe(
+        payload: PushSubscriptionIn,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> PushStatusOut:
+        if not is_push_enabled(settings):
+            raise HTTPException(status_code=503, detail="Push notifications are not configured")
+        await upsert_subscription(
+            session,
+            uuid.UUID(user.id),
+            SubscriptionPayload(
+                endpoint=payload.endpoint,
+                p256dh=payload.p256dh,
+                auth=payload.auth,
+                user_agent=payload.user_agent,
+            ),
+        )
+        return PushStatusOut(subscribed=True, endpoint=payload.endpoint)
+
+    @app.post("/api/push/unsubscribe", response_model=PushStatusOut)
+    async def push_unsubscribe(
+        payload: PushUnsubscribeIn,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PushStatusOut:
+        await delete_subscription(session, payload.endpoint)
+        return PushStatusOut(subscribed=False, endpoint=None)
 
     @app.get("/api/admin/users", response_model=AdminUsersOut)
     async def admin_users(

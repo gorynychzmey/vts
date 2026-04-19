@@ -41,6 +41,8 @@ window.__VTS_I18N.ru = {
 "action.save_tab": "Сохранить вкладку",
 "action.expand": "Развернуть",
 "action.collapse": "Свернуть",
+"action.enable_notifications": "Включить уведомления",
+"action.disable_notifications": "Отключить уведомления",
 "tab.transcript": "Сырой транскрипт",
 "tab.transcript_pending": "Сырой транскрипт еще не готов",
 "tab.summary": "Сводка",

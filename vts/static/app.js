@@ -1920,6 +1920,178 @@ if (adminResetBtn) {
   adminResetBtn.addEventListener("click", resetAdminUser);
 }
 
+// ---------- Web Push ----------
+
+const pushToggleBtn = document.getElementById("push-toggle-btn");
+let pushConfig = null;
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+async function getPushSubscription() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+function setPushButtonState(state) {
+  if (!pushToggleBtn) return;
+  const label =
+    state === "subscribed"
+      ? t("action.disable_notifications")
+      : t("action.enable_notifications");
+  pushToggleBtn.title = label;
+  pushToggleBtn.setAttribute("aria-label", label);
+  pushToggleBtn.classList.toggle("push-active", state === "subscribed");
+  pushToggleBtn.disabled = state === "pending";
+}
+
+async function loadPushConfig() {
+  if (!pushToggleBtn) return;
+  if (!pushSupported()) return;
+  try {
+    pushConfig = await api("/api/push/config");
+  } catch {
+    return;
+  }
+  if (!pushConfig || !pushConfig.enabled) return;
+  pushToggleBtn.classList.remove("hidden");
+  const sub = await getPushSubscription();
+  setPushButtonState(sub ? "subscribed" : "idle");
+}
+
+async function subscribeToPush() {
+  if (!pushConfig || !pushConfig.public_key) {
+    window.alert("Push is not configured on the server.");
+    return;
+  }
+  if (Notification.permission === "denied") {
+    window.alert("Notifications are blocked for this site in the browser settings.");
+    return;
+  }
+  setPushButtonState("pending");
+  try {
+    if (Notification.permission !== "granted") {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        setPushButtonState("idle");
+        return;
+      }
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushConfig.public_key),
+    });
+    const json = sub.toJSON();
+    await api("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        endpoint: sub.endpoint,
+        p256dh: json.keys && json.keys.p256dh,
+        auth: json.keys && json.keys.auth,
+        user_agent: navigator.userAgent,
+      }),
+    });
+    setPushButtonState("subscribed");
+  } catch (err) {
+    console.error("push subscribe failed", err);
+    setPushButtonState("idle");
+  }
+}
+
+async function unsubscribeFromPush() {
+  setPushButtonState("pending");
+  try {
+    const sub = await getPushSubscription();
+    if (sub) {
+      await api("/api/push/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      }).catch(() => {});
+      await sub.unsubscribe();
+    }
+  } finally {
+    setPushButtonState("idle");
+  }
+}
+
+async function togglePush() {
+  const sub = await getPushSubscription();
+  if (sub) {
+    await unsubscribeFromPush();
+  } else {
+    await subscribeToPush();
+  }
+}
+
+if (pushToggleBtn) {
+  pushToggleBtn.addEventListener("click", togglePush);
+}
+
+// ---------- Share target: pending file handoff from service worker ----------
+
+async function applyPendingSharedFileIfAny() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("share_pending") !== "file") return;
+  // Drop the marker immediately so a reload doesn't retry.
+  const clean = window.location.pathname + window.location.hash;
+  window.history.replaceState({}, "", clean);
+  try {
+    const resp = await fetch("/_share_inbox");
+    if (!resp.ok) return;
+    const filenameHeader = resp.headers.get("X-Share-Filename") || "";
+    const filename = filenameHeader ? decodeURIComponent(filenameHeader) : "shared";
+    const blob = await resp.blob();
+    const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
+    const fileInput = document.getElementById("file-input");
+    const fileRadio = document.getElementById("source-type-file");
+    if (fileRadio && !fileRadio.checked) {
+      fileRadio.checked = true;
+      syncSourceType();
+    }
+    if (fileInput) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+      fileInput.focus();
+    }
+  } catch (err) {
+    console.warn("shared file handoff failed", err);
+  }
+}
+
+// ---------- Notification click from SW ----------
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const msg = event.data || {};
+    if (msg.type === "notification_click" && msg.task_id) {
+      const row = document.querySelector(`[data-task-id="${msg.task_id}"]`);
+      if (row) {
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        row.classList.add("flash");
+        setTimeout(() => row.classList.remove("flash"), 2000);
+      }
+    }
+  });
+}
+
 function extractUrlFromSharePayload() {
   // Android share sheets (especially YouTube) often deliver the URL inside
   // `text` rather than `url`. Scan all forwarded fields and pick the first
@@ -1962,7 +2134,9 @@ async function bootstrap() {
   syncSummaryToggle();
   syncSourceType();
   applySharedUrlIfAny();
+  await applyPendingSharedFileIfAny();
   await refreshAll();
+  await loadPushConfig();
 }
 
 void bootstrap();

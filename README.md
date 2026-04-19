@@ -112,6 +112,27 @@ Schema is managed by Alembic (`alembic/versions/0001_initial.py`).
 - Admin can switch context to an existing registered user (`?as_user=<email>`).
 - Tasks created while switched are created for the selected user, not the admin.
 
+## PWA: install, share target, push notifications
+
+Installed on Android/desktop (Chromium), the app exposes a [PWA manifest](vts/static/manifest.webmanifest):
+
+- **Share target**: once installed, vts appears in the system share sheet. Sharing a URL (e.g. from YouTube) opens the app with the URL pre-filled in the New Task form. Sharing a video/audio file loads it into the file input. The user still picks options and submits manually.
+- **Web Push notifications**: the bell icon in the header asks for notification permission and subscribes the browser. When a task finishes (`completed` or `failed`), the server sends a push. Clicking the notification focuses the app and scrolls to the task.
+
+To enable push, set the VAPID keys on the server:
+
+- `vapid_public_key` (`VTS_VAPID_PUBLIC_KEY`) — base64url-encoded public key, also exposed to the frontend.
+- `vapid_private_key` (`VTS_VAPID_PRIVATE_KEY`) — base64url-encoded private key.
+- `vapid_subject` (`VTS_VAPID_SUBJECT`) — contact URL for the push service, e.g. `mailto:ops@example.com`.
+
+Generate a keypair once and paste into config:
+
+```
+python scripts/generate_vapid_keys.py
+```
+
+If VAPID keys are not set, the bell icon stays hidden and push is disabled; the rest of the app works normally.
+
 ## Browser cache and auto-update
 
 - `index.html` is served with `Cache-Control: no-store`.

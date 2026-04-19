@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     summary_final_min_ratio: float = 0.60
     summary_final_max_ratio: float = 0.80
 
+    # Web Push (VAPID) — if any of these are empty, push is disabled at runtime.
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    vapid_subject: str = "mailto:admin@example.com"
+
     # Feature flags
     features_donor_clone: bool = False
 

@@ -744,3 +744,16 @@ input[type="file"] {
     justify-content: space-between;
   }
 }
+
+.icon-btn.push-active {
+  color: #d65d2b;
+}
+
+.task.flash {
+  animation: task-flash 1.8s ease-out;
+}
+
+@keyframes task-flash {
+  0% { box-shadow: 0 0 0 3px rgba(214, 93, 43, 0.6); }
+  100% { box-shadow: 0 0 0 0 rgba(214, 93, 43, 0); }
+}
