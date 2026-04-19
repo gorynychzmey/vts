@@ -1920,12 +1920,48 @@ if (adminResetBtn) {
   adminResetBtn.addEventListener("click", resetAdminUser);
 }
 
+function extractUrlFromSharePayload() {
+  // Android share sheets (especially YouTube) often deliver the URL inside
+  // `text` rather than `url`. Scan all forwarded fields and pick the first
+  // http(s) URL we find.
+  const params = new URLSearchParams(window.location.search);
+  const candidates = [
+    params.get("share_url"),
+    params.get("share_text"),
+    params.get("share_title"),
+  ].filter((v) => typeof v === "string" && v.length > 0);
+  for (const candidate of candidates) {
+    const match = candidate.match(/https?:\/\/\S+/);
+    if (match) return match[0];
+  }
+  return null;
+}
+
+function applySharedUrlIfAny() {
+  const shared = extractUrlFromSharePayload();
+  if (!shared) return;
+  const urlInput = document.getElementById("url");
+  const urlRadio = document.getElementById("source-type-url");
+  if (urlRadio && !urlRadio.checked) {
+    urlRadio.checked = true;
+    syncSourceType();
+  }
+  if (urlInput) {
+    urlInput.value = shared;
+    urlInput.focus();
+  }
+  // Clean the query string so reloads don't keep re-applying it.
+  const clean = window.location.pathname + window.location.hash;
+  window.history.replaceState({}, "", clean);
+}
+
 async function bootstrap() {
   await ensureI18nLoaded();
   applyI18nToPage();
   setVersionLabel(BUILD_VERSION);
   syncSummaryToggle();
   syncSourceType();
+  applySharedUrlIfAny();
   await refreshAll();
 }
 

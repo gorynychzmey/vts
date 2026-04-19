@@ -6,9 +6,10 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -373,6 +374,41 @@ def create_app() -> FastAPI:
         template = (static_dir / "index.html").read_text(encoding="utf-8")
         content = template.replace("__VTS_VERSION__", __version__)
         return HTMLResponse(content=content, headers=no_cache_headers)
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest() -> FileResponse:
+        return FileResponse(
+            path=str(static_dir / "manifest.webmanifest"),
+            media_type="application/manifest+json",
+        )
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        # Serve service worker from root so its scope covers the whole app.
+        return FileResponse(
+            path=str(static_dir / "sw.js"),
+            media_type="application/javascript",
+            headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
+        )
+
+    @app.get("/share", include_in_schema=False)
+    async def share_target(
+        url: str | None = None,
+        text: str | None = None,
+        title: str | None = None,
+    ) -> RedirectResponse:
+        # Android share sheet passes arbitrary payloads. YouTube typically
+        # puts the URL into `text`. Forward everything and let the frontend
+        # pick the best candidate.
+        params: dict[str, str] = {}
+        if url:
+            params["share_url"] = url
+        if text:
+            params["share_text"] = text
+        if title:
+            params["share_title"] = title
+        query = f"?{urlencode(params)}" if params else ""
+        return RedirectResponse(url=f"/{query}", status_code=303)
 
     @app.get("/healthz", include_in_schema=False)
     async def health() -> PlainTextResponse:
