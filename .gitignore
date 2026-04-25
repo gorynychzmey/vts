@@ -215,3 +215,12 @@ __marimo__/
 .dolt/
 *.db
 .beads-credential-key
+.beads/
+
+# Editor / IDE
+.vscode/
+
+# Local-only artifacts (must never be committed in public repo)
+metrics.jsonl
+TODO.md
+gh-cli-cache/
