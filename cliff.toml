@@ -6,7 +6,7 @@
 # previous tag, grouped by conventional-commit type.
 body = """
 {% if version %}\
-## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+## [v{{ version | trim_start_matches(pat="build-") | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
 {% else %}\
 ## [unreleased]
 {% endif %}\
@@ -20,7 +20,7 @@ body = """
 
 {% if previous and previous.version and version -%}
 **Full Changelog**: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/compare/{{ previous.version }}...{{ version }}
-{% endif %}
+{% endif -%}
 """
 trim = true
 footer = ""
