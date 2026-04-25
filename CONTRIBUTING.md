@@ -52,9 +52,12 @@ There is no separate lint config yet; the codebase generally follows
 4. **Version bump.** This project bumps the patch version on every commit
    (`python scripts/bump_version.py patch`). Bots that bump versions on
    merge are not in place — please bump in your PR.
-5. **Commit message.** Follow the existing conventional-commit style:
-   `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`. The first line is a
-   short summary; the body explains *why*.
+5. **Commit message.** Follow the [conventional-commit](https://www.conventionalcommits.org/)
+   style: `feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `ci:`, `build:`,
+   `chore:`, `test:`. The first line is a short summary; the body explains
+   *why*. Release notes are auto-generated from these prefixes by
+   `git-cliff` on every `build-X.Y.Z` tag — non-conventional commits are
+   silently dropped from the changelog.
 
 ## Code style
 

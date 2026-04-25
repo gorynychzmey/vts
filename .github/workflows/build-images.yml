@@ -27,12 +27,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # create GitHub Release on tag builds
       packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # git-cliff needs full history + tags to compute the changelog.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -144,3 +148,38 @@ jobs:
           docker tag "${GHCR_REPO}:latest" "${DOCKERHUB_REPO}:latest"
           docker push "${DOCKERHUB_REPO}:${VERSION}"
           docker push "${DOCKERHUB_REPO}:latest"
+
+      # ── GitHub Release (only on build-* tag pushes) ──────────────────────
+      - name: Generate changelog with git-cliff
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/build-')
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          # --latest = render only the section for the tag being built.
+          # --strip header keeps the body clean (no top-level "Changelog" heading).
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/build-')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.repos.outputs.version }}
+          body: |
+            ${{ steps.changelog.outputs.content }}
+
+            ## Container images
+
+            ```
+            docker pull ${{ steps.repos.outputs.ghcr_repo }}:${{ steps.repos.outputs.version }}
+            docker pull ${{ steps.repos.outputs.ghcr_repo }}:latest
+            ```
+
+            See [docs/INITIAL_DEPLOYMENT.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INITIAL_DEPLOYMENT.md) for production deployment instructions.
+          draft: false
+          prerelease: false
+          make_latest: "true"

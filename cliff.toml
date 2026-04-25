@@ -1,0 +1,59 @@
+# git-cliff configuration for vts.
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+# Tera template for the body of each release. Renders the commits since the
+# previous tag, grouped by conventional-commit type.
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim }}\
+  {% if commit.id %} ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/commit/{{ commit.id }})){% endif %}
+{% endfor %}\
+{% endfor %}
+
+{% if previous and previous.version and version -%}
+**Full Changelog**: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/compare/{{ previous.version }}...{{ version }}
+{% endif %}
+"""
+trim = true
+footer = ""
+
+[git]
+# Parse commits according to the conventional-commits spec.
+conventional_commits = true
+# Drop commits that don't match the spec (release-noise reduction).
+filter_unconventional = true
+# Don't split multi-line commits.
+split_commits = false
+# Strip "(#123)" PR-number suffixes that GitHub adds on squash-merge.
+commit_preprocessors = [
+  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "" },
+]
+# Map conventional-commit types to changelog sections.
+commit_parsers = [
+  { message = "^feat",     group = "Features" },
+  { message = "^fix",      group = "Bug fixes" },
+  { message = "^perf",     group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs",     group = "Documentation" },
+  { message = "^ci",       group = "CI" },
+  { message = "^build",    group = "Build" },
+  { message = "^chore",    group = "Chores" },
+  { message = "^test",     group = "Tests" },
+  # Anything else: drop (filter_commits below would also do it, but explicit is clearer).
+  { message = ".*", skip = true },
+]
+filter_commits = true
+# Newest commits first within each group.
+sort_commits = "newest"
+# Only consider tags matching this pattern (matches our build-X.Y.Z scheme).
+tag_pattern = "build-[0-9]+\\.[0-9]+\\.[0-9]+"
+# Skip release tags older than this (optional). Empty = include all.
+skip_tags = ""
