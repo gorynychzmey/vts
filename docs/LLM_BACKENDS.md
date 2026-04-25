@@ -25,34 +25,12 @@ out of the box.
 | **OpenAI / Anthropic** | yes | no | no | ⚠️ Same; also paid |
 | **LiteLLM proxy** | yes | depends on backend | depends on backend | Depends — useful as a router |
 
-## Option A: llama.cpp (recommended)
+## Option A: Ollama (what the author runs)
 
-The default and best-tested path. One container, one `.gguf` file, no extra
-configuration needed.
+The shipped prompts in `./prompts/` are tuned for **Qwen 3.5 9B** running
+under Ollama. This is the path the maintainer uses in production.
 
-```bash
-mkdir -p models
-# Download a model, e.g. Qwen2.5-7B-Instruct (Q4_K_M ≈ 4.6GB):
-#   https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF
-# Place it at ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-
-docker compose --profile llm-llamacpp --profile asr-whisper up -d
-```
-
-`config.yaml`:
-
-```yaml
-services:
-  llm:
-    url: http://llama:8000/v1
-    model: Qwen2.5-7B-Instruct-Q4_K_M
-```
-
-## Option B: Ollama
-
-Use this if you already run Ollama on the host or prefer its model management.
-
-vts will work, but with two caveats:
+vts works with two caveats compared to llama.cpp:
 
 1. **Token counting falls back to a local tokenizer file.** Without it, vts calls
    `/tokenize` on every request and Ollama returns 404, breaking the run. Mount a
@@ -62,8 +40,8 @@ vts will work, but with two caveats:
    services:
      llm:
        url: http://ollama:11434/v1
-       model: qwen2.5:7b-instruct
-   llm_tokenizer_path: /opt/vts/tokenizers/qwen2.5/tokenizer.json
+       model: qwen3.5:9b
+   llm_tokenizer_path: /opt/vts/tokenizers/qwen3.5/tokenizer.json
    ```
 
 2. **`n_ctx` is not auto-detected.** vts normally reads it from `/props`. Without
@@ -77,7 +55,35 @@ vts will work, but with two caveats:
 After starting the stack, pull the model:
 
 ```bash
-docker compose exec ollama ollama pull qwen2.5:7b-instruct
+docker compose --profile llm-ollama up -d
+docker compose exec ollama ollama pull qwen3.5:9b
+```
+
+## Option B: llama.cpp
+
+The API vts is implemented against. One container, one `.gguf` file, no
+tokenizer file or n_ctx wrangling needed (vts reads them from `/props` and
+`/tokenize`). The default `compose.yaml` ships with a Qwen2.5-7B example
+because Qwen3.5 GGUFs are not (yet) publicly distributed; expect summary
+quality to differ slightly from the Ollama+Qwen3.5 path the prompts are
+tuned for.
+
+```bash
+mkdir -p models
+# Download a model, e.g. Qwen2.5-7B-Instruct (Q4_K_M ≈ 4.6 GB):
+#   https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF
+# Place it at ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+
+docker compose --profile llm-llamacpp --profile asr-whisper up -d
+```
+
+`config.yaml`:
+
+```yaml
+services:
+  llm:
+    url: http://llama:8000/v1
+    model: Qwen2.5-7B-Instruct-Q4_K_M
 ```
 
 ## Option C: LiteLLM in front of Ollama / OpenAI / etc.

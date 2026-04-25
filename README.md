@@ -43,12 +43,19 @@ git clone https://github.com/<owner>/vts.git
 cd vts
 cp .env.example .env
 
-# Download a quantized model into ./models. Example: Qwen2.5-7B-Instruct Q4_K_M
-# from https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF (≈4.6 GB)
-mkdir -p models
-# (download Qwen2.5-7B-Instruct-Q4_K_M.gguf into ./models/)
+# Pick an LLM backend. The shipped prompts in ./prompts/ are tuned for
+# Qwen 3.5 9B (via Ollama). Other instruct models work too — see
+# docs/LLM_BACKENDS.md for the trade-offs and switch instructions.
 
-# Bring up the full stack: webapi, worker, postgres, redis, llama.cpp, whisper
+# Path A — Ollama (recommended, matches the shipped prompt tuning):
+docker compose --profile llm-ollama --profile asr-whisper up -d
+docker compose exec ollama ollama pull qwen3.5:9b
+
+# Path B — llama.cpp with a local .gguf file:
+mkdir -p models
+# Download a quantized model into ./models. Example: Qwen2.5-7B-Instruct Q4_K_M
+# from https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF (≈4.6 GB).
+# (download Qwen2.5-7B-Instruct-Q4_K_M.gguf into ./models/)
 docker compose --profile llm-llamacpp --profile asr-whisper up -d
 
 # Wait ~30s for healthchecks to settle, then open:
@@ -90,9 +97,11 @@ vts is built against the llama.cpp HTTP server, which means it uses a few
 endpoints beyond the OpenAI standard (`/props`, `/tokenize`, `/detokenize`).
 This affects which alternative backends work:
 
-- **llama.cpp** — works out of the box. Default.
-- **Ollama** — works with a local tokenizer file and a static `n_ctx`. See
-  [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md).
+- **Ollama** — what the author runs in production. The shipped prompts in
+  `./prompts/` are tuned for Qwen 3.5 9B (`qwen3.5:9b`). Needs a local
+  tokenizer file and a static `n_ctx`; see [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md).
+- **llama.cpp** — the API vts is implemented against; works with no extra
+  setup once you have a `.gguf` model.
 - **vLLM, OpenAI, Anthropic, anything OpenAI-compatible via LiteLLM** — same
   caveats as Ollama.
 

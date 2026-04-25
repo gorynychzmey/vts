@@ -15,8 +15,15 @@ services:
     url: http://whisper:9000
     backend: asr  # asr (onerahmet/openai-whisper-asr-webservice) or cpp (whisper.cpp server)
   llm:
+    # Default targets the llama.cpp container in docker-compose.yml
+    # (--profile llm-llamacpp). The shipped prompts in ./prompts/ are tuned
+    # for Qwen 3.5 9B running under Ollama; switch to the Ollama config
+    # below if you want the closest match.
     url: http://llama:8000/v1
-    model: qwen3.5:9b
+    model: Qwen2.5-7B-Instruct-Q4_K_M
+    # # Ollama variant (requires llm_tokenizer_path; see docs/LLM_BACKENDS.md):
+    # url: http://ollama:11434/v1
+    # model: qwen3.5:9b
     temperature: 0.2
     # api_key: sk-...
 
