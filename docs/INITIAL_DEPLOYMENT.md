@@ -130,4 +130,4 @@ Open UI via reverse proxy that injects `X-Forwarded-User`.
 For commit/deploy rules and release sequence, follow:
 
 - `PROJECT_RULES.md`
-- `README.md` (workflow index)
+- `docs/ARCHITECTURE.md` (build, release, and configuration reference)
