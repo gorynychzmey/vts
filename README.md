@@ -130,4 +130,4 @@ how it is maintained. See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md),
 
 ## License
 
-[MIT](LICENSE) © Victor Vostrikov
+[MIT](LICENSE) © Viktor Vostrikov
