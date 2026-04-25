@@ -16,7 +16,7 @@ services:
     backend: asr  # asr (onerahmet/openai-whisper-asr-webservice) or cpp (whisper.cpp server)
   llm:
     url: http://llama:8000/v1
-    model: Qwen2.5-7B-Instruct-Q4
+    model: qwen3.5:9b
     temperature: 0.2
     # api_key: sk-...
 

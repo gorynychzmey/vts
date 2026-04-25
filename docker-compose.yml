@@ -1,4 +1,21 @@
-version: "3.9"
+# Local docker compose profile for self-hosting vts.
+#
+# Quick start:
+#   cp .env.example .env
+#   docker compose up -d postgres redis
+#   docker compose up -d webapi worker
+#
+# By default this stack runs `webapi`, `worker`, `postgres`, `redis`.
+# An LLM and ASR backend are required at runtime; they live behind opt-in
+# profiles so you can pick the variant that fits your hardware. See
+# docs/LLM_BACKENDS.md for trade-offs and configuration notes.
+#
+# Examples:
+#   docker compose --profile llm-llamacpp --profile asr-whisper up -d
+#   docker compose --profile llm-ollama   --profile asr-whisper up -d
+#
+# Production deployments use the systemd units in ./systemd/ and do not use
+# this file.
 
 x-vts-build: &vts-build
   context: .
@@ -11,7 +28,7 @@ x-vts-build: &vts-build
 services:
   webapi:
     build: *vts-build
-    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}
+    image: ${IMAGE_REPO:-ghcr.io/OWNER/vts}:${VTS_VERSION:-latest}
     env_file:
       - .env
     environment:
@@ -23,13 +40,15 @@ services:
       - ./prompts:/opt/vts/prompts:ro
       - vts_data:/srv/vts-data
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
     build: *vts-build
-    image: ${IMAGE_REPO:-docker.io/gorynychzmey/vts}:${VTS_VERSION:-0.0.0}
+    image: ${IMAGE_REPO:-ghcr.io/OWNER/vts}:${VTS_VERSION:-latest}
     env_file:
       - .env
     environment:
@@ -39,48 +58,94 @@ services:
       - ./prompts:/opt/vts/prompts:ro
       - vts_data:/srv/vts-data
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: vts
-      POSTGRES_PASSWORD: vts
-      POSTGRES_DB: vts
+      POSTGRES_USER: ${POSTGRES_USER:-vts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vts}
+      POSTGRES_DB: ${POSTGRES_DB:-vts}
     command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_size=2GB"]
     volumes:
       - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vts} -d ${POSTGRES_DB:-vts}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   redis:
-    image: redis:8
-    command: ["redis-server", "--save", "60", "1"]
+    # Drop-in compatible alternatives: valkey/valkey:8, eqalpha/keydb:latest.
+    # Override via REDIS_IMAGE in .env (e.g. REDIS_IMAGE=valkey/valkey:8).
+    image: ${REDIS_IMAGE:-redis:8}
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
+  # ── ASR backend ──────────────────────────────────────────────────────────
+  # Whisper ASR webservice (https://github.com/ahmetoner/whisper-asr-webservice).
+  # Activate with: --profile asr-whisper
   whisper:
     image: ghcr.io/ahmetoner/whisper-asr-webservice:latest
-    profiles: ["external"]
+    profiles: ["asr-whisper"]
     environment:
-      - ASR_MODEL=medium
+      ASR_MODEL: ${ASR_MODEL:-medium}
+    volumes:
+      - whisper_cache:/root/.cache
     restart: unless-stopped
 
+  # ── LLM backend (pick ONE) ───────────────────────────────────────────────
+  # Native: llama.cpp server. Default vts target.
+  # Activate with: --profile llm-llamacpp
+  # You must place a .gguf model at ./models/<file>.gguf and set
+  # LLAMA_MODEL_FILE in your .env to the file name.
   llama:
-    image: ghcr.io/ggerganov/llama.cpp:server
-    profiles: ["external"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llm-llamacpp"]
     command: [
-      "-m", "/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "-m", "/models/${LLAMA_MODEL_FILE:-Qwen2.5-7B-Instruct-Q4_K_M.gguf}",
       "--host", "0.0.0.0",
-      "--port", "8000"
+      "--port", "8000",
+      "-c", "${LLAMA_N_CTX:-32768}"
     ]
     volumes:
-      - ./models:/models
+      - ./models:/models:ro
+    restart: unless-stopped
+
+  # Alternative: Ollama. Uses an OpenAI-compatible /v1 endpoint.
+  # Activate with: --profile llm-ollama
+  # Notes:
+  # - vts also calls llama.cpp-specific endpoints (/props, /tokenize,
+  #   /detokenize). Ollama does not expose them. To make this combo work:
+  #     1. Set llm_tokenizer_path in config.yaml to a HuggingFace tokenizer.json
+  #        for the model (mounted into the container).
+  #     2. Set summary.n_ctx in config.yaml manually (no /props auto-detect).
+  # - After first start: docker compose exec ollama ollama pull <model>
+  # See docs/LLM_BACKENDS.md for details.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm-ollama"]
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
     restart: unless-stopped
 
 volumes:
   pg_data:
   redis_data:
   vts_data:
+  whisper_cache:
+  ollama_data:
