@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
       dockerhub_image_repo:
-        description: "Docker Hub image repository (e.g. docker.io/gorynychzmey/vts)"
+        description: "Docker Hub image repository (e.g. docker.io/<owner>/vts). Leave empty to skip Docker Hub mirror."
         required: false
         default: ""
       ghcr_image_repo:
@@ -55,12 +55,15 @@ jobs:
           ghcr_var="${{ vars.GHCR_IMAGE_REPO || '' }}"
           build_version_input="${{ github.event.inputs.build_version || '' }}"
 
+          # Docker Hub mirror is optional — empty repo disables the mirror step.
+          # Set repository var DOCKERHUB_IMAGE_REPO (e.g. docker.io/<owner>/vts)
+          # or pass dockerhub_image_repo input to enable.
           if [[ -n "${dockerhub_input}" ]]; then
             dockerhub_repo="${dockerhub_input}"
           elif [[ -n "${dockerhub_var}" ]]; then
             dockerhub_repo="${dockerhub_var}"
           else
-            dockerhub_repo="docker.io/gorynychzmey/vts"
+            dockerhub_repo=""
           fi
 
           if [[ -n "${ghcr_input}" ]]; then
@@ -92,15 +95,17 @@ jobs:
           echo "Version: ${version}"
 
       - name: Validate Docker Hub secrets
+        if: steps.repos.outputs.dockerhub_repo != ''
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${{ secrets.DOCKERHUB_USERNAME }}" || -z "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then
-            echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are required."
+            echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are required when a Docker Hub repo is configured."
             exit 1
           fi
 
       - name: Login to Docker Hub
+        if: steps.repos.outputs.dockerhub_repo != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -127,6 +132,7 @@ jobs:
           bash ./build.sh
 
       - name: Mirror GHCR images to Docker Hub
+        if: steps.repos.outputs.dockerhub_repo != ''
         shell: bash
         env:
           DOCKERHUB_REPO: ${{ steps.repos.outputs.dockerhub_repo }}

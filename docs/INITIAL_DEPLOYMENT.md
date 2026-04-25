@@ -61,28 +61,28 @@ CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 
 `scripts/setup_postgres.sh` is idempotent and creates/updates role/database (defaults: `vts` / `vts`).
 
-## 4. Image source: Docker Hub `gorynychzmey/vts`
+## 4. Image source
 
-Published tags:
+Published tags (replace `OWNER` with your GitHub user/org or container registry namespace):
 
-- `docker.io/gorynychzmey/vts:<version>`
-- `docker.io/gorynychzmey/vts:latest`
+- `ghcr.io/OWNER/vts:<version>`
+- `ghcr.io/OWNER/vts:latest`
 
 Set `/opt/vts/config/vts.env`:
 
 ```bash
-VTS_IMAGE=docker.io/gorynychzmey/vts:<version>
+VTS_IMAGE=ghcr.io/OWNER/vts:<version>
 ```
 
 If you need to rebuild and push images from a build host:
 
 ```bash
 python -m pytest -q tests
-docker login
+docker login ghcr.io
 export CONTAINER_ENGINE=docker
-export IMAGE_REPO=docker.io/gorynychzmey/vts
+export IMAGE_REPO=ghcr.io/OWNER/vts
 export USE_BUILDX=auto
-export BUILDX_CACHE_REPO=docker.io/gorynychzmey/vts
+export BUILDX_CACHE_REPO=ghcr.io/OWNER/vts
 export BUILDX_CACHE_MODE=max
 export APT_MIRROR=http://deb.debian.org/debian
 export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security

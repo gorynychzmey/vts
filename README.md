@@ -147,19 +147,20 @@ If VAPID keys are not set, the bell icon stays hidden and push is disabled; the 
 
 ## Build and image publish
 
-`build.sh` builds and pushes one universal image to Docker Hub:
+`build.sh` builds and pushes one universal image to a container registry of
+your choice (GHCR, Docker Hub, etc.):
 
-- `docker.io/gorynychzmey/vts:<version>`
-- `docker.io/gorynychzmey/vts:latest`
+- `<registry>/<owner>/vts:<version>`
+- `<registry>/<owner>/vts:latest`
 
 Example:
 
 ```bash
-docker login
+docker login ghcr.io
 export CONTAINER_ENGINE=docker
-export IMAGE_REPO=docker.io/gorynychzmey/vts
+export IMAGE_REPO=ghcr.io/OWNER/vts        # change OWNER to your GH user/org
 export USE_BUILDX=auto
-export BUILDX_CACHE_REPO=docker.io/gorynychzmey/vts
+export BUILDX_CACHE_REPO=ghcr.io/OWNER/vts
 export BUILDX_CACHE_MODE=max
 export APT_MIRROR=http://deb.debian.org/debian
 export APT_SECURITY_MIRROR=http://deb.debian.org/debian-security

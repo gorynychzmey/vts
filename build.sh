@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENGINE="${CONTAINER_ENGINE:-podman}"
-IMAGE_REPO="${IMAGE_REPO:-docker.io/gorynychzmey/vts}"
+IMAGE_REPO="${IMAGE_REPO:-ghcr.io/OWNER/vts}"
 APT_MIRROR="${APT_MIRROR:-http://deb.debian.org/debian}"
 APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}"
 USE_BUILDX="${USE_BUILDX:-auto}"
