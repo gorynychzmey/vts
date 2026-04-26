@@ -1,5 +1,7 @@
 # vts
 
+![vts — your videos, your machine](docs/assets/hero.png)
+
 Self-hosted service for video transcription and summarization.
 
 Give it a YouTube URL or upload a video file. It downloads, transcribes with
