@@ -2,11 +2,14 @@
 
 ![vts — your videos, your machine](docs/assets/hero.png)
 
-Self-hosted service for video transcription and summarization.
+Self-hosted pipeline that turns long-form video into structured transcripts
+and summaries. Uses Whisper for transcription and a local LLM for
+summarization, with silence-aware audio segmentation and backpressure-managed
+parallel processing so it runs on modest hardware.
 
-Give it a YouTube URL or upload a video file. It downloads, transcribes with
-Whisper, and produces a summary with a local LLM. Runs entirely on your own
-machine. Installable as a PWA on Android and desktop, with system share-sheet
+Give it a YouTube URL or upload a video file — it downloads, segments,
+transcribes, summarizes, and notifies. Runs entirely on your own machine.
+Installable as a PWA on Android and desktop, with system share-sheet
 integration and push notifications when long-running tasks finish.
 
 > **Status:** working personal project, used in production by the author.
@@ -41,7 +44,7 @@ You need Docker (or Podman with the docker CLI plugin) and a `.gguf` model
 file for the LLM stage.
 
 ```bash
-git clone https://github.com/<owner>/vts.git
+git clone https://github.com/gorynychzmey/vts.git
 cd vts
 cp .env.example .env
 
