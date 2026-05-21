@@ -33,6 +33,40 @@ Containers:
 
 Whisper and llama servers are external dependencies and are not implemented in this repository.
 
+## Data flow
+
+```mermaid
+flowchart LR
+  User([User / Browser])
+  PWA[PWA / SPA]
+  API[webapi<br/>FastAPI + SSE]
+  PG[(Postgres)]
+  R[(Redis<br/>queue + pub/sub)]
+  W[worker]
+  YT[yt-dlp + ffmpeg]
+  ASR[Whisper ASR<br/>HTTP service]
+  LLM[llama.cpp / Ollama<br/>HTTP server]
+  FS[(artifacts_root<br/>/srv/vts-data)]
+
+  User -- "X-Forwarded-User" --> PWA
+  PWA -- "POST /api/tasks" --> API
+  PWA <-- "GET /api/events (SSE)" --> API
+  API -- "enqueue" --> R
+  API <-- "task/step state" --> PG
+  R -- "pop job" --> W
+  W -- "publish events" --> R
+  R -- "fan-out events" --> API
+  W -- "step rows" --> PG
+  W -- "download / segment" --> YT
+  YT -- "media + WAV segments" --> FS
+  W -- "POST audio" --> ASR
+  ASR -- "segments_raw.json" --> FS
+  W -- "POST /chat/completions, /tokenize, /detokenize, /props" --> LLM
+  LLM -- "window/final notes" --> FS
+```
+
+The artifact tree (under `artifacts_root/<task_id>/`) is the durable boundary between stages: each step writes named files there, and the next step reads them. Postgres holds task/step status; Redis carries the queue and the SSE event stream.
+
 ## External model services
 
 Install/deploy these separately:
@@ -44,9 +78,38 @@ Install/deploy these separately:
   - Image: `ghcr.io/ggerganov/llama.cpp:server`
   - Docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
 
-Pipeline includes dedicated `prepare_llama_model` and `prepare_summary_chunks` steps before summary generation. They perform model warm-up and transcript chunk preparation so long tokenization/detokenization is visible as a separate stage.
+## Pipeline stages
 
-Summarization uses adaptive token budgeting: token targets for each stage are computed as clamped ratios of the input size rather than fixed paragraph counts. A dedicated `pack_window_notes` step (Stage B) deduplicates and compresses per-window notes before final synthesis when the total exceeds the final-stage context budget. All budget knobs are configurable via `summary_*` settings in `config.yaml`.
+The DAG is defined in [`vts/pipeline/types.py`](../vts/pipeline/types.py) as a fixed ordered list. Each stage is a method on `TaskProcessor` ([`vts/pipeline/processor.py`](../vts/pipeline/processor.py)); the runner walks the list, persists a row in `steps` for each stage, and resumes by replaying the list and skipping completed stages whose `dry_run=True` check confirms their on-disk artifacts are still present.
+
+| # | Stage | Input | Output | Restart marker |
+|---|-------|-------|--------|----------------|
+| 1 | `download` | `source_url` or uploaded file | `media/video.mkv` (unless `audio_only`), `media/audio.original.<ext>` | Either media file or downstream segments exist |
+| 2 | `extract_audio` | `media/audio.original.<ext>` | `media/audio.wav` (16kHz mono PCM) | `audio.wav` exists |
+| 3 | `trim_initial_silence` | `media/audio.wav` | rewritten `media/audio.wav` + trim metadata | Marker file / step row |
+| 4 | `segment_audio` | `media/audio.wav` | `segments/0001.wav … NNNN.wav` with `overlap_seconds` overlap | Segment files exist |
+| 5 | `detect_language` | first segment | `language` column on `tasks` | Field populated |
+| 6 | `transcribe_segments` | `segments/*.wav` (parallel: `transcribe_parallel_per_task`) | `asr_segments` rows + `asr/segments_raw.json` | Per-segment row present |
+| 7 | `merge_transcript` | `asr_segments` rows | `outputs/transcript.txt`, `outputs/transcript.json` | Files exist |
+| 8 | `prepare_llama_model` | LLM URL | warm `/props` cache, validated tokenizer | Cached props match |
+| 9 | `prepare_summary_chunks` | `outputs/transcript.json` | `summary/chunks.json` (token-counted windows) | File exists |
+| 10 | `summarize_windows` | chunks (parallel via heavy-slot semaphore) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
+| 11 | `pack_window_notes` | `summary/windows.json` | `summary/packed_notes.json` (only when packing triggered) | File exists or skip-flag in step row |
+| 12 | `summarize_final` | window notes (packed if applicable) | `summary/final.md`, `tasks.summary_path` | File exists |
+
+Restart contract: `processor._maybe_skip_step()` calls the stage with `dry_run=True`; if it returns `True`, the step row is marked `skipped` and the next stage runs. Otherwise the stage executes from scratch — there is no partial-stage resume, just whole-stage idempotency.
+
+## Design decisions
+
+These are the non-obvious choices baked into the pipeline. Each links back to the implementation.
+
+**Silence-aware segmentation with overlap.** `segment_audio` (in [`vts/services/media.py`](../vts/services/media.py)) runs ffmpeg `silencedetect` over the input, then for each target boundary at `k * segment_target_seconds` searches a `±segment_search_window_seconds` window for the closest silence and cuts there. Adjacent segments share `segment_overlap_seconds` of audio. Fixed-size chunks would cut mid-word and hurt ASR; pure silence-based segmentation would produce wildly variable lengths and complicate parallelism. The hybrid keeps segments within a predictable range while landing cuts on silence.
+
+**Single heavy slot.** Transcription and LLM calls share a Redis-backed semaphore in [`vts/services/heavy_slot.py`](../vts/services/heavy_slot.py) with default `heavy_slot_limit = 1`. The slot is acquired around any GPU- or VRAM-heavy operation, so even with multiple workers and `transcribe_parallel_per_task > 1`, only one heavy operation runs at a time on the model server. Unbounded parallelism on a single-GPU host thrashes VRAM and slows everything down; this is the explicit backpressure point. The same slot also gates on night-mode (`night_mode_enabled`) — acquisitions block until an allowed hour.
+
+**llama.cpp HTTP server as baseline API.** The LLM client in [`vts/services/summarizer.py`](../vts/services/summarizer.py) talks to four endpoints — `GET /props`, `POST /tokenize`, `POST /detokenize`, `POST /chat/completions`. Only the last is in the OpenAI standard. The other three are needed because token budgeting (Stage A/B/C adaptive ratios) requires an authoritative token count on the *server's* tokenizer, not a guess from a local tiktoken-style heuristic. OpenAI-compatible servers that lack `/tokenize` must supply a local tokenizer file via `llm_tokenizer_path` (see [LLM_BACKENDS.md](LLM_BACKENDS.md)).
+
+**Sliding-window summarization with optional packing.** `summarize_windows` slides a `window_tokens` window (default ≈ 2000 tokens) over the transcript with 15% overlap, producing one note per window. A single-shot summary over the full transcript is impossible above the LLM's context size and unstable below it. Two stages also let each window's output be checked for quality (compression ratio, redundancy, number/date/unit mismatches) independently — see the metrics schema below. When the concatenated window notes plus the final prompt would exceed `summary_n_ctx - summary_safety_margin`, `pack_window_notes` (Stage B) batches and re-compresses them before `summarize_final` runs.
 
 ## Metrics (JSONL)
 
@@ -93,15 +156,17 @@ If saved client fails, worker retries fallback clients and updates stored prefer
 
 ## Data model
 
-Tables:
+Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, subsequent migrations evolve it (e.g. `0002` adds `users.preferred_ytdlp_client`, `0004` adds `tasks.source_title`, `0005` adds `tasks.summary_progress`, `0006` drops `asr_words`, `0008` adds `push_subscriptions`).
 
-- `users`
-- `tasks`
-- `steps`
-- `asr_segments`
-- `asr_words`
+| Table | Columns | Keys & indexes |
+|-------|---------|----------------|
+| `users` | `id UUID PK`, `username TEXT UNIQUE`, `created_at TIMESTAMPTZ`, `preferred_ytdlp_client TEXT?` | unique on `username` |
+| `tasks` | `id UUID PK`, `user_id UUID FK→users`, `source_url TEXT`, `source_title TEXT?`, `status ENUM(queued, running, paused, completed, failed, canceled, archived)`, `options JSON`, `artifact_dir TEXT`, `transcript_path TEXT?`, `summary_path TEXT?`, `summary_progress JSON?`, `error_message TEXT?`, `created_at`, `updated_at` | FK CASCADE; indexes `(user_id, created_at)`, `(status, created_at)` |
+| `steps` | `id UUID PK`, `task_id UUID FK→tasks`, `name TEXT(64)`, `status ENUM(pending, running, completed, failed, skipped)`, `attempt INT`, `started_at?`, `finished_at?`, `message TEXT?` | FK CASCADE; unique `(task_id, name)`; index `(task_id, status)` |
+| `asr_segments` | `id UUID PK`, `task_id UUID FK→tasks`, `segment_index INT`, `start_sec FLOAT`, `end_sec FLOAT`, `text TEXT`, `raw_json JSON` (full Whisper response) | FK CASCADE; unique `(task_id, segment_index)`; index `(task_id, start_sec)` |
+| `push_subscriptions` | `id UUID PK`, `user_id UUID FK→users`, `endpoint TEXT`, `p256dh TEXT`, `auth TEXT`, `user_agent TEXT?`, `created_at` | FK CASCADE; one row per Web Push subscription |
 
-Schema is managed by Alembic (`alembic/versions/0001_initial.py`).
+The `tasks.artifact_dir` is the per-task subdirectory under `artifacts_root` that holds every on-disk artifact (see *Processing Artifacts* below). The `steps` table is the durable record of which DAG stages have completed; the restart contract reads it on worker startup.
 
 ## Auth and user context
 
@@ -111,6 +176,102 @@ Schema is managed by Alembic (`alembic/versions/0001_initial.py`).
 - Admin emails are configured by `VTS_ADMIN_EMAILS`.
 - Admin can switch context to an existing registered user (`?as_user=<email>`).
 - Tasks created while switched are created for the selected user, not the admin.
+
+## Configuration reference
+
+Config is loaded from `/opt/vts/config/config.yaml` (or `./config.yaml` in dev) and overlaid with environment variables. The env name is `VTS_` + the Settings field name in [`vts/core/config.py`](../vts/core/config.py).
+
+**YAML → env mapping.** Nested YAML keys are flattened by joining segments with underscores; the flat key is then matched (sometimes via an alias) to a `Settings` field. Examples:
+
+- `services.llm.model` → `services_llm_model` → field `llm_model` → env `VTS_LLM_MODEL`
+- `summary.segment.ratio` → `summary_segment_ratio` → env `VTS_SUMMARY_SEGMENT_RATIO`
+- `ytdlp.youtube.player_client` → `ytdlp_youtube_player_client` → env `VTS_YTDLP_YOUTUBE_PLAYER_CLIENT`
+
+Legacy `services.llama.*` keys still resolve to the same `llm_*` fields for backward compatibility.
+
+### All keys
+
+Defaults shown match [`vts/core/config.py`](../vts/core/config.py). Every key listed here accepts a `VTS_<UPPER>` override.
+
+**Runtime / network:**
+
+| YAML path | Env | Default |
+|-----------|-----|---------|
+| `environment.host` | `VTS_HOST` | `0.0.0.0` |
+| `environment.port` | `VTS_PORT` | `8080` |
+| `services.database.url` | `VTS_DATABASE_URL` | `postgresql+asyncpg://vts:vts@postgres:5432/vts` |
+| `services.database.write_throttle.ms` | `VTS_SERVICES_DATABASE_WRITE_THROTTLE_MS` | `150` |
+| `services.redis.url` | `VTS_REDIS_URL` | `redis://redis:6379/0` |
+| `services.redis.prefix` | `VTS_REDIS_PREFIX` | `vts:` |
+| `trusted_proxy.cidrs` | `VTS_TRUSTED_PROXY_CIDRS` | `["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12"]` |
+| `admin.emails` | `VTS_ADMIN_EMAILS` | `[]` |
+| `dirs.artifacts` | `VTS_ARTIFACTS_ROOT` | `/srv/vts-data` |
+| `dirs.prompts` | `VTS_PROMPTS_DIR` | `/opt/vts/prompts` |
+| `timezone` | `VTS_TIMEZONE` | `null` (use system) |
+
+**External services:**
+
+| YAML path | Env | Default |
+|-----------|-----|---------|
+| `services.whisper.url` | `VTS_WHISPER_URL` | `http://whisper:9000` |
+| `services.whisper.backend` | `VTS_WHISPER_BACKEND` | `asr` (or `cpp`) |
+| `services.llm.url` | `VTS_LLM_URL` | `http://llama:8000/v1` |
+| `services.llm.api_key` | `VTS_LLM_API_KEY` | `null` |
+| `services.llm.model` | `VTS_LLM_MODEL` | `Qwen2.5-7B-Instruct-Q4` |
+| `services.llm.tokenizer_path` | `VTS_LLM_TOKENIZER_PATH` | `null` |
+| `services.llm.temperature` | `VTS_LLM_TEMPERATURE` | `0.2` |
+| `services.llm.top_p` | `VTS_LLM_TOP_P` | `null` |
+| `services.llm.min_p` | `VTS_LLM_MIN_P` | `null` |
+| `services.llm.repeat_penalty` | `VTS_LLM_REPEAT_PENALTY` | `null` |
+| `services.llm.thinking` | `VTS_LLM_THINKING` | `null` |
+| `services.llm.chat_timeout_seconds` | `VTS_LLM_CHAT_TIMEOUT_SECONDS` | `600` |
+| `services.llm.final_timeout_seconds` | `VTS_LLM_FINAL_TIMEOUT_SECONDS` | `1800` |
+
+**Pipeline tuning:**
+
+| YAML path | Env | Default |
+|-----------|-----|---------|
+| `segment.target_seconds` | `VTS_SEGMENT_TARGET_SECONDS` | `300` |
+| `segment.search_window_seconds` | `VTS_SEGMENT_SEARCH_WINDOW_SECONDS` | `30` |
+| `segment.overlap_seconds` | `VTS_SEGMENT_OVERLAP_SECONDS` | `3` |
+| `trim_silence.threshold_db` | `VTS_TRIM_SILENCE_THRESHOLD_DB` | `-35.0` |
+| `trim_silence.min_duration_sec` | `VTS_TRIM_SILENCE_MIN_DURATION_SEC` | `0.4` |
+| `trim_silence.max_seconds` | `VTS_TRIM_SILENCE_MAX_SECONDS` | `30.0` |
+| `language_detection.confidence_threshold` | `VTS_LANGUAGE_DETECTION_CONFIDENCE_THRESHOLD` | `0.60` |
+| `transcribe.parallel_per_task` | `VTS_TRANSCRIBE_PARALLEL_PER_TASK` | `2` |
+| `heavy_slot.limit` | `VTS_HEAVY_SLOT_LIMIT` | `1` |
+| `event_throttle.hz` | `VTS_EVENT_THROTTLE_HZ` | `4` |
+| `task_cancel_ttl.seconds` | `VTS_TASK_CANCEL_TTL_SECONDS` | `3600` |
+| `night_mode.enabled` | `VTS_NIGHT_MODE_ENABLED` | `false` |
+| `night_mode.start_hour` | `VTS_NIGHT_MODE_START_HOUR` | `22` |
+| `night_mode.end_hour` | `VTS_NIGHT_MODE_END_HOUR` | `7` |
+| `media_ttl.hours` | `VTS_MEDIA_TTL_HOURS` | `72` |
+
+**Summarization (adaptive token budgeting):**
+
+| YAML path | Env | Default |
+|-----------|-----|---------|
+| `summary.n_ctx` | `VTS_SUMMARY_N_CTX` | `32768` |
+| `summary.safety_margin` | `VTS_SUMMARY_SAFETY_MARGIN` | `768` |
+| `summary.segment.ratio` | `VTS_SUMMARY_SEGMENT_RATIO` | `0.40` |
+| `summary.segment.min_ratio` | `VTS_SUMMARY_SEGMENT_MIN_RATIO` | `0.30` |
+| `summary.segment.max_ratio` | `VTS_SUMMARY_SEGMENT_MAX_RATIO` | `0.55` |
+| `summary.segment.min_floor` | `VTS_SUMMARY_SEGMENT_MIN_FLOOR` | `200` |
+| `summary.segment.max_cap` | `VTS_SUMMARY_SEGMENT_MAX_CAP` | `1800` |
+| `summary.pack.ratio` | `VTS_SUMMARY_PACK_RATIO` | `0.90` |
+| `summary.pack.min_ratio` | `VTS_SUMMARY_PACK_MIN_RATIO` | `0.80` |
+| `summary.pack.max_ratio` | `VTS_SUMMARY_PACK_MAX_RATIO` | `0.95` |
+| `summary.pack.min_floor` | `VTS_SUMMARY_PACK_MIN_FLOOR` | `400` |
+| `summary.pack.batch_max_input_tokens` | `VTS_SUMMARY_PACK_BATCH_MAX_INPUT_TOKENS` | `12000` |
+| `summary.final.ratio` | `VTS_SUMMARY_FINAL_RATIO` | `0.70` |
+| `summary.final.min_ratio` | `VTS_SUMMARY_FINAL_MIN_RATIO` | `0.60` |
+| `summary.final.max_ratio` | `VTS_SUMMARY_FINAL_MAX_RATIO` | `0.80` |
+
+**Web Push (VAPID):** `vapid_public_key`, `vapid_private_key`, `vapid_subject` — see the PWA section below.
+
+**Metrics:** see the *Metrics (JSONL)* section above — `metrics.enabled`, `metrics.jsonl_path`, `metrics.redundancy.*`.
+
+**yt-dlp:** see the *yt-dlp YouTube auth and diagnostics* section above.
 
 ## PWA: install, share target, push notifications
 
@@ -251,6 +412,8 @@ ssh-keyscan -H <your-hostname>
 
 ## API summary
 
+REST endpoints:
+
 - `POST /api/tasks`
 - `GET /api/tasks`
 - `GET /api/tasks/{id}`
@@ -259,10 +422,32 @@ ssh-keyscan -H <your-hostname>
 - `DELETE /api/tasks/{id}`
 - `GET /api/tasks/{id}/transcript`
 - `GET /api/tasks/{id}/summary`
-- `GET /api/events`
 - `GET /api/version`
 - `GET /api/me`
 - `GET /api/admin/users` (admin only)
+
+Auth: every request is identified by the `X-Forwarded-User` header, trusted only when the client's remote IP falls within `trusted_proxy_cidrs`. The header value is the username; unknown users are auto-created. Admins (configured via `admin.emails` / `VTS_ADMIN_EMAILS`) can impersonate via the `?as_user=<email>` query parameter — tasks created in this mode are owned by the impersonated user, not the admin.
+
+### SSE: `GET /api/events`
+
+Server-Sent Events stream of per-task updates, filtered to the requesting user. Each message arrives as `event: <name>\ndata: <json>\n\n`. The JSON envelope is `{user_id, task_id, event, data}` (see [`vts/services/redis_bus.py`](../vts/services/redis_bus.py)).
+
+| `event` | When emitted | Notable `data` fields |
+|---------|--------------|-----------------------|
+| `server_version` | First message on connect | `version` |
+| `ping` | Keep-alive (≈ every 30 s) | — |
+| `task_status` | Task lifecycle transitions | `status` (queued/running/paused/completed/failed/canceled) |
+| `step` | DAG stage start/end | `name`, `status`, optional `message` |
+| `phase` | Sub-phases inside `download` / `extract_audio` | `phase`, `status` |
+| `media_progress` | yt-dlp download progress (throttled at `event_throttle_hz`) | `downloaded`, `total`, `percent` |
+| `segment_progress` | Audio segmentation progress | `segment_index`, `total` |
+| `transcribe_progress` | Per-segment ASR completion | `segment_index`, `total` |
+| `transcript_segment_text` | One segment of ready transcript text | `segment_index`, `text` |
+| `llama_model_progress` | LLM warm-up (`prepare_llama_model`) | `phase`, `status` |
+| `summary_progress` | Per-window summarization | `window_index`, `total` |
+| `segment_summary_text` | One window summary as it lands | `window_index`, `text` |
+
+All progress events that fire at high rates are throttled by `event_throttle_hz` (default 4 Hz) per task per channel.
 
 ## Task options
 
