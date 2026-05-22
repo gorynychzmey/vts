@@ -63,8 +63,7 @@ Each tool implementation is a free async function in `vts/mcp/tools.py` that tak
 
 **Files:**
 - Modify: `requirements.txt`
-- Create: `tests/mcp/__init__.py` (empty)
-- Create: `tests/mcp/test_server_mount.py`
+- Create: `tests/mcp/test_server_mount.py` (the repo uses namespace-style test discovery — do NOT add `tests/mcp/__init__.py`, otherwise a top-level `mcp` package will shadow the installed MCP SDK during test collection)
 
 - [ ] **Step 1: Write the failing test** (`tests/mcp/test_server_mount.py`)
 
@@ -110,7 +109,7 @@ Expected: PASS.
 Edit `vts/__init__.py`: bump patch (e.g. `0.5.22` → `0.5.23`).
 
 ```bash
-git add requirements.txt tests/mcp/__init__.py tests/mcp/test_server_mount.py vts/__init__.py
+git add requirements.txt tests/mcp/test_server_mount.py vts/__init__.py
 git commit -m "chore(mcp): add fastmcp dependency"
 ```
 
