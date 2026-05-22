@@ -25,6 +25,7 @@ fi
 VTS_IMAGE="${IMAGE_REPO}:${VERSION}"
 VTS_LATEST="${IMAGE_REPO}:latest"
 PYTEST_VERSION="${PYTEST_VERSION:-8.4.2}"
+PYTEST_ASYNCIO_VERSION="${PYTEST_ASYNCIO_VERSION:-0.26.0}"
 
 run_tests_in_container() {
   local runtime="${1}"
@@ -39,7 +40,7 @@ run_tests_in_container() {
   fi
   echo "Running tests inside container ${VTS_IMAGE}"
   "${runtime}" "${run_args[@]}" "${VTS_IMAGE}" -lc \
-    "pip install -q pytest==${PYTEST_VERSION} && python -m pytest -q tests"
+    "pip install -q pytest==${PYTEST_VERSION} pytest-asyncio==${PYTEST_ASYNCIO_VERSION} && python -m pytest -q tests"
 }
 
 echo "Building version ${VERSION}"
