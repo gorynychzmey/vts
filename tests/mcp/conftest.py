@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -110,3 +111,44 @@ class FakeBus:
 class FakeUser:
     id: str
     username: str = "alice"
+
+
+class _FakePubSub:
+    def __init__(self, redis: "FakeRedisWithPubSub") -> None:
+        self._redis = redis
+        self._channels: set[str] = set()
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def subscribe(self, channel: str) -> None:
+        self._channels.add(channel)
+        self._redis._subscribers.setdefault(channel, []).append(self)
+
+    async def unsubscribe(self, channel: str | None = None) -> None:
+        chans = list(self._channels) if channel is None else [channel]
+        for ch in chans:
+            subs = self._redis._subscribers.get(ch, [])
+            if self in subs:
+                subs.remove(self)
+            self._channels.discard(ch)
+
+    async def close(self) -> None:
+        await self.unsubscribe()
+
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float | None = None):
+        try:
+            payload = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        return {"type": "message", "data": json.dumps(payload).encode("utf-8")}
+
+
+class FakeRedisWithPubSub:
+    def __init__(self) -> None:
+        self._subscribers: dict[str, list[_FakePubSub]] = {}
+
+    def pubsub(self) -> _FakePubSub:
+        return _FakePubSub(self)
+
+    async def publish(self, channel: str, payload: dict[str, Any]) -> None:
+        for sub in self._subscribers.get(channel, []):
+            sub._queue.put_nowait(payload)

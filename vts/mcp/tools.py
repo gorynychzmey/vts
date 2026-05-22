@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -7,7 +9,7 @@ from typing import Any, Literal, Protocol
 from fastapi import HTTPException
 
 from vts.api.main import _summary_progress_for_task
-from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult
+from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult, WaitResult
 from vts.services.storage import task_dir
 
 
@@ -202,3 +204,108 @@ async def get_transcript(
         content=path.read_text(encoding="utf-8"),
         format=fmt,
     )
+
+
+_TERMINAL = {"completed", "failed", "canceled"}
+
+
+def _wait_condition_met(task: Any, until: str) -> bool:
+    if str(task.status) in _TERMINAL:
+        return True
+    if until == "transcript":
+        return bool(task.transcript_path)
+    if until == "summary":
+        return bool(task.summary_path)
+    return False  # until == "done" already handled by terminal check
+
+
+def _event_implies_target(event_name: str, data: dict, until: str) -> bool:
+    if event_name == "task_status" and data.get("status") in _TERMINAL:
+        return True
+    if (
+        until == "transcript"
+        and event_name == "phase"
+        and data.get("phase") == "merge_transcript"
+        and data.get("status") == "done"
+    ):
+        return True
+    # For until == "summary" there is no dedicated phase event; we rely on
+    # the DB re-check on each wake-up (handled by the loop).
+    return False
+
+
+class _PubSubLike(Protocol):
+    async def subscribe(self, channel: str) -> None: ...
+    async def unsubscribe(self, channel: str | None = None) -> None: ...
+    async def close(self) -> None: ...
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float | None = None) -> Any: ...
+
+
+class _RedisLike(Protocol):
+    def pubsub(self) -> _PubSubLike: ...
+
+
+async def wait_for_task(
+    *,
+    task_id: uuid.UUID,
+    until: str = "done",
+    timeout_seconds: int = 300,
+    user: _UserLike,
+    repo: _RepoStatusLike,
+    redis: _RedisLike,
+    events_channel: str,
+) -> WaitResult:
+    if until not in {"transcript", "summary", "done"}:
+        raise HTTPException(status_code=422, detail="invalid 'until' value")
+    if timeout_seconds < 1 or timeout_seconds > 1800:
+        raise HTTPException(status_code=422, detail="timeout_seconds must be 1..1800")
+
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(events_channel)
+    try:
+        # subscribe-then-check: any event after `subscribe` is buffered.
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if _wait_condition_met(task, until):
+            return WaitResult(
+                task_id=task.id, status=str(task.status), reached=True,
+                stage=None, updated_at=task.updated_at,
+            )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout_seconds
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=min(remaining, 5.0))
+            if not msg:
+                # periodic re-check covers the no-phase-for-summary case
+                task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+                if task and _wait_condition_met(task, until):
+                    return WaitResult(
+                        task_id=task.id, status=str(task.status), reached=True,
+                        stage=None, updated_at=task.updated_at,
+                    )
+                continue
+            payload = json.loads(msg["data"].decode("utf-8")) if isinstance(msg.get("data"), (bytes, bytearray)) else msg["data"]
+            if payload.get("user_id") != user.id:
+                continue
+            if payload.get("task_id") != str(task_id):
+                continue
+            if _event_implies_target(payload.get("event", ""), payload.get("data") or {}, until):
+                task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+                return WaitResult(
+                    task_id=task.id, status=str(task.status), reached=True,
+                    stage=None, updated_at=task.updated_at,
+                )
+
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        return WaitResult(
+            task_id=task.id, status=str(task.status), reached=False,
+            stage=None, updated_at=task.updated_at,
+        )
+    finally:
+        await pubsub.unsubscribe(events_channel)
+        await pubsub.close()
