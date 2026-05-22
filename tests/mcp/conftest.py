@@ -56,7 +56,7 @@ class FakeRepo:
             return None
         return t
 
-    async def list_tasks_for_user(
+    async def list_tasks_for_user_filtered(
         self,
         user_id: uuid.UUID,
         *,

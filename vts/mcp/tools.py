@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
-from vts.mcp.schemas import SubmitVideoResult
+from vts.mcp.schemas import SubmitVideoResult, TaskSummary
 from vts.services.storage import task_dir
 
 
@@ -72,3 +72,46 @@ async def submit_video(
         data={"status": str(task.status)},
     )
     return SubmitVideoResult(task_id=task.id, status=task.status, created_at=task.created_at)
+
+
+class _RepoListLike(Protocol):
+    async def list_tasks_for_user_filtered(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: Any = None,
+        limit: int = 20,
+        sort: str = "updated_at",
+        order: str = "desc",
+    ) -> list[Any]: ...
+
+
+async def list_tasks(
+    *,
+    user: _UserLike,
+    repo: _RepoListLike,
+    status: Literal["queued", "running", "completed", "failed", "paused", "canceled", "archived"] | None = None,
+    limit: int = 20,
+    sort: Literal["created_at", "updated_at", "title"] = "updated_at",
+    order: Literal["asc", "desc"] = "desc",
+) -> list[TaskSummary]:
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    tasks = await repo.list_tasks_for_user_filtered(
+        uuid.UUID(user.id),
+        status=status,
+        limit=limit,
+        sort=sort,
+        order=order,
+    )
+    return [
+        TaskSummary(
+            task_id=t.id,
+            status=t.status,
+            title=t.source_title,
+            url=t.source_url,
+            created_at=t.created_at,
+            updated_at=t.updated_at,
+        )
+        for t in tasks
+    ]

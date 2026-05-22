@@ -79,6 +79,40 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    async def list_tasks_for_user_filtered(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: TaskStatus | None = None,
+        limit: int = 20,
+        sort: str = "updated_at",
+        order: str = "desc",
+    ) -> list[Task]:
+        """List tasks owned by user_id with optional status filter and explicit sort.
+
+        sort: one of "created_at" | "updated_at" | "title" (where title sorts by source_title).
+        order: "asc" | "desc".
+        """
+        sort_columns = {
+            "created_at": Task.created_at,
+            "updated_at": Task.updated_at,
+            "title": Task.source_title,
+        }
+        column = sort_columns.get(sort)
+        if column is None:
+            raise ValueError(f"unsupported sort: {sort}")
+        ordering = column.desc() if order == "desc" else column.asc()
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.steps))
+            .where(Task.user_id == user_id)
+        )
+        if status is not None:
+            stmt = stmt.where(Task.status == status)
+        stmt = stmt.order_by(ordering).limit(limit)
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
     async def list_task_ids_for_statuses(self, statuses: list[TaskStatus]) -> list[uuid.UUID]:
         stmt = select(Task.id).where(Task.status.in_(statuses)).order_by(Task.created_at.asc(), Task.id.asc())
         result = await self.session.scalars(stmt)
