@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     night_mode_end_hour: int = 7
 
     timezone: str | None = None
+    mcp_enabled: bool = True
+    mcp_path: str = "/mcp"
 
     media_ttl_hours: int = 72
 
