@@ -22,6 +22,7 @@ class FakeTask:
     error_message: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     summary_progress: dict[str, int] | None = None
+    steps: list[Any] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -31,6 +32,7 @@ class FakeRepo:
 
     def __init__(self) -> None:
         self.tasks: dict[uuid.UUID, FakeTask] = {}
+        self._asr_progress: dict[uuid.UUID, tuple[int, int]] = {}
 
     async def create_task(
         self,
@@ -55,6 +57,9 @@ class FakeRepo:
         if t is None or t.user_id != user_id:
             return None
         return t
+
+    async def get_asr_progress_for_tasks(self, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
+        return {tid: self._asr_progress.get(tid, (0, 0)) for tid in task_ids}
 
     async def list_tasks_for_user_filtered(
         self,

@@ -6,7 +6,8 @@ from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
-from vts.mcp.schemas import SubmitVideoResult, TaskSummary
+from vts.api.main import _summary_progress_for_task
+from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, TaskStatusResult, TaskSummary
 from vts.services.storage import task_dir
 
 
@@ -115,3 +116,43 @@ async def list_tasks(
         )
         for t in tasks
     ]
+
+
+def _stage_label(task: Any) -> str | None:
+    """Return the name of the first running step, or None."""
+    steps = getattr(task, "steps", None) or []
+    for step in steps:
+        status_value = step.status if isinstance(step.status, str) else getattr(step.status, "value", None)
+        if status_value == "running":
+            return step.name
+    return None
+
+
+class _RepoStatusLike(Protocol):
+    async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Any | None: ...
+    async def get_asr_progress_for_tasks(
+        self, task_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[int, int]]: ...
+
+
+async def get_status(
+    *,
+    task_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoStatusLike,
+) -> TaskStatusResult:
+    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    asr_map = await repo.get_asr_progress_for_tasks([task.id])
+    asr_current, asr_total = asr_map.get(task.id, (0, 0))
+    summary_current, summary_total = _summary_progress_for_task(task)
+    return TaskStatusResult(
+        task_id=task.id,
+        status=str(task.status),
+        stage=_stage_label(task),
+        asr_progress=ProgressCounts(current=asr_current, total=asr_total),
+        summary_progress=ProgressCounts(current=summary_current, total=summary_total),
+        error=getattr(task, "error_message", None),
+        updated_at=task.updated_at,
+    )
