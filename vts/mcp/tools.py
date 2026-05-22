@@ -8,7 +8,6 @@ from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
-from vts.api.main import _summary_progress_for_task
 from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult, WaitResult
 from vts.services.storage import task_dir
 
@@ -142,6 +141,8 @@ async def get_status(
     user: _UserLike,
     repo: _RepoStatusLike,
 ) -> TaskStatusResult:
+    from vts.api.main import _summary_progress_for_task  # lazy to avoid circular import
+
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
