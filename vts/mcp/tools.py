@@ -7,7 +7,7 @@ from typing import Any, Literal, Protocol
 from fastapi import HTTPException
 
 from vts.api.main import _summary_progress_for_task
-from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, TaskStatusResult, TaskSummary
+from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, TaskStatusResult, TaskSummary, TranscriptResult
 from vts.services.storage import task_dir
 
 
@@ -154,4 +154,34 @@ async def get_status(
         summary_progress=ProgressCounts(current=summary_current, total=summary_total),
         error=task.error_message,
         updated_at=task.updated_at,
+    )
+
+
+async def get_transcript(
+    *,
+    task_id: uuid.UUID,
+    variant: Literal["raw", "redacted"],
+    user: _UserLike,
+    repo: _RepoStatusLike,
+) -> TranscriptResult:
+    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if variant == "raw":
+        if not task.transcript_path:
+            raise HTTPException(status_code=404, detail="Transcript is not ready")
+        path = Path(task.transcript_path)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Transcript file missing")
+        fmt = "txt" if path.suffix == ".txt" else "json"
+    else:  # redacted
+        path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
+        fmt = "txt"
+    return TranscriptResult(
+        task_id=task.id,
+        variant=variant,
+        content=path.read_text(encoding="utf-8"),
+        format=fmt,
     )
