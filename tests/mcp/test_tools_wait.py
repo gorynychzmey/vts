@@ -139,3 +139,31 @@ async def test_wait_for_transcript_until(tmp_path) -> None:
         events_channel="vts:events",
     )
     assert res.reached is True
+
+
+async def test_wait_for_summary_via_db_recheck(monkeypatch) -> None:
+    """until=summary has no dedicated phase event — exercises the DB re-check loop."""
+    import vts.mcp.tools as tools_mod
+    monkeypatch.setattr(tools_mod, "_WAIT_POLL_INTERVAL_SECONDS", 0.05)
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    redis = FakeRedisWithPubSub()
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
+    repo.tasks[t.id] = t
+
+    async def mark_summary_ready():
+        await asyncio.sleep(0.08)
+        t.summary_path = "/tmp/fake/summary.md"
+
+    asyncio.create_task(mark_summary_ready())
+    res = await wait_for_task(
+        task_id=t.id,
+        until="summary",
+        timeout_seconds=2,
+        user=user,
+        repo=repo,
+        redis=redis,
+        events_channel="vts:events",
+    )
+    assert res.reached is True

@@ -207,6 +207,7 @@ async def get_transcript(
 
 
 _TERMINAL = {"completed", "failed", "canceled"}
+_WAIT_POLL_INTERVAL_SECONDS = 5.0  # seconds between DB re-checks when no event arrives
 
 
 def _wait_condition_met(task: Any, until: str) -> bool:
@@ -261,8 +262,8 @@ async def wait_for_task(
         raise HTTPException(status_code=422, detail="timeout_seconds must be 1..1800")
 
     pubsub = redis.pubsub()
-    await pubsub.subscribe(events_channel)
     try:
+        await pubsub.subscribe(events_channel)
         # subscribe-then-check: any event after `subscribe` is buffered.
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
@@ -273,13 +274,13 @@ async def wait_for_task(
                 stage=None, updated_at=task.updated_at,
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
-            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=min(remaining, 5.0))
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=min(remaining, _WAIT_POLL_INTERVAL_SECONDS))
             if not msg:
                 # periodic re-check covers the no-phase-for-summary case
                 task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
@@ -289,7 +290,7 @@ async def wait_for_task(
                         stage=None, updated_at=task.updated_at,
                     )
                 continue
-            payload = json.loads(msg["data"].decode("utf-8")) if isinstance(msg.get("data"), (bytes, bytearray)) else msg["data"]
+            payload = json.loads(msg["data"].decode("utf-8"))
             if payload.get("user_id") != user.id:
                 continue
             if payload.get("task_id") != str(task_id):
