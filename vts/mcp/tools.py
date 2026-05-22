@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult, WaitResult
 from vts.services.storage import task_dir
+from vts.services.task_progress import summary_progress_for_task
 
 
 class _UserLike(Protocol):
@@ -141,14 +142,12 @@ async def get_status(
     user: _UserLike,
     repo: _RepoStatusLike,
 ) -> TaskStatusResult:
-    from vts.api.main import _summary_progress_for_task  # lazy to avoid circular import
-
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     asr_map = await repo.get_asr_progress_for_tasks([task.id])
     asr_current, asr_total = asr_map.get(task.id, (0, 0))
-    summary_current, summary_total = _summary_progress_for_task(task)
+    summary_current, summary_total = summary_progress_for_task(task)
     return TaskStatusResult(
         task_id=task.id,
         status=str(task.status),

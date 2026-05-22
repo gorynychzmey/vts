@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
-from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, _summary_progress_for_task, serialize_task
+from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, serialize_task
+from vts.services.task_progress import summary_progress_for_task as _summary_progress_for_task
 from vts.db.models import StepStatus, TaskStatus
 
 

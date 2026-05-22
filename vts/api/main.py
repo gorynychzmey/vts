@@ -45,6 +45,7 @@ from vts.services.push import (
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
+from vts.services.task_progress import summary_progress_for_task
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -226,17 +227,6 @@ def _find_step_status(task: Task, step_name: str) -> StepStatus | None:
             return step.status
     return None
 
-
-def _summary_progress_for_task(task: Task) -> tuple[int, int]:
-    options = task.options if isinstance(task.options, dict) else {}
-    if options.get("summary") is False:
-        return (0, 0)
-    prog = task.summary_progress
-    if not isinstance(prog, dict):
-        return (0, 0)
-    current = prog.get("current", 0)
-    total = prog.get("total", 0)
-    return (max(int(current), 0), max(int(total), 0))
 
 
 def _processing_seconds_for_task(task: Task) -> int | None:
@@ -546,7 +536,7 @@ def create_app() -> FastAPI:
         set_committed_value(task, "steps", [])
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
-        summary_progress = {task.id: _summary_progress_for_task(task)}
+        summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
     _ALLOWED_UPLOAD_SUFFIXES = frozenset(
@@ -614,7 +604,7 @@ def create_app() -> FastAPI:
         set_committed_value(task, "steps", [])
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
-        summary_progress = {task.id: _summary_progress_for_task(task)}
+        summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
     @app.get("/api/tasks", response_model=list[TaskOut])
@@ -629,7 +619,7 @@ def create_app() -> FastAPI:
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         task_ids = [task.id for task in tasks]
         asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
-        summary_progress = {task.id: _summary_progress_for_task(task) for task in tasks}
+        summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
         return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
 
     @app.get("/api/tasks/queue-positions")
@@ -657,7 +647,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Task not found")
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
-        summary_progress = {task.id: _summary_progress_for_task(task)}
+        summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
     @app.post("/api/tasks/restart_summary", response_model=BatchResultOut)
