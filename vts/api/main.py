@@ -373,6 +373,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="vts", version=__version__)
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    if settings.mcp_enabled:
+        from vts.mcp import build_mcp_app
+        app.mount(settings.mcp_path, build_mcp_app())
 
     no_cache_headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
