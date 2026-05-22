@@ -19,15 +19,16 @@ class AuthenticatedUser:
     acting_as: str
 
 
-async def require_user(
+async def resolve_user_from_request(
     request: Request,
-    x_forwarded_user: str | None = Header(default=None, alias="X-Forwarded-User"),
-    session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
+    session: AsyncSession,
+    settings: Settings,
 ) -> AuthenticatedUser:
+    """Core auth logic, callable from both FastAPI Depends and FastMCP tools."""
     remote_host = request.client.host if request.client else "127.0.0.1"
     if not settings.is_trusted_proxy(remote_host):
         raise HTTPException(status_code=403, detail="Untrusted proxy source for forwarded auth header")
+    x_forwarded_user = request.headers.get("x-forwarded-user")
     if not x_forwarded_user and settings.environment != "prod":
         x_forwarded_user = request.query_params.get("dev_user")
     if not x_forwarded_user:
@@ -63,3 +64,15 @@ async def require_user(
         is_admin=is_admin,
         acting_as=acting_as,
     )
+
+
+async def require_user(
+    request: Request,
+    x_forwarded_user: str | None = Header(default=None, alias="X-Forwarded-User"),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> AuthenticatedUser:
+    # x_forwarded_user kept as a FastAPI Header param for OpenAPI docs only;
+    # the resolver reads it directly from the request.
+    _ = x_forwarded_user
+    return await resolve_user_from_request(request, session, settings)

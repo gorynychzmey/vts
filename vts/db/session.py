@@ -20,3 +20,12 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session
 
+
+def get_db_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the async sessionmaker bound to the global engine.
+
+    Suitable for callers that need to open their own session without going
+    through the FastAPI Depends graph (e.g. MCP tools).
+    """
+    return SessionLocal
+
