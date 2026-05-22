@@ -1478,15 +1478,15 @@ import uuid
 import pytest
 
 from tests.mcp.conftest import FakeRepo, FakeUser, FakeTask, FakeRedisWithPubSub
+from vts.db.models import TaskStatus
 from vts.mcp.tools import wait_for_task
 
 
-@pytest.mark.asyncio
 async def test_wait_returns_immediately_if_terminal() -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status="completed")
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.completed)
     repo.tasks[t.id] = t
 
     res = await wait_for_task(
@@ -1502,17 +1502,16 @@ async def test_wait_returns_immediately_if_terminal() -> None:
     assert res.status == "completed"
 
 
-@pytest.mark.asyncio
 async def test_wait_unblocks_on_task_status_event() -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status="running")
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
     repo.tasks[t.id] = t
 
     async def publish_later():
         await asyncio.sleep(0.05)
-        t.status = "completed"
+        t.status = TaskStatus.completed
         await redis.publish("vts:events", {
             "user_id": user.id,
             "task_id": str(t.id),
@@ -1534,12 +1533,11 @@ async def test_wait_unblocks_on_task_status_event() -> None:
     assert res.status == "completed"
 
 
-@pytest.mark.asyncio
 async def test_wait_timeout_returns_reached_false() -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status="running")
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
     repo.tasks[t.id] = t
 
     res = await wait_for_task(
@@ -1555,13 +1553,12 @@ async def test_wait_timeout_returns_reached_false() -> None:
     assert res.status == "running"
 
 
-@pytest.mark.asyncio
 async def test_wait_filters_other_users_events() -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
-    other = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    other = FakeUser(id=str(uuid.uuid4()), username="bob")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status="running")
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
     repo.tasks[t.id] = t
 
     async def publish_noise():
@@ -1586,12 +1583,11 @@ async def test_wait_filters_other_users_events() -> None:
     assert res.reached is False
 
 
-@pytest.mark.asyncio
 async def test_wait_for_transcript_until(tmp_path) -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status="running")
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
     repo.tasks[t.id] = t
 
     async def publish_phase():
@@ -1622,8 +1618,8 @@ async def test_wait_for_transcript_until(tmp_path) -> None:
 - [ ] **Step 4: Implement `wait_for_task`** in `vts/mcp/tools.py`
 
 ```python
-import asyncio as _asyncio
-import json as _json
+import asyncio
+import json
 
 from vts.mcp.schemas import WaitResult
 
@@ -1631,8 +1627,8 @@ from vts.mcp.schemas import WaitResult
 _TERMINAL = {"completed", "failed", "canceled"}
 
 
-def _wait_condition_met(task, until: str) -> bool:
-    if task.status in _TERMINAL:
+def _wait_condition_met(task: Any, until: str) -> bool:
+    if str(task.status) in _TERMINAL:
         return True
     if until == "transcript":
         return bool(task.transcript_path)
@@ -1644,22 +1640,37 @@ def _wait_condition_met(task, until: str) -> bool:
 def _event_implies_target(event_name: str, data: dict, until: str) -> bool:
     if event_name == "task_status" and data.get("status") in _TERMINAL:
         return True
-    if until == "transcript" and event_name == "phase" \
-            and data.get("phase") == "merge_transcript" and data.get("status") == "done":
+    if (
+        until == "transcript"
+        and event_name == "phase"
+        and data.get("phase") == "merge_transcript"
+        and data.get("status") == "done"
+    ):
         return True
     # For until == "summary" there is no dedicated phase event; we rely on
     # the DB re-check on each wake-up (handled by the loop).
     return False
 
 
+class _PubSubLike(Protocol):
+    async def subscribe(self, channel: str) -> None: ...
+    async def unsubscribe(self, channel: str | None = None) -> None: ...
+    async def close(self) -> None: ...
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float | None = None) -> Any: ...
+
+
+class _RedisLike(Protocol):
+    def pubsub(self) -> _PubSubLike: ...
+
+
 async def wait_for_task(
     *,
-    task_id,
+    task_id: uuid.UUID,
     until: str = "done",
     timeout_seconds: int = 300,
-    user,
-    repo,
-    redis,
+    user: _UserLike,
+    repo: _RepoStatusLike,
+    redis: _RedisLike,
     events_channel: str,
 ) -> WaitResult:
     if until not in {"transcript", "summary", "done"}:
@@ -1671,51 +1682,58 @@ async def wait_for_task(
     await pubsub.subscribe(events_channel)
     try:
         # subscribe-then-check: any event after `subscribe` is buffered.
-        task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         if _wait_condition_met(task, until):
             return WaitResult(
-                task_id=task.id, status=task.status, reached=True,
+                task_id=task.id, status=str(task.status), reached=True,
                 stage=None, updated_at=task.updated_at,
             )
 
-        deadline = _asyncio.get_event_loop().time() + timeout_seconds
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout_seconds
         while True:
-            remaining = deadline - _asyncio.get_event_loop().time()
+            remaining = deadline - loop.time()
             if remaining <= 0:
                 break
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=min(remaining, 5.0))
             if not msg:
                 # periodic re-check covers the no-phase-for-summary case
-                task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
+                task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
                 if task and _wait_condition_met(task, until):
                     return WaitResult(
-                        task_id=task.id, status=task.status, reached=True,
+                        task_id=task.id, status=str(task.status), reached=True,
                         stage=None, updated_at=task.updated_at,
                     )
                 continue
-            payload = _json.loads(msg["data"].decode("utf-8"))
+            payload = json.loads(msg["data"].decode("utf-8")) if isinstance(msg.get("data"), (bytes, bytearray)) else msg["data"]
             if payload.get("user_id") != user.id:
                 continue
             if payload.get("task_id") != str(task_id):
                 continue
             if _event_implies_target(payload.get("event", ""), payload.get("data") or {}, until):
-                task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
+                task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
                 return WaitResult(
-                    task_id=task.id, status=task.status, reached=True,
+                    task_id=task.id, status=str(task.status), reached=True,
                     stage=None, updated_at=task.updated_at,
                 )
 
-        task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         return WaitResult(
-            task_id=task.id, status=task.status, reached=False,
+            task_id=task.id, status=str(task.status), reached=False,
             stage=None, updated_at=task.updated_at,
         )
     finally:
         await pubsub.unsubscribe(events_channel)
         await pubsub.close()
 ```
+
+Notes for the implementer:
+- `uuid` (no alias) is already imported at the top of `vts/mcp/tools.py` from Task 6 onwards.
+- `Protocol`, `Any`, `HTTPException`, `Path` are also already imported.
+- `_RepoStatusLike` and `_UserLike` Protocols already exist (from Tasks 6/8). Reuse them — they declare `get_task_for_user`, which is the only repo method `wait_for_task` calls.
+- The `payload = json.loads(...) if ... bytes ... else msg["data"]` line handles BOTH the real Redis client (which delivers bytes) AND the FakeRedisWithPubSub (which also delivers a JSON-encoded bytes payload per the conftest helper). Keep this defensive form.
 
 - [ ] **Step 5: Run all wait tests, expect PASS**
 
