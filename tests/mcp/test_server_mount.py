@@ -17,17 +17,19 @@ def test_build_mcp_app_returns_asgi_callable() -> None:
     assert callable(app)
 
 
-def test_webapi_mounts_mcp_when_enabled() -> None:
+def test_webapi_mounts_mcp_when_enabled(monkeypatch) -> None:
     """The FastAPI app should have a route mounted at the configured mcp_path."""
-    import os
+    from vts.core.config import get_settings
 
-    os.environ["VTS_MCP_ENABLED"] = "true"
-    os.environ["VTS_MCP_PATH"] = "/mcp"
+    monkeypatch.setenv("VTS_MCP_ENABLED", "true")
+    monkeypatch.setenv("VTS_MCP_PATH", "/mcp")
+    get_settings.cache_clear()
     from vts.api.main import create_app
 
     app = create_app()
     paths = [getattr(r, "path", None) for r in app.routes]
     assert "/mcp" in paths
+    get_settings.cache_clear()
 
 
 def test_webapi_does_not_mount_mcp_when_disabled(monkeypatch) -> None:
