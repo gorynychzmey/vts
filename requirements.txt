@@ -13,3 +13,4 @@ PyYAML==6.0.3
 pywebpush==2.3.0
 tokenizers>=0.21.0,<1
 yt-dlp==2026.3.17
+fastmcp>=3.3,<4
