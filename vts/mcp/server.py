@@ -36,9 +36,9 @@ def build_mcp_server() -> FastMCP:
     @mcp.tool(name="submit_video")
     async def _submit_video(url: str) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately."""
-        user, settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
+            user, settings = await mcp_authenticate(get_http_request(), session)
             repo = Repo(session)
             redis = Redis.from_url(settings.redis_url, decode_responses=False)
             try:
@@ -62,9 +62,9 @@ def build_mcp_server() -> FastMCP:
         order: Literal["asc", "desc"] = "desc",
     ) -> list[TaskSummary]:
         """List tasks owned by the calling user."""
-        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
+            user, _settings = await mcp_authenticate(get_http_request(), session)
             return await list_tasks(
                 user=user, repo=Repo(session),
                 status=status, limit=limit, sort=sort, order=order,
@@ -73,9 +73,9 @@ def build_mcp_server() -> FastMCP:
     @mcp.tool(name="get_status")
     async def _get_status(task_id: uuid.UUID) -> TaskStatusResult:
         """Get current pipeline status for one task."""
-        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
+            user, _settings = await mcp_authenticate(get_http_request(), session)
             return await get_status(task_id=task_id, user=user, repo=Repo(session))
 
     @mcp.tool(name="get_transcript")
@@ -83,17 +83,17 @@ def build_mcp_server() -> FastMCP:
         task_id: uuid.UUID, variant: Literal["raw", "redacted"] = "raw"
     ) -> TranscriptResult:
         """Fetch the transcript text. variant=raw is the ASR output, variant=redacted is the processed version."""
-        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
+            user, _settings = await mcp_authenticate(get_http_request(), session)
             return await get_transcript(task_id=task_id, variant=variant, user=user, repo=Repo(session))
 
     @mcp.tool(name="get_summary")
     async def _get_summary(task_id: uuid.UUID) -> SummaryResult:
         """Fetch the markdown summary for a task."""
-        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
+            user, _settings = await mcp_authenticate(get_http_request(), session)
             return await get_summary(task_id=task_id, user=user, repo=Repo(session))
 
     @mcp.tool(name="wait_for_task")
@@ -103,9 +103,13 @@ def build_mcp_server() -> FastMCP:
         timeout_seconds: int = 300,
     ) -> WaitResult:
         """Block until the task reaches the target stage or the timeout fires."""
-        user, settings = await mcp_authenticate(get_http_request())
-        redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        # We resolve the user first inside a short-lived session, then release it
+        # before opening Redis — the wait can block for up to 30 min and we don't
+        # want to hold a DB connection that whole time.
         session_factory = get_db_session_factory()
+        async with session_factory() as auth_session:
+            user, settings = await mcp_authenticate(get_http_request(), auth_session)
+        redis = Redis.from_url(settings.redis_url, decode_responses=False)
         try:
             async with session_factory() as session:
                 return await wait_for_task(
