@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -360,7 +361,16 @@ def serialize_task(
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
-    app = FastAPI(title="vts", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        try:
+            yield
+        finally:
+            await app.state.redis.aclose()
+
+    app = FastAPI(title="vts", version=__version__, lifespan=lifespan)
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if settings.mcp_enabled:
@@ -372,14 +382,6 @@ def create_app() -> FastAPI:
         "Pragma": "no-cache",
         "Expires": "0",
     }
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        await app.state.redis.aclose()
 
     @app.get("/", include_in_schema=False)
     async def root() -> HTMLResponse:
