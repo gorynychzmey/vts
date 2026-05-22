@@ -104,7 +104,6 @@ class Repo:
         ordering = column.desc() if order == "desc" else column.asc()
         stmt = (
             select(Task)
-            .options(selectinload(Task.steps))
             .where(Task.user_id == user_id)
         )
         if status is not None:

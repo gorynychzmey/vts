@@ -47,6 +47,7 @@ async def test_list_tasks_status_filter() -> None:
 
     out = await list_tasks(user=user, repo=repo, status="completed", limit=20, sort="updated_at", order="desc")
     assert all(r.status == "completed" for r in out)
+    assert len(out) == 2
 
 
 @pytest.mark.asyncio
