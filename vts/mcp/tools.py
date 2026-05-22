@@ -7,7 +7,7 @@ from typing import Any, Literal, Protocol
 from fastapi import HTTPException
 
 from vts.api.main import _summary_progress_for_task
-from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, TaskStatusResult, TaskSummary, TranscriptResult
+from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult
 from vts.services.storage import task_dir
 
 
@@ -155,6 +155,23 @@ async def get_status(
         error=task.error_message,
         updated_at=task.updated_at,
     )
+
+
+async def get_summary(
+    *,
+    task_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoStatusLike,
+) -> SummaryResult:
+    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.summary_path:
+        raise HTTPException(status_code=404, detail="Summary is not ready")
+    path = Path(task.summary_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Summary file missing")
+    return SummaryResult(task_id=task.id, content=path.read_text(encoding="utf-8"), format="markdown")
 
 
 async def get_transcript(
