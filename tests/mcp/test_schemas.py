@@ -4,11 +4,12 @@ import uuid
 from datetime import datetime, timezone
 
 from vts.mcp.schemas import (
+    ProgressCounts,
     SubmitVideoResult,
-    TaskSummary,
-    TaskStatusResult,
-    TranscriptResult,
     SummaryResult,
+    TaskStatusResult,
+    TaskSummary,
+    TranscriptResult,
     WaitResult,
 )
 
@@ -37,13 +38,14 @@ def test_task_status_result_includes_progress() -> None:
         task_id=uuid.uuid4(),
         status="running",
         stage="transcribing",
-        asr_progress=0.5,
-        summary_progress=0.0,
+        asr_progress=ProgressCounts(current=5, total=10),
+        summary_progress=ProgressCounts(current=0, total=0),
         error=None,
         updated_at=datetime.now(tz=timezone.utc),
     )
     d = r.model_dump(mode="json")
-    assert d["asr_progress"] == 0.5
+    assert d["asr_progress"] == {"current": 5, "total": 10}
+    assert d["summary_progress"] == {"current": 0, "total": 0}
 
 
 def test_transcript_and_summary_shapes() -> None:

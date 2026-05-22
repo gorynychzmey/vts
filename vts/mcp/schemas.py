@@ -12,6 +12,12 @@ TaskStatusLiteral = Literal[
 ]
 
 
+class ProgressCounts(BaseModel):
+    """Discrete progress counts for a pipeline stage."""
+    current: int
+    total: int
+
+
 class SubmitVideoResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
@@ -22,7 +28,7 @@ class TaskSummary(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     title: str | None
-    url: str | None
+    url: str
     created_at: datetime
     updated_at: datetime
 
@@ -31,8 +37,8 @@ class TaskStatusResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     stage: str | None
-    asr_progress: float
-    summary_progress: float
+    asr_progress: ProgressCounts
+    summary_progress: ProgressCounts
     error: str | None
     updated_at: datetime
 
