@@ -122,8 +122,7 @@ def _stage_label(task: Any) -> str | None:
     """Return the name of the first running step, or None."""
     steps = getattr(task, "steps", None) or []
     for step in steps:
-        status_value = step.status if isinstance(step.status, str) else getattr(step.status, "value", None)
-        if status_value == "running":
+        if str(step.status) == "running":
             return step.name
     return None
 
@@ -153,6 +152,6 @@ async def get_status(
         stage=_stage_label(task),
         asr_progress=ProgressCounts(current=asr_current, total=asr_total),
         summary_progress=ProgressCounts(current=summary_current, total=summary_total),
-        error=getattr(task, "error_message", None),
+        error=task.error_message,
         updated_at=task.updated_at,
     )

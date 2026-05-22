@@ -81,3 +81,23 @@ async def test_get_status_no_running_step_yields_none_stage() -> None:
 
     result = await get_status(task_id=task_id, user=user, repo=repo)
     assert result.stage is None
+
+
+async def test_get_status_propagates_error_message_on_failure() -> None:
+    from vts.db.models import TaskStatus
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    task_id = uuid.uuid4()
+    t = FakeTask(
+        id=task_id,
+        user_id=uuid.UUID(user.id),
+        source_url="x",
+        status=TaskStatus.failed,
+        error_message="boom",
+    )
+    repo.tasks[task_id] = t
+
+    result = await get_status(task_id=task_id, user=user, repo=repo)
+    assert result.status == "failed"
+    assert result.error == "boom"
