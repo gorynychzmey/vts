@@ -581,6 +581,7 @@ import uuid
 from datetime import datetime, timezone
 
 from vts.mcp.schemas import (
+    ProgressCounts,
     SubmitVideoResult,
     TaskSummary,
     TaskStatusResult,
@@ -614,13 +615,14 @@ def test_task_status_result_includes_progress() -> None:
         task_id=uuid.uuid4(),
         status="running",
         stage="transcribing",
-        asr_progress=0.5,
-        summary_progress=0.0,
+        asr_progress=ProgressCounts(current=5, total=10),
+        summary_progress=ProgressCounts(current=0, total=0),
         error=None,
         updated_at=datetime.now(tz=timezone.utc),
     )
     d = r.model_dump(mode="json")
-    assert d["asr_progress"] == 0.5
+    assert d["asr_progress"] == {"current": 5, "total": 10}
+    assert d["summary_progress"] == {"current": 0, "total": 0}
 
 
 def test_transcript_and_summary_shapes() -> None:
@@ -672,17 +674,23 @@ class TaskSummary(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     title: str | None
-    url: str | None
+    url: str
     created_at: datetime
     updated_at: datetime
+
+
+class ProgressCounts(BaseModel):
+    """Discrete progress counts for a pipeline stage."""
+    current: int
+    total: int
 
 
 class TaskStatusResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     stage: str | None
-    asr_progress: float
-    summary_progress: float
+    asr_progress: ProgressCounts
+    summary_progress: ProgressCounts
     error: str | None
     updated_at: datetime
 
@@ -1107,26 +1115,27 @@ async def test_get_status_404_when_not_owned() -> None:
 - [ ] **Step 2: Implement**
 
 ```python
-from vts.mcp.schemas import TaskStatusResult
+from vts.mcp.schemas import ProgressCounts, TaskStatusResult
 
 
 async def get_status(*, task_id: _uuid.UUID, user, repo) -> TaskStatusResult:
     task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    asr_progress, summary_progress = _progress_for_task(task)  # see note below
+    asr_current, asr_total = await _asr_progress_for_task(repo, task)
+    summary_current, summary_total = _summary_progress_for_task(task)
     return TaskStatusResult(
         task_id=task.id,
         status=task.status,
         stage=_stage_label(task),
-        asr_progress=asr_progress,
-        summary_progress=summary_progress,
+        asr_progress=ProgressCounts(current=asr_current, total=asr_total),
+        summary_progress=ProgressCounts(current=summary_current, total=summary_total),
         error=task.error_message,
         updated_at=task.updated_at,
     )
 ```
 
-For `_progress_for_task` and `_stage_label`: the REST `serialize_task` helper in [vts/api/main.py](../../../vts/api/main.py) already computes both. Either (a) extract those helpers into `vts/services/` so they're callable from MCP, or (b) call them directly from `vts/api/main` (acceptable — no circular dep yet) and use their return shape. The first is cleaner; do (a) if it requires moving < 50 lines. Otherwise (b) and leave a TODO-free note in the commit message that future cleanup should move them.
+For `_asr_progress_for_task`, `_summary_progress_for_task`, and `_stage_label`: the REST `serialize_task` helper in [vts/api/main.py](../../../vts/api/main.py) already computes equivalents. `_summary_progress_for_task` already exists at module scope in `vts/api/main.py:230` and returns `tuple[int, int]` — reuse it (import directly: `from vts.api.main import _summary_progress_for_task`). `asr_progress` in REST comes from `repo.get_asr_progress_for_tasks([task_id]) -> dict[uuid.UUID, tuple[int, int]]` — call that and pick `dict.get(task.id, (0, 0))`. `_stage_label` does not exist as a helper today; in this task either extract a small helper from `serialize_task` (≤30 lines) into `vts/services/` so MCP can call it, or inline a 5-line version in the tool that maps the current step status to a label. Choose whichever is cleaner; the spec only requires that the field name is `stage` and the value is a short human-readable label or `None`.
 
 - [ ] **Step 3: Run, PASS**
 - [ ] **Step 4: Bump, commit**
