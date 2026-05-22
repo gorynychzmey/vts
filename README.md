@@ -76,6 +76,43 @@ oauth2-proxy, etc.).
 For production deployments using podman + systemd, see
 [docs/INITIAL_DEPLOYMENT.md](docs/INITIAL_DEPLOYMENT.md).
 
+## MCP server
+
+vts exposes a Model Context Protocol (MCP) server in the same process as the
+webapi, mounted at `/mcp` by default. MCP clients (Claude Desktop, Claude
+Code, etc.) can submit videos and pull back transcripts and summaries.
+
+**Tools exposed:**
+
+- `submit_video(url)` — submit a URL for processing; returns a
+  `task_id` immediately.
+- `list_tasks(status?, limit?, sort?, order?)` — list your tasks.
+- `get_status(task_id)` — poll status and progress.
+- `get_transcript(task_id, variant="raw"|"redacted")` — fetch the raw ASR
+  transcript or the processed (redacted) one.
+- `get_summary(task_id)` — fetch the markdown summary.
+- `wait_for_task(task_id, until="done"|"transcript"|"summary", timeout_seconds?)`
+  — block until the task reaches the target stage.
+
+**Auth:** identical to the REST API — the MCP endpoint sits behind the same
+reverse proxy and reads `X-Forwarded-User`.
+
+**Example Claude Desktop config:**
+
+```json
+{
+  "mcpServers": {
+    "vts": {
+      "type": "http",
+      "url": "https://vts.example.com/mcp"
+    }
+  }
+}
+```
+
+Disable the MCP server with `VTS_MCP_ENABLED=false` or change the mount
+path with `VTS_MCP_PATH=/some/other/path`.
+
 ## Stack
 
 - **Python 3.14**, FastAPI, async SQLAlchemy.
