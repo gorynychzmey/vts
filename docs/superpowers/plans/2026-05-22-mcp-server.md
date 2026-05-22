@@ -1763,16 +1763,18 @@ Now we expose the six free functions as FastMCP tools, doing per-call auth + dep
 from __future__ import annotations
 
 
-def test_server_registers_expected_tools() -> None:
+async def test_server_registers_expected_tools() -> None:
     from vts.mcp.server import build_mcp_server
 
     mcp = build_mcp_server()
-    names = {tool.name for tool in mcp.tools}  # FastMCP 3.x exposes .tools
+    # FastMCP 3.x exposes registered tools via the async list_tools() coroutine
+    tools = await mcp.list_tools()
+    names = {tool.name for tool in tools}
     expected = {"submit_video", "list_tasks", "get_status", "get_transcript", "get_summary", "wait_for_task"}
-    assert expected.issubset(names)
+    assert expected.issubset(names), f"missing tools: {expected - names}"
 ```
 
-If `mcp.tools` is not the correct accessor in FastMCP 3.x, grep the installed package to find the right one (`grep -rn "def tools\|@property" .venv/lib/*/site-packages/fastmcp/ | head -30`) and update both the test and assertion.
+Controller pre-verified: `FastMCP(...).list_tools()` is the correct API on 3.3.1. Tool names default to the decorated function name; to expose them WITHOUT the `_tool` suffix, decorate as `@mcp.tool(name="submit_video")`.
 
 - [ ] **Step 2: Run, expect failure**
 
@@ -1784,10 +1786,10 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 from redis.asyncio import Redis
 
-from vts.core.config import get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
@@ -1810,23 +1812,14 @@ from vts.mcp.tools import (
 from vts.services.redis_bus import RedisBus
 
 
-def _get_http_request(ctx: Context):
-    """Pull the underlying Starlette request out of the FastMCP context.
-
-    FastMCP 3.x exposes it via `ctx.request_context.request`. Verify the
-    exact attribute name on first run; if different, fix here (and only here).
-    """
-    return ctx.request_context.request
-
-
 def build_mcp_server() -> FastMCP:
+    """Construct the FastMCP server with all six MCP tools registered."""
     mcp = FastMCP(name="vts")
 
-    @mcp.tool
-    async def submit_video_tool(ctx: Context, url: str) -> SubmitVideoResult:
+    @mcp.tool(name="submit_video")
+    async def _submit_video(url: str) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately."""
-        http_req = _get_http_request(ctx)
-        user, settings = await mcp_authenticate(http_req)
+        user, settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             repo = Repo(session)
@@ -1842,16 +1835,17 @@ def build_mcp_server() -> FastMCP:
             finally:
                 await redis.aclose()
 
-    @mcp.tool
-    async def list_tasks_tool(
-        ctx: Context,
-        status: Literal["queued", "running", "completed", "failed", "paused"] | None = None,
+    @mcp.tool(name="list_tasks")
+    async def _list_tasks(
+        status: Literal[
+            "queued", "running", "paused", "completed", "archived", "failed", "canceled"
+        ] | None = None,
         limit: int = 20,
         sort: Literal["created_at", "updated_at", "title"] = "updated_at",
         order: Literal["asc", "desc"] = "desc",
     ) -> list[TaskSummary]:
         """List tasks owned by the calling user."""
-        user, _settings = await mcp_authenticate(_get_http_request(ctx))
+        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             return await list_tasks(
@@ -1859,41 +1853,40 @@ def build_mcp_server() -> FastMCP:
                 status=status, limit=limit, sort=sort, order=order,
             )
 
-    @mcp.tool
-    async def get_status_tool(ctx: Context, task_id: uuid.UUID) -> TaskStatusResult:
+    @mcp.tool(name="get_status")
+    async def _get_status(task_id: uuid.UUID) -> TaskStatusResult:
         """Get current pipeline status for one task."""
-        user, _settings = await mcp_authenticate(_get_http_request(ctx))
+        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             return await get_status(task_id=task_id, user=user, repo=Repo(session))
 
-    @mcp.tool
-    async def get_transcript_tool(
-        ctx: Context, task_id: uuid.UUID, variant: Literal["raw", "redacted"] = "raw"
+    @mcp.tool(name="get_transcript")
+    async def _get_transcript(
+        task_id: uuid.UUID, variant: Literal["raw", "redacted"] = "raw"
     ) -> TranscriptResult:
         """Fetch the transcript text. variant=raw is the ASR output, variant=redacted is the processed version."""
-        user, _settings = await mcp_authenticate(_get_http_request(ctx))
+        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             return await get_transcript(task_id=task_id, variant=variant, user=user, repo=Repo(session))
 
-    @mcp.tool
-    async def get_summary_tool(ctx: Context, task_id: uuid.UUID) -> SummaryResult:
+    @mcp.tool(name="get_summary")
+    async def _get_summary(task_id: uuid.UUID) -> SummaryResult:
         """Fetch the markdown summary for a task."""
-        user, _settings = await mcp_authenticate(_get_http_request(ctx))
+        user, _settings = await mcp_authenticate(get_http_request())
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             return await get_summary(task_id=task_id, user=user, repo=Repo(session))
 
-    @mcp.tool
-    async def wait_for_task_tool(
-        ctx: Context,
+    @mcp.tool(name="wait_for_task")
+    async def _wait_for_task(
         task_id: uuid.UUID,
         until: Literal["transcript", "summary", "done"] = "done",
         timeout_seconds: int = 300,
     ) -> WaitResult:
         """Block until the task reaches the target stage or the timeout fires."""
-        user, settings = await mcp_authenticate(_get_http_request(ctx))
+        user, settings = await mcp_authenticate(get_http_request())
         redis = Redis.from_url(settings.redis_url, decode_responses=False)
         session_factory = get_db_session_factory()
         try:
@@ -1913,7 +1906,10 @@ def build_mcp_app() -> Any:
     return build_mcp_server().http_app()
 ```
 
-The tool names exposed to MCP clients are `submit_video`, `list_tasks`, `get_status`, `get_transcript`, `get_summary`, `wait_for_task` (FastMCP uses the function name by default; the `_tool` suffix above is for the inner Python symbol — if FastMCP picks it up verbatim and gives clients `submit_video_tool`, switch to `@mcp.tool(name="submit_video")` syntax). Confirm by running the test in Step 1 — it asserts on the public names.
+Notes:
+- Controller pre-verified that `from fastmcp.server.dependencies import get_http_request` works on FastMCP 3.3.1 and returns the underlying Starlette `Request` for the current MCP call.
+- `@mcp.tool(name="...")` overrides the default (function name) so MCP clients see the clean names. The inner Python symbols use a `_` prefix to avoid shadowing the actual tool implementations imported from `vts.mcp.tools`.
+- All 7 `TaskStatus` values are accepted by `list_tasks` (matches the underlying `vts.mcp.tools.list_tasks` Literal).
 
 - [ ] **Step 4: Run all MCP tests**
 
