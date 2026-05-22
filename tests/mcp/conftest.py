@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from vts.db.models import TaskStatus
+
 
 @dataclass
 class FakeTask:
@@ -13,7 +15,7 @@ class FakeTask:
     user_id: uuid.UUID
     source_url: str
     source_title: str | None = None
-    status: str = "queued"
+    status: TaskStatus = TaskStatus.queued
     artifact_dir: str = "/tmp/vts-test/task"
     transcript_path: str | None = None
     summary_path: str | None = None
