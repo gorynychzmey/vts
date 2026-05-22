@@ -197,6 +197,9 @@ cython_debug/
 
 # Claude Code
 .claude/settings.local.json
+.claude/background/
+.claude/hooks/
+.codegraph/
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
