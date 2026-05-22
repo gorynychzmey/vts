@@ -96,7 +96,8 @@ Submit a URL (YouTube or anything `yt-dlp` accepts) for processing.
 | Param | Type | Required | Notes |
 |---|---|---|---|
 | `url` | string | yes | Same validation as the REST `POST /api/tasks`. |
-| `title` | string | no | Optional override; otherwise yt-dlp metadata is used. |
+
+(There is no `title` override at submit time: the REST endpoint also doesn't accept one, and the title is set later from yt-dlp metadata by the pipeline.)
 
 Returns:
 

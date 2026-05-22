@@ -729,10 +729,39 @@ git commit -m "feat(mcp): response schemas"
 
 ## Task 6: Tool — `submit_video`
 
-This tool calls the same code path as `POST /api/tasks`. Read [vts/api/main.py:512-555](../../../vts/api/main.py#L512-L555) first to see what fields it sets and how it publishes `notify_queued()`. Mirror that, calling repository + bus directly — do NOT issue an in-process HTTP request.
+This tool replicates the body of `POST /api/tasks` in [vts/api/main.py:515-550](../../../vts/api/main.py#L515-L550), calling repository + bus directly — do NOT issue an in-process HTTP request.
+
+**Authoritative reference implementation** (REST `create_task`, simplified to the parts we mirror):
+
+```python
+artifact = task_dir(settings.artifacts_root, user.username, task_id)  # uses hashed username
+artifact.mkdir(parents=True, exist_ok=True)
+task = await repo.create_task(
+    user_id=effective_user_id,
+    source_url=request.url,
+    options=options,        # request fields minus 'url'
+    artifact_dir=str(artifact),
+    task_id=task_id,
+)
+await session.commit()
+bus = RedisBus(redis, settings)
+await bus.notify_queued()
+await bus.publish_event(
+    user_id=str(task.user_id),
+    task_id=str(task.id),
+    event="task_status",
+    data={"status": task.status.value},
+)
+```
+
+Two facts to memorise (verified by the controller against the live source):
+1. `repo.create_task(...)` does NOT accept `source_title`. The title is set later by the pipeline from yt-dlp metadata. So the MCP tool also does not accept `title`.
+2. `task_dir(root, username, task_id)` lives in `vts/services/storage.py` and uses a **hashed** username — use it verbatim, do not roll your own path scheme.
+
+The MCP tool therefore exposes only `url`, and must publish the `task_status=queued` event after `notify_queued()` so `wait_for_task` subscribers see the first state change.
 
 **Files:**
-- Modify: `vts/mcp/tools.py` (create)
+- Create: `vts/mcp/tools.py`
 - Create: `tests/mcp/conftest.py` (shared fakes)
 - Create: `tests/mcp/test_tools_submit.py`
 
@@ -743,7 +772,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -767,28 +795,44 @@ class FakeTask:
 
 
 class FakeRepo:
+    """Mirrors the subset of vts.db.repo.Repo that the MCP tools call."""
+
     def __init__(self) -> None:
         self.tasks: dict[uuid.UUID, FakeTask] = {}
 
-    async def create_task(self, *, user_id, source_url, source_title, artifact_dir, options) -> FakeTask:
+    async def create_task(
+        self,
+        user_id: uuid.UUID,
+        source_url: str,
+        options: dict[str, Any],
+        artifact_dir: str,
+        task_id: uuid.UUID | None = None,
+    ) -> FakeTask:
         task = FakeTask(
-            id=uuid.uuid4(),
+            id=task_id or uuid.uuid4(),
             user_id=user_id,
             source_url=source_url,
-            source_title=source_title,
             artifact_dir=artifact_dir,
             options=options or {},
         )
         self.tasks[task.id] = task
         return task
 
-    async def get_task_for_user(self, user_id, task_id) -> FakeTask | None:
+    async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> FakeTask | None:
         t = self.tasks.get(task_id)
         if t is None or t.user_id != user_id:
             return None
         return t
 
-    async def list_tasks_for_user(self, user_id, *, status=None, limit=20, sort="updated_at", order="desc"):
+    async def list_tasks_for_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        limit: int = 20,
+        sort: str = "updated_at",
+        order: str = "desc",
+    ) -> list[FakeTask]:
         items = [t for t in self.tasks.values() if t.user_id == user_id]
         if status:
             items = [t for t in items if t.status == status]
@@ -802,38 +846,33 @@ class FakeRepo:
 
 
 class FakeBus:
+    """Mirrors the subset of vts.services.redis_bus.RedisBus that the MCP tools call."""
+
     def __init__(self) -> None:
         self.queued_notifications = 0
         self.published: list[dict[str, Any]] = []
-        self._subscribers: list[asyncio.Queue[dict[str, Any]]] = []
 
     async def notify_queued(self) -> None:
         self.queued_notifications += 1
 
-    async def publish_event(self, *, user_id, task_id, event, data, throttle_key=None) -> None:
-        payload = {"user_id": user_id, "task_id": task_id, "event": event, "data": data}
-        self.published.append(payload)
-        for q in list(self._subscribers):
-            q.put_nowait(payload)
-
-    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
-        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._subscribers.append(q)
-        return q
-
-    def unsubscribe(self, q: asyncio.Queue[dict[str, Any]]) -> None:
-        if q in self._subscribers:
-            self._subscribers.remove(q)
+    async def publish_event(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        event: str,
+        data: dict[str, Any],
+        throttle_key: str | None = None,
+    ) -> None:
+        self.published.append(
+            {"user_id": user_id, "task_id": task_id, "event": event, "data": data}
+        )
 
 
 @dataclass
 class FakeUser:
     id: str
     username: str = "alice"
-
-    @property
-    def id_uuid(self) -> uuid.UUID:
-        return uuid.UUID(self.id) if isinstance(self.id, str) and "-" in self.id else uuid.uuid4()
 ```
 
 - [ ] **Step 2: Write the failing test** (`tests/mcp/test_tools_submit.py`)
@@ -842,6 +881,7 @@ class FakeUser:
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -849,15 +889,14 @@ from tests.mcp.conftest import FakeBus, FakeRepo, FakeUser
 from vts.mcp.tools import submit_video
 
 
-@pytest.mark.asyncio
-async def test_submit_video_creates_task_and_notifies(tmp_path) -> None:
-    user = FakeUser(id=str(uuid.uuid4()))
+async def test_submit_video_creates_task_notifies_and_publishes(tmp_path: Path) -> None:
+    user_id = uuid.uuid4()
+    user = FakeUser(id=str(user_id), username="alice")
     repo = FakeRepo()
     bus = FakeBus()
 
     result = await submit_video(
         url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        title=None,
         user=user,
         repo=repo,
         bus=bus,
@@ -866,20 +905,42 @@ async def test_submit_video_creates_task_and_notifies(tmp_path) -> None:
 
     assert result.status == "queued"
     assert result.task_id in repo.tasks
+    assert repo.tasks[result.task_id].source_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     assert bus.queued_notifications == 1
+    # Exactly one task_status=queued event published, for this task and user
+    assert len(bus.published) == 1
+    evt = bus.published[0]
+    assert evt["event"] == "task_status"
+    assert evt["data"] == {"status": "queued"}
+    assert evt["user_id"] == str(user_id)
+    assert evt["task_id"] == str(result.task_id)
+    # artifact_dir was created on disk
+    assert Path(repo.tasks[result.task_id].artifact_dir).is_dir()
 
 
-@pytest.mark.asyncio
-async def test_submit_video_rejects_blank_url(tmp_path) -> None:
+async def test_submit_video_strips_whitespace(tmp_path: Path) -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    result = await submit_video(
+        url="  https://x/abc  ",
+        user=user,
+        repo=repo,
+        bus=bus,
+        artifacts_root=tmp_path,
+    )
+    assert repo.tasks[result.task_id].source_url == "https://x/abc"
+
+
+async def test_submit_video_rejects_blank_url(tmp_path: Path) -> None:
     from fastapi import HTTPException
 
-    user = FakeUser(id=str(uuid.uuid4()))
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     bus = FakeBus()
     with pytest.raises(HTTPException) as exc:
         await submit_video(
             url="   ",
-            title=None,
             user=user,
             repo=repo,
             bus=bus,
@@ -889,6 +950,10 @@ async def test_submit_video_rejects_blank_url(tmp_path) -> None:
 ```
 
 - [ ] **Step 3: Run, expect failure**
+
+```bash
+.venv/bin/python -m pytest tests/mcp/test_tools_submit.py -v
+```
 
 Expected: `ModuleNotFoundError: No module named 'vts.mcp.tools'`.
 
@@ -903,33 +968,41 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from vts.mcp.schemas import SubmitVideoResult
+from vts.services.storage import task_dir
 
 
 async def submit_video(
     *,
     url: str,
-    title: str | None,
     user,
     repo,
     bus,
     artifacts_root: Path,
 ) -> SubmitVideoResult:
+    """Create a new task in the queued state and notify the worker."""
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
-    user_uuid = uuid.UUID(user.id)
-    artifact_dir = artifacts_root / str(user_uuid) / "tasks" / str(uuid.uuid4())
+    task_id = uuid.uuid4()
+    artifact = task_dir(artifacts_root, user.username, task_id)
+    artifact.mkdir(parents=True, exist_ok=True)
     task = await repo.create_task(
-        user_id=user_uuid,
+        user_id=uuid.UUID(user.id),
         source_url=url.strip(),
-        source_title=(title or None),
-        artifact_dir=str(artifact_dir),
         options={},
+        artifact_dir=str(artifact),
+        task_id=task_id,
     )
     await bus.notify_queued()
+    await bus.publish_event(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        event="task_status",
+        data={"status": task.status if isinstance(task.status, str) else task.status.value},
+    )
     return SubmitVideoResult(task_id=task.id, status=task.status, created_at=task.created_at)
 ```
 
-Note: the REST endpoint in `vts/api/main.py` does more (e.g. de-dup, artifact dir mkdir, additional options). When implementing, re-read [vts/api/main.py:512-555](../../../vts/api/main.py#L512-L555) and mirror the exact production semantics — do **not** invent a simpler variant. The pseudo-implementation above shows the shape; the real one delegates to whatever helper REST uses (likely `repo.create_task(...)` directly).
+`task.status` is a `TaskStatus` enum (StrEnum) in production but a plain `str` in the FakeTask fixture — the `isinstance` guard accepts both.
 
 - [ ] **Step 5: Run tests, expect PASS**
 
@@ -1732,7 +1805,7 @@ def build_mcp_server() -> FastMCP:
     mcp = FastMCP(name="vts")
 
     @mcp.tool
-    async def submit_video_tool(ctx: Context, url: str, title: str | None = None) -> SubmitVideoResult:
+    async def submit_video_tool(ctx: Context, url: str) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately."""
         http_req = _get_http_request(ctx)
         user, settings = await mcp_authenticate(http_req)
@@ -1743,7 +1816,7 @@ def build_mcp_server() -> FastMCP:
             try:
                 bus = RedisBus(redis, settings)
                 result = await submit_video(
-                    url=url, title=title, user=user, repo=repo, bus=bus,
+                    url=url, user=user, repo=repo, bus=bus,
                     artifacts_root=settings.artifacts_root,
                 )
                 await session.commit()
@@ -1865,7 +1938,7 @@ Code, etc.) can submit videos and pull back transcripts and summaries.
 
 **Tools exposed:**
 
-- `submit_video(url, title?)` — submit a URL for processing; returns a
+- `submit_video(url)` — submit a URL for processing; returns a
   `task_id` immediately.
 - `list_tasks(status?, limit?, sort?, order?)` — list your tasks.
 - `get_status(task_id)` — poll status and progress.
