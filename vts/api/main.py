@@ -382,9 +382,10 @@ def create_app() -> FastAPI:
     # streamable-http transport initialises its session manager only via
     # that lifespan.
     mcp_app = None
+    mcp_oauth_routes: list = []
     if settings.mcp_enabled:
-        from vts.mcp import build_mcp_app
-        mcp_app = build_mcp_app()
+        from vts.mcp import build_mcp_app_with_wellknown
+        mcp_app, mcp_oauth_routes = build_mcp_app_with_wellknown(settings.mcp_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -413,6 +414,13 @@ def create_app() -> FastAPI:
     if settings.oauth_enabled:
         from vts.api.auth_routes import router as auth_router
         app.include_router(auth_router)
+
+    # FastMCP's OAuth routes (/.well-known/oauth-*, /authorize, /token,
+    # /register, /consent, /<mcp_path>/auth/callback) all live at host
+    # root per RFC 8414/9728. Mount them on the parent FastAPI BEFORE the
+    # MCP sub-app so they win path matching.
+    for route in mcp_oauth_routes:
+        app.router.routes.append(route)
 
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")

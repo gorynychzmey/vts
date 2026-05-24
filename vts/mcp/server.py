@@ -46,12 +46,23 @@ def build_mcp_server() -> FastMCP:
                 "oauth_enabled but public_base_url missing — "
                 "set VTS_PUBLIC_BASE_URL (e.g. https://vts.example.com)"
             )
-        mcp_base = f"{settings.public_base_url.rstrip('/')}{settings.mcp_path}"
+        # FastMCP's auth provider publishes /.well-known/oauth-* metadata
+        # whose URLs are anchored to issuer_url's host (RFC 8414/9728: metadata
+        # MUST live at the host root, not under a subpath). When the MCP app
+        # is mounted at /mcp the well-known routes also need to be reachable
+        # at the host root — see build_mcp_app() below, which extracts them
+        # so the parent FastAPI can mount them on /.
+        #
+        # base_url stays host-only (no /mcp suffix): that's what the spec
+        # calls the "resource server URL" and what well-known docs reference.
+        # redirect_path is moved off /auth/callback (used by the web UI) to
+        # /mcp/auth/callback, which is what the Google client already has
+        # registered for MCP.
         auth_provider = GoogleProvider(
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
-            base_url=mcp_base,
-            redirect_path="/auth/callback",
+            base_url=settings.public_base_url.rstrip("/"),
+            redirect_path=f"{settings.mcp_path.rstrip('/')}/auth/callback",
             required_scopes=["openid", "email"],
             require_authorization_consent="remember",
         )
@@ -147,9 +158,38 @@ def build_mcp_server() -> FastMCP:
     return mcp
 
 
+def build_mcp_app_with_wellknown(mcp_path: str) -> tuple[Any, list]:
+    """Build the ASGI app AND extract the FastMCP auth provider's
+    OAuth routes that must live at host root.
+
+    RFC 8414 + RFC 9728 require OAuth metadata to live at the resource's
+    host root, not under a subpath. The metadata document also references
+    /authorize, /token, /register, /consent and the redirect callback —
+    all of which must therefore live at root too, otherwise clients hit
+    the URL advertised by the metadata and get 404s from sub-app paths.
+
+    FastMCP exposes these routes via `auth.get_routes(mcp_path=...)`; we
+    return them ALL so the parent FastAPI mounts them on `/`. The MCP
+    sub-app itself (mounted at mcp_path) is left with the JSON-RPC
+    endpoint and nothing else auth-related — auth.get_routes(...) already
+    omits the streamable-HTTP transport handler.
+
+    Returns (asgi_app, oauth_routes). oauth_routes is an empty list when
+    no auth provider is attached.
+    """
+    server = build_mcp_server()
+    # path="/" mounts the streamable-HTTP endpoint at the sub-app root so
+    # the external URL is /mcp (when the sub-app is mounted at /mcp) rather
+    # than /mcp/mcp.
+    app = server.http_app(path="/")
+    routes: list = []
+    if server.auth is not None:
+        routes = list(server.auth.get_routes(mcp_path=mcp_path))
+    return app, routes
+
+
 def build_mcp_app() -> Any:
-    # path="/" mounts the streamable-HTTP endpoint at the sub-app root.
-    # Combined with `app.mount(settings.mcp_path, ...)` this exposes the
-    # transport at the configured path itself (e.g. /mcp) instead of the
-    # nested /mcp/mcp that FastMCP's default path="/mcp" would produce.
-    return build_mcp_server().http_app(path="/")
+    """Legacy single-return accessor — used by callers that don't need the
+    OAuth routes (e.g. when OAuth is off)."""
+    app, _ = build_mcp_app_with_wellknown(mcp_path="/mcp")
+    return app
