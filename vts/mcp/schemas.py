@@ -37,8 +37,7 @@ class TaskStatusResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     stage: str | None
-    asr_progress: ProgressCounts
-    summary_progress: ProgressCounts
+    progress: ProgressCounts | None
     error: str | None
     updated_at: datetime
 

@@ -614,15 +614,15 @@ def test_task_status_result_includes_progress() -> None:
     r = TaskStatusResult(
         task_id=uuid.uuid4(),
         status="running",
-        stage="transcribing",
-        asr_progress=ProgressCounts(current=5, total=10),
-        summary_progress=ProgressCounts(current=0, total=0),
+        stage="transcribe_segments",
+        progress=ProgressCounts(current=5, total=10),
         error=None,
         updated_at=datetime.now(tz=timezone.utc),
     )
     d = r.model_dump(mode="json")
-    assert d["asr_progress"] == {"current": 5, "total": 10}
-    assert d["summary_progress"] == {"current": 0, "total": 0}
+    assert d["progress"] == {"current": 5, "total": 10}
+    assert "asr_progress" not in d
+    assert "summary_progress" not in d
 
 
 def test_transcript_and_summary_shapes() -> None:
@@ -689,8 +689,7 @@ class TaskStatusResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
     stage: str | None
-    asr_progress: ProgressCounts
-    summary_progress: ProgressCounts
+    progress: ProgressCounts | None  # counter for the active stage; None when stage has no numeric counter or task is not running
     error: str | None
     updated_at: datetime
 
@@ -1190,25 +1189,44 @@ async def test_get_status_404_when_not_owned() -> None:
 ```python
 from vts.mcp.schemas import ProgressCounts, TaskStatusResult
 
+_ASR_STAGE = "transcribe_segments"
+_SUMMARY_STAGES = frozenset({"summarize_windows", "pack_window_notes", "summarize_final"})
+
+
+def _progress_for_stage(stage, task, asr_map) -> ProgressCounts | None:
+    """Return the progress counter for the currently active stage, or None."""
+    if stage is None:
+        return None
+    if stage == _ASR_STAGE:
+        current, total = asr_map.get(task.id, (0, 0))
+        return ProgressCounts(current=current, total=total)
+    if stage in _SUMMARY_STAGES:
+        current, total = summary_progress_for_task(task)
+        return ProgressCounts(current=current, total=total)
+    return None
+
 
 async def get_status(*, task_id: _uuid.UUID, user, repo) -> TaskStatusResult:
     task = await repo.get_task_for_user(_uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    asr_current, asr_total = await _asr_progress_for_task(repo, task)
-    summary_current, summary_total = _summary_progress_for_task(task)
+    asr_map = await repo.get_asr_progress_for_tasks([task.id])
+    stage = _stage_label(task)
     return TaskStatusResult(
         task_id=task.id,
         status=task.status,
-        stage=_stage_label(task),
-        asr_progress=ProgressCounts(current=asr_current, total=asr_total),
-        summary_progress=ProgressCounts(current=summary_current, total=summary_total),
+        stage=stage,
+        progress=_progress_for_stage(stage, task, asr_map),
         error=task.error_message,
         updated_at=task.updated_at,
     )
 ```
 
-For `_asr_progress_for_task`, `_summary_progress_for_task`, and `_stage_label`: the REST `serialize_task` helper in [vts/api/main.py](../../../vts/api/main.py) already computes equivalents. `_summary_progress_for_task` already exists at module scope in `vts/api/main.py:230` and returns `tuple[int, int]` — reuse it (import directly: `from vts.api.main import _summary_progress_for_task`). `asr_progress` in REST comes from `repo.get_asr_progress_for_tasks([task_id]) -> dict[uuid.UUID, tuple[int, int]]` — call that and pick `dict.get(task.id, (0, 0))`. `_stage_label` does not exist as a helper today; in this task either extract a small helper from `serialize_task` (≤30 lines) into `vts/services/` so MCP can call it, or inline a 5-line version in the tool that maps the current step status to a label. Choose whichever is cleaner; the spec only requires that the field name is `stage` and the value is a short human-readable label or `None`.
+`progress` carries the counter for the active stage only:
+- `transcribe_segments` → ASR segment counts from `repo.get_asr_progress_for_tasks`
+- `summarize_windows` / `pack_window_notes` / `summarize_final` → summary part counts from `summary_progress_for_task`
+- any other stage (download, extract_audio, etc.) → `None` (no numeric counter)
+- `stage is None` (task not currently running a step) → `None`
 
 - [ ] **Step 3: Run, PASS**
 - [ ] **Step 4: Bump, commit**

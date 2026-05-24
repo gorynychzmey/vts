@@ -136,6 +136,27 @@ class _RepoStatusLike(Protocol):
     ) -> dict[uuid.UUID, tuple[int, int]]: ...
 
 
+_ASR_STAGE = "transcribe_segments"
+_SUMMARY_STAGES = frozenset({"summarize_windows", "pack_window_notes", "summarize_final"})
+
+
+def _progress_for_stage(
+    stage: str | None,
+    task: Any,
+    asr_map: dict[uuid.UUID, tuple[int, int]],
+) -> ProgressCounts | None:
+    """Return the progress counter for the currently active stage, or None."""
+    if stage is None:
+        return None
+    if stage == _ASR_STAGE:
+        current, total = asr_map.get(task.id, (0, 0))
+        return ProgressCounts(current=current, total=total)
+    if stage in _SUMMARY_STAGES:
+        current, total = summary_progress_for_task(task)
+        return ProgressCounts(current=current, total=total)
+    return None
+
+
 async def get_status(
     *,
     task_id: uuid.UUID,
@@ -146,14 +167,12 @@ async def get_status(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     asr_map = await repo.get_asr_progress_for_tasks([task.id])
-    asr_current, asr_total = asr_map.get(task.id, (0, 0))
-    summary_current, summary_total = summary_progress_for_task(task)
+    stage = _stage_label(task)
     return TaskStatusResult(
         task_id=task.id,
         status=str(task.status),
-        stage=_stage_label(task),
-        asr_progress=ProgressCounts(current=asr_current, total=asr_total),
-        summary_progress=ProgressCounts(current=summary_current, total=summary_total),
+        stage=stage,
+        progress=_progress_for_stage(stage, task, asr_map),
         error=task.error_message,
         updated_at=task.updated_at,
     )

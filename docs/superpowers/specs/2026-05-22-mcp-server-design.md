@@ -151,13 +151,22 @@ Returns:
 {
   "task_id": "uuid",
   "status": "running",
-  "stage": "transcribing|summarizing|...",
-  "asr_progress": 0.42,
-  "summary_progress": 0.0,
+  "stage": "transcribe_segments|summarize_windows|...|null",
+  "progress": {"current": 3, "total": 10},
   "error": "string|null",
   "updated_at": "RFC3339"
 }
 ```
+
+`progress` carries the numeric counter for whatever stage is currently active:
+- `transcribe_segments` → ASR segment-level counts
+- `summarize_windows` / `pack_window_notes` / `summarize_final` → summary part counts
+- any other stage (download, extract_audio, etc.) → `null` (no numeric counter)
+- `stage` is `null` (task queued/paused/terminal) → `null`
+
+A task is in exactly one stage at a time, so one counter is sufficient. The old
+`asr_progress` + `summary_progress` split has been removed — the second field
+always carried a stale `(0, 0)` when the first was live, and vice versa.
 
 Field set follows the existing `serialize_task(...)` output, trimmed to what
 an external caller needs (no internal IDs, no queue positions).

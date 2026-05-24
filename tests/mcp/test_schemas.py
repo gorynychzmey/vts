@@ -37,15 +37,15 @@ def test_task_status_result_includes_progress() -> None:
     r = TaskStatusResult(
         task_id=uuid.uuid4(),
         status="running",
-        stage="transcribing",
-        asr_progress=ProgressCounts(current=5, total=10),
-        summary_progress=ProgressCounts(current=0, total=0),
+        stage="transcribe_segments",
+        progress=ProgressCounts(current=5, total=10),
         error=None,
         updated_at=datetime.now(tz=timezone.utc),
     )
     d = r.model_dump(mode="json")
-    assert d["asr_progress"] == {"current": 5, "total": 10}
-    assert d["summary_progress"] == {"current": 0, "total": 0}
+    assert d["progress"] == {"current": 5, "total": 10}
+    assert "asr_progress" not in d
+    assert "summary_progress" not in d
 
 
 def test_transcript_and_summary_shapes() -> None:
