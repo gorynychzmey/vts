@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import uuid
@@ -8,6 +9,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+
+from starlette.middleware.sessions import SessionMiddleware
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
@@ -362,6 +365,18 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
 
+    if settings.oauth_enabled:
+        if not settings.oauth_client_secret:
+            raise RuntimeError(
+                "oauth_enabled=True but oauth_client_secret is missing — "
+                "set VTS_OAUTH_CLIENT_SECRET"
+            )
+        session_secret = settings.session_secret or hashlib.blake2b(
+            settings.oauth_client_secret.encode("utf-8"),
+            key=b"vts-session-cookie",
+            digest_size=32,
+        ).hexdigest()
+
     # Build the MCP sub-app eagerly so we can chain its lifespan into ours;
     # FastAPI does not run lifespans of mounted sub-apps, and the FastMCP
     # streamable-http transport initialises its session manager only via
@@ -384,6 +399,17 @@ def create_app() -> FastAPI:
             await app.state.redis.aclose()
 
     app = FastAPI(title="vts", version=__version__, lifespan=lifespan)
+
+    if settings.oauth_enabled:
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=session_secret,
+            session_cookie="vts_session",
+            https_only=True,
+            same_site="lax",
+            max_age=2_592_000,
+        )
+
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if mcp_app is not None:
