@@ -91,9 +91,12 @@ the browser (PWA / web UI) and MCP clients. After this lands:
 ### What changes shape
 
 - `Settings` collapses `mcp_oauth_*` → `oauth_*` for the shared bits
-  (client_id, client_secret, allowed_emails, allowed_domains), keeping
-  one MCP-specific value (`mcp_oauth_base_url`). Old env names accept
-  the new value as a deprecation alias.
+  (client_id, client_secret, allowed_emails, allowed_domains).
+  `mcp_oauth_base_url` is **removed**; a single `public_base_url`
+  (host-only, e.g. `https://vts.vostrikov.dev`) replaces it. MCP's
+  GoogleProvider base_url is computed as
+  `public_base_url + mcp_path`. Old env names accept the new value
+  as a deprecation alias.
 - `vts/services/auth.py:resolve_user_from_request` is rewritten to
   follow the cookie / bearer / dev-mode path described below.
 - `vts/static/app.js` stops sending an `X-Forwarded-User` header in
@@ -210,8 +213,8 @@ the previous spec stays exactly as is. The only edits:
 - `GoogleProvider(client_id=..., client_secret=...)` reads the shared
   `settings.oauth_client_id` / `settings.oauth_client_secret` instead
   of the old `mcp_oauth_*`.
-- `base_url=settings.mcp_oauth_base_url` (the one MCP-only setting we
-  keep).
+- `base_url = f"{settings.public_base_url}{settings.mcp_path}"`
+  (composed at server-construction time; no separate setting).
 - `is_email_allowed(..., settings.oauth_allowed_*)` (shared lists).
 - `mcp_authenticate` keeps two branches (legacy / OAuth) but the legacy
   branch now equals "no auth at all when `oauth_enabled=False`" — no
@@ -225,15 +228,31 @@ All settings consolidated under `oauth_*`. New canonical names:
 
 ```python
 class Settings(BaseSettings):
+    public_base_url: str | None = None       # e.g. "https://vts.vostrikov.dev"
     oauth_enabled: bool = False
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
     oauth_allowed_emails: list[str] = []
     oauth_allowed_domains: list[str] = []
     session_secret: str | None = None
-    # MCP-specific
-    mcp_oauth_base_url: str | None = None
 ```
+
+`public_base_url` is **host-only** (no path). All URL derivations
+compute paths from it:
+
+- Web OAuth `redirect_uri` = `public_base_url + "/auth/callback"`.
+- MCP `GoogleProvider(base_url=...)` = `public_base_url + mcp_path`
+  (e.g. `https://vts.vostrikov.dev/mcp`).
+- Future endpoints that need self-reference (e.g. Web Push WebPush
+  audience) reuse the same value.
+
+`mcp_oauth_base_url` is **removed** from the config in favour of this
+single source. If the migration aliases (below) see the old key, they
+warn AND fall back to splitting it: `mcp_oauth_base_url=
+"https://vts.vostrikov.dev/mcp"` becomes
+`public_base_url="https://vts.vostrikov.dev"` plus the already-existing
+`mcp_path="/mcp"`. This keeps existing deployments working through the
+deprecation window.
 
 ### Deprecated aliases
 
@@ -249,7 +268,7 @@ table:
 | `VTS_MCP_OAUTH_CLIENT_SECRET` | `VTS_OAUTH_CLIENT_SECRET` |
 | `VTS_MCP_OAUTH_ALLOWED_EMAILS` | `VTS_OAUTH_ALLOWED_EMAILS` |
 | `VTS_MCP_OAUTH_ALLOWED_DOMAINS` | `VTS_OAUTH_ALLOWED_DOMAINS` |
-| `VTS_MCP_OAUTH_BASE_URL` | (kept as `VTS_MCP_OAUTH_BASE_URL`) |
+| `VTS_MCP_OAUTH_BASE_URL` | `VTS_PUBLIC_BASE_URL` (with `mcp_path` stripped if present) |
 
 `Settings.trusted_proxy_cidrs` and `Settings.is_trusted_proxy(...)` are
 deleted outright (no alias). Existing configs that set them get
@@ -271,13 +290,16 @@ VTS_OAUTH_ALLOWED_EMAILS=
 # rotating the OAuth client secret without invalidating sessions.
 VTS_SESSION_SECRET=
 
-# MCP-specific: public base URL of the MCP endpoint.
-VTS_MCP_OAUTH_BASE_URL=https://vts.vostrikov.dev/mcp
+# Public origin where vts is reachable from the outside. No path.
+# Used to build OAuth redirect URIs (both web and MCP) and any other
+# self-referential URL the service needs to advertise.
+VTS_PUBLIC_BASE_URL=https://vts.vostrikov.dev
 ```
 
 ### `config.yaml` equivalent
 
 ```yaml
+public_base_url: https://vts.vostrikov.dev
 oauth:
   enabled: true
   client_id: ...apps.googleusercontent.com
@@ -286,8 +308,8 @@ oauth:
   allowed_emails: []
 # session_secret in env only
 mcp:
-  oauth:
-    base_url: https://vts.vostrikov.dev/mcp
+  path: /mcp     # already existed; combined with public_base_url
+                 # gives the MCP GoogleProvider its base_url.
 ```
 
 ## Frontend changes
