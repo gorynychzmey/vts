@@ -124,4 +124,8 @@ def build_mcp_server() -> FastMCP:
 
 
 def build_mcp_app() -> Any:
-    return build_mcp_server().http_app()
+    # path="/" mounts the streamable-HTTP endpoint at the sub-app root.
+    # Combined with `app.mount(settings.mcp_path, ...)` this exposes the
+    # transport at the configured path itself (e.g. /mcp) instead of the
+    # nested /mcp/mcp that FastMCP's default path="/mcp" would produce.
+    return build_mcp_server().http_app(path="/")

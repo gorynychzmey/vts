@@ -79,10 +79,8 @@ For production deployments using podman + systemd, see
 ## MCP server
 
 vts exposes a Model Context Protocol (MCP) server in the same process as the
-webapi, mounted at `/mcp` by default. The streamable-HTTP endpoint that
-clients actually POST to is `/mcp/mcp` (FastMCP nests its own `/mcp` route
-inside the sub-app). MCP clients (Claude Desktop, Claude Code, etc.) can
-submit videos and pull back transcripts and summaries.
+webapi, mounted at `/mcp` by default. MCP clients (Claude Desktop, Claude
+Code, etc.) can submit videos and pull back transcripts and summaries.
 
 **Tools exposed:**
 
@@ -106,7 +104,7 @@ reverse proxy and reads `X-Forwarded-User`.
   "mcpServers": {
     "vts": {
       "type": "http",
-      "url": "https://vts.example.com/mcp/mcp"
+      "url": "https://vts.example.com/mcp/"
     }
   }
 }
