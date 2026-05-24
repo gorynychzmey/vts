@@ -99,6 +99,9 @@ reverse proxy and reads `X-Forwarded-User`.
 
 **Example Claude Desktop config:**
 
+For direct connections from Claude Desktop where you control the
+reverse-proxy auth headers yourself:
+
 ```json
 {
   "mcpServers": {
@@ -112,6 +115,50 @@ reverse proxy and reads `X-Forwarded-User`.
 
 Disable the MCP server with `VTS_MCP_ENABLED=false` or change the mount
 path with `VTS_MCP_PATH=/some/other/path`.
+
+### MCP OAuth (for claude.ai / chatgpt.com)
+
+`claude.ai` and `chatgpt.com` only accept OAuth 2.1 + Dynamic Client
+Registration for remote MCP servers. To make them connect to your vts
+instance:
+
+1. **Create a Google OAuth 2.0 Client** in GCP Console:
+   - Type: Web application
+   - Authorized redirect URIs: `https://<your-domain>/mcp/auth/callback`
+   - Note `client_id` and `client_secret`.
+
+2. **Configure vts** via env vars (or `config.yaml`):
+
+   ```bash
+   VTS_MCP_OAUTH_ENABLED=true
+   VTS_MCP_OAUTH_CLIENT_ID=<from GCP>
+   VTS_MCP_OAUTH_CLIENT_SECRET=<from GCP>
+   VTS_MCP_OAUTH_BASE_URL=https://<your-domain>/mcp
+   VTS_MCP_OAUTH_ALLOWED_DOMAINS=your-domain.tld
+   ```
+
+   `config.yaml` equivalent (secrets stay in env):
+   ```yaml
+   mcp:
+     oauth:
+       enabled: true
+       client_id: <from GCP>
+       base_url: https://<your-domain>/mcp
+       allowed_domains: [your-domain.tld]
+       allowed_emails: []
+   ```
+
+3. **Reverse proxy**: ensure `/mcp/*` reaches vts WITHOUT any
+   OIDC/forward-auth middleware (vts handles OAuth itself for that
+   path).
+
+4. **Connect** in claude.ai → Settings → Connectors → Custom, URL
+   `https://<your-domain>/mcp/`. ChatGPT works the same way.
+
+Access is granted if the authenticated Google email matches **either**
+`VTS_MCP_OAUTH_ALLOWED_EMAILS` (exact) **or**
+`VTS_MCP_OAUTH_ALLOWED_DOMAINS` (right-hand side of `@`). Both lists
+empty → access denied (fail-safe).
 
 ## Stack
 
