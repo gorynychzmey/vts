@@ -23,16 +23,16 @@ jobs:
       contents: read
 
     steps:
-      - name: Validate deploy secrets
+      - name: Validate deploy configuration
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           if [[ -z "${DEPLOY_HOST}" ]]; then
-            echo "Missing required secret: DEPLOY_HOST"
+            echo "Missing required variable: DEPLOY_HOST (set under Repo Settings → Variables)"
             exit 1
           fi
           if [[ -z "${DEPLOY_SSH_KEY}" ]]; then
@@ -61,8 +61,8 @@ jobs:
       - name: Deploy on server
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_JUMP_HOST: ${{ secrets.DEPLOY_JUMP_HOST }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_JUMP_HOST: ${{ vars.DEPLOY_JUMP_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_REMOTE_DIR: ${{ vars.DEPLOY_REMOTE_DIR }}
