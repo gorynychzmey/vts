@@ -47,13 +47,12 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
     import vts.mcp.server as server_mod
     from vts.core.config import Settings
 
-    # Four patches in vts.mcp.server:
-    # get_http_request() is called as an argument to mcp_authenticate in each wrapper,
-    # so it must be patched too (it raises RuntimeError outside HTTP context).
-    async def _fake_mcp_authenticate(http_request, session):
+    # Three patches in vts.mcp.server:
+    # mcp_authenticate now calls get_http_request() internally, so only the
+    # function itself needs patching here.
+    async def _fake_mcp_authenticate(session):
         return user, Settings(trusted_proxy_cidrs=["127.0.0.1/32"])
 
-    monkeypatch.setattr(server_mod, "get_http_request", lambda: object())
     monkeypatch.setattr(server_mod, "mcp_authenticate", _fake_mcp_authenticate)
     monkeypatch.setattr(server_mod, "get_db_session_factory", _fake_session_factory)
     monkeypatch.setattr(server_mod, "Repo", lambda _session: repo)
