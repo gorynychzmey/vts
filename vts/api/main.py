@@ -410,6 +410,10 @@ def create_app() -> FastAPI:
             max_age=2_592_000,
         )
 
+    if settings.oauth_enabled:
+        from vts.api.auth_routes import router as auth_router
+        app.include_router(auth_router)
+
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if mcp_app is not None:
