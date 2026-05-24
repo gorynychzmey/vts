@@ -76,13 +76,47 @@ oauth2-proxy, etc.).
 For production deployments using podman + systemd, see
 [docs/INITIAL_DEPLOYMENT.md](docs/INITIAL_DEPLOYMENT.md).
 
-## MCP server
+## Authentication
 
-vts exposes a Model Context Protocol (MCP) server in the same process as the
-webapi, mounted at `/mcp` by default. MCP clients (Claude Desktop, Claude
-Code, etc.) can submit videos and pull back transcripts and summaries.
+vts authenticates everyone via Google OAuth 2.0 (one Google Cloud project
+covers both the web UI and the MCP endpoint).
 
-**Tools exposed:**
+### Setup
+
+1. **Create an OAuth 2.0 Client ID** in [GCP Console](https://console.cloud.google.com/apis/credentials):
+   - Type: Web application
+   - Authorized redirect URIs (add BOTH):
+     - `https://<your-domain>/auth/callback`     (web UI)
+     - `https://<your-domain>/mcp/auth/callback` (MCP)
+   - Note the `client_id` and `client_secret`.
+
+2. **Set env vars** (or `config.yaml`):
+
+   ```bash
+   VTS_OAUTH_ENABLED=true
+   VTS_OAUTH_CLIENT_ID=<from GCP>
+   VTS_OAUTH_CLIENT_SECRET=<from GCP>
+   VTS_PUBLIC_BASE_URL=https://<your-domain>
+   VTS_OAUTH_ALLOWED_DOMAINS=your-domain.tld
+   ```
+
+3. **Reverse proxy**: route `Host(your-domain)` straight to vts. No OIDC
+   middleware, no path-prefix bypasses; vts handles OAuth itself.
+
+### How it works
+
+- Browser visits `/` → vts redirects to `/auth/login` → Google login →
+  `/auth/callback` validates the email against the allow-list, sets a
+  signed `vts_session` cookie, and lands you on `/`.
+- claude.ai / ChatGPT / Claude Desktop point their MCP connector at
+  `https://<your-domain>/mcp/`. The first request triggers FastMCP's
+  OAuth dance against the same Google client; subsequent calls carry a
+  Bearer access token.
+- Allow-list: at least one of `VTS_OAUTH_ALLOWED_DOMAINS` (right-hand
+  side of `@`, case-insensitive) or `VTS_OAUTH_ALLOWED_EMAILS` (exact)
+  must match. Both empty → access denied (fail-safe).
+
+### Tools exposed via MCP
 
 - `submit_video(url)` — submit a URL for processing; returns a
   `task_id` immediately.
@@ -94,71 +128,10 @@ Code, etc.) can submit videos and pull back transcripts and summaries.
 - `wait_for_task(task_id, until="done"|"transcript"|"summary", timeout_seconds?)`
   — block until the task reaches the target stage.
 
-**Auth:** identical to the REST API — the MCP endpoint sits behind the same
-reverse proxy and reads `X-Forwarded-User`.
+### Local development
 
-**Example Claude Desktop config:**
-
-For direct connections from Claude Desktop where you control the
-reverse-proxy auth headers yourself:
-
-```json
-{
-  "mcpServers": {
-    "vts": {
-      "type": "http",
-      "url": "https://vts.example.com/mcp/"
-    }
-  }
-}
-```
-
-Disable the MCP server with `VTS_MCP_ENABLED=false` or change the mount
-path with `VTS_MCP_PATH=/some/other/path`.
-
-### MCP OAuth (for claude.ai / chatgpt.com)
-
-`claude.ai` and `chatgpt.com` only accept OAuth 2.1 + Dynamic Client
-Registration for remote MCP servers. To make them connect to your vts
-instance:
-
-1. **Create a Google OAuth 2.0 Client** in GCP Console:
-   - Type: Web application
-   - Authorized redirect URIs: `https://<your-domain>/mcp/auth/callback`
-   - Note `client_id` and `client_secret`.
-
-2. **Configure vts** via env vars (or `config.yaml`):
-
-   ```bash
-   VTS_MCP_OAUTH_ENABLED=true
-   VTS_MCP_OAUTH_CLIENT_ID=<from GCP>
-   VTS_MCP_OAUTH_CLIENT_SECRET=<from GCP>
-   VTS_MCP_OAUTH_BASE_URL=https://<your-domain>/mcp
-   VTS_MCP_OAUTH_ALLOWED_DOMAINS=your-domain.tld
-   ```
-
-   `config.yaml` equivalent (secrets stay in env):
-   ```yaml
-   mcp:
-     oauth:
-       enabled: true
-       client_id: <from GCP>
-       base_url: https://<your-domain>/mcp
-       allowed_domains: [your-domain.tld]
-       allowed_emails: []
-   ```
-
-3. **Reverse proxy**: ensure `/mcp/*` reaches vts WITHOUT any
-   OIDC/forward-auth middleware (vts handles OAuth itself for that
-   path).
-
-4. **Connect** in claude.ai → Settings → Connectors → Custom, URL
-   `https://<your-domain>/mcp/`. ChatGPT works the same way.
-
-Access is granted if the authenticated Google email matches **either**
-`VTS_MCP_OAUTH_ALLOWED_EMAILS` (exact) **or**
-`VTS_MCP_OAUTH_ALLOWED_DOMAINS` (right-hand side of `@`). Both lists
-empty → access denied (fail-safe).
+Set `VTS_OAUTH_ENABLED=false` and pass `X-Forwarded-User: <your-email>`
+on each request (curl/httpie/your-own-proxy). This skips Google entirely.
 
 ## Stack
 

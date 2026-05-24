@@ -51,7 +51,7 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
     # mcp_authenticate now calls get_http_request() internally, so only the
     # function itself needs patching here.
     async def _fake_mcp_authenticate(session):
-        return user, Settings(trusted_proxy_cidrs=["127.0.0.1/32"])
+        return user, Settings()
 
     monkeypatch.setattr(server_mod, "mcp_authenticate", _fake_mcp_authenticate)
     monkeypatch.setattr(server_mod, "get_db_session_factory", _fake_session_factory)
