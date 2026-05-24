@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources.providers.env import EnvSettingsSource
 
 # Fields that accept comma-separated strings from the environment.
-_CSV_LIST_FIELDS = frozenset({"mcp_oauth_allowed_emails", "mcp_oauth_allowed_domains"})
+_CSV_LIST_FIELDS = frozenset({
+    "oauth_allowed_emails",
+    "oauth_allowed_domains",
+})
 
 
 class _CsvEnvSource(EnvSettingsSource):
@@ -22,7 +24,25 @@ class _CsvEnvSource(EnvSettingsSource):
     vars (e.g. ``'["a", "b"]'``).  This subclass transparently converts plain
     comma-separated values (e.g. ``"a@b.com,c@d.com"``) to a list before the
     standard JSON-decode path runs, so both formats work.
+
+    Also handles the legacy VTS_MCP_OAUTH_BASE_URL env var by splitting it into
+    public_base_url (stripping the mcp_path suffix) when VTS_PUBLIC_BASE_URL is
+    not set.
     """
+
+    def __call__(self) -> dict[str, Any]:
+        import os
+        result = super().__call__()
+        # Promote legacy VTS_MCP_OAUTH_BASE_URL → public_base_url when needed.
+        if "public_base_url" not in result:
+            legacy_base = os.environ.get("VTS_MCP_OAUTH_BASE_URL", "")
+            if legacy_base:
+                raw = legacy_base.rstrip("/")
+                mcp_path = (result.get("mcp_path") or os.environ.get("VTS_MCP_PATH") or "/mcp").rstrip("/")
+                if mcp_path and raw.endswith(mcp_path):
+                    raw = raw[: -len(mcp_path)]
+                result["public_base_url"] = raw
+        return result
 
     def prepare_field_value(
         self,
@@ -67,12 +87,6 @@ class Settings(BaseSettings):
     prompts_dir: Path = Path("/opt/vts/prompts")
     artifacts_root: Path = Path("/srv/vts-data")
 
-    trusted_proxy_cidrs: list[str] = [
-        "127.0.0.1/32",
-        "::1/128",
-        "172.16.0.0/12",
-        "10.0.0.0/8",
-    ]
     admin_emails: list[str] = []
 
     whisper_url: str = "http://whisper:9000"
@@ -115,12 +129,64 @@ class Settings(BaseSettings):
     timezone: str | None = None
     mcp_enabled: bool = True
     mcp_path: str = "/mcp"
-    mcp_oauth_enabled: bool = False
-    mcp_oauth_client_id: str | None = None
-    mcp_oauth_client_secret: str | None = None
-    mcp_oauth_base_url: str | None = None
-    mcp_oauth_allowed_emails: list[str] = []
-    mcp_oauth_allowed_domains: list[str] = []
+
+    # Canonical OAuth / session settings (Task 1: vts-u8n).
+    # AliasChoices lists both the new VTS_OAUTH_* env vars and the deprecated
+    # VTS_MCP_OAUTH_* aliases so existing deployments keep working unchanged.
+    public_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VTS_PUBLIC_BASE_URL",
+            "public_base_url",
+        ),
+    )
+    oauth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VTS_OAUTH_ENABLED",
+            "VTS_MCP_OAUTH_ENABLED",
+            "oauth_enabled",
+        ),
+    )
+    oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VTS_OAUTH_CLIENT_ID",
+            "VTS_MCP_OAUTH_CLIENT_ID",
+            "oauth_client_id",
+        ),
+    )
+    oauth_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VTS_OAUTH_CLIENT_SECRET",
+            "VTS_MCP_OAUTH_CLIENT_SECRET",
+            "oauth_client_secret",
+        ),
+    )
+    oauth_allowed_emails: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "VTS_OAUTH_ALLOWED_EMAILS",
+            "VTS_MCP_OAUTH_ALLOWED_EMAILS",
+            "oauth_allowed_emails",
+        ),
+    )
+    oauth_allowed_domains: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "VTS_OAUTH_ALLOWED_DOMAINS",
+            "VTS_MCP_OAUTH_ALLOWED_DOMAINS",
+            "oauth_allowed_domains",
+        ),
+    )
+    session_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VTS_SESSION_SECRET",
+            "session_secret",
+        ),
+    )
 
     media_ttl_hours: int = 72
 
@@ -165,26 +231,32 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator(
-        "mcp_oauth_allowed_emails",
-        "mcp_oauth_allowed_domains",
-        mode="before",
-    )
+    @model_validator(mode="before")
     @classmethod
-    def _csv_or_json_list(cls, value: Any) -> Any:
-        """Accept comma-separated string for env input; JSON arrays
-        (pydantic-settings' env default) and real lists (from YAML) pass
-        through unchanged."""
-        if isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                return []
-            # Heuristic: a string starting with '[' AND containing a quote is a JSON array.
-            # This excludes bracket-local-part emails like "[email@example.com]".
-            if stripped.startswith("[") and ('"' in stripped or "'" in stripped):
-                return stripped  # pydantic-settings will JSON-decode
-            return [item.strip() for item in stripped.split(",") if item.strip()]
-        return value
+    def _mcp_oauth_alias_promotion(cls, data: Any) -> Any:
+        """Accept legacy VTS_MCP_OAUTH_* keys as aliases until 1.2.x.
+        Canonical VTS_OAUTH_* (or oauth_* yaml) wins when both are set."""
+        if not isinstance(data, dict):
+            return data
+        alias_map = {
+            "mcp_oauth_enabled": "oauth_enabled",
+            "mcp_oauth_client_id": "oauth_client_id",
+            "mcp_oauth_client_secret": "oauth_client_secret",
+            "mcp_oauth_allowed_emails": "oauth_allowed_emails",
+            "mcp_oauth_allowed_domains": "oauth_allowed_domains",
+        }
+        for legacy, canonical in alias_map.items():
+            if legacy in data and canonical not in data:
+                data[canonical] = data[legacy]
+        # Split legacy mcp_oauth_base_url into public_base_url (host part).
+        if "mcp_oauth_base_url" in data and "public_base_url" not in data:
+            raw = str(data["mcp_oauth_base_url"]).rstrip("/")
+            # Strip the trailing mcp_path if present.
+            mcp_path = data.get("mcp_path", "/mcp").rstrip("/")
+            if mcp_path and raw.endswith(mcp_path):
+                raw = raw[: -len(mcp_path)]
+            data["public_base_url"] = raw
+        return data
 
     @classmethod
     def settings_customise_sources(cls, settings_cls: type[BaseSettings], **kwargs: Any) -> tuple[Any, ...]:  # type: ignore[override]
@@ -194,10 +266,6 @@ class Settings(BaseSettings):
             _CsvEnvSource(settings_cls) if isinstance(src, EnvSettingsSource) else src
             for src in sources
         )
-
-    def is_trusted_proxy(self, host: str) -> bool:
-        remote = ip_address(host)
-        return any(remote in ip_network(cidr) for cidr in self.trusted_proxy_cidrs)
 
     def is_admin(self, email: str) -> bool:
         normalized = email.strip().lower()

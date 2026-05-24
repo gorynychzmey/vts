@@ -15,7 +15,7 @@ async def mcp_authenticate(
 ) -> tuple[AuthenticatedUser, Settings]:
     """Resolve the user for an MCP tool invocation.
 
-    If `settings.mcp_oauth_enabled`, identity comes from the FastMCP
+    If `settings.oauth_enabled`, identity comes from the FastMCP
     OAuth access token (email claim populated by GoogleProvider).
     Otherwise, falls back to the X-Forwarded-User reverse-proxy flow.
 
@@ -23,7 +23,7 @@ async def mcp_authenticate(
     FastMCP translates these to MCP errors.
     """
     settings = get_settings()
-    if settings.mcp_oauth_enabled:
+    if settings.oauth_enabled:
         return await _authenticate_via_oauth(session, settings)
     http_request = get_http_request()
     user = await resolve_user_from_request(http_request, session, settings)
@@ -42,8 +42,8 @@ async def _authenticate_via_oauth(
         raise HTTPException(status_code=401, detail="OAuth token has no email claim")
     if not is_email_allowed(
         email,
-        allowed_emails=settings.mcp_oauth_allowed_emails,
-        allowed_domains=settings.mcp_oauth_allowed_domains,
+        allowed_emails=settings.oauth_allowed_emails,
+        allowed_domains=settings.oauth_allowed_domains,
     ):
         raise HTTPException(status_code=403, detail="Email not allowed")
 

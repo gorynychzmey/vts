@@ -33,23 +33,24 @@ def build_mcp_server() -> FastMCP:
     """Construct the FastMCP server with all six MCP tools registered."""
     settings = get_settings()
     auth_provider = None
-    if settings.mcp_oauth_enabled:
+    if settings.oauth_enabled:
         from fastmcp.server.auth.providers.google import GoogleProvider
 
-        if not settings.mcp_oauth_client_id or not settings.mcp_oauth_client_secret:
+        if not settings.oauth_client_id or not settings.oauth_client_secret:
             raise RuntimeError(
-                "mcp_oauth_enabled but client_id/client_secret missing — "
-                "set VTS_MCP_OAUTH_CLIENT_ID and VTS_MCP_OAUTH_CLIENT_SECRET"
+                "oauth_enabled but client_id/client_secret missing — "
+                "set VTS_OAUTH_CLIENT_ID and VTS_OAUTH_CLIENT_SECRET"
             )
-        if not settings.mcp_oauth_base_url:
+        if not settings.public_base_url:
             raise RuntimeError(
-                "mcp_oauth_enabled but base_url missing — "
-                "set VTS_MCP_OAUTH_BASE_URL (e.g. https://vts.example.com/mcp)"
+                "oauth_enabled but public_base_url missing — "
+                "set VTS_PUBLIC_BASE_URL (e.g. https://vts.example.com)"
             )
+        mcp_base = f"{settings.public_base_url.rstrip('/')}{settings.mcp_path}"
         auth_provider = GoogleProvider(
-            client_id=settings.mcp_oauth_client_id,
-            client_secret=settings.mcp_oauth_client_secret,
-            base_url=settings.mcp_oauth_base_url,
+            client_id=settings.oauth_client_id,
+            client_secret=settings.oauth_client_secret,
+            base_url=mcp_base,
             redirect_path="/auth/callback",
             required_scopes=["openid", "email"],
             require_authorization_consent="remember",

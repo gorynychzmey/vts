@@ -34,9 +34,9 @@ def fake_settings(monkeypatch):
     from vts.core.config import Settings
 
     s = Settings(
-        mcp_oauth_enabled=True,
-        mcp_oauth_allowed_domains=["vostrikov.de"],
-        mcp_oauth_allowed_emails=[],
+        oauth_enabled=True,
+        oauth_allowed_domains=["vostrikov.de"],
+        oauth_allowed_emails=[],
     )
     monkeypatch.setattr("vts.mcp.auth.get_settings", lambda: s)
     return s
@@ -108,12 +108,12 @@ async def test_oauth_path_email_lowercased_before_lookup(monkeypatch, fake_setti
 
 
 async def test_legacy_path_still_works_when_oauth_disabled(monkeypatch) -> None:
-    """When mcp_oauth_enabled=False, fall back to X-Forwarded-User via
+    """When oauth_enabled=False, fall back to X-Forwarded-User via
     resolve_user_from_request (the existing path; we just smoke that the
     branch is taken)."""
     from vts.core.config import Settings
 
-    s = Settings(mcp_oauth_enabled=False, trusted_proxy_cidrs=["127.0.0.1/32"])
+    s = Settings(oauth_enabled=False)
     monkeypatch.setattr("vts.mcp.auth.get_settings", lambda: s)
 
     sentinel_user = SimpleNamespace(id="u-1", username="legacy", is_admin=False)
