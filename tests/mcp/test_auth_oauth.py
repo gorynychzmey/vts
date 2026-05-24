@@ -17,20 +17,9 @@ class _FakeSession:
         self.committed = True
 
 
-class _FakeRepo:
-    def __init__(self) -> None:
-        self.last_arg: str | None = None
-        self.user = SimpleNamespace(id=uuid.uuid4(), username="user@vostrikov.de")
-
-    async def get_or_create_user(self, username: str):
-        self.last_arg = username
-        self.user = SimpleNamespace(id=self.user.id, username=username)
-        return self.user
-
-
 @pytest.fixture
-def fake_settings(monkeypatch):
-    """Replace get_settings() so OAuth branch fires."""
+def fake_settings_oauth(monkeypatch):
+    """Replace get_settings() so oauth_enabled=True."""
     from vts.core.config import Settings
 
     s = Settings(
@@ -42,75 +31,54 @@ def fake_settings(monkeypatch):
     return s
 
 
-def _patch_access_token(monkeypatch, token):
-    monkeypatch.setattr("vts.mcp.auth.get_access_token", lambda: token)
+async def test_mcp_authenticate_delegates_to_resolve_user(monkeypatch, fake_settings_oauth) -> None:
+    """mcp_authenticate must delegate to resolve_user_from_request regardless of oauth flag."""
+    sentinel_user = SimpleNamespace(id=str(uuid.uuid4()), username="alice@vostrikov.de", is_admin=False)
 
+    async def _fake_resolve(request, session, settings):
+        return sentinel_user
 
-def _patch_repo(monkeypatch, repo):
-    monkeypatch.setattr("vts.mcp.auth.Repo", lambda _session: repo)
+    monkeypatch.setattr("vts.mcp.auth.resolve_user_from_request", _fake_resolve)
+    monkeypatch.setattr("vts.mcp.auth.get_http_request", lambda: object())
 
-
-async def test_oauth_path_resolves_user_from_email_claim(monkeypatch, fake_settings) -> None:
-    token = SimpleNamespace(claims={"email": "alice@vostrikov.de"})
-    repo = _FakeRepo()
-    _patch_access_token(monkeypatch, token)
-    _patch_repo(monkeypatch, repo)
     session = _FakeSession()
-
     user, settings = await mcp_authenticate(session)
-    assert user.username == "alice@vostrikov.de"
-    assert repo.last_arg == "alice@vostrikov.de"
-    assert session.committed is True
-    assert settings is fake_settings
+    assert user is sentinel_user
+    assert settings is fake_settings_oauth
 
 
-async def test_oauth_path_rejects_when_no_token(monkeypatch, fake_settings) -> None:
-    _patch_access_token(monkeypatch, None)
-    _patch_repo(monkeypatch, _FakeRepo())
+async def test_mcp_authenticate_propagates_401(monkeypatch, fake_settings_oauth) -> None:
+    """When resolve_user_from_request raises HTTPException 401, mcp_authenticate propagates it."""
+
+    async def _fake_resolve(request, session, settings):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    monkeypatch.setattr("vts.mcp.auth.resolve_user_from_request", _fake_resolve)
+    monkeypatch.setattr("vts.mcp.auth.get_http_request", lambda: object())
+
     session = _FakeSession()
-
     with pytest.raises(HTTPException) as exc:
         await mcp_authenticate(session)
     assert exc.value.status_code == 401
 
 
-async def test_oauth_path_rejects_when_email_claim_missing(monkeypatch, fake_settings) -> None:
-    token = SimpleNamespace(claims={"sub": "12345"})  # no email
-    _patch_access_token(monkeypatch, token)
-    _patch_repo(monkeypatch, _FakeRepo())
+async def test_mcp_authenticate_propagates_403(monkeypatch, fake_settings_oauth) -> None:
+    """When resolve_user_from_request raises HTTPException 403, mcp_authenticate propagates it."""
+
+    async def _fake_resolve(request, session, settings):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    monkeypatch.setattr("vts.mcp.auth.resolve_user_from_request", _fake_resolve)
+    monkeypatch.setattr("vts.mcp.auth.get_http_request", lambda: object())
+
     session = _FakeSession()
-
-    with pytest.raises(HTTPException) as exc:
-        await mcp_authenticate(session)
-    assert exc.value.status_code == 401
-
-
-async def test_oauth_path_rejects_email_not_in_allowlist(monkeypatch, fake_settings) -> None:
-    token = SimpleNamespace(claims={"email": "stranger@elsewhere.com"})
-    _patch_access_token(monkeypatch, token)
-    _patch_repo(monkeypatch, _FakeRepo())
-    session = _FakeSession()
-
     with pytest.raises(HTTPException) as exc:
         await mcp_authenticate(session)
     assert exc.value.status_code == 403
 
 
-async def test_oauth_path_email_lowercased_before_lookup(monkeypatch, fake_settings) -> None:
-    token = SimpleNamespace(claims={"email": "Alice@Vostrikov.de"})
-    repo = _FakeRepo()
-    _patch_access_token(monkeypatch, token)
-    _patch_repo(monkeypatch, repo)
-    session = _FakeSession()
-
-    await mcp_authenticate(session)
-    assert repo.last_arg == "alice@vostrikov.de"
-
-
-async def test_legacy_path_still_works_when_oauth_disabled(monkeypatch) -> None:
-    """When oauth_enabled=False, fall back to X-Forwarded-User via
-    resolve_user_from_request (the existing path; we just smoke that the
-    branch is taken)."""
+async def test_mcp_authenticate_works_when_oauth_disabled(monkeypatch) -> None:
+    """When oauth_enabled=False, mcp_authenticate still delegates to resolve_user_from_request."""
     from vts.core.config import Settings
 
     s = Settings(oauth_enabled=False)

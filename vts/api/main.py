@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 
 from starlette.middleware.sessions import SessionMiddleware
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -425,8 +425,17 @@ def create_app() -> FastAPI:
         "Expires": "0",
     }
 
-    @app.get("/", include_in_schema=False)
-    async def root() -> HTMLResponse:
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    async def root(request: Request) -> HTMLResponse:
+        if settings.oauth_enabled:
+            session_data = getattr(request, "session", None) or {}
+            email = (session_data.get("email") or "").strip() if isinstance(session_data, dict) else ""
+            if not email:
+                import urllib.parse
+                return RedirectResponse(
+                    url=f"/auth/login?next={urllib.parse.quote(request.url.path, safe='')}",
+                    status_code=302,
+                )
         template = (static_dir / "index.html").read_text(encoding="utf-8")
         content = template.replace("__VTS_VERSION__", __version__)
         return HTMLResponse(content=content, headers=no_cache_headers)
