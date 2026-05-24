@@ -25,12 +25,36 @@ from vts.mcp.tools import (
     submit_video,
     wait_for_task,
 )
+from vts.core.config import get_settings
 from vts.services.redis_bus import RedisBus
 
 
 def build_mcp_server() -> FastMCP:
     """Construct the FastMCP server with all six MCP tools registered."""
-    mcp = FastMCP(name="vts")
+    settings = get_settings()
+    auth_provider = None
+    if settings.mcp_oauth_enabled:
+        from fastmcp.server.auth.providers.google import GoogleProvider
+
+        if not settings.mcp_oauth_client_id or not settings.mcp_oauth_client_secret:
+            raise RuntimeError(
+                "mcp_oauth_enabled but client_id/client_secret missing — "
+                "set VTS_MCP_OAUTH_CLIENT_ID and VTS_MCP_OAUTH_CLIENT_SECRET"
+            )
+        if not settings.mcp_oauth_base_url:
+            raise RuntimeError(
+                "mcp_oauth_enabled but base_url missing — "
+                "set VTS_MCP_OAUTH_BASE_URL (e.g. https://vts.example.com/mcp)"
+            )
+        auth_provider = GoogleProvider(
+            client_id=settings.mcp_oauth_client_id,
+            client_secret=settings.mcp_oauth_client_secret,
+            base_url=settings.mcp_oauth_base_url,
+            redirect_path="/auth/callback",
+            required_scopes=["openid", "email"],
+            require_authorization_consent="remember",
+        )
+    mcp = FastMCP(name="vts", auth=auth_provider)
 
     @mcp.tool(name="submit_video")
     async def _submit_video(url: str) -> SubmitVideoResult:
