@@ -43,6 +43,7 @@ window.__VTS_I18N.ru = {
 "action.collapse": "Свернуть",
 "action.enable_notifications": "Включить уведомления",
 "action.disable_notifications": "Отключить уведомления",
+"action.logout": "Выход",
 "tab.transcript": "Сырой транскрипт",
 "tab.transcript_pending": "Сырой транскрипт еще не готов",
 "tab.summary": "Сводка",

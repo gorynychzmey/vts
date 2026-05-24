@@ -234,8 +234,12 @@ function buildPath(path) {
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  headers["X-Forwarded-User"] = state.authUser;
   const response = await fetch(buildPath(path), { ...options, headers });
+  if (response.status === 401 && path.startsWith("/api/")) {
+    const here = window.location.pathname + window.location.search;
+    window.location.href = "/auth/login?next=" + encodeURIComponent(here);
+    return new Promise(() => {});  // never resolves; navigation pending
+  }
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`${response.status}: ${text}`);
@@ -1919,6 +1923,10 @@ if (adminApplyBtn) {
 if (adminResetBtn) {
   adminResetBtn.addEventListener("click", resetAdminUser);
 }
+document.getElementById("logout-btn")?.addEventListener("click", async () => {
+  await fetch("/auth/logout", { method: "POST" });
+  window.location.href = "/";
+});
 
 // ---------- Web Push ----------
 

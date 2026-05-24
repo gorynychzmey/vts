@@ -43,6 +43,7 @@ window.__VTS_I18N.en = {
 "action.collapse": "Collapse",
 "action.enable_notifications": "Enable notifications",
 "action.disable_notifications": "Disable notifications",
+"action.logout": "Logout",
 "tab.transcript": "Raw transcript",
 "tab.transcript_pending": "Raw transcript is not ready yet",
 "tab.summary": "Summary",

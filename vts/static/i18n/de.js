@@ -43,6 +43,7 @@ window.__VTS_I18N.de = {
 "action.collapse": "Einklappen",
 "action.enable_notifications": "Benachrichtigungen aktivieren",
 "action.disable_notifications": "Benachrichtigungen deaktivieren",
+"action.logout": "Abmelden",
 "tab.transcript": "Rohtranskript",
 "tab.transcript_pending": "Rohtranskript ist noch nicht bereit",
 "tab.summary": "Zusammenfassung",
