@@ -6,8 +6,42 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+import json
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources.providers.env import EnvSettingsSource
+
+# Fields that accept comma-separated strings from the environment.
+_CSV_LIST_FIELDS = frozenset({"mcp_oauth_allowed_emails", "mcp_oauth_allowed_domains"})
+
+
+class _CsvEnvSource(EnvSettingsSource):
+    """Env source that accepts CSV strings for designated list fields.
+
+    pydantic-settings normally requires list fields to be JSON-encoded in env
+    vars (e.g. ``'["a", "b"]'``).  This subclass transparently converts plain
+    comma-separated values (e.g. ``"a@b.com,c@d.com"``) to a list before the
+    standard JSON-decode path runs, so both formats work.
+    """
+
+    def prepare_field_value(
+        self,
+        field_name: str,
+        field: Any,
+        value: Any,
+        value_is_complex: bool,
+    ) -> Any:
+        if field_name in _CSV_LIST_FIELDS and isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if not stripped.startswith("["):
+                # CSV — convert to a proper list so super() gets a list, not a
+                # raw string it would try to JSON-decode and fail on.
+                return [item.strip() for item in stripped.split(",") if item.strip()]
+            # Looks like a JSON array — let the standard path handle it.
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
 
 
 class Settings(BaseSettings):
@@ -80,6 +114,12 @@ class Settings(BaseSettings):
     timezone: str | None = None
     mcp_enabled: bool = True
     mcp_path: str = "/mcp"
+    mcp_oauth_enabled: bool = False
+    mcp_oauth_client_id: str | None = None
+    mcp_oauth_client_secret: str | None = None
+    mcp_oauth_base_url: str | None = None
+    mcp_oauth_allowed_emails: list[str] = []
+    mcp_oauth_allowed_domains: list[str] = []
 
     media_ttl_hours: int = 72
 
@@ -123,6 +163,34 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator(
+        "mcp_oauth_allowed_emails",
+        "mcp_oauth_allowed_domains",
+        mode="before",
+    )
+    @classmethod
+    def _csv_or_json_list(cls, value: Any) -> Any:
+        """Accept comma-separated string for env input; JSON arrays
+        (pydantic-settings' env default) and real lists (from YAML) pass
+        through unchanged."""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                return stripped  # pydantic-settings will JSON-decode
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        return value
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls: type[BaseSettings], **kwargs: Any) -> tuple[Any, ...]:  # type: ignore[override]
+        sources = super().settings_customise_sources(settings_cls, **kwargs)
+        # Replace the default EnvSettingsSource with our CSV-aware subclass.
+        return tuple(
+            _CsvEnvSource(settings_cls) if isinstance(src, EnvSettingsSource) else src
+            for src in sources
+        )
 
     def is_trusted_proxy(self, host: str) -> bool:
         remote = ip_address(host)
