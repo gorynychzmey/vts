@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-import json
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,11 +35,13 @@ class _CsvEnvSource(EnvSettingsSource):
             stripped = value.strip()
             if not stripped:
                 return []
-            if not stripped.startswith("["):
+            if not (stripped.startswith("[") and ('"' in stripped or "'" in stripped)):
                 # CSV — convert to a proper list so super() gets a list, not a
                 # raw string it would try to JSON-decode and fail on.
+                # The quote guard prevents bracket-local-part email addresses
+                # (e.g. "[email@example.com]") from being mis-classified as JSON.
                 return [item.strip() for item in stripped.split(",") if item.strip()]
-            # Looks like a JSON array — let the standard path handle it.
+            # Looks like a JSON array (contains quotes) — let the standard path handle it.
         return super().prepare_field_value(field_name, field, value, value_is_complex)
 
 
@@ -178,7 +179,9 @@ class Settings(BaseSettings):
             stripped = value.strip()
             if not stripped:
                 return []
-            if stripped.startswith("["):
+            # Heuristic: a string starting with '[' AND containing a quote is a JSON array.
+            # This excludes bracket-local-part emails like "[email@example.com]".
+            if stripped.startswith("[") and ('"' in stripped or "'" in stripped):
                 return stripped  # pydantic-settings will JSON-decode
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
