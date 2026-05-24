@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
+from fastmcp.server.dependencies import get_access_token
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from vts.core.config import Settings, get_settings
 from vts.db.repo import Repo
@@ -24,17 +26,55 @@ async def resolve_user_from_request(
     session: AsyncSession,
     settings: Settings,
 ) -> AuthenticatedUser:
-    """Core auth logic, callable from both FastAPI Depends and FastMCP tools."""
-    remote_host = request.client.host if request.client else "127.0.0.1"
-    if not settings.is_trusted_proxy(remote_host):
-        raise HTTPException(status_code=403, detail="Untrusted proxy source for forwarded auth header")
-    x_forwarded_user = request.headers.get("x-forwarded-user")
-    if not x_forwarded_user and settings.environment != "prod":
-        x_forwarded_user = request.query_params.get("dev_user")
-    if not x_forwarded_user:
-        raise HTTPException(status_code=401, detail="Missing X-Forwarded-User header")
+    """Single auth entrypoint. Picks one of three branches:
 
-    requested_by = x_forwarded_user.strip()
+    1. oauth_enabled=False → trust X-Forwarded-User (dev only, no proxy check).
+    2. oauth_enabled=True + Authorization: Bearer → FastMCP access token claims.
+    3. oauth_enabled=True + signed session cookie → session['email'].
+
+    Allow-list applies to the bearer branch only (the session branch is
+    already gated by /auth/callback at login time).
+    """
+    if not settings.oauth_enabled:
+        email = request.headers.get("x-forwarded-user", "").strip()
+        if not email:
+            raise HTTPException(status_code=401, detail="Missing X-Forwarded-User (dev mode)")
+        return await _materialize_user(email, request, session, settings)
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = get_access_token()
+        if token is None:
+            raise HTTPException(status_code=401, detail="Invalid bearer token")
+        email = (token.claims or {}).get("email", "")
+        if not email:
+            raise HTTPException(status_code=401, detail="Bearer token has no email claim")
+        from vts.mcp.allowlist import is_email_allowed  # local to avoid circular import
+        if not is_email_allowed(
+            email,
+            allowed_emails=settings.oauth_allowed_emails,
+            allowed_domains=settings.oauth_allowed_domains,
+        ):
+            raise HTTPException(status_code=403, detail="Email not allowed")
+        return await _materialize_user(email, request, session, settings)
+
+    # Browser path: session cookie via Starlette SessionMiddleware.
+    starlette_session = getattr(request, "session", None) or {}
+    email = (starlette_session.get("email") or "").strip() if isinstance(starlette_session, dict) else ""
+    if email:
+        # Allow-list was enforced at /auth/callback; trust the session.
+        return await _materialize_user(email, request, session, settings)
+
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+async def _materialize_user(
+    email: str,
+    request: Request,
+    session: AsyncSession,
+    settings: Settings,
+) -> AuthenticatedUser:
+    requested_by = email.strip().lower()
     is_admin = settings.is_admin(requested_by)
     acting_as = requested_by
     requested_as = request.query_params.get("as_user")
@@ -66,13 +106,11 @@ async def resolve_user_from_request(
     )
 
 
+# require_user — kept as a FastAPI dependency for OpenAPI docs.
 async def require_user(
     request: Request,
-    x_forwarded_user: str | None = Header(default=None, alias="X-Forwarded-User"),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> AuthenticatedUser:
-    # x_forwarded_user kept as a FastAPI Header param for OpenAPI docs only;
-    # the resolver reads it directly from the request.
-    _ = x_forwarded_user
+    """FastAPI Depends wrapper kept for OpenAPI; delegates to resolve_user_from_request."""
     return await resolve_user_from_request(request, session, settings)
