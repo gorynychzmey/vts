@@ -60,11 +60,12 @@ async def test_auth_callback_rejects_when_state_missing(app_with_oauth) -> None:
 
 
 async def test_auth_callback_happy_path_sets_session(app_with_oauth, monkeypatch) -> None:
-    """Monkeypatch authlib's authorize_access_token to return a fake Google
-    userinfo claim set; assert the callback sets vts_session and redirects."""
-    import socket
-
-    fake_token = {"userinfo": {"email": "alice@example.com"}}
+    """Monkeypatch authlib's authorize_access_token AND the DB repo so the
+    callback executes end-to-end WITHOUT touching any real database — a
+    previous version of this test had a socket.gaierror fallback that, on
+    a dev box where vts.api.db.session resolved to a real Postgres, ended
+    up writing a fake user into production."""
+    fake_token = {"userinfo": {"email": "callback-test@local.invalid"}}
 
     async def _fake_authorize_access_token(self, request):
         return fake_token
@@ -72,23 +73,37 @@ async def test_auth_callback_happy_path_sets_session(app_with_oauth, monkeypatch
     from authlib.integrations.starlette_client.apps import StarletteOAuth2App
     monkeypatch.setattr(StarletteOAuth2App, "authorize_access_token", _fake_authorize_access_token)
 
-    # Pre-populate the session with the OAuth state authlib would have set
-    # during /auth/login. Use httpx cookie jar to carry the SessionMiddleware
-    # cookie across requests.
+    # Block the DB path completely. The route calls
+    # get_db_session_factory() → Session → Repo(db).get_or_create_user(...).
+    # Replace the factory with one that yields a session whose Repo is a
+    # no-op: it returns a sentinel user without doing any SQL.
+    class _NoopSession:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
+        async def commit(self): pass
+    def _noop_session_factory():
+        return _NoopSession()
+
+    class _NoopRepo:
+        def __init__(self, _db): pass
+        async def get_or_create_user(self, username):
+            return None  # value is unused; callback only sets request.session["email"]
+
+    monkeypatch.setattr("vts.api.auth_routes.get_db_session_factory", lambda: _noop_session_factory)
+    monkeypatch.setattr("vts.api.auth_routes.Repo", _NoopRepo)
+
+    # Allow the test email through.
+    from vts.core.config import get_settings
+    get_settings.cache_clear()
+    monkeypatch.setenv("VTS_OAUTH_ALLOWED_EMAILS", "callback-test@local.invalid")
+    get_settings.cache_clear()
+
     transport = ASGITransport(app=app_with_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
-        login_r = await client.get("/auth/login?next=/")
-        # The Set-Cookie carries the state authlib needs. httpx auto-tracks it.
-        # Now call callback with any code; the fake token replaces the response.
-        # The state mismatch will trip authlib; but with the fake patch above we
-        # bypass the upstream call. State check still requires the cookie state to
-        # match the query state. For a simpler check: assert that without a valid
-        # state the response is not 200 — and the happy path is exercised by the
-        # browser integration test below.
-        try:
-            r = await client.get("/auth/callback?code=anything&state=anything", follow_redirects=False)
-            assert r.status_code in (302, 400)
-        except socket.gaierror:
-            # DB unavailable in this test environment; the OAuth exchange itself
-            # succeeded (fake token was returned). 302/DB-error are the only outcomes.
-            pass
+        await client.get("/auth/login?next=/")
+        # State validation is bypassed by the fake authorize_access_token
+        # which short-circuits the upstream exchange. We assert only that
+        # the response is either the success redirect (302) or the state
+        # mismatch (400) — never 500.
+        r = await client.get("/auth/callback?code=anything&state=anything", follow_redirects=False)
+        assert r.status_code in (302, 400)
