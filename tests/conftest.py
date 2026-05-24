@@ -5,13 +5,19 @@ from __future__ import annotations
 # but does not supply mcp_oauth_client_secret (which is a runtime secret,
 # not stored in YAML).
 #
-# build_mcp_server() now raises RuntimeError when mcp_oauth_enabled=True and
-# the secret is absent.  Patching _load_yaml_overrides to inject a placeholder
+# build_mcp_server() raises RuntimeError when mcp_oauth_enabled=True and the
+# secret is absent.  Patching _load_yaml_overrides to inject a placeholder
 # satisfies the guard for tests that go through get_settings() (which calls
 # _load_yaml_overrides internally).
 #
-# Tests that construct Settings() directly (e.g. test_oauth_defaults_disabled)
-# are unaffected because they bypass _load_yaml_overrides entirely.
+# This conftest lives in tests/ rather than the project root so it is scoped
+# to the test suite only — not a global side-effect on any pytest invocation
+# in the repo root.
+#
+# The test_webapi_does_not_mount_mcp_when_disabled known failure (vts-3ur) is
+# intentionally preserved: that test fails because the yaml also supplies
+# mcp_enabled=True as a constructor kwarg which beats the env var — a separate
+# isolation problem tracked in vts-3ur.
 # ---------------------------------------------------------------------------
 
 try:

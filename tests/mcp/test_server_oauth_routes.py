@@ -3,6 +3,20 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_settings_from_yaml(monkeypatch):
+    """OAuth-route tests must control Settings purely via env vars,
+    so monkeypatch the YAML loader away for the duration of each test.
+    Without this, the dev-host config.yaml leaks mcp_* keys into Settings
+    and the env-var-based assertions fail unpredictably."""
+    from vts.core.config import get_settings
+
+    monkeypatch.setattr("vts.core.config._load_yaml_overrides", lambda: {})
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def _build_server_with_oauth(monkeypatch):
     """Construct a build_mcp_server() with OAuth env vars set."""
     from vts.core.config import Settings, get_settings
