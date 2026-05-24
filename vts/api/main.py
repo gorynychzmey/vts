@@ -362,20 +362,32 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
 
+    # Build the MCP sub-app eagerly so we can chain its lifespan into ours;
+    # FastAPI does not run lifespans of mounted sub-apps, and the FastMCP
+    # streamable-http transport initialises its session manager only via
+    # that lifespan.
+    mcp_app = None
+    if settings.mcp_enabled:
+        from vts.mcp import build_mcp_app
+        mcp_app = build_mcp_app()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
         try:
-            yield
+            if mcp_app is not None:
+                async with mcp_app.router.lifespan_context(mcp_app):
+                    yield
+            else:
+                yield
         finally:
             await app.state.redis.aclose()
 
     app = FastAPI(title="vts", version=__version__, lifespan=lifespan)
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
-    if settings.mcp_enabled:
-        from vts.mcp import build_mcp_app
-        app.mount(settings.mcp_path, build_mcp_app())
+    if mcp_app is not None:
+        app.mount(settings.mcp_path, mcp_app)
 
     no_cache_headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
