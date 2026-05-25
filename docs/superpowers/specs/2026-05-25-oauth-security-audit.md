@@ -13,7 +13,7 @@ fixed first because vts-tlw inherits the same surface area.
 
 | # | Severity | Title | File |
 |---|----------|-------|------|
-| 1 | High | Session cookie not bound to user identity — replay survives logout if cookie leaks | [api/auth_routes.py:85](vts/api/auth_routes.py#L85), [api/main.py:404](vts/api/main.py#L404) — **partially fixed in 1.0.59 (vts-jo2): allow-list re-checked per-request; full server-side session record tracked as vts-pa9** |
+| 1 | High | Session cookie not bound to user identity — replay survives logout if cookie leaks | [api/auth_routes.py:85](vts/api/auth_routes.py#L85), [api/main.py:404](vts/api/main.py#L404) — **fully fixed: allow-list re-check in 1.0.59 (vts-jo2); server-side session record (Redis) in 1.0.61 (vts-pa9)** |
 | 2 | High | `/auth/logout` lacks CSRF protection; SameSite=lax POST is reachable cross-site via form re-submission | [api/auth_routes.py:85](vts/api/auth_routes.py#L85) — **fixed in 1.0.59 (vts-0e1): Sec-Fetch-Site gate** |
 | 3 | Medium | Bearer-token email allow-list bypass via session smuggling when `Authorization` header is malformed | [services/auth.py:44-66](vts/services/auth.py#L44-L66) |
 | 4 | Medium | Session secret defaults to deterministic derivation from `oauth_client_secret` — same input across hosts → same secret | [api/main.py:374](vts/api/main.py#L374) — **fixed in 1.0.58 (vts-mmt)** |

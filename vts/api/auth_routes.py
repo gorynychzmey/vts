@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +11,7 @@ from vts.core.config import Settings, get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.allowlist import is_email_allowed
+from vts.services import session_store
 from vts.services.web_oauth import build_oauth_client
 
 
@@ -87,12 +89,36 @@ async def auth_callback(request: Request):
         await repo.get_or_create_user(email)
         await db.commit()
 
-    request.session["email"] = email
+    # vts-pa9: store {sid -> email} server-side so /auth/logout can truly
+    # revoke the session. Cookie holds only the opaque sid; legacy
+    # `email`-only cookies still work via the resolver's fallback path.
+    redis = getattr(request.app.state, "redis", None)
+    if redis is not None:
+        sid = await session_store.create(
+            redis,
+            email=email,
+            ttl_seconds=settings.session_max_age_days * 86_400,
+            issued_at=int(time.time()),
+        )
+        request.session["sid"] = sid
+        # Belt-and-braces: scrub any pre-vts-pa9 email left in the session.
+        request.session.pop("email", None)
+    else:
+        # No Redis (e.g. dev without app.state.redis) — fall back to the
+        # legacy email-in-cookie path so callers don't see a regression.
+        request.session["email"] = email
+
     next_path = _safe_next(request.session.pop("next_after_login", "/"))
     return RedirectResponse(url=next_path, status_code=302)
 
 
 @router.post("/auth/logout", dependencies=[Depends(require_same_site)])
 async def auth_logout(request: Request):
+    sid = (request.session.get("sid") or "").strip()
+    if sid:
+        redis = getattr(request.app.state, "redis", None)
+        if redis is not None:
+            await session_store.delete(redis, sid)
+    request.session.pop("sid", None)
     request.session.pop("email", None)
     return Response(status_code=204)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastmcp.server.dependencies import get_access_token
@@ -25,15 +26,14 @@ async def resolve_user_from_request(
     request: Request,
     session: AsyncSession,
     settings: Settings,
+    redis: Any | None = None,
 ) -> AuthenticatedUser:
     """Single auth entrypoint. Picks one of three branches:
 
     1. oauth_enabled=False → trust X-Forwarded-User (dev only, no proxy check).
     2. oauth_enabled=True + Authorization: Bearer → FastMCP access token claims.
-    3. oauth_enabled=True + signed session cookie → session['email'].
-
-    Allow-list applies to the bearer branch only (the session branch is
-    already gated by /auth/callback at login time).
+    3. oauth_enabled=True + signed session cookie → server-side session
+       record in Redis (vts-pa9), falling back to legacy email-only cookies.
     """
     if not settings.oauth_enabled:
         email = request.headers.get("x-forwarded-user", "").strip()
@@ -60,12 +60,31 @@ async def resolve_user_from_request(
 
     # Browser path: session cookie via Starlette SessionMiddleware.
     starlette_session = getattr(request, "session", None) or {}
-    email = (starlette_session.get("email") or "").strip() if isinstance(starlette_session, dict) else ""
+    if not isinstance(starlette_session, dict):
+        starlette_session = {}
+
+    email: str | None = None
+    sid = (starlette_session.get("sid") or "").strip() if starlette_session else ""
+    if sid and redis is not None:
+        # vts-pa9: cookie carries opaque sid; email lives in Redis. A
+        # missing record means /auth/logout deleted it or it expired —
+        # in both cases force re-login.
+        from vts.services import session_store
+        record = await session_store.lookup(redis, sid)
+        if record is None:
+            raise HTTPException(status_code=401, detail="Session expired or revoked")
+        email = record.email
+    else:
+        # Legacy fallback for cookies issued before vts-pa9 (or test
+        # contexts that don't supply Redis). Safe because vts-jo2's
+        # allow-list re-check still applies below.
+        legacy_email = (starlette_session.get("email") or "").strip()
+        if legacy_email:
+            email = legacy_email
+
     if email:
-        # Re-check the allow-list on EVERY request (vts-jo2 / audit Finding 1).
-        # /auth/callback gates only at login time; without this re-check,
-        # removing a user from oauth_allowed_emails / oauth_allowed_domains
-        # would not take effect until the cookie's 30-day max-age elapsed.
+        # vts-jo2: per-request allow-list re-check so an operator removing
+        # someone from oauth_allowed_* takes effect on the next request.
         from vts.mcp.allowlist import is_email_allowed  # local to avoid circular import
         if not is_email_allowed(
             email,
@@ -126,4 +145,5 @@ async def require_user(
     settings: Settings = Depends(get_settings),
 ) -> AuthenticatedUser:
     """FastAPI Depends wrapper kept for OpenAPI; delegates to resolve_user_from_request."""
-    return await resolve_user_from_request(request, session, settings)
+    redis = getattr(request.app.state, "redis", None) if hasattr(request, "app") else None
+    return await resolve_user_from_request(request, session, settings, redis=redis)

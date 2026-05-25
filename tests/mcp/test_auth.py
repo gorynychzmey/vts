@@ -81,6 +81,85 @@ async def test_browser_path_reads_session_cookie_email(monkeypatch) -> None:
     assert user.username == "bob@example.com"
 
 
+class _FakeRedis:
+    """Minimal async Redis stub used by session_store-aware tests."""
+    def __init__(self) -> None:
+        self.store: dict[str, bytes] = {}
+
+    async def set(self, key, value, *, ex=None) -> None:
+        if isinstance(value, str):
+            value = value.encode("utf-8")
+        self.store[key] = value
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def delete(self, key) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+
+async def test_browser_path_resolves_via_redis_sid(monkeypatch) -> None:
+    """vts-pa9: sid in cookie + record in Redis -> user materialised."""
+    import json
+
+    settings = Settings(
+        oauth_enabled=True,
+        oauth_allowed_domains=["example.com"],
+    )
+    redis = _FakeRedis()
+    redis.store["vts:session:abc123"] = json.dumps(
+        {"email": "alice@example.com", "issued_at": 12345}
+    ).encode("utf-8")
+    request = _make_request(cookies={"__starlette_session__": {"sid": "abc123"}})
+    repo = _FakeRepo()
+    monkeypatch.setattr("vts.services.auth.Repo", lambda _s: repo)
+    session = _FakeSession()
+
+    user = await resolve_user_from_request(request, session, settings, redis=redis)
+    assert user.username == "alice@example.com"
+
+
+async def test_browser_path_rejects_sid_missing_from_redis(monkeypatch) -> None:
+    """vts-pa9: sid in cookie but record gone (logout / expiry) -> 401."""
+    settings = Settings(oauth_enabled=True, oauth_allowed_domains=["example.com"])
+    redis = _FakeRedis()  # empty
+    request = _make_request(cookies={"__starlette_session__": {"sid": "abc123"}})
+    session = _FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        await resolve_user_from_request(request, session, settings, redis=redis)
+    assert exc.value.status_code == 401
+
+
+async def test_browser_path_rejects_redis_sid_email_not_allowed(monkeypatch) -> None:
+    """vts-pa9 + vts-jo2: even with a valid Redis record, if the email is
+    no longer in oauth_allowed_*, deny."""
+    import json
+
+    settings = Settings(oauth_enabled=True, oauth_allowed_domains=["example.com"])
+    redis = _FakeRedis()
+    redis.store["vts:session:abc123"] = json.dumps(
+        {"email": "alice@elsewhere.com", "issued_at": 12345}
+    ).encode("utf-8")
+    request = _make_request(cookies={"__starlette_session__": {"sid": "abc123"}})
+    session = _FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        await resolve_user_from_request(request, session, settings, redis=redis)
+    assert exc.value.status_code == 403
+
+
+async def test_browser_path_falls_back_to_legacy_email_cookie(monkeypatch) -> None:
+    """vts-pa9 backwards-compat: cookies issued before this change carry
+    `email` directly and must still work for their remaining max-age."""
+    settings = Settings(oauth_enabled=True, oauth_allowed_domains=["example.com"])
+    request = _make_request(cookies={"__starlette_session__": {"email": "alice@example.com"}})
+    repo = _FakeRepo()
+    monkeypatch.setattr("vts.services.auth.Repo", lambda _s: repo)
+    session = _FakeSession()
+
+    user = await resolve_user_from_request(request, session, settings, redis=_FakeRedis())
+    assert user.username == "alice@example.com"
+
+
 async def test_browser_path_rejects_session_email_no_longer_allowed(monkeypatch) -> None:
     """Regression for vts-jo2 (audit Finding 1): if the operator removes a
     user from the allow-list, their existing session cookie must stop
