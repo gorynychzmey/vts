@@ -89,7 +89,10 @@ async def _materialize_user(
     acting_as = requested_by
     requested_as = request.query_params.get("as_user")
     if requested_as:
-        candidate = requested_as.strip()
+        # vts-9kk: stored usernames are .strip().lower() emails (set by
+        # /auth/callback). Normalise the admin's switch input the same
+        # way so '?as_user=Alice@Example.com' matches the existing row.
+        candidate = requested_as.strip().lower()
         if not candidate:
             raise HTTPException(status_code=400, detail="Empty as_user value")
         if not is_admin:

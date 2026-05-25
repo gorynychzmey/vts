@@ -31,6 +31,15 @@ def _safe_next(value: str | None) -> str:
         return "/"
     if value.startswith("//"):
         return "/"
+    # vts-le1: browsers normalise '\' -> '/' in Location headers, so
+    # '/\evil.com' becomes '//evil.com' cross-origin. urlparse does NOT
+    # treat backslash as a separator, so this slips past the netloc
+    # check below — block it explicitly. Same for percent-encoded
+    # slash/backslash (%2F, %5C), which some browsers historically
+    # decoded before redirecting.
+    lowered = value.lower()
+    if "\\" in value or "%2f" in lowered or "%5c" in lowered:
+        return "/"
     parsed = urlparse(value)
     if parsed.scheme or parsed.netloc:
         return "/"

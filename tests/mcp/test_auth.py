@@ -11,7 +11,7 @@ from vts.core.config import Settings
 from vts.services.auth import resolve_user_from_request
 
 
-def _make_request(*, headers=None, cookies=None, scheme="https") -> Request:
+def _make_request(*, headers=None, cookies=None, scheme="https", query_string=b"") -> Request:
     headers_list = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     if cookies:
         cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
@@ -19,7 +19,7 @@ def _make_request(*, headers=None, cookies=None, scheme="https") -> Request:
     scope = {
         "type": "http",
         "headers": headers_list,
-        "query_string": b"",
+        "query_string": query_string,
         "client": ("127.0.0.1", 12345),
         "scheme": scheme,
         "session": cookies.get("__starlette_session__", {}) if cookies else {},
@@ -138,6 +138,41 @@ async def test_bearer_path_rejects_disallowed_email(monkeypatch) -> None:
     with pytest.raises(HTTPException) as exc:
         await resolve_user_from_request(request, session, settings)
     assert exc.value.status_code == 403
+
+
+async def test_as_user_normalised_to_lower_case(monkeypatch) -> None:
+    """vts-9kk / audit Finding 6: ?as_user=Alice@Example.com must look up
+    the same row /auth/callback created with .strip().lower()."""
+    settings = Settings(
+        oauth_enabled=True,
+        admin_emails=["admin@example.com"],
+        oauth_allowed_domains=["example.com"],
+    )
+    request = _make_request(
+        cookies={"__starlette_session__": {"email": "admin@example.com"}},
+        query_string=b"as_user=Alice%40Example.com",
+    )
+
+    looked_up: list[str] = []
+
+    class _RecordingRepo:
+        def __init__(self, _s) -> None:
+            self.users: dict = {}
+
+        async def get_or_create_user(self, username: str):
+            self.users[username] = SimpleNamespace(id=uuid.uuid4(), username=username)
+            return self.users[username]
+
+        async def get_user_by_username(self, username: str):
+            looked_up.append(username)
+            return SimpleNamespace(id=uuid.uuid4(), username=username)
+
+    monkeypatch.setattr("vts.services.auth.Repo", _RecordingRepo)
+    session = _FakeSession()
+
+    user = await resolve_user_from_request(request, session, settings)
+    assert looked_up == ["alice@example.com"]
+    assert user.acting_as == "alice@example.com"
 
 
 async def test_oauth_enabled_no_credentials_raises_401(monkeypatch) -> None:
