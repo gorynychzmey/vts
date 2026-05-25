@@ -187,6 +187,20 @@ class Settings(BaseSettings):
             "session_secret",
         ),
     )
+    session_secret_file: Path = Field(
+        default=Path("/opt/vts/state/session_secret"),
+        validation_alias=AliasChoices(
+            "VTS_SESSION_SECRET_FILE",
+            "session_secret_file",
+        ),
+    )
+    session_max_age_days: int = Field(
+        default=30,
+        validation_alias=AliasChoices(
+            "VTS_SESSION_MAX_AGE_DAYS",
+            "session_max_age_days",
+        ),
+    )
 
     media_ttl_hours: int = 72
 

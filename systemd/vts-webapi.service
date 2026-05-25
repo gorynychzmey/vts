@@ -12,6 +12,7 @@ ExecStart=/usr/bin/podman run --rm --name vts-webapi \
   -e VTS_ROLE=webapi \
   -v /opt/vts/config:/opt/vts/config:ro \
   -v /opt/vts/prompts:/opt/vts/prompts:ro \
+  -v /opt/vts/state:/opt/vts/state \
   -v /srv/vts-data:/srv/vts-data \
   -p 8080:8080 \
   ${VTS_IMAGE}

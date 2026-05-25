@@ -15,9 +15,17 @@ Install:
 Create directories:
 
 ```bash
-sudo mkdir -p /opt/vts /opt/vts/config /srv/vts-data /opt/vts/prompts
+sudo mkdir -p /opt/vts /opt/vts/config /opt/vts/state /srv/vts-data /opt/vts/prompts
 sudo chown -R "$USER":"$USER" /opt/vts /srv/vts-data
+sudo chmod 700 /opt/vts/state
 ```
+
+`/opt/vts/state/` holds container-managed secrets the operator should
+not edit by hand (HMAC key for the session cookie, auto-generated on
+first start). It is mounted read-write into the webapi container; back
+it up alongside `/opt/vts/config/vts.env`. Deleting
+`/opt/vts/state/session_secret` and restarting the webapi logs out all
+users (intended rotation path).
 
 ## 1.1 External AI services (required)
 

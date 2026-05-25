@@ -103,6 +103,20 @@ covers both the web UI and the MCP endpoint).
 3. **Reverse proxy**: route `Host(your-domain)` straight to vts. No OIDC
    middleware, no path-prefix bypasses; vts handles OAuth itself.
 
+4. **Session HMAC key**: vts auto-generates one at
+   `/opt/vts/state/session_secret` on first start (0600). Back it up
+   with `vts.env`; deleting it logs out all users on next restart.
+   For multi-host (HA) deployments behind a load balancer, set
+   `VTS_SESSION_SECRET` explicitly in `vts.env` and share the same
+   value across hosts — per-host autogeneration would otherwise produce
+   mismatched cookies.
+
+5. **Session lifetime** (optional): `VTS_SESSION_MAX_AGE_DAYS=30` is
+   the default. The cookie has an absolute (not sliding) expiry —
+   users re-authenticate via Google every N days regardless of
+   activity. Lower this if you want shorter exposure windows for
+   stolen cookies; raise it for less frequent re-auth.
+
 ### How it works
 
 - Browser visits `/` → vts redirects to `/auth/login` → Google login →

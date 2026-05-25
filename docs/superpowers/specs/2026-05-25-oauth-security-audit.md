@@ -16,7 +16,7 @@ fixed first because vts-tlw inherits the same surface area.
 | 1 | High | Session cookie not bound to user identity — replay survives logout if cookie leaks | [api/auth_routes.py:85](vts/api/auth_routes.py#L85), [api/main.py:404](vts/api/main.py#L404) |
 | 2 | High | `/auth/logout` lacks CSRF protection; SameSite=lax POST is reachable cross-site via form re-submission | [api/auth_routes.py:85](vts/api/auth_routes.py#L85) |
 | 3 | Medium | Bearer-token email allow-list bypass via session smuggling when `Authorization` header is malformed | [services/auth.py:44-66](vts/services/auth.py#L44-L66) |
-| 4 | Medium | Session secret defaults to deterministic derivation from `oauth_client_secret` — same input across hosts → same secret | [api/main.py:374](vts/api/main.py#L374) |
+| 4 | Medium | Session secret defaults to deterministic derivation from `oauth_client_secret` — same input across hosts → same secret | [api/main.py:374](vts/api/main.py#L374) — **fixed in 1.0.58 (vts-mmt)** |
 | 5 | Low | Open-redirect bypass via backslash and percent-encoded slash in `next` | [api/auth_routes.py:26-36](vts/api/auth_routes.py#L26-L36) |
 | 6 | Low | `as_user` query-param admin impersonation accepts arbitrary strings without normalisation | [services/auth.py:80-99](vts/services/auth.py#L80-L99) |
 
@@ -431,9 +431,9 @@ Recommended to file:
 - **High:** `Sec-Fetch-Site` (or CSRF-token) discipline for all
   state-changing endpoints under `/auth/*` (Finding 2). Set the
   pattern before vts-tlw expands the surface.
-- **Medium:** Autogenerate session secret on first start at
+- ~~**Medium:** Autogenerate session secret on first start at
   `/opt/vts/state/session_secret`; drop the deterministic blake2b
-  fallback (Finding 4, vts-mmt).
+  fallback (Finding 4, vts-mmt).~~ **Done in 1.0.58.**
 - **Medium:** Decide MCP cookie-auth policy and enforce in the
   resolver (Finding 3). Belongs inside vts-tlw scope.
 - **Low:** Harden `_safe_next` against `\` and `%2f` (Finding 5).

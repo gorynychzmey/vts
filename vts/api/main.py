@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
+import logging
+import os
+import secrets
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -361,6 +363,49 @@ def serialize_task(
     )
 
 
+def _resolve_session_secret(*, env_secret: str | None, secret_file: Path) -> str:
+    """Resolve the SessionMiddleware HMAC key.
+
+    Priority:
+      1. VTS_SESSION_SECRET env (explicit / HA / multi-host deployments).
+      2. Contents of secret_file. Auto-created on first start so a fresh
+         self-hosted install does not require manual key generation.
+
+    On first start the file is written with mode 0600 via O_EXCL so
+    parallel uvicorn workers cannot both write — the loser of the race
+    catches FileExistsError and reads what the winner wrote.
+    """
+    if env_secret:
+        return env_secret
+
+    if secret_file.exists():
+        return secret_file.read_text(encoding="utf-8").strip()
+
+    secret_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    new_secret = secrets.token_hex(32)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(str(secret_file), flags, 0o600)
+    except FileExistsError:
+        # Another worker won the race; read its value.
+        return secret_file.read_text(encoding="utf-8").strip()
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_secret)
+    except Exception:
+        # On any write failure, remove the half-written file so the next
+        # start retries cleanly rather than reading an empty secret.
+        try:
+            secret_file.unlink()
+        except OSError:
+            pass
+        raise
+    logging.getLogger(__name__).info(
+        "generated new session secret at %s", secret_file
+    )
+    return new_secret
+
+
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
@@ -371,11 +416,10 @@ def create_app() -> FastAPI:
                 "oauth_enabled=True but oauth_client_secret is missing — "
                 "set VTS_OAUTH_CLIENT_SECRET"
             )
-        session_secret = settings.session_secret or hashlib.blake2b(
-            settings.oauth_client_secret.encode("utf-8"),
-            key=b"vts-session-cookie",
-            digest_size=32,
-        ).hexdigest()
+        session_secret = _resolve_session_secret(
+            env_secret=settings.session_secret,
+            secret_file=settings.session_secret_file,
+        )
 
     # Build the MCP sub-app eagerly so we can chain its lifespan into ours;
     # FastAPI does not run lifespans of mounted sub-apps, and the FastMCP
@@ -408,7 +452,7 @@ def create_app() -> FastAPI:
             session_cookie="vts_session",
             https_only=True,
             same_site="lax",
-            max_age=2_592_000,
+            max_age=settings.session_max_age_days * 86_400,
         )
 
     if settings.oauth_enabled:
