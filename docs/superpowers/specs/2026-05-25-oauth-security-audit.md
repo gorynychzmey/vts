@@ -13,8 +13,8 @@ fixed first because vts-tlw inherits the same surface area.
 
 | # | Severity | Title | File |
 |---|----------|-------|------|
-| 1 | High | Session cookie not bound to user identity — replay survives logout if cookie leaks | [api/auth_routes.py:85](vts/api/auth_routes.py#L85), [api/main.py:404](vts/api/main.py#L404) |
-| 2 | High | `/auth/logout` lacks CSRF protection; SameSite=lax POST is reachable cross-site via form re-submission | [api/auth_routes.py:85](vts/api/auth_routes.py#L85) |
+| 1 | High | Session cookie not bound to user identity — replay survives logout if cookie leaks | [api/auth_routes.py:85](vts/api/auth_routes.py#L85), [api/main.py:404](vts/api/main.py#L404) — **partially fixed in 1.0.59 (vts-jo2): allow-list re-checked per-request; full server-side session record tracked as vts-pa9** |
+| 2 | High | `/auth/logout` lacks CSRF protection; SameSite=lax POST is reachable cross-site via form re-submission | [api/auth_routes.py:85](vts/api/auth_routes.py#L85) — **fixed in 1.0.59 (vts-0e1): Sec-Fetch-Site gate** |
 | 3 | Medium | Bearer-token email allow-list bypass via session smuggling when `Authorization` header is malformed | [services/auth.py:44-66](vts/services/auth.py#L44-L66) |
 | 4 | Medium | Session secret defaults to deterministic derivation from `oauth_client_secret` — same input across hosts → same secret | [api/main.py:374](vts/api/main.py#L374) — **fixed in 1.0.58 (vts-mmt)** |
 | 5 | Low | Open-redirect bypass via backslash and percent-encoded slash in `next` | [api/auth_routes.py:26-36](vts/api/auth_routes.py#L26-L36) |
@@ -425,12 +425,13 @@ When vts-tlw lands, the pluggable provider abstraction MUST:
 
 Recommended to file:
 
-- **High:** Session revocation gap (Finding 1) — implement server-side
-  session record OR per-request allow-list re-check. Block vts-tlw on
-  the resolver-side mitigation.
-- **High:** `Sec-Fetch-Site` (or CSRF-token) discipline for all
-  state-changing endpoints under `/auth/*` (Finding 2). Set the
-  pattern before vts-tlw expands the surface.
+- ~~**High:** Session revocation gap (Finding 1) — implement server-side
+  session record OR per-request allow-list re-check.~~ **Cheap fix done
+  in 1.0.59 (vts-jo2); durable server-side record tracked as vts-pa9.**
+- ~~**High:** `Sec-Fetch-Site` (or CSRF-token) discipline for all
+  state-changing endpoints under `/auth/*` (Finding 2).~~ **Done in
+  1.0.59 (vts-0e1); helper at `vts/api/csrf.py:require_same_site` is
+  the standard for future state-changing endpoints in vts-tlw.**
 - ~~**Medium:** Autogenerate session secret on first start at
   `/opt/vts/state/session_secret`; drop the deterministic blake2b
   fallback (Finding 4, vts-mmt).~~ **Done in 1.0.58.**

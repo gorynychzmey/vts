@@ -81,6 +81,24 @@ async def test_browser_path_reads_session_cookie_email(monkeypatch) -> None:
     assert user.username == "bob@example.com"
 
 
+async def test_browser_path_rejects_session_email_no_longer_allowed(monkeypatch) -> None:
+    """Regression for vts-jo2 (audit Finding 1): if the operator removes a
+    user from the allow-list, their existing session cookie must stop
+    working on the next request — the session branch must re-check the
+    allow-list, not trust the original /auth/callback gate."""
+    settings = Settings(
+        oauth_enabled=True,
+        oauth_allowed_domains=["example.com"],
+    )
+    # Cookie was issued back when alice@elsewhere.com was allowed; now elsewhere.com
+    # is no longer in oauth_allowed_domains.
+    request = _make_request(cookies={"__starlette_session__": {"email": "alice@elsewhere.com"}})
+    session = _FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        await resolve_user_from_request(request, session, settings)
+    assert exc.value.status_code == 403
+
+
 async def test_browser_path_rejects_empty_session() -> None:
     settings = Settings(oauth_enabled=True)
     request = _make_request(cookies={"__starlette_session__": {}})

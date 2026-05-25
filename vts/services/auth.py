@@ -62,7 +62,17 @@ async def resolve_user_from_request(
     starlette_session = getattr(request, "session", None) or {}
     email = (starlette_session.get("email") or "").strip() if isinstance(starlette_session, dict) else ""
     if email:
-        # Allow-list was enforced at /auth/callback; trust the session.
+        # Re-check the allow-list on EVERY request (vts-jo2 / audit Finding 1).
+        # /auth/callback gates only at login time; without this re-check,
+        # removing a user from oauth_allowed_emails / oauth_allowed_domains
+        # would not take effect until the cookie's 30-day max-age elapsed.
+        from vts.mcp.allowlist import is_email_allowed  # local to avoid circular import
+        if not is_email_allowed(
+            email,
+            allowed_emails=settings.oauth_allowed_emails,
+            allowed_domains=settings.oauth_allowed_domains,
+        ):
+            raise HTTPException(status_code=403, detail="Email no longer allowed")
         return await _materialize_user(email, request, session, settings)
 
     raise HTTPException(status_code=401, detail="Authentication required")

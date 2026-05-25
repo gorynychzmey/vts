@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.responses import RedirectResponse, Response
 
+from vts.api.csrf import require_same_site
 from vts.core.config import Settings, get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
@@ -82,7 +83,7 @@ async def auth_callback(request: Request):
     return RedirectResponse(url=next_path, status_code=302)
 
 
-@router.post("/auth/logout")
+@router.post("/auth/logout", dependencies=[Depends(require_same_site)])
 async def auth_logout(request: Request):
     request.session.pop("email", None)
     return Response(status_code=204)

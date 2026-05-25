@@ -46,9 +46,34 @@ async def test_auth_login_rejects_open_redirect(app_with_oauth) -> None:
 async def test_auth_logout_clears_cookie(app_with_oauth) -> None:
     transport = ASGITransport(app=app_with_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
-        # Even without a prior login, /auth/logout should respond 204 and not blow up.
-        r = await client.post("/auth/logout")
+        # Same-origin POST (what the real frontend fetch() does) is accepted;
+        # even without a prior login the route responds 204 and does not blow up.
+        r = await client.post(
+            "/auth/logout",
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
         assert r.status_code == 204
+
+
+async def test_auth_logout_rejects_cross_site_post(app_with_oauth) -> None:
+    """vts-0e1 / audit Finding 2: cross-site POST must be blocked by the
+    Sec-Fetch-Site gate, not by SameSite=lax alone."""
+    transport = ASGITransport(app=app_with_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.post(
+            "/auth/logout",
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert r.status_code == 403
+
+
+async def test_auth_logout_rejects_missing_sec_fetch_site(app_with_oauth) -> None:
+    """Fail-closed: legacy browsers without Sec-Fetch-Site (or curl) cannot
+    perform state-changing actions. Documented constraint."""
+    transport = ASGITransport(app=app_with_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.post("/auth/logout")
+        assert r.status_code == 403
 
 
 async def test_auth_callback_rejects_when_state_missing(app_with_oauth) -> None:
