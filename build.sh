@@ -39,8 +39,14 @@ run_tests_in_container() {
     exit 1
   fi
   echo "Running tests inside container ${VTS_IMAGE}"
+  # Test dependencies install + presence assert before pytest runs (vts-gxw):
+  # async tests silently report 'passed' if pytest-asyncio is missing
+  # despite @pytest.mark.asyncio, so guard explicitly. Eight consecutive
+  # CI failures on 2026-05-22 traced to this gap.
   "${runtime}" "${run_args[@]}" "${VTS_IMAGE}" -lc \
-    "pip install -q pytest==${PYTEST_VERSION} pytest-asyncio==${PYTEST_ASYNCIO_VERSION} && python -m pytest -q tests"
+    "pip install -q pytest==${PYTEST_VERSION} pytest-asyncio==${PYTEST_ASYNCIO_VERSION} \
+     && python -c 'import pytest_asyncio; print(\"pytest-asyncio\", pytest_asyncio.__version__)' \
+     && python -m pytest -q tests"
 }
 
 echo "Building version ${VERSION}"

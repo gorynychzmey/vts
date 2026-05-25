@@ -2,6 +2,7 @@
 
 - **Commit + push after every task**: when a task is done, bump the version in `vts/__init__.py`, commit all changed files, and push to `origin/main`.
 - **Build only on explicit request**: never run `/build` or push a `build-X.Y.Z` tag unless the user explicitly asks.
+- **Harness-managed `.claude/settings.json` is local-only**: hooks on this machine append a `worktree.bgIsolation` block and per-machine hook entries (background-setup.sh, inbox-notifier.sh) to `.claude/settings.json` every session. The canonical repo version contains only the shared `bd prime` SessionStart/PreCompact hooks. On a fresh clone, run `git update-index --skip-worktree .claude/settings.json` so local mutations stop showing up in `git status` and stop interrupting commits with stash dances. `.claude/scheduled_tasks.lock` and `.claude/settings.json.old` are gitignored runtime state.
 
 # context-mode — MANDATORY routing rules
 
