@@ -67,28 +67,29 @@ docker compose --profile llm-llamacpp --profile asr-whisper up -d
 open http://localhost:8080
 ```
 
-vts ships with no users by default. The first request from a trusted proxy
-auto-creates a user using the `X-Forwarded-User` header — for local testing
-without a proxy, set `VTS_TRUSTED_PROXY_CIDRS=["127.0.0.1/32"]` in `.env`
-and pass the header yourself, or put a small auth proxy in front (Authelia,
-oauth2-proxy, etc.).
+For real deployments, vts authenticates via Google OAuth (see
+[Authentication](#authentication) below and
+[docs/AUTH.md](docs/AUTH.md) for the full picture). For local development
+without a Google client, set `VTS_OAUTH_ENABLED=false` and pass
+`X-Forwarded-User: <your-email>` on each request — vts auto-creates the
+user on first call.
 
 For production deployments using podman + systemd, see
 [docs/INITIAL_DEPLOYMENT.md](docs/INITIAL_DEPLOYMENT.md).
 
 ## Authentication
 
-vts authenticates everyone via Google OAuth 2.0 (one Google Cloud project
-covers both the web UI and the MCP endpoint).
+vts handles authentication itself — Google OAuth 2.0 for browsers and MCP
+clients (claude.ai / ChatGPT / Claude Desktop), all behind the same Google
+client. There is no separate auth proxy.
 
-### Setup
+Minimal setup:
 
-1. **Create an OAuth 2.0 Client ID** in [GCP Console](https://console.cloud.google.com/apis/credentials):
-   - Type: Web application
-   - Authorized redirect URIs (add BOTH):
-     - `https://<your-domain>/auth/callback`     (web UI)
-     - `https://<your-domain>/mcp/auth/callback` (MCP)
-   - Note the `client_id` and `client_secret`.
+1. **Create an OAuth 2.0 Client ID** in
+   [GCP Console](https://console.cloud.google.com/apis/credentials) (type
+   "Web application"). Add **both** redirect URIs:
+   - `https://<your-domain>/auth/callback`     (web UI)
+   - `https://<your-domain>/mcp/auth/callback` (MCP)
 
 2. **Set env vars** (or `config.yaml`):
 
@@ -100,55 +101,22 @@ covers both the web UI and the MCP endpoint).
    VTS_OAUTH_ALLOWED_DOMAINS=your-domain.tld
    ```
 
-3. **Reverse proxy**: route `Host(your-domain)` straight to vts. No OIDC
-   middleware, no path-prefix bypasses; vts handles OAuth itself.
+3. **Reverse proxy**: route `Host(your-domain)` straight to vts on
+   port 8080.
 
-4. **Session HMAC key**: vts auto-generates one at
-   `/opt/vts/state/session_secret` on first start (0600). Back it up
-   with `vts.env`; deleting it logs out all users on next restart.
-   For multi-host (HA) deployments behind a load balancer, set
-   `VTS_SESSION_SECRET` explicitly in `vts.env` and share the same
-   value across hosts — per-host autogeneration would otherwise produce
-   mismatched cookies.
+The session HMAC key is auto-generated on first start at
+`/opt/vts/state/session_secret`; no manual key management needed for
+single-host deployments.
 
-5. **Session lifetime** (optional): `VTS_SESSION_MAX_AGE_DAYS=30` is
-   the default. The cookie has an absolute (not sliding) expiry —
-   users re-authenticate via Google every N days regardless of
-   activity. Lower this if you want shorter exposure windows for
-   stolen cookies; raise it for less frequent re-auth.
+For the full picture — request resolver, MCP flow, session lifetime,
+admin impersonation, HA setup, security model, dev mode — see
+[**docs/AUTH.md**](docs/AUTH.md).
 
-### How it works
+MCP tools exposed once authenticated:
 
-- Browser visits `/` → vts redirects to `/auth/login` → Google login →
-  `/auth/callback` validates the email against the allow-list, sets a
-  signed `vts_session` cookie, and lands you on `/`.
-- claude.ai / ChatGPT / Claude Desktop point their MCP connector at
-  `https://<your-domain>/mcp/`. The first request triggers FastMCP's
-  OAuth dance against the same Google client; subsequent calls carry a
-  Bearer access token.
-- Allow-list: at least one of `VTS_OAUTH_ALLOWED_DOMAINS` (right-hand
-  side of `@`, case-insensitive) or `VTS_OAUTH_ALLOWED_EMAILS` (exact)
-  must match. Both empty → access denied (fail-safe).
-
-### Tools exposed via MCP
-
-- `submit_video(url, language?, audio_only?, transcript?, summary?)` —
-  submit a URL for processing; returns a `task_id` immediately. Pipeline
-  flags mirror the web form: `transcript=True` and `summary=True` by
-  default; pass `audio_only=True` to skip video, `language="en"` (etc.)
-  to skip ASR autodetect.
-- `list_tasks(status?, limit?, sort?, order?)` — list your tasks.
-- `get_status(task_id)` — poll status and progress.
-- `get_transcript(task_id, variant="raw"|"redacted")` — fetch the raw ASR
-  transcript or the processed (redacted) one.
-- `get_summary(task_id)` — fetch the markdown summary.
-- `wait_for_task(task_id, until="done"|"transcript"|"summary", timeout_seconds?)`
-  — block until the task reaches the target stage.
-
-### Local development
-
-Set `VTS_OAUTH_ENABLED=false` and pass `X-Forwarded-User: <your-email>`
-on each request (curl/httpie/your-own-proxy). This skips Google entirely.
+- `submit_video`, `list_tasks`, `get_status`, `get_transcript`,
+  `get_summary`, `wait_for_task` — see
+  [docs/AUTH.md](docs/AUTH.md#mcp-tools) for the full signatures.
 
 ## Stack
 
