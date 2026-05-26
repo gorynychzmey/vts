@@ -132,8 +132,11 @@ covers both the web UI and the MCP endpoint).
 
 ### Tools exposed via MCP
 
-- `submit_video(url)` — submit a URL for processing; returns a
-  `task_id` immediately.
+- `submit_video(url, language?, audio_only?, transcript?, summary?)` —
+  submit a URL for processing; returns a `task_id` immediately. Pipeline
+  flags mirror the web form: `transcript=True` and `summary=True` by
+  default; pass `audio_only=True` to skip video, `language="en"` (etc.)
+  to skip ASR autodetect.
 - `list_tasks(status?, limit?, sort?, order?)` — list your tasks.
 - `get_status(task_id)` — poll status and progress.
 - `get_transcript(task_id, variant="raw"|"redacted")` — fetch the raw ASR

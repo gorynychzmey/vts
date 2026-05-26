@@ -69,8 +69,26 @@ def build_mcp_server() -> FastMCP:
     mcp = FastMCP(name="vts", auth=auth_provider)
 
     @mcp.tool(name="submit_video")
-    async def _submit_video(url: str) -> SubmitVideoResult:
-        """Submit a video URL for processing. Returns task_id immediately."""
+    async def _submit_video(
+        url: str,
+        language: str | None = None,
+        audio_only: bool = False,
+        transcript: bool = True,
+        summary: bool = True,
+    ) -> SubmitVideoResult:
+        """Submit a video URL for processing. Returns task_id immediately.
+
+        Args:
+            url: Video URL (yt-dlp supported sources).
+            language: Optional ISO language code (e.g. "en", "ru") to skip
+                language autodetection. Default: autodetect.
+            audio_only: Download audio track only, skip video. Default: False.
+            transcript: Run ASR transcription. Default: True. Set False to
+                skip transcription entirely (audio/video download only).
+            summary: Generate markdown summary. Default: True. Requires
+                transcript=True (the worker has nothing to summarise
+                otherwise — request is rejected with 422).
+        """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, settings = await mcp_authenticate(session)
@@ -81,6 +99,10 @@ def build_mcp_server() -> FastMCP:
                 result = await submit_video(
                     url=url, user=user, repo=repo, bus=bus,
                     artifacts_root=settings.artifacts_root,
+                    language=language,
+                    audio_only=audio_only,
+                    transcript=transcript,
+                    summary=summary,
                 )
                 await session.commit()
                 return result

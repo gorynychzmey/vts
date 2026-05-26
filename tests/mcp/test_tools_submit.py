@@ -67,3 +67,70 @@ async def test_submit_video_rejects_blank_url(tmp_path: Path) -> None:
             artifacts_root=tmp_path,
         )
     assert exc.value.status_code == 422
+
+
+async def test_submit_video_defaults_match_web_pipeline(tmp_path: Path) -> None:
+    """vts-08l: with no params besides url, MCP must produce the same
+    task.options as web does on a bare /api/tasks POST — full pipeline."""
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    result = await submit_video(
+        url="https://x/abc",
+        user=user,
+        repo=repo,
+        bus=bus,
+        artifacts_root=tmp_path,
+    )
+    opts = repo.tasks[result.task_id].options
+    assert opts == {
+        "language": None,
+        "audio_only": False,
+        "transcript": True,
+        "summary": True,
+    }
+
+
+async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    result = await submit_video(
+        url="https://x/abc",
+        user=user,
+        repo=repo,
+        bus=bus,
+        artifacts_root=tmp_path,
+        language="en",
+        audio_only=True,
+        transcript=True,
+        summary=False,
+    )
+    opts = repo.tasks[result.task_id].options
+    assert opts == {
+        "language": "en",
+        "audio_only": True,
+        "transcript": True,
+        "summary": False,
+    }
+
+
+async def test_submit_video_rejects_summary_without_transcript(tmp_path: Path) -> None:
+    """Mirrors TaskCreateRequest.validate_stage_dependencies in web."""
+    from fastapi import HTTPException
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    with pytest.raises(HTTPException) as exc:
+        await submit_video(
+            url="https://x/abc",
+            user=user,
+            repo=repo,
+            bus=bus,
+            artifacts_root=tmp_path,
+            transcript=False,
+            summary=True,
+        )
+    assert exc.value.status_code == 422
+    assert "transcript" in exc.value.detail.lower()

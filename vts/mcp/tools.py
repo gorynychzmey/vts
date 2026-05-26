@@ -53,17 +53,35 @@ async def submit_video(
     repo: _RepoLike,
     bus: _BusLike,
     artifacts_root: Path,
+    language: str | None = None,
+    audio_only: bool = False,
+    transcript: bool = True,
+    summary: bool = True,
 ) -> SubmitVideoResult:
-    """Create a new task in the queued state and notify the worker."""
+    """Create a new task in the queued state and notify the worker.
+
+    Pipeline options mirror web /api/tasks (vts-08l) so a bare URL submit
+    runs the full transcript+summary pipeline by default. `summary=True`
+    requires `transcript=True` — the worker would otherwise have nothing
+    to summarise.
+    """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
+    if summary and not transcript:
+        raise HTTPException(status_code=422, detail="summary requires transcript")
     task_id = uuid.uuid4()
     artifact = task_dir(artifacts_root, user.username, task_id)
     artifact.mkdir(parents=True, exist_ok=True)
+    options: dict[str, Any] = {
+        "language": language,
+        "audio_only": audio_only,
+        "transcript": transcript,
+        "summary": summary,
+    }
     task = await repo.create_task(
         user_id=uuid.UUID(user.id),
         source_url=url.strip(),
-        options={},
+        options=options,
         artifact_dir=str(artifact),
         task_id=task_id,
     )
