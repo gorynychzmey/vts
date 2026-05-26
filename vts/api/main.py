@@ -481,8 +481,17 @@ def create_app() -> FastAPI:
     async def root(request: Request) -> HTMLResponse:
         if settings.oauth_enabled:
             session_data = getattr(request, "session", None) or {}
-            email = (session_data.get("email") or "").strip() if isinstance(session_data, dict) else ""
-            if not email:
+            if not isinstance(session_data, dict):
+                session_data = {}
+            # vts-pa9: prefer sid (current cookie shape); fall back to
+            # legacy email (cookies issued before vts-pa9). Either presence
+            # means the user has a session — the resolver will validate it
+            # on the next authenticated call.
+            has_session = bool(
+                (session_data.get("sid") or "").strip()
+                or (session_data.get("email") or "").strip()
+            )
+            if not has_session:
                 import urllib.parse
                 return RedirectResponse(
                     url=f"/auth/login?next={urllib.parse.quote(request.url.path, safe='')}",
