@@ -15,7 +15,7 @@
 
 body {
   margin: 0;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Manrope", sans-serif;
   color: var(--ink);
   background: radial-gradient(1200px 500px at 85% -10%, #f0c9af 0%, transparent 70%), var(--bg);
 }
