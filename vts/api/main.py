@@ -1016,6 +1016,7 @@ def create_app() -> FastAPI:
     @app.get("/player/{task_id}", include_in_schema=False, response_class=HTMLResponse)
     async def media_player(
         task_id: uuid.UUID,
+        request: Request,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> HTMLResponse:
@@ -1030,11 +1031,18 @@ def create_app() -> FastAPI:
         # source_url is "file://<name>" for uploads, an http URL otherwise;
         # in either case the last path segment is a sensible display name.
         title = (task.source_url or "").rsplit("/", 1)[-1] or media_file.name
+        # Propagate admin impersonation: <video>/<audio> will fire its own
+        # request to /api/tasks/<id>/media, which must resolve to the same
+        # acting user as the page itself — otherwise the request resolves
+        # as the admin and the task ownership check returns 404.
         src = f"/api/tasks/{task_id}/media"
+        acting_as = request.query_params.get("as_user")
+        if acting_as:
+            src = f"{src}?{urlencode({'as_user': acting_as})}"
         tag = (
-            f'<video controls autoplay src="{src}"></video>'
+            f'<video controls autoplay src="{_html.escape(src, quote=True)}"></video>'
             if kind == "video"
-            else f'<audio controls autoplay src="{src}"></audio>'
+            else f'<audio controls autoplay src="{_html.escape(src, quote=True)}"></audio>'
         )
         html = f"""<!doctype html>
 <html lang="en">
