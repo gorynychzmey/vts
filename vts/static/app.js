@@ -774,6 +774,7 @@ function createRuntime(task) {
   const transcribeProgress = readStageProgress(task, "transcribe");
   const summaryProgress = readStageProgress(task, "summary");
   return {
+    id: String(task.id || ""),
     sourceUrl: String(task.source_url || ""),
     displayName: typeof task.source_title === "string" ? task.source_title.trim() : "",
     baseStatus: String(task.status || ""),
@@ -1001,9 +1002,19 @@ function renderTaskTitle(taskEl) {
   const runtime = taskEl._runtime;
   const elements = taskEl._elements;
   const hasName = Boolean(runtime.displayName);
-  elements.linkEl.textContent = hasName ? runtime.displayName : runtime.sourceUrl;
-  elements.linkEl.href = runtime.sourceUrl;
-  elements.sourceEl.textContent = runtime.sourceUrl;
+  const isUpload = typeof runtime.sourceUrl === "string" && runtime.sourceUrl.startsWith("file://");
+  const uploadName = isUpload ? runtime.sourceUrl.slice("file://".length) : "";
+  const playerHref = isUpload ? buildPath(`/player/${encodeURIComponent(runtime.id)}`) : runtime.sourceUrl;
+  elements.linkEl.textContent = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
+  elements.linkEl.href = playerHref;
+  if (isUpload) {
+    elements.linkEl.target = "_blank";
+    elements.linkEl.rel = "noopener";
+  } else {
+    elements.linkEl.removeAttribute("target");
+    elements.linkEl.removeAttribute("rel");
+  }
+  elements.sourceEl.textContent = isUpload ? uploadName : runtime.sourceUrl;
   elements.sourceEl.classList.toggle("hidden", !hasName);
 }
 

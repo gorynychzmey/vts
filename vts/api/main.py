@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json
 import logging
 import os
@@ -42,6 +43,7 @@ from vts.core.logging import configure_logging
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
+from vts.services.media_kind import media_content_type, media_kind
 from vts.services.push import (
     SubscriptionPayload,
     delete_subscription,
@@ -1005,7 +1007,57 @@ def create_app() -> FastAPI:
         media_file = _find_media_file(task.artifact_dir)
         if media_file is None:
             raise HTTPException(status_code=404, detail="Media file not available")
-        return FileResponse(path=str(media_file), filename=media_file.name, media_type="application/octet-stream")
+        return FileResponse(
+            path=str(media_file),
+            filename=media_file.name,
+            media_type=media_content_type(media_file),
+        )
+
+    @app.get("/player/{task_id}", include_in_schema=False, response_class=HTMLResponse)
+    async def media_player(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> HTMLResponse:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        media_file = _find_media_file(task.artifact_dir)
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not available")
+        kind = media_kind(media_file)
+        # source_url is "file://<name>" for uploads, an http URL otherwise;
+        # in either case the last path segment is a sensible display name.
+        title = (task.source_url or "").rsplit("/", 1)[-1] or media_file.name
+        src = f"/api/tasks/{task_id}/media"
+        tag = (
+            f'<video controls autoplay src="{src}"></video>'
+            if kind == "video"
+            else f'<audio controls autoplay src="{src}"></audio>'
+        )
+        html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{_html.escape(title)}</title>
+<style>
+  html, body {{ margin: 0; padding: 0; background: #111; color: #ddd;
+    font-family: system-ui, sans-serif; min-height: 100vh; }}
+  body {{ display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 1rem; }}
+  h1 {{ font-size: 1rem; font-weight: 400; margin: 0 0 1rem;
+    word-break: break-all; text-align: center; }}
+  video, audio {{ max-width: 100%; width: min(960px, 100%); }}
+  video {{ max-height: 80vh; background: #000; }}
+</style>
+</head>
+<body>
+<h1>{_html.escape(title)}</h1>
+{tag}
+</body>
+</html>"""
+        return HTMLResponse(html)
 
     @app.get("/api/events")
     async def get_events(
