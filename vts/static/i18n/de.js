@@ -27,6 +27,8 @@ window.__VTS_I18N.de = {
 "new_task.language_fr": "Französisch",
 "new_task.language_es": "Spanisch",
 "tasks.title": "Aufgaben",
+"tasks.media_expired_badge": "abgelaufen",
+"tasks.media_expired_tooltip": "Die Originaldatei wurde gemäss Aufbewahrungsrichtlinie entfernt.",
 "action.create": "Aufgabe erstellen",
 "action.refresh": "Aufgaben aktualisieren",
 "action.pause": "Pausieren",

@@ -27,6 +27,8 @@ window.__VTS_I18N.ru = {
 "new_task.language_fr": "Французский",
 "new_task.language_es": "Испанский",
 "tasks.title": "Задачи",
+"tasks.media_expired_badge": "удалено",
+"tasks.media_expired_tooltip": "Исходный файл удалён по политике хранения.",
 "action.create": "Создать задачу",
 "action.refresh": "Обновить задачи",
 "action.pause": "Пауза",

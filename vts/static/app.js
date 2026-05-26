@@ -1004,15 +1004,27 @@ function renderTaskTitle(taskEl) {
   const hasName = Boolean(runtime.displayName);
   const isUpload = typeof runtime.sourceUrl === "string" && runtime.sourceUrl.startsWith("file://");
   const uploadName = isUpload ? runtime.sourceUrl.slice("file://".length) : "";
+  const uploadExpired = isUpload && !runtime.mediaReady;
   const playerHref = isUpload ? buildPath(`/player/${encodeURIComponent(runtime.id)}`) : runtime.sourceUrl;
   elements.linkEl.textContent = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
-  elements.linkEl.href = playerHref;
-  if (isUpload) {
-    elements.linkEl.target = "_blank";
-    elements.linkEl.rel = "noopener";
-  } else {
+  if (uploadExpired) {
+    elements.linkEl.removeAttribute("href");
     elements.linkEl.removeAttribute("target");
     elements.linkEl.removeAttribute("rel");
+    elements.linkEl.classList.add("expired");
+  } else {
+    elements.linkEl.href = playerHref;
+    elements.linkEl.classList.remove("expired");
+    if (isUpload) {
+      elements.linkEl.target = "_blank";
+      elements.linkEl.rel = "noopener";
+    } else {
+      elements.linkEl.removeAttribute("target");
+      elements.linkEl.removeAttribute("rel");
+    }
+  }
+  if (elements.expiredEl) {
+    elements.expiredEl.classList.toggle("hidden", !uploadExpired);
   }
   elements.sourceEl.textContent = isUpload ? uploadName : runtime.sourceUrl;
   elements.sourceEl.classList.toggle("hidden", !hasName);
@@ -1277,6 +1289,7 @@ function renderTasks(tasks) {
 
     root._elements = {
       linkEl: root.querySelector(".task-link"),
+      expiredEl: root.querySelector(".task-expired"),
       sourceEl: root.querySelector(".task-source"),
       statusEl: root.querySelector(".task-status"),
       taskRuntimeEl: root.querySelector(".task-runtime"),

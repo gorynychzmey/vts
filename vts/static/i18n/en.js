@@ -27,6 +27,8 @@ window.__VTS_I18N.en = {
 "new_task.language_fr": "French",
 "new_task.language_es": "Spanish",
 "tasks.title": "Tasks",
+"tasks.media_expired_badge": "expired",
+"tasks.media_expired_tooltip": "Original media file has been removed by retention policy.",
 "action.create": "Create task",
 "action.refresh": "Refresh tasks",
 "action.pause": "Pause",

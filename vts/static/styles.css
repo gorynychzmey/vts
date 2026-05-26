@@ -421,6 +421,41 @@ input[type="file"] {
   text-decoration: underline;
 }
 
+.task-link.expired {
+  color: var(--ink-soft);
+  cursor: default;
+}
+
+.task-link.expired:hover {
+  text-decoration: none;
+}
+
+.task-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.task-title-row .task-link {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-expired {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn, #b25c00);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 0.35rem;
+  line-height: 1.4;
+  cursor: help;
+}
+
 .task-source {
   color: var(--ink-soft);
   font-size: 0.78rem;
