@@ -76,6 +76,60 @@ If you want MCP semantics (claude.ai, Claude Desktop, etc.), use the
 separate MCP endpoint at `/mcp/` instead — see
 [AUTH.md](AUTH.md#mcp-auth-flow).
 
+## Building your own Custom GPT from scratch
+
+A shared GPT link gives the recipient a read-only assistant — they
+cannot edit the system prompt or Actions. To give someone full control,
+they need to build their own GPT and import the spec. Every VTS user can
+do this independently:
+
+1. **Get a personal API token** at `<your-vts>/` → key icon in the
+   header → **Create token** → name it (e.g. `chatgpt-laptop`) → copy
+   the `vts_…` value. It's only shown once.
+
+2. **Create a GPT.** ChatGPT → *Explore GPTs* → *Create* (requires a
+   ChatGPT Plus / Team / Enterprise plan).
+
+3. **Configure → Actions → Create new action → Import from URL.**
+   Paste:
+
+   ```
+   https://<your-vts>/openapi.json
+   ```
+
+   ChatGPT will pull the spec, list every endpoint, and validate it.
+
+4. **Authentication** (still inside the Action editor):
+   - Authentication type: **API Key**
+   - API Key: paste your `vts_…` token
+   - Auth Type: **Bearer**
+
+5. **Privacy policy URL:** ChatGPT requires one to publish the Action.
+   Any URL on your domain works (e.g. `<your-vts>/` itself). Nothing
+   sensitive about VTS — the API is private to you and your allow-list.
+
+6. **System prompt** (the *Instructions* field at the top): describe
+   how you want the assistant to use VTS. A reasonable starter:
+
+   > You help me work with my self-hosted VTS instance. When the user
+   > shares a YouTube URL, submit it via `POST /api/tasks` with
+   > `transcript=true` and `summary=true`. Poll `GET /api/tasks/{id}`
+   > until done, then fetch the summary. When the user asks for a
+   > recap of an old task, search via `GET /api/tasks` and fetch the
+   > relevant artifact.
+
+7. **Save** the GPT (top-right). It is private to your account by
+   default. You can leave it that way; no need to publish.
+
+8. **Test.** Open the new GPT, send "what's my identity?" — the
+   first call will prompt for the action to use your token; click
+   *Allow always for this site*. Then ask it to do something real
+   ("list my last 5 tasks").
+
+What the OpenAPI spec carries is the same for everyone — the endpoints,
+the schemas, the auth method. What differs per user is their `vts_…`
+token (issued from their own VTS account) and their system prompt.
+
 ## Curl quick reference
 
 ```bash
