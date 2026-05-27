@@ -1996,7 +1996,7 @@ function renderTokensList(tokens) {
 
     const revokeBtn = document.createElement("button");
     revokeBtn.type = "button";
-    revokeBtn.className = "icon-btn ghost";
+    revokeBtn.className = "btn-text ghost";
     revokeBtn.textContent = t("tokens.revoke");
     revokeBtn.addEventListener("click", async () => {
       if (!window.confirm(t("tokens.revoke_confirm"))) return;

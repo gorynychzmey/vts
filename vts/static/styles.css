@@ -879,14 +879,56 @@ input[type="file"] {
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
+  align-items: stretch;
 }
 
 .tokens-create-form input {
   flex: 1 1 auto;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--ink-soft);
-  border-radius: 4px;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
   font: inherit;
+  line-height: 1.4;
+}
+
+/* Text buttons inside the tokens dialog. Unlike .icon-btn (which forces
+   a 2.25rem square), .btn-text sizes to its label. */
+.btn-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  border: 0;
+}
+
+.btn-text.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-text.primary:hover {
+  filter: brightness(1.03);
+}
+
+.btn-text.ghost {
+  background: #efe9db;
+  color: var(--ink);
+}
+
+.btn-text.ghost:hover {
+  background: #e6dece;
+}
+
+.btn-text:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .tokens-created {
@@ -904,7 +946,7 @@ input[type="file"] {
 
 .tokens-raw-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 0.5rem;
 }
 
