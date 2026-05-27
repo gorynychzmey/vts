@@ -41,6 +41,22 @@
           </button>
           <button
             type="button"
+            id="tokens-btn"
+            class="icon-btn ghost"
+            data-i18n-title="tokens.open"
+            data-i18n-aria-label="tokens.open"
+            title="API tokens"
+            aria-label="API tokens"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="8" cy="14" r="4" />
+              <path d="M11 11l9-9" />
+              <path d="M16 6l3 3" />
+              <path d="M19 4l2 2" />
+            </svg>
+          </button>
+          <button
+            type="button"
             id="logout-btn"
             class="icon-btn ghost"
             data-i18n-title="action.logout"
@@ -402,5 +418,44 @@
       }
     </script>
     <script src="/static/app.js?v=__VTS_VERSION__"></script>
+
+    <dialog id="tokens-dialog" class="tokens-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="tokens.title">API tokens</h2>
+        <button type="button" id="tokens-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <p class="tokens-help" data-i18n="tokens.help">
+        Use these tokens for scripted access (Authorization: Bearer …).
+      </p>
+
+      <div id="tokens-list" class="tokens-list"></div>
+
+      <form id="tokens-create-form" class="tokens-create-form">
+        <input type="text" id="tokens-create-name" name="name" required
+               maxlength="255" autocomplete="off"
+               data-i18n-placeholder="tokens.name_placeholder"
+               placeholder="e.g. obs-laptop" />
+        <button type="submit" class="icon-btn primary" data-i18n="tokens.create">Create token</button>
+      </form>
+
+      <div id="tokens-created-banner" class="tokens-created hidden">
+        <p data-i18n="tokens.copy_warning">
+          Copy this token now — it will not be shown again.
+        </p>
+        <div class="tokens-raw-row">
+          <code id="tokens-raw-value" class="mono"></code>
+          <button type="button" id="tokens-copy-btn" class="icon-btn primary"
+                  data-i18n="tokens.copy">Copy</button>
+        </div>
+      </div>
+    </dialog>
   </body>
 </html>

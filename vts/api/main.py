@@ -23,9 +23,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
-from vts.api.deps import get_current_user, get_redis, get_session_dep, get_settings_dep
+from vts.api.csrf import require_same_site
+from vts.api.deps import (
+    get_current_user,
+    get_current_user_session_only,
+    get_redis,
+    get_session_dep,
+    get_settings_dep,
+)
 from vts.api.schemas import (
     AdminUsersOut,
+    ApiTokenCreateOut,
+    ApiTokenCreateRequest,
+    ApiTokenOut,
     BatchResultOut,
     MeOut,
     PushConfigOut,
@@ -557,6 +567,66 @@ def create_app() -> FastAPI:
     @app.get("/api/me", response_model=MeOut)
     async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeOut:
         return MeOut(requested_by=user.requested_by, acting_as=user.acting_as, is_admin=user.is_admin)
+
+    @app.get("/api/me/tokens", response_model=list[ApiTokenOut])
+    async def list_tokens(
+        user: AuthenticatedUser = Depends(get_current_user_session_only),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[ApiTokenOut]:
+        from vts.db.repo import Repo as _Repo
+        repo = _Repo(session)
+        rows = await repo.list_api_tokens(uuid.UUID(user.id))
+        return [
+            ApiTokenOut(
+                id=r.id, name=r.name, prefix=r.prefix,
+                created_at=r.created_at, last_used_at=r.last_used_at,
+            )
+            for r in rows
+        ]
+
+    @app.post(
+        "/api/me/tokens",
+        response_model=ApiTokenCreateOut,
+        dependencies=[Depends(require_same_site)],
+    )
+    async def create_token(
+        payload: ApiTokenCreateRequest,
+        user: AuthenticatedUser = Depends(get_current_user_session_only),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> ApiTokenCreateOut:
+        from vts.db.repo import Repo as _Repo
+        from vts.services.api_tokens import generate_token, hash_token, token_prefix
+        raw = generate_token()
+        repo = _Repo(session)
+        row = await repo.create_api_token(
+            user_id=uuid.UUID(user.id),
+            name=payload.name.strip(),
+            token_hash=hash_token(raw),
+            prefix=token_prefix(raw),
+        )
+        await session.commit()
+        return ApiTokenCreateOut(
+            id=row.id, name=row.name, prefix=row.prefix,
+            created_at=row.created_at, last_used_at=None, token=raw,
+        )
+
+    @app.delete(
+        "/api/me/tokens/{token_id}",
+        status_code=204,
+        dependencies=[Depends(require_same_site)],
+    )
+    async def revoke_token(
+        token_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user_session_only),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        from vts.db.repo import Repo as _Repo
+        repo = _Repo(session)
+        ok = await repo.revoke_api_token(uuid.UUID(user.id), token_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Token not found")
+        await session.commit()
+        return Response(status_code=204)
 
     @app.get("/api/push/config", response_model=PushConfigOut)
     async def push_config(settings: Settings = Depends(get_settings_dep)) -> PushConfigOut:

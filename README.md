@@ -109,8 +109,8 @@ The session HMAC key is auto-generated on first start at
 single-host deployments.
 
 For the full picture — request resolver, MCP flow, session lifetime,
-admin impersonation, HA setup, security model, dev mode — see
-[**docs/AUTH.md**](docs/AUTH.md).
+admin impersonation, HA setup, security model, dev mode, **personal API
+tokens** for scripted clients — see [**docs/AUTH.md**](docs/AUTH.md).
 
 MCP tools exposed once authenticated:
 

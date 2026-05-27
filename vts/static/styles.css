@@ -792,3 +792,130 @@ input[type="file"] {
   0% { box-shadow: 0 0 0 3px rgba(214, 93, 43, 0.6); }
   100% { box-shadow: 0 0 0 0 rgba(214, 93, 43, 0); }
 }
+
+/* ---------- API tokens dialog (vts-nuu) ---------- */
+
+.tokens-dialog {
+  border: 1px solid var(--ink-soft);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  max-width: 640px;
+  width: calc(100% - 2rem);
+  background: var(--bg, #fff);
+  color: var(--ink);
+}
+
+.tokens-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.tokens-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.tokens-dialog-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.tokens-help {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+
+.tokens-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tokens-empty {
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0;
+}
+
+.tokens-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.3rem 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--ink-soft);
+  border-radius: 6px;
+  align-items: center;
+}
+
+.tokens-meta {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.tokens-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tokens-prefix {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.tokens-sub {
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.tokens-create-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tokens-create-form input {
+  flex: 1 1 auto;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--ink-soft);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.tokens-created {
+  border: 2px solid #b25c00;
+  background: #fff7ed;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.tokens-created p {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: #b25c00;
+}
+
+.tokens-raw-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tokens-raw-row code {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 0.4rem 0.6rem;
+  background: #fff;
+  border: 1px solid var(--ink-soft);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+

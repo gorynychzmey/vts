@@ -113,3 +113,21 @@ class PushConfigOut(BaseModel):
 class PushStatusOut(BaseModel):
     subscribed: bool
     endpoint: str | None = None
+
+
+class ApiTokenCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class ApiTokenOut(BaseModel):
+    id: UUID
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
+class ApiTokenCreateOut(ApiTokenOut):
+    # The raw token, returned only at creation time. Never persisted by the
+    # server in clear; never re-fetchable through GET.
+    token: str

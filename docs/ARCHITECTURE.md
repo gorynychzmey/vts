@@ -156,7 +156,7 @@ If saved client fails, worker retries fallback clients and updates stored prefer
 
 ## Data model
 
-Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, subsequent migrations evolve it (e.g. `0002` adds `users.preferred_ytdlp_client`, `0004` adds `tasks.source_title`, `0005` adds `tasks.summary_progress`, `0006` drops `asr_words`, `0008` adds `push_subscriptions`).
+Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, subsequent migrations evolve it (e.g. `0002` adds `users.preferred_ytdlp_client`, `0004` adds `tasks.source_title`, `0005` adds `tasks.summary_progress`, `0006` drops `asr_words`, `0008` adds `push_subscriptions`, `0009` adds `api_tokens`).
 
 | Table | Columns | Keys & indexes |
 |-------|---------|----------------|
@@ -165,6 +165,7 @@ Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, su
 | `steps` | `id UUID PK`, `task_id UUID FK→tasks`, `name TEXT(64)`, `status ENUM(pending, running, completed, failed, skipped)`, `attempt INT`, `started_at?`, `finished_at?`, `message TEXT?` | FK CASCADE; unique `(task_id, name)`; index `(task_id, status)` |
 | `asr_segments` | `id UUID PK`, `task_id UUID FK→tasks`, `segment_index INT`, `start_sec FLOAT`, `end_sec FLOAT`, `text TEXT`, `raw_json JSON` (full Whisper response) | FK CASCADE; unique `(task_id, segment_index)`; index `(task_id, start_sec)` |
 | `push_subscriptions` | `id UUID PK`, `user_id UUID FK→users`, `endpoint TEXT`, `p256dh TEXT`, `auth TEXT`, `user_agent TEXT?`, `created_at` | FK CASCADE; one row per Web Push subscription |
+| `api_tokens` | `id UUID PK`, `user_id UUID FK→users`, `name TEXT`, `token_hash CHAR(64)` (SHA-256), `prefix TEXT`, `created_at`, `last_used_at?`, `revoked_at?` | FK CASCADE; unique on `token_hash`; index `(user_id, revoked_at)` |
 
 The `tasks.artifact_dir` is the per-task subdirectory under `artifacts_root` that holds every on-disk artifact (see *Processing Artifacts* below). The `steps` table is the durable record of which DAG stages have completed; the restart contract reads it on worker startup.
 
@@ -470,6 +471,7 @@ REST endpoints:
 - `GET /api/tasks/{id}/summary`
 - `GET /api/version`
 - `GET /api/me`
+- `GET /api/me/tokens` / `POST /api/me/tokens` / `DELETE /api/me/tokens/<id>` (session-only)
 - `GET /api/admin/users` (admin only)
 
 Auth endpoints (active when `oauth_enabled=true`):

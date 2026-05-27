@@ -237,6 +237,77 @@ Tools exposed via the FastMCP endpoint (auth-gated by the bearer flow above):
 - `wait_for_task(task_id, until="done"|"transcript"|"summary", timeout_seconds?)`
   — block until the task reaches the target stage.
 
+## Personal API tokens
+
+For programmatic clients (scripted uploads, cron jobs, CLI tools) where
+running the full OAuth flow is awkward, vts supports long-lived personal
+API tokens. They live in the `api_tokens` table and are sent in the
+standard `Authorization: Bearer <token>` header.
+
+### Generate
+
+UI: header → key icon → **API tokens** dialog → enter a name → **Create
+token**. The raw token is shown **once**, on the create response — it is
+never stored in clear server-side (only the SHA-256 hash is). Copy it
+immediately into your script's env file or secret store.
+
+Token shape: `vts_<43 url-safe base64 chars>` (≈256 bits of entropy).
+
+### Use
+
+```bash
+curl -H "Authorization: Bearer vts_AbCdEf..." \
+     -F "file=@recording.mp4" \
+     https://vts.example.com/api/tasks/upload
+```
+
+The bearer-resolver branches on the `vts_` prefix: it looks the token up
+by SHA-256 hash, loads the owning user, and proceeds as if that user
+had logged in via OAuth. All the usual machinery applies — the task is
+owned by the token's user, the user's data isolation, admin impersonation
+via `?as_user=` (if the token's owner is an admin).
+
+When `oauth_enabled=true`, the allow-list is re-checked on every request
+using the token's owning email — removing someone from
+`oauth_allowed_domains`/`emails` disables their tokens immediately, no
+explicit revoke needed. When `oauth_enabled=false`, tokens work without
+allow-list re-check (there is no allow-list to check against).
+
+### Revoke
+
+UI: open the dialog, hit **Revoke** next to a token. Revocation is
+server-side and effective on the next request — the token row is soft-
+deleted with `revoked_at = now()` and skipped by the lookup query.
+
+### Security model
+
+- **Storage:** only `SHA-256(raw)` is persisted. A database dump does
+  not leak working tokens (raw tokens have 256 bits of entropy, no
+  practical dictionary attack against the hash).
+- **Prefix:** first 12 chars (`vts_a1b2c3d4`) are stored in clear for UI
+  display ("which token is this?"). Not enough to guess the rest.
+- **Token management is session-only.** `GET/POST/DELETE /api/me/tokens`
+  rejects `Authorization: Bearer` with 403 — an attacker who steals a
+  token cannot use it to issue more tokens or revoke the user's other
+  tokens. Token management requires a real interactive session cookie.
+- **`last_used_at`** is updated on each successful auth, throttled
+  per-process to one write per 5 minutes per token to avoid write
+  amplification under busy scripts.
+- **No expiry by default.** Tokens are long-lived until revoked. Use
+  revoke + re-create for rotation; expiry could be added later if
+  needed.
+- **Same rights as the owner.** No scope/permission system; tokens
+  grant exactly what the owning user can do (including admin
+  impersonation for admin owners).
+
+### Endpoints
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/api/me/tokens` | session cookie | list active tokens (no raw values) |
+| `POST` | `/api/me/tokens` | session cookie + Sec-Fetch-Site | create token; raw value in response |
+| `DELETE` | `/api/me/tokens/<id>` | session cookie + Sec-Fetch-Site | soft-revoke |
+
 ## Reverse proxy
 
 Route `Host(<your-domain>)` straight to vts on port 8080. No OIDC

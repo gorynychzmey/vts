@@ -7,7 +7,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vts.db.models import AsrSegment, Step, StepStatus, Task, TaskStatus, User
+from vts.db.models import ApiToken, AsrSegment, Step, StepStatus, Task, TaskStatus, User
 
 
 def utcnow() -> datetime:
@@ -337,6 +337,54 @@ class Repo:
         if candidate.options != options:
             return None
         return candidate
+
+    async def create_api_token(
+        self,
+        user_id: uuid.UUID,
+        name: str,
+        token_hash: str,
+        prefix: str,
+    ) -> ApiToken:
+        token = ApiToken(user_id=user_id, name=name, token_hash=token_hash, prefix=prefix)
+        self.session.add(token)
+        await self.session.flush()
+        return token
+
+    async def list_api_tokens(self, user_id: uuid.UUID) -> list[ApiToken]:
+        stmt = (
+            select(ApiToken)
+            .where(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None))
+            .order_by(ApiToken.created_at.desc())
+        )
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_active_api_token_by_hash(self, token_hash: str) -> ApiToken | None:
+        stmt = select(ApiToken).where(
+            ApiToken.token_hash == token_hash, ApiToken.revoked_at.is_(None)
+        )
+        return await self.session.scalar(stmt)
+
+    async def revoke_api_token(self, user_id: uuid.UUID, token_id: uuid.UUID) -> bool:
+        stmt = select(ApiToken).where(
+            ApiToken.id == token_id,
+            ApiToken.user_id == user_id,
+            ApiToken.revoked_at.is_(None),
+        )
+        token = await self.session.scalar(stmt)
+        if token is None:
+            return False
+        token.revoked_at = utcnow()
+        await self.session.flush()
+        return True
+
+    async def touch_api_token_last_used(self, token_id: uuid.UUID) -> None:
+        stmt = (
+            update(ApiToken)
+            .where(ApiToken.id == token_id)
+            .values(last_used_at=utcnow())
+        )
+        await self.session.execute(stmt)
 
     async def clone_asr_segments(self, src_task_id: uuid.UUID, dst_task_id: uuid.UUID) -> None:
         """Copy all ASR segments from src task to dst task."""

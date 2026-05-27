@@ -1952,6 +1952,123 @@ document.getElementById("logout-btn")?.addEventListener("click", async () => {
   window.location.href = "/";
 });
 
+// ---------- API tokens ----------
+
+const tokensDialog = document.getElementById("tokens-dialog");
+const tokensListEl = document.getElementById("tokens-list");
+const tokensCreateForm = document.getElementById("tokens-create-form");
+const tokensCreateNameInput = document.getElementById("tokens-create-name");
+const tokensCreatedBanner = document.getElementById("tokens-created-banner");
+const tokensRawValueEl = document.getElementById("tokens-raw-value");
+
+function renderTokensList(tokens) {
+  if (!tokensListEl) return;
+  tokensListEl.innerHTML = "";
+  if (!tokens.length) {
+    const empty = document.createElement("p");
+    empty.className = "tokens-empty";
+    empty.textContent = t("tokens.empty");
+    tokensListEl.appendChild(empty);
+    return;
+  }
+  for (const tok of tokens) {
+    const row = document.createElement("div");
+    row.className = "tokens-row";
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta";
+    const name = document.createElement("span");
+    name.className = "tokens-name";
+    name.textContent = tok.name;
+    const prefix = document.createElement("code");
+    prefix.className = "mono tokens-prefix";
+    prefix.textContent = `${tok.prefix}…`;
+    meta.appendChild(name);
+    meta.appendChild(prefix);
+    row.appendChild(meta);
+
+    const sub = document.createElement("div");
+    sub.className = "tokens-sub";
+    const created = new Date(tok.created_at).toLocaleString();
+    const lastUsed = tok.last_used_at ? new Date(tok.last_used_at).toLocaleString() : t("tokens.never_used");
+    sub.textContent = `${t("tokens.created")}: ${created} · ${t("tokens.last_used")}: ${lastUsed}`;
+    row.appendChild(sub);
+
+    const revokeBtn = document.createElement("button");
+    revokeBtn.type = "button";
+    revokeBtn.className = "icon-btn ghost";
+    revokeBtn.textContent = t("tokens.revoke");
+    revokeBtn.addEventListener("click", async () => {
+      if (!window.confirm(t("tokens.revoke_confirm"))) return;
+      const resp = await fetch(buildPath(`/api/me/tokens/${encodeURIComponent(tok.id)}`), { method: "DELETE" });
+      if (resp.ok) await refreshTokensList();
+    });
+    row.appendChild(revokeBtn);
+
+    tokensListEl.appendChild(row);
+  }
+}
+
+async function refreshTokensList() {
+  const resp = await fetch(buildPath("/api/me/tokens"));
+  if (!resp.ok) return;
+  const tokens = await resp.json();
+  renderTokensList(tokens);
+}
+
+function resetTokensDialog() {
+  if (tokensCreatedBanner) tokensCreatedBanner.classList.add("hidden");
+  if (tokensRawValueEl) tokensRawValueEl.textContent = "";
+  if (tokensCreateNameInput) tokensCreateNameInput.value = "";
+}
+
+document.getElementById("tokens-btn")?.addEventListener("click", async () => {
+  if (!tokensDialog) return;
+  resetTokensDialog();
+  await refreshTokensList();
+  if (typeof tokensDialog.showModal === "function") {
+    tokensDialog.showModal();
+  } else {
+    tokensDialog.setAttribute("open", "");
+  }
+});
+
+document.getElementById("tokens-close-btn")?.addEventListener("click", () => {
+  tokensDialog?.close();
+});
+
+tokensCreateForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = (tokensCreateNameInput?.value || "").trim();
+  if (!name) return;
+  const resp = await fetch(buildPath("/api/me/tokens"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!resp.ok) return;
+  const created = await resp.json();
+  if (tokensRawValueEl) tokensRawValueEl.textContent = created.token;
+  tokensCreatedBanner?.classList.remove("hidden");
+  if (tokensCreateNameInput) tokensCreateNameInput.value = "";
+  await refreshTokensList();
+});
+
+document.getElementById("tokens-copy-btn")?.addEventListener("click", async () => {
+  const value = tokensRawValueEl?.textContent || "";
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    // Fallback for browsers without async clipboard
+    const range = document.createRange();
+    range.selectNode(tokensRawValueEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+});
+
 // ---------- Web Push ----------
 
 const pushToggleBtn = document.getElementById("push-toggle-btn");

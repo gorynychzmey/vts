@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from vts.core.config import Settings, get_settings
+from vts.db.models import User
 from vts.db.repo import Repo
 from vts.db.session import get_db_session
 
@@ -28,20 +29,27 @@ async def resolve_user_from_request(
     settings: Settings,
     redis: Any | None = None,
 ) -> AuthenticatedUser:
-    """Single auth entrypoint. Picks one of three branches:
+    """Single auth entrypoint. Branches:
 
-    1. oauth_enabled=False → trust X-Forwarded-User (dev only, no proxy check).
-    2. oauth_enabled=True + Authorization: Bearer → FastMCP access token claims.
-    3. oauth_enabled=True + signed session cookie → server-side session
+    1. Authorization: Bearer vts_<...>  → personal API token (any oauth mode).
+    2. oauth_enabled=False → trust X-Forwarded-User (dev only, no proxy check).
+    3. oauth_enabled=True + Authorization: Bearer → FastMCP access token claims.
+    4. oauth_enabled=True + signed session cookie → server-side session
        record in Redis (vts-pa9), falling back to legacy email-only cookies.
     """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        from vts.services.api_tokens import hash_token, looks_like_api_token
+        raw = auth_header.split(" ", 1)[1].strip()
+        if looks_like_api_token(raw):
+            return await _resolve_via_api_token(raw, request, session, settings, hash_token)
+
     if not settings.oauth_enabled:
         email = request.headers.get("x-forwarded-user", "").strip()
         if not email:
             raise HTTPException(status_code=401, detail="Missing X-Forwarded-User (dev mode)")
         return await _materialize_user(email, request, session, settings)
 
-    auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = get_access_token()
         if token is None:
@@ -95,6 +103,56 @@ async def resolve_user_from_request(
         return await _materialize_user(email, request, session, settings)
 
     raise HTTPException(status_code=401, detail="Authentication required")
+
+
+# Per-process throttle for last_used_at writes so a busy script doesn't
+# generate one UPDATE per request. Maps token_id -> last write monotonic time.
+_TOKEN_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
+_token_last_touched: dict[str, float] = {}
+
+
+async def _resolve_via_api_token(
+    raw_token: str,
+    request: Request,
+    session: AsyncSession,
+    settings: Settings,
+    hash_fn: Any,
+) -> AuthenticatedUser:
+    """vts-nuu: bearer auth via personal API token (vts_<...> prefix).
+
+    Works in any oauth mode — token ownership is the auth, not a Google
+    session. When oauth is on, the allow-list is still re-checked so
+    removing the user from oauth_allowed_* also disables their tokens.
+    """
+    import time as _time
+    repo = Repo(session)
+    token_row = await repo.get_active_api_token_by_hash(hash_fn(raw_token))
+    if token_row is None:
+        raise HTTPException(status_code=401, detail="Invalid or revoked API token")
+    user = await session.get(User, token_row.user_id)
+    if user is None:
+        # Token outlived its user row (CASCADE should prevent this, but
+        # defensively reject rather than silently materialise a new user).
+        raise HTTPException(status_code=401, detail="API token has no owning user")
+
+    if settings.oauth_enabled:
+        from vts.mcp.allowlist import is_email_allowed  # local to avoid circular import
+        if not is_email_allowed(
+            user.username,
+            allowed_emails=settings.oauth_allowed_emails,
+            allowed_domains=settings.oauth_allowed_domains,
+        ):
+            raise HTTPException(status_code=403, detail="API token owner no longer allowed")
+
+    # Throttled last_used_at update.
+    token_key = str(token_row.id)
+    now = _time.monotonic()
+    last = _token_last_touched.get(token_key, 0.0)
+    if now - last >= _TOKEN_TOUCH_INTERVAL_SECONDS:
+        _token_last_touched[token_key] = now
+        await repo.touch_api_token_last_used(token_row.id)
+
+    return await _materialize_user(user.username, request, session, settings)
 
 
 async def _materialize_user(
