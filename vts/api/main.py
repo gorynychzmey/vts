@@ -553,6 +553,69 @@ def _resolve_session_secret(*, env_secret: str | None, secret_file: Path) -> str
     return new_secret
 
 
+def _downgrade_to_openapi_30(node: Any) -> Any:
+    """Convert OpenAPI 3.1 nullable forms into 3.0-compatible
+    `{type: ..., nullable: true}` recursively.
+
+    ChatGPT Custom Actions advertise support for OpenAPI 3.1.x but their
+    response-validation pipeline chokes on the 3.1 nullable form
+    `anyOf: [{type: "string"}, {type: "null"}]` — clients see
+    `ClientResponseError` even though our server returned 200 OK. The
+    fix is to rewrite those constructs to the older
+    `{type: "string", nullable: true}` shape and downgrade the spec
+    version string to 3.0.3.
+
+    Pydantic v2 emits the 3.1 form unconditionally, so we transform the
+    spec after FastAPI builds it.
+    """
+    if isinstance(node, dict):
+        # Case: anyOf/oneOf containing a `{type: "null"}` sibling.
+        for key in ("anyOf", "oneOf"):
+            variants = node.get(key)
+            if isinstance(variants, list):
+                null_variants = [
+                    v for v in variants
+                    if isinstance(v, dict) and v.get("type") == "null"
+                ]
+                non_null = [
+                    v for v in variants
+                    if not (isinstance(v, dict) and v.get("type") == "null")
+                ]
+                if null_variants and non_null:
+                    # If exactly one non-null branch remains, inline it and
+                    # mark nullable. Otherwise wrap the surviving branches
+                    # back into the anyOf/oneOf with a nullable sibling
+                    # (rare in our spec).
+                    if len(non_null) == 1:
+                        # Drop the anyOf wrapper, merge its single branch
+                        # into the parent, and set nullable on the result.
+                        node.pop(key)
+                        for k, v in non_null[0].items():
+                            node.setdefault(k, v)
+                        node["nullable"] = True
+                    else:
+                        node[key] = non_null
+                        node["nullable"] = True
+        # Case: 3.1 union "type": ["string", "null"]
+        t = node.get("type")
+        if isinstance(t, list):
+            non_null_types = [x for x in t if x != "null"]
+            if len(non_null_types) == 1:
+                node["type"] = non_null_types[0]
+                if "null" in t:
+                    node["nullable"] = True
+            elif "null" in t:
+                node["type"] = non_null_types
+                node["nullable"] = True
+        # Recurse.
+        for v in node.values():
+            _downgrade_to_openapi_30(v)
+    elif isinstance(node, list):
+        for item in node:
+            _downgrade_to_openapi_30(item)
+    return node
+
+
 def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
     """Override app.openapi() so the generated spec is suitable for
     external clients (e.g. GPT Custom Actions, curl/Postman).
@@ -561,6 +624,7 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
       - `servers` with the deployment's public base URL (if configured)
       - `securitySchemes.ApiToken` (HTTP Bearer) + global default security
       - Per-path tags grouped by URL prefix (tasks, meta, admin)
+      - Downgrade 3.1 nullable form to 3.0-compat for client compatibility
     """
     from fastapi.openapi.utils import get_openapi
 
@@ -618,6 +682,10 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
             for op in schema.get("paths", {}).get(path, {}).values():
                 if isinstance(op, dict):
                     op["security"] = []
+        # Downgrade to OpenAPI 3.0 for client compatibility (notably
+        # ChatGPT Custom Actions — see _downgrade_to_openapi_30 docstring).
+        _downgrade_to_openapi_30(schema)
+        schema["openapi"] = "3.0.3"
         app.openapi_schema = schema
         return schema
 

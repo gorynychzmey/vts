@@ -134,6 +134,69 @@ async def test_list_tasks_exposes_pagination_and_compact(app_no_oauth) -> None:
     assert {"limit", "offset", "compact"}.issubset(param_names), param_names
 
 
+def test_downgrade_inlines_single_branch_anyof_nullable() -> None:
+    from vts.api.main import _downgrade_to_openapi_30
+    schema = {
+        "properties": {
+            "source_title": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "title": "Source Title",
+            }
+        }
+    }
+    _downgrade_to_openapi_30(schema)
+    field = schema["properties"]["source_title"]
+    assert field["type"] == "string"
+    assert field["nullable"] is True
+    assert "anyOf" not in field
+
+
+def test_downgrade_handles_union_type_list() -> None:
+    from vts.api.main import _downgrade_to_openapi_30
+    schema = {"foo": {"type": ["string", "null"]}}
+    _downgrade_to_openapi_30(schema)
+    assert schema["foo"]["type"] == "string"
+    assert schema["foo"]["nullable"] is True
+
+
+def test_downgrade_preserves_anyof_when_multiple_non_null_branches() -> None:
+    from vts.api.main import _downgrade_to_openapi_30
+    schema = {
+        "x": {
+            "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+        }
+    }
+    _downgrade_to_openapi_30(schema)
+    # Multiple non-null branches must stay in anyOf; nullable set on parent.
+    assert schema["x"]["nullable"] is True
+    types = {b["type"] for b in schema["x"]["anyOf"]}
+    assert types == {"string", "integer"}
+
+
+def test_downgrade_leaves_non_nullable_schemas_alone() -> None:
+    from vts.api.main import _downgrade_to_openapi_30
+    schema = {"id": {"type": "string", "format": "uuid"}}
+    _downgrade_to_openapi_30(schema)
+    assert schema == {"id": {"type": "string", "format": "uuid"}}
+
+
+async def test_openapi_is_30_compat_no_31_nullable_forms(app_no_oauth) -> None:
+    """ChatGPT Custom Actions reject responses validated against the 3.1
+    nullable form (`anyOf: [..., {type: null}]`). Ensure we emit 3.0-style
+    `nullable: true` instead, and advertise the older spec version."""
+    import json as _json
+    transport = ASGITransport(app=app_no_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.get("/openapi.json")
+    spec = r.json()
+    assert spec.get("openapi", "").startswith("3.0"), spec.get("openapi")
+    body = _json.dumps(spec)
+    # No 3.1-only null marker should survive the downgrade pass.
+    assert '"type": "null"' not in body and '"type":"null"' not in body, (
+        "OpenAPI 3.1 nullable form leaked through; ChatGPT will reject responses"
+    )
+
+
 async def test_openapi_operation_descriptions_fit_gpt_actions_limit(app_no_oauth) -> None:
     """ChatGPT Custom Actions reject operations whose `description` exceeds
     300 chars. Catch any new endpoint that drifts past the limit before it
