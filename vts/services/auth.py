@@ -144,11 +144,15 @@ async def _resolve_via_api_token(
         ):
             raise HTTPException(status_code=403, detail="API token owner no longer allowed")
 
-    # Throttled last_used_at update.
+    # Throttled last_used_at update. First touch always writes (cold
+    # cache); subsequent touches within the interval are skipped.
+    # Note: cannot compare `now - last >= INTERVAL` with last=0.0 default,
+    # because monotonic() can be smaller than INTERVAL on a freshly-started
+    # process (e.g. CI runner) and the cold-cache write would be skipped.
     token_key = str(token_row.id)
     now = _time.monotonic()
-    last = _token_last_touched.get(token_key, 0.0)
-    if now - last >= _TOKEN_TOUCH_INTERVAL_SECONDS:
+    last = _token_last_touched.get(token_key)
+    if last is None or (now - last) >= _TOKEN_TOUCH_INTERVAL_SECONDS:
         _token_last_touched[token_key] = now
         await repo.touch_api_token_last_used(token_row.id)
 
