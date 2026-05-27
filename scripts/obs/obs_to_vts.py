@@ -2,22 +2,24 @@
 
 Drop this file into OBS Studio via Tools → Scripts → +.
 
-Configuration is read once from environment variables when OBS loads the
-script. Restart OBS (or re-load the script in the Tools → Scripts dialog)
-after changing env vars.
+Configuration is read from two sources, in this order of precedence:
 
-Env vars
---------
-VTS_BASE_URL     — required, e.g. "https://vts.vostrikov.dev" (no trailing slash)
-VTS_API_TOKEN    — required, the "vts_…" personal API token
-VTS_TRANSCRIPT   — "true"/"false", default "true"
-VTS_SUMMARY      — "true"/"false", default "true"  (requires transcript=true)
-VTS_LANGUAGE     — "" / "ru" / "en" / "de" / "fr" / …  (empty = auto-detect)
-VTS_AUDIO_ONLY   — "true"/"false", default "false"
+1. **OBS script properties** (Tools → Scripts → select this script).
+   Fields shown in the OBS UI; persisted in OBS' own JSON config. Best
+   for normal interactive use — no terminal, no env vars, no reboot.
+2. **Environment variables** (fallback). Used when the corresponding UI
+   field is empty / unset. Useful for scripted / headless / CI setups
+   where you launch OBS from a wrapper script.
 
-Why env vars and not OBS script properties: simpler to share one config
-file (e.g. ~/.config/obs-studio/vts.env sourced before launching OBS)
-across machines than to copy script settings via OBS UI.
+A non-empty UI value always wins over the env var with the same name.
+
+Env vars (also the names of the UI fields):
+  VTS_BASE_URL     — e.g. "https://vts.vostrikov.dev" (no trailing slash)
+  VTS_API_TOKEN    — the "vts_…" personal API token
+  VTS_TRANSCRIPT   — bool, default true
+  VTS_SUMMARY      — bool, default true  (requires transcript=true)
+  VTS_LANGUAGE     — "" / "ru" / "en" / "de" / "fr" / …  ("" = auto-detect)
+  VTS_AUDIO_ONLY   — bool, default false
 
 Limitations
 -----------
@@ -45,6 +47,14 @@ import obspython as obs  # type: ignore[import-not-found]  # provided by OBS at 
 
 # ---------------------------------------------------------------- config
 
+_PROP_BASE_URL = "vts_base_url"
+_PROP_API_TOKEN = "vts_api_token"
+_PROP_TRANSCRIPT = "vts_transcript"
+_PROP_SUMMARY = "vts_summary"
+_PROP_LANGUAGE = "vts_language"
+_PROP_AUDIO_ONLY = "vts_audio_only"
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -52,16 +62,39 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _read_config() -> dict[str, object]:
-    base = os.environ.get("VTS_BASE_URL", "").rstrip("/")
-    token = os.environ.get("VTS_API_TOKEN", "").strip()
+def _pick_str(ui_value: str, env_name: str) -> str:
+    """UI value wins if non-empty; otherwise fall back to the env var."""
+    ui = (ui_value or "").strip()
+    if ui:
+        return ui
+    return os.environ.get(env_name, "").strip()
+
+
+def _read_config(settings) -> dict[str, object]:
+    """Merge OBS UI properties with env-var fallbacks.
+
+    `settings` is the obs_data_t passed by script_update/script_load.
+    For booleans, OBS' obs_data_get_bool returns False on a missing
+    key, so we explicitly check obs_data_has_user_value to distinguish
+    "user set false" from "never touched" — only in the latter case do
+    we fall back to the env var.
+    """
+    base = _pick_str(obs.obs_data_get_string(settings, _PROP_BASE_URL), "VTS_BASE_URL").rstrip("/")
+    token = _pick_str(obs.obs_data_get_string(settings, _PROP_API_TOKEN), "VTS_API_TOKEN")
+    language = _pick_str(obs.obs_data_get_string(settings, _PROP_LANGUAGE), "VTS_LANGUAGE")
+
+    def _bool(prop: str, env_name: str, default: bool) -> bool:
+        if obs.obs_data_has_user_value(settings, prop):
+            return bool(obs.obs_data_get_bool(settings, prop))
+        return _env_bool(env_name, default)
+
     return {
         "base_url": base,
         "token": token,
-        "transcript": _env_bool("VTS_TRANSCRIPT", True),
-        "summary": _env_bool("VTS_SUMMARY", True),
-        "language": os.environ.get("VTS_LANGUAGE", "").strip(),
-        "audio_only": _env_bool("VTS_AUDIO_ONLY", False),
+        "transcript": _bool(_PROP_TRANSCRIPT, "VTS_TRANSCRIPT", True),
+        "summary": _bool(_PROP_SUMMARY, "VTS_SUMMARY", True),
+        "language": language,
+        "audio_only": _bool(_PROP_AUDIO_ONLY, "VTS_AUDIO_ONLY", False),
     }
 
 
@@ -172,29 +205,68 @@ def _on_frontend_event(event):
 
 def script_description():
     return (
-        "Upload finished OBS recordings to VTS via the /api/tasks/upload "
-        "endpoint. Configure via env vars VTS_BASE_URL, VTS_API_TOKEN, "
-        "VTS_TRANSCRIPT, VTS_SUMMARY, VTS_LANGUAGE, VTS_AUDIO_ONLY. "
-        "See scripts/obs/README.md for details."
+        "Upload finished OBS recordings to VTS via /api/tasks/upload. "
+        "Fill in the fields below, or leave them blank to fall back to "
+        "the matching VTS_* env vars. See scripts/obs/README.md for details."
     )
 
 
-def script_load(_settings):  # pyright: ignore[reportUnusedParameter]
+def script_defaults(settings):
+    obs.obs_data_set_default_string(settings, _PROP_BASE_URL, "")
+    obs.obs_data_set_default_string(settings, _PROP_API_TOKEN, "")
+    obs.obs_data_set_default_string(settings, _PROP_LANGUAGE, "")
+    obs.obs_data_set_default_bool(settings, _PROP_TRANSCRIPT, True)
+    obs.obs_data_set_default_bool(settings, _PROP_SUMMARY, True)
+    obs.obs_data_set_default_bool(settings, _PROP_AUDIO_ONLY, False)
+
+
+def script_properties():
+    props = obs.obs_properties_create()
+    obs.obs_properties_add_text(
+        props, _PROP_BASE_URL, "VTS base URL", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_text(
+        props, _PROP_API_TOKEN, "API token (vts_…)", obs.OBS_TEXT_PASSWORD
+    )
+    obs.obs_properties_add_bool(props, _PROP_TRANSCRIPT, "Generate transcript")
+    obs.obs_properties_add_bool(props, _PROP_SUMMARY, "Generate summary")
+    obs.obs_properties_add_bool(props, _PROP_AUDIO_ONLY, "Audio only")
+    obs.obs_properties_add_text(
+        props, _PROP_LANGUAGE,
+        'Language ("" = auto, or "ru" / "en" / "de" / …)',
+        obs.OBS_TEXT_DEFAULT,
+    )
+    return props
+
+
+def _log_loaded_summary() -> None:
+    if not _config.get("base_url") or not _config.get("token"):
+        print(
+            "[obs_to_vts] WARNING: base URL or API token not configured "
+            "(neither OBS UI fields nor VTS_* env vars). Uploads will be skipped."
+        )
+        return
+    # Never log the token itself.
+    print(
+        f"[obs_to_vts] config: target={_config['base_url']}, "
+        f"transcript={_config['transcript']}, summary={_config['summary']}, "
+        f"audio_only={_config['audio_only']}, "
+        f"language={_config['language'] or 'auto'}"
+    )
+
+
+def script_load(settings):
     global _config
-    _config = _read_config()
-    if not _config["base_url"] or not _config["token"]:
-        print(
-            "[obs_to_vts] WARNING: VTS_BASE_URL or VTS_API_TOKEN not set in the "
-            "environment OBS was launched from. Uploads will be skipped."
-        )
-    else:
-        print(
-            f"[obs_to_vts] loaded; target={_config['base_url']}, "
-            f"transcript={_config['transcript']}, summary={_config['summary']}, "
-            f"audio_only={_config['audio_only']}, "
-            f"language={_config['language'] or 'auto'}"
-        )
+    _config = _read_config(settings)
+    _log_loaded_summary()
     obs.obs_frontend_add_event_callback(_on_frontend_event)
+
+
+def script_update(settings):
+    """OBS fires this each time the user edits a property in the UI."""
+    global _config
+    _config = _read_config(settings)
+    _log_loaded_summary()
 
 
 def script_unload():

@@ -10,33 +10,44 @@ personal API token (see [docs/AUTH.md](../../docs/AUTH.md#personal-api-tokens)).
    header → "Create token" → give it a name (e.g. `obs-laptop`) → copy
    the `vts_…` value once. The raw value is never shown again.
 
-2. **Set environment variables** for the OBS process (see below).
-
-3. **Install the script.** OBS Studio → Tools → Scripts → `+` →
+2. **Install the script.** OBS Studio → Tools → Scripts → `+` →
    pick `scripts/obs/obs_to_vts.py`.
 
-4. **Restart OBS** (or remove and re-add the script) any time you
-   change the env vars — they are read once on script load.
+3. **Configure.** Two paths — pick whichever fits:
+   - **Easy path:** fill the fields shown in the OBS Scripts dialog
+     (VTS base URL, API token, etc.). Changes take effect immediately;
+     no OBS restart needed.
+   - **Scripted/headless path:** leave the UI fields empty and supply
+     the values via env vars (see table below). OBS reads env vars
+     once at script load — restart OBS or reload the script after
+     changing them.
 
-5. Check OBS' Script Log panel (Tools → Scripts → Script Log) after
+   You can also mix: UI for the URL, env var for the token, etc. A
+   non-empty UI field always wins over the env var with the same name.
+
+4. Check OBS' Script Log panel (Tools → Scripts → Script Log) after
    stopping a recording. You should see one of:
    - `[obs_to_vts] uploading <file>.mkv → https://...`
    - `[obs_to_vts] upload OK: HTTP 200 …`
 
-## Env vars
+## Settings (UI field name = env var name)
 
-| Name | Required | Default | Notes |
-|------|----------|---------|-------|
+| OBS UI field / Env var | Required | Default | Notes |
+|------------------------|----------|---------|-------|
 | `VTS_BASE_URL`    | yes | — | e.g. `https://vts.example.com`, no trailing slash |
-| `VTS_API_TOKEN`   | yes | — | The `vts_…` token created in the VTS UI |
+| `VTS_API_TOKEN`   | yes | — | The `vts_…` token created in the VTS UI (UI field is password-masked) |
 | `VTS_TRANSCRIPT`  | no  | `true` | Run the transcription pipeline |
 | `VTS_SUMMARY`     | no  | `true` | Run the LLM summary; requires transcript=true |
 | `VTS_LANGUAGE`    | no  | (empty = auto) | Force ASR language: `ru`, `en`, `de`, `fr`, … |
 | `VTS_AUDIO_ONLY`  | no  | `false` | Skip the video stream during processing |
 
-Bool values: `true` / `false` / `1` / `0` / `yes` / `no` (case-insensitive).
+Env-var bool values: `true` / `false` / `1` / `0` / `yes` / `no` (case-insensitive).
 
-## Setting env vars
+UI values are persisted in OBS' own config (`~/.config/obs-studio/...`
+on Linux; equivalent on macOS/Windows). The token field is stored in
+clear in that JSON file — same security as any OBS plugin setting.
+
+## Setting env vars (only if you use the scripted path)
 
 OBS inherits the environment of whatever launched it; the *system* env
 isn't enough on most desktops.

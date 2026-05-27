@@ -14,13 +14,48 @@ from pathlib import Path
 import pytest
 
 
+class _FakeObsData:
+    """Stands in for OBS' obs_data_t — backed by a Python dict.
+
+    The script accesses values via obs_data_get_string / get_bool /
+    has_user_value. Our fake mirrors that interface.
+    """
+    def __init__(self, raw: dict | None = None) -> None:
+        self._d: dict = dict(raw or {})
+
+    def set_string(self, key: str, value: str) -> None:
+        self._d[key] = value
+
+    def set_bool(self, key: str, value: bool) -> None:
+        self._d[key] = bool(value)
+
+    def get_string(self, key: str) -> str:
+        v = self._d.get(key, "")
+        return v if isinstance(v, str) else ""
+
+    def get_bool(self, key: str) -> bool:
+        return bool(self._d.get(key, False))
+
+    def has_user_value(self, key: str) -> bool:
+        return key in self._d
+
+
 @pytest.fixture(scope="module")
 def obs_module():
-    # Stub obspython with the constants the script references.
     stub = types.ModuleType("obspython")
-    stub.OBS_FRONTEND_EVENT_RECORDING_STOPPED = 1  # arbitrary
+    stub.OBS_FRONTEND_EVENT_RECORDING_STOPPED = 1
+    stub.OBS_TEXT_DEFAULT = 0
+    stub.OBS_TEXT_PASSWORD = 1
     stub.obs_frontend_add_event_callback = lambda _cb: None
     stub.obs_frontend_get_last_recording = lambda: ""
+    stub.obs_data_get_string = lambda settings, key: settings.get_string(key)
+    stub.obs_data_get_bool = lambda settings, key: settings.get_bool(key)
+    stub.obs_data_has_user_value = lambda settings, key: settings.has_user_value(key)
+    stub.obs_data_set_default_string = lambda *_args, **_kwargs: None
+    stub.obs_data_set_default_bool = lambda *_args, **_kwargs: None
+    stub.obs_properties_create = lambda: None
+    stub.obs_properties_add_text = lambda *_args, **_kwargs: None
+    stub.obs_properties_add_bool = lambda *_args, **_kwargs: None
     sys.modules["obspython"] = stub
 
     path = Path(__file__).resolve().parent.parent / "scripts" / "obs" / "obs_to_vts.py"
@@ -47,19 +82,61 @@ def test_env_bool_parses(obs_module, monkeypatch, raw: str, expected: bool):
     assert obs_module._env_bool("X_TEST", default=True) is expected
 
 
-def test_read_config_strips_trailing_slash(obs_module, monkeypatch):
+def _empty_settings():
+    return _FakeObsData()
+
+
+def test_read_config_env_fallback_when_ui_empty(obs_module, monkeypatch):
     monkeypatch.setenv("VTS_BASE_URL", "https://vts.example.com/")
     monkeypatch.setenv("VTS_API_TOKEN", "vts_abc")
-    cfg = obs_module._read_config()
-    assert cfg["base_url"] == "https://vts.example.com"
+    monkeypatch.setenv("VTS_LANGUAGE", "ru")
+    cfg = obs_module._read_config(_empty_settings())
+    assert cfg["base_url"] == "https://vts.example.com"  # trailing slash stripped
     assert cfg["token"] == "vts_abc"
+    assert cfg["language"] == "ru"
 
 
-def test_read_config_defaults(obs_module, monkeypatch):
+def test_read_config_ui_overrides_env(obs_module, monkeypatch):
+    monkeypatch.setenv("VTS_BASE_URL", "https://wrong.example.com")
+    monkeypatch.setenv("VTS_API_TOKEN", "vts_wrong")
+    s = _FakeObsData({
+        "vts_base_url": "https://right.example.com/",
+        "vts_api_token": "vts_right",
+    })
+    cfg = obs_module._read_config(s)
+    assert cfg["base_url"] == "https://right.example.com"
+    assert cfg["token"] == "vts_right"
+
+
+def test_read_config_ui_empty_falls_back_per_field(obs_module, monkeypatch):
+    """Mixed sources: UI sets base, env supplies token."""
+    monkeypatch.setenv("VTS_API_TOKEN", "vts_from_env")
+    s = _FakeObsData({"vts_base_url": "https://ui.example.com"})
+    cfg = obs_module._read_config(s)
+    assert cfg["base_url"] == "https://ui.example.com"
+    assert cfg["token"] == "vts_from_env"
+
+
+def test_read_config_bool_ui_value_wins_over_env(obs_module, monkeypatch):
+    """UI explicitly setting summary=False must beat env VTS_SUMMARY=true."""
+    monkeypatch.setenv("VTS_SUMMARY", "true")
+    s = _FakeObsData({"vts_summary": False})
+    cfg = obs_module._read_config(s)
+    assert cfg["summary"] is False
+
+
+def test_read_config_bool_missing_ui_falls_back_to_env(obs_module, monkeypatch):
+    monkeypatch.setenv("VTS_TRANSCRIPT", "false")
+    s = _FakeObsData()  # no UI value for transcript
+    cfg = obs_module._read_config(s)
+    assert cfg["transcript"] is False
+
+
+def test_read_config_defaults_when_nothing_set(obs_module, monkeypatch):
     for k in ("VTS_BASE_URL", "VTS_API_TOKEN", "VTS_TRANSCRIPT",
               "VTS_SUMMARY", "VTS_LANGUAGE", "VTS_AUDIO_ONLY"):
         monkeypatch.delenv(k, raising=False)
-    cfg = obs_module._read_config()
+    cfg = obs_module._read_config(_empty_settings())
     assert cfg == {
         "base_url": "",
         "token": "",
