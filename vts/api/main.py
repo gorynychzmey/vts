@@ -1075,7 +1075,19 @@ def create_app() -> FastAPI:
         await session.commit()
         return BatchResultOut(results=results)
 
-    @app.get("/api/tasks/{task_id}/transcript")
+    @app.get(
+        "/api/tasks/{task_id}/transcript",
+        responses={
+            200: {
+                "description": "Raw transcript. text/plain when the artifact is a .txt file, application/json otherwise.",
+                "content": {
+                    "text/plain": {"schema": {"type": "string"}},
+                    "application/json": {"schema": {"type": "object"}},
+                },
+            },
+            404: {"description": "Task or transcript artifact not found"},
+        },
+    )
     async def get_transcript(
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -1093,7 +1105,19 @@ def create_app() -> FastAPI:
         media_type = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/json"
         return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
 
-    @app.get("/api/tasks/{task_id}/summary")
+    @app.get(
+        "/api/tasks/{task_id}/summary",
+        responses={
+            200: {
+                "description": "Markdown summary. text/markdown when the artifact is .md, application/json otherwise.",
+                "content": {
+                    "text/markdown": {"schema": {"type": "string"}},
+                    "application/json": {"schema": {"type": "object"}},
+                },
+            },
+            404: {"description": "Task or summary artifact not found"},
+        },
+    )
     async def get_summary(
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -1111,7 +1135,16 @@ def create_app() -> FastAPI:
         media_type = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
         return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
 
-    @app.get("/api/tasks/{task_id}/redacted")
+    @app.get(
+        "/api/tasks/{task_id}/redacted",
+        responses={
+            200: {
+                "description": "Redacted plain-text transcript.",
+                "content": {"text/plain": {"schema": {"type": "string"}}},
+            },
+            404: {"description": "Task or redacted transcript not found"},
+        },
+    )
     async def get_redacted_transcript(
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -1126,7 +1159,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
         return Response(content=path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
 
-    @app.get("/api/tasks/{task_id}/log")
+    @app.get(
+        "/api/tasks/{task_id}/log",
+        responses={
+            200: {
+                "description": "Plain-text task log. Empty body if the task has no log yet.",
+                "content": {"text/plain": {"schema": {"type": "string"}}},
+            },
+            404: {"description": "Task not found"},
+        },
+    )
     async def get_log(
         task_id: uuid.UUID,
         user: AuthenticatedUser = Depends(get_current_user),

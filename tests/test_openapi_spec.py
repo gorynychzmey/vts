@@ -76,6 +76,27 @@ async def test_openapi_exposes_core_task_routes(app_no_oauth) -> None:
         assert required in paths, f"{required} missing from public OpenAPI spec"
 
 
+async def test_openapi_text_endpoints_declare_content_type(app_no_oauth) -> None:
+    """transcript/summary/redacted/log return text — make that explicit so
+    clients (incl. GPT Custom Actions) don't fall back to 'unknown'."""
+    transport = ASGITransport(app=app_no_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.get("/openapi.json")
+    paths = r.json().get("paths", {})
+
+    for path, content_types in [
+        ("/api/tasks/{task_id}/transcript", {"text/plain", "application/json"}),
+        ("/api/tasks/{task_id}/summary", {"text/markdown", "application/json"}),
+        ("/api/tasks/{task_id}/redacted", {"text/plain"}),
+        ("/api/tasks/{task_id}/log", {"text/plain"}),
+    ]:
+        op = paths[path]["get"]
+        ok = op["responses"]["200"]["content"]
+        assert content_types.issubset(ok.keys()), (
+            f"{path} should declare {content_types} content types, got {ok.keys()}"
+        )
+
+
 async def test_openapi_tags_routes_by_prefix(app_no_oauth) -> None:
     transport = ASGITransport(app=app_no_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
