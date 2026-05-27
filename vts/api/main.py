@@ -682,10 +682,15 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
             for op in schema.get("paths", {}).get(path, {}).values():
                 if isinstance(op, dict):
                     op["security"] = []
-        # Downgrade to OpenAPI 3.0 for client compatibility (notably
-        # ChatGPT Custom Actions — see _downgrade_to_openapi_30 docstring).
+        # Rewrite the 3.1 nullable form `anyOf: [..., {type: null}]` to the
+        # widely-supported `nullable: true` extension. ChatGPT Custom Actions
+        # validator chokes on the former even though it parses fine
+        # elsewhere; the latter is accepted by both 3.0.x and 3.1.x clients
+        # in practice. We keep the 3.1.0 header so ChatGPT's "must be
+        # 3.1.0/3.1.1" check passes, even though `nullable` is technically a
+        # 3.0 leftover — most validators (incl. ChatGPT, Swagger UI, Redoc)
+        # honour it regardless of declared version.
         _downgrade_to_openapi_30(schema)
-        schema["openapi"] = "3.0.3"
         app.openapi_schema = schema
         return schema
 

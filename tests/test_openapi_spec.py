@@ -180,21 +180,25 @@ def test_downgrade_leaves_non_nullable_schemas_alone() -> None:
     assert schema == {"id": {"type": "string", "format": "uuid"}}
 
 
-async def test_openapi_is_30_compat_no_31_nullable_forms(app_no_oauth) -> None:
+async def test_openapi_no_31_null_branches(app_no_oauth) -> None:
     """ChatGPT Custom Actions reject responses validated against the 3.1
-    nullable form (`anyOf: [..., {type: null}]`). Ensure we emit 3.0-style
-    `nullable: true` instead, and advertise the older spec version."""
+    nullable form (`anyOf: [..., {type: null}]`) but their import check
+    requires `openapi: 3.1.x`. Solution: keep the 3.1 header but rewrite
+    null branches to the `nullable: true` extension, which is honoured
+    by both 3.0 and 3.1 validators in practice."""
     import json as _json
     transport = ASGITransport(app=app_no_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
         r = await client.get("/openapi.json")
     spec = r.json()
-    assert spec.get("openapi", "").startswith("3.0"), spec.get("openapi")
+    assert spec.get("openapi", "").startswith("3.1"), spec.get("openapi")
     body = _json.dumps(spec)
-    # No 3.1-only null marker should survive the downgrade pass.
+    # No 3.1 null branches should survive the downgrade pass.
     assert '"type": "null"' not in body and '"type":"null"' not in body, (
-        "OpenAPI 3.1 nullable form leaked through; ChatGPT will reject responses"
+        "OpenAPI 3.1 null branch leaked through; ChatGPT will reject responses"
     )
+    # Verify nullable: true is what we use instead.
+    assert '"nullable": true' in body or '"nullable":true' in body
 
 
 async def test_openapi_operation_descriptions_fit_gpt_actions_limit(app_no_oauth) -> None:
