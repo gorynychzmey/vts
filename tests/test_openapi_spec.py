@@ -134,6 +134,28 @@ async def test_list_tasks_exposes_pagination_and_compact(app_no_oauth) -> None:
     assert {"limit", "offset", "compact"}.issubset(param_names), param_names
 
 
+async def test_openapi_operation_descriptions_fit_gpt_actions_limit(app_no_oauth) -> None:
+    """ChatGPT Custom Actions reject operations whose `description` exceeds
+    300 chars. Catch any new endpoint that drifts past the limit before it
+    breaks the GPT import."""
+    transport = ASGITransport(app=app_no_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.get("/openapi.json")
+    paths = r.json().get("paths", {})
+    offenders: list[str] = []
+    for path, methods in paths.items():
+        for verb, op in methods.items():
+            if not isinstance(op, dict):
+                continue
+            desc = op.get("description", "") or ""
+            if len(desc) > 300:
+                offenders.append(f"{verb.upper()} {path}: {len(desc)} chars")
+    assert not offenders, (
+        "Operation descriptions over the 300-char ChatGPT Actions limit:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 async def test_openapi_tags_routes_by_prefix(app_no_oauth) -> None:
     transport = ASGITransport(app=app_no_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:

@@ -1029,16 +1029,10 @@ def create_app() -> FastAPI:
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> list[TaskOut] | list[TaskCompactOut]:
-        """List tasks owned by the current user, newest first.
-
-        Query params (added for external clients with small response budgets,
-        e.g. ChatGPT Custom Actions which cap responses at ~30KB):
-          - `limit`: maximum number of tasks to return (default: all).
-          - `offset`: skip the first N tasks; combine with `limit` to paginate.
-          - `compact`: when true, return slim `TaskCompactOut` records
-            (no steps, no options, no paths). Roughly an order of magnitude
-            smaller per task than the full TaskOut.
-        """
+        """List tasks owned by the current user, newest first. Use
+        `limit`/`offset` to paginate and `compact=true` for slim records
+        (no steps/options/paths) when the client has a small response
+        budget (e.g. ChatGPT Custom Actions cap at ~30KB)."""
         if limit is not None and limit < 0:
             raise HTTPException(status_code=422, detail="limit must be non-negative")
         if offset < 0:
