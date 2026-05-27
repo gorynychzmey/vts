@@ -150,3 +150,21 @@ class ApiTokenCreateOut(ApiTokenOut):
     # The raw token, returned only at creation time. Never persisted by the
     # server in clear; never re-fetchable through GET.
     token: str
+
+
+class TextSliceOut(BaseModel):
+    """Paginated slice of a text artifact (transcript, summary, log).
+
+    Returned in JSON mode (Accept: application/json) for endpoints whose
+    plain-text form can exceed external clients' response budget
+    (notably ChatGPT Custom Actions: ~30KB cap). Default plain-text mode
+    is unaffected.
+
+    `text` is the slice itself; the other fields let the caller iterate
+    without an extra HEAD-style request.
+    """
+    text: str
+    offset: int = Field(ge=0)
+    length: int = Field(ge=0)
+    total_length: int = Field(ge=0)
+    is_end: bool

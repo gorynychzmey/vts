@@ -39,6 +39,7 @@ from vts.api.schemas import (
     BatchResultOut,
     MeOut,
     TaskCompactOut,
+    TextSliceOut,
     PushConfigOut,
     PushStatusOut,
     PushSubscriptionIn,
@@ -312,6 +313,104 @@ async def _get_cached_queue_positions(
     return positions
 
 
+_MAX_TEXT_SLICE_CHARS = 200_000  # safety cap for JSON-mode slice length
+
+
+def _parse_range_header(value: str, total: int) -> tuple[int, int] | None:
+    """Parse a `Range: bytes=START-END` header into (offset, length) char-pair.
+
+    We use character offsets (not bytes) since the underlying artifacts are
+    UTF-8 text and we want predictable slicing. Returns None for malformed
+    or unsatisfiable ranges; the caller falls back to a full response.
+    """
+    if not value:
+        return None
+    value = value.strip().lower()
+    if not value.startswith("bytes="):
+        return None
+    spec = value[len("bytes="):]
+    if "," in spec:
+        return None  # multipart ranges — not supported
+    if "-" not in spec:
+        return None
+    start_str, end_str = spec.split("-", 1)
+    # We deliberately do not support suffix-range (`bytes=-N`, "last N
+    # bytes") — start_str must be present. Callers wanting the tail can
+    # compute the offset from total_length.
+    if not start_str:
+        return None
+    try:
+        start = int(start_str)
+        end = int(end_str) if end_str else total - 1
+    except ValueError:
+        return None
+    if start < 0 or end < start or start >= total:
+        return None
+    end = min(end, total - 1)
+    return start, (end - start + 1)
+
+
+def _serve_text(
+    text: str,
+    plain_media_type: str,
+    *,
+    request: Request,
+    offset: int | None,
+    limit: int | None,
+) -> Response:
+    """Serve a text artifact with three modes:
+
+    1. Default (Accept: text/plain or */*; no slicing) → full body, original
+       media-type (text/plain or text/markdown). Unchanged behaviour.
+    2. Range header (`bytes=START-END`) → 206 Partial Content, plain text
+       slice. Standard HTTP, works for curl/wget/anything HTTP-literate.
+    3. Accept: application/json (+ optional ?offset/?limit) → JSON
+       TextSliceOut with metadata. Works around 30KB client caps
+       (notably ChatGPT Custom Actions). Slicing applied if requested,
+       else full text wrapped in JSON.
+    """
+    total = len(text)
+
+    range_header = request.headers.get("range")
+    if range_header:
+        parsed = _parse_range_header(range_header, total)
+        if parsed is not None:
+            start, length = parsed
+            chunk = text[start:start + length]
+            return Response(
+                content=chunk,
+                status_code=206,
+                media_type=plain_media_type,
+                headers={
+                    "Content-Range": f"bytes {start}-{start + length - 1}/{total}",
+                    "Accept-Ranges": "bytes",
+                },
+            )
+
+    accept = (request.headers.get("accept") or "").lower()
+    wants_json = "application/json" in accept and "text/plain" not in accept
+    has_slice_query = offset is not None or limit is not None
+
+    if wants_json or has_slice_query:
+        off = max(0, offset or 0)
+        if off > total:
+            off = total
+        lim = limit if limit is not None else _MAX_TEXT_SLICE_CHARS
+        lim = max(0, min(lim, _MAX_TEXT_SLICE_CHARS))
+        slice_text = text[off:off + lim]
+        payload = TextSliceOut(
+            text=slice_text,
+            offset=off,
+            length=len(slice_text),
+            total_length=total,
+            is_end=(off + len(slice_text)) >= total,
+        )
+        return JSONResponse(payload.model_dump(), headers={"Accept-Ranges": "bytes"})
+
+    # Default: full plain text, as before.
+    return Response(content=text, media_type=plain_media_type, headers={"Accept-Ranges": "bytes"})
+
+
 def _find_media_file(artifact_dir: str | None) -> Path | None:
     if not artifact_dir:
         return None
@@ -483,7 +582,18 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
         )
         if settings.public_base_url:
             schema["servers"] = [{"url": settings.public_base_url.rstrip("/")}]
-        schema.setdefault("components", {})["securitySchemes"] = {
+        # Schemas referenced only via responses[...]['content']['$ref']
+        # don't get auto-collected by FastAPI; inject them explicitly so
+        # OpenAPI consumers can resolve the $ref.
+        components = schema.setdefault("components", {})
+        registered_schemas = components.setdefault("schemas", {})
+        for extra_model in (TextSliceOut,):
+            name = extra_model.__name__
+            if name not in registered_schemas:
+                registered_schemas[name] = extra_model.model_json_schema(
+                    ref_template="#/components/schemas/{model}"
+                )
+        components["securitySchemes"] = {
             "ApiToken": {
                 "type": "http",
                 "scheme": "bearer",
@@ -1141,17 +1251,26 @@ def create_app() -> FastAPI:
         "/api/tasks/{task_id}/transcript",
         responses={
             200: {
-                "description": "Raw transcript. text/plain when the artifact is a .txt file, application/json otherwise.",
+                "description": (
+                    "Raw transcript. Default response is text/plain (full body). "
+                    "With Accept: application/json or ?offset/limit query, returns a "
+                    "TextSliceOut JSON. With a `Range: bytes=START-END` header, returns "
+                    "206 Partial Content. See docs/API.md for the rationale."
+                ),
                 "content": {
                     "text/plain": {"schema": {"type": "string"}},
-                    "application/json": {"schema": {"type": "object"}},
+                    "application/json": {"schema": {"$ref": "#/components/schemas/TextSliceOut"}},
                 },
             },
+            206: {"description": "Partial transcript (Range request)"},
             404: {"description": "Task or transcript artifact not found"},
         },
     )
     async def get_transcript(
         task_id: uuid.UUID,
+        request: Request,
+        offset: int | None = None,
+        limit: int | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> Response:
@@ -1164,24 +1283,38 @@ def create_app() -> FastAPI:
         path = Path(task.transcript_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Transcript file missing")
-        media_type = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/json"
-        return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
+        plain_mt = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/json"
+        return _serve_text(
+            path.read_text(encoding="utf-8"),
+            plain_mt,
+            request=request,
+            offset=offset,
+            limit=limit,
+        )
 
     @app.get(
         "/api/tasks/{task_id}/summary",
         responses={
             200: {
-                "description": "Markdown summary. text/markdown when the artifact is .md, application/json otherwise.",
+                "description": (
+                    "Markdown summary. Default response is text/markdown (full body). "
+                    "With Accept: application/json or ?offset/limit, returns TextSliceOut. "
+                    "With Range header, returns 206 Partial Content."
+                ),
                 "content": {
                     "text/markdown": {"schema": {"type": "string"}},
-                    "application/json": {"schema": {"type": "object"}},
+                    "application/json": {"schema": {"$ref": "#/components/schemas/TextSliceOut"}},
                 },
             },
+            206: {"description": "Partial summary (Range request)"},
             404: {"description": "Task or summary artifact not found"},
         },
     )
     async def get_summary(
         task_id: uuid.UUID,
+        request: Request,
+        offset: int | None = None,
+        limit: int | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> Response:
@@ -1194,21 +1327,37 @@ def create_app() -> FastAPI:
         path = Path(task.summary_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Summary file missing")
-        media_type = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
-        return Response(content=path.read_text(encoding="utf-8"), media_type=media_type)
+        plain_mt = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
+        return _serve_text(
+            path.read_text(encoding="utf-8"),
+            plain_mt,
+            request=request,
+            offset=offset,
+            limit=limit,
+        )
 
     @app.get(
         "/api/tasks/{task_id}/redacted",
         responses={
             200: {
-                "description": "Redacted plain-text transcript.",
-                "content": {"text/plain": {"schema": {"type": "string"}}},
+                "description": (
+                    "Redacted plain-text transcript. Supports the same paginated "
+                    "modes as /transcript (Accept: application/json or Range header)."
+                ),
+                "content": {
+                    "text/plain": {"schema": {"type": "string"}},
+                    "application/json": {"schema": {"$ref": "#/components/schemas/TextSliceOut"}},
+                },
             },
+            206: {"description": "Partial redacted transcript (Range request)"},
             404: {"description": "Task or redacted transcript not found"},
         },
     )
     async def get_redacted_transcript(
         task_id: uuid.UUID,
+        request: Request,
+        offset: int | None = None,
+        limit: int | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> Response:
@@ -1219,31 +1368,52 @@ def create_app() -> FastAPI:
         path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
         if not path.exists():
             raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
-        return Response(content=path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
+        return _serve_text(
+            path.read_text(encoding="utf-8"),
+            "text/plain; charset=utf-8",
+            request=request,
+            offset=offset,
+            limit=limit,
+        )
 
     @app.get(
         "/api/tasks/{task_id}/log",
         responses={
             200: {
-                "description": "Plain-text task log. Empty body if the task has no log yet.",
-                "content": {"text/plain": {"schema": {"type": "string"}}},
+                "description": (
+                    "Plain-text task log. Empty body if the task has no log yet. "
+                    "Supports the same paginated modes as /transcript."
+                ),
+                "content": {
+                    "text/plain": {"schema": {"type": "string"}},
+                    "application/json": {"schema": {"$ref": "#/components/schemas/TextSliceOut"}},
+                },
             },
+            206: {"description": "Partial log (Range request)"},
             404: {"description": "Task not found"},
         },
     )
     async def get_log(
         task_id: uuid.UUID,
+        request: Request,
+        offset: int | None = None,
+        limit: int | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
-    ) -> PlainTextResponse:
+    ) -> Response:
         repo = Repo(session)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         path = Path(task.artifact_dir) / "logs" / "task.log"
-        if not path.exists():
-            return PlainTextResponse("", status_code=200)
-        return PlainTextResponse(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        return _serve_text(
+            text,
+            "text/plain; charset=utf-8",
+            request=request,
+            offset=offset,
+            limit=limit,
+        )
 
     @app.get("/api/tasks/{task_id}/media")
     async def get_media(

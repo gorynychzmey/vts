@@ -97,6 +97,31 @@ async def test_openapi_text_endpoints_declare_content_type(app_no_oauth) -> None
         )
 
 
+async def test_text_endpoints_expose_offset_limit_and_textslice(app_no_oauth) -> None:
+    """transcript/summary/redacted/log advertise the offset+limit query params
+    plus an application/json variant that references TextSliceOut, so GPT
+    can paginate around its ~30KB response cap."""
+    transport = ASGITransport(app=app_no_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.get("/openapi.json")
+    spec = r.json()
+    schemas = spec.get("components", {}).get("schemas", {})
+    assert "TextSliceOut" in schemas
+    for path in (
+        "/api/tasks/{task_id}/transcript",
+        "/api/tasks/{task_id}/summary",
+        "/api/tasks/{task_id}/redacted",
+        "/api/tasks/{task_id}/log",
+    ):
+        op = spec["paths"][path]["get"]
+        param_names = {p["name"] for p in op.get("parameters", [])}
+        assert {"offset", "limit"}.issubset(param_names), (path, param_names)
+        ok_content = op["responses"]["200"]["content"]
+        assert "application/json" in ok_content, path
+        ref = ok_content["application/json"]["schema"].get("$ref", "")
+        assert ref.endswith("/TextSliceOut"), (path, ref)
+
+
 async def test_list_tasks_exposes_pagination_and_compact(app_no_oauth) -> None:
     """GET /api/tasks should advertise limit/offset/compact query params so
     constrained clients (GPT Actions, 30KB response cap) can chunk the list."""

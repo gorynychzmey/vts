@@ -119,6 +119,12 @@ do this independently:
    > (ChatGPT Actions have a ~30KB response budget — `compact=true` and
    > a small `limit` keep responses well under it) and fetch the
    > specific artifact when you've identified the right task.
+   >
+   > Transcripts can be long. To read a full transcript, paginate:
+   > `GET /api/tasks/{id}/transcript?offset=0&limit=25000` returns a
+   > JSON `TextSliceOut`. Keep calling with `offset = previous offset +
+   > previous length` until `is_end: true`, concatenate the `text`
+   > fields. Same pattern works for /summary, /redacted, /log.
 
 7. **Save** the GPT (top-right). It is private to your account by
    default. You can leave it that way; no need to publish.
@@ -131,6 +137,30 @@ do this independently:
 What the OpenAPI spec carries is the same for everyone — the endpoints,
 the schemas, the auth method. What differs per user is their `vts_…`
 token (issued from their own VTS account) and their system prompt.
+
+## Paginated reads of large text artifacts
+
+`/api/tasks/{id}/transcript`, `/summary`, `/redacted`, and `/log` can
+exceed the response budget of constrained clients (ChatGPT Custom
+Actions cap at ~30KB). Three modes are available:
+
+1. **Default (UI / browsers):** plain text, full body. Unchanged.
+2. **JSON pagination:** `Accept: application/json` (or any `?offset=` /
+   `?limit=` query) returns a `TextSliceOut`:
+   ```json
+   {"text": "...", "offset": 0, "length": 25000, "total_length": 87234, "is_end": false}
+   ```
+   Call repeatedly with `offset += length` until `is_end: true`. Hard
+   safety cap of 200000 chars per slice.
+3. **HTTP Range** (`Range: bytes=0-24999`) returns `206 Partial Content`
+   with `Content-Range: bytes 0-24999/87234`. Standard HTTP — good for
+   curl/wget/programmatic clients. Suffix-range (`bytes=-N`) is not
+   supported; compute the offset from `total_length` instead.
+
+ChatGPT Custom Actions support modes 1 and 2 but not 3 — the Action
+infrastructure doesn't forward arbitrary request headers to your server.
+For GPT, use `?offset=&limit=` (the Action spec includes them as query
+parameters, GPT picks them up automatically).
 
 ## Curl quick reference
 
