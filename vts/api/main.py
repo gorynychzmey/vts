@@ -418,6 +418,66 @@ def _resolve_session_secret(*, env_secret: str | None, secret_file: Path) -> str
     return new_secret
 
 
+def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
+    """Override app.openapi() so the generated spec is suitable for
+    external clients (e.g. GPT Custom Actions, curl/Postman).
+
+    On top of FastAPI's auto-generated spec we add:
+      - `servers` with the deployment's public base URL (if configured)
+      - `securitySchemes.ApiToken` (HTTP Bearer) + global default security
+      - Per-path tags grouped by URL prefix (tasks, meta, admin)
+    """
+    from fastapi.openapi.utils import get_openapi
+
+    def _tag_for_path(path: str) -> str:
+        if path.startswith("/api/tasks"):
+            return "tasks"
+        if path.startswith("/api/admin"):
+            return "admin"
+        return "meta"
+
+    def custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        if settings.public_base_url:
+            schema["servers"] = [{"url": settings.public_base_url.rstrip("/")}]
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "ApiToken": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": (
+                    "Personal API token issued from the VTS UI "
+                    "(header → key icon → Create token). Format: `vts_<43 chars>`. "
+                    "Browser session cookies also work for the same endpoints but "
+                    "are out of scope for external clients."
+                ),
+            }
+        }
+        # Apply globally; unauthenticated endpoints opt out individually below.
+        schema["security"] = [{"ApiToken": []}]
+        for path, methods in schema.get("paths", {}).items():
+            tag = _tag_for_path(path)
+            for op in methods.values():
+                if not isinstance(op, dict):
+                    continue
+                op.setdefault("tags", [tag])
+        # Endpoints that must NOT require auth in the spec.
+        for path in ("/api/version", "/healthz"):
+            for op in schema.get("paths", {}).get(path, {}).values():
+                if isinstance(op, dict):
+                    op["security"] = []
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
+
+
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
@@ -455,7 +515,22 @@ def create_app() -> FastAPI:
         finally:
             await app.state.redis.aclose()
 
-    app = FastAPI(title="vts", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="vts",
+        version=__version__,
+        description=(
+            "Self-hosted video transcription and summarisation API. "
+            "Authenticate with a personal API token from the VTS web UI "
+            "(header → key icon → Create token). "
+            "Send it as `Authorization: Bearer vts_…`. "
+            "See https://github.com/gorynychzmey/vts/blob/main/docs/AUTH.md "
+            "for the full auth model and "
+            "https://github.com/gorynychzmey/vts/blob/main/docs/API.md "
+            "for programmatic-access details (incl. GPT Custom Actions)."
+        ),
+        lifespan=lifespan,
+    )
+    _install_custom_openapi(app, settings)
 
     if settings.oauth_enabled:
         app.add_middleware(
@@ -568,7 +643,7 @@ def create_app() -> FastAPI:
     async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeOut:
         return MeOut(requested_by=user.requested_by, acting_as=user.acting_as, is_admin=user.is_admin)
 
-    @app.get("/api/me/tokens", response_model=list[ApiTokenOut])
+    @app.get("/api/me/tokens", response_model=list[ApiTokenOut], include_in_schema=False)
     async def list_tokens(
         user: AuthenticatedUser = Depends(get_current_user_session_only),
         session: AsyncSession = Depends(get_session_dep),
@@ -588,6 +663,7 @@ def create_app() -> FastAPI:
         "/api/me/tokens",
         response_model=ApiTokenCreateOut,
         dependencies=[Depends(require_same_site)],
+        include_in_schema=False,
     )
     async def create_token(
         payload: ApiTokenCreateRequest,
@@ -614,6 +690,7 @@ def create_app() -> FastAPI:
         "/api/me/tokens/{token_id}",
         status_code=204,
         dependencies=[Depends(require_same_site)],
+        include_in_schema=False,
     )
     async def revoke_token(
         token_id: uuid.UUID,
@@ -628,13 +705,13 @@ def create_app() -> FastAPI:
         await session.commit()
         return Response(status_code=204)
 
-    @app.get("/api/push/config", response_model=PushConfigOut)
+    @app.get("/api/push/config", response_model=PushConfigOut, include_in_schema=False)
     async def push_config(settings: Settings = Depends(get_settings_dep)) -> PushConfigOut:
         if not is_push_enabled(settings):
             return PushConfigOut(enabled=False, public_key=None)
         return PushConfigOut(enabled=True, public_key=settings.vapid_public_key)
 
-    @app.get("/api/push/status", response_model=PushStatusOut)
+    @app.get("/api/push/status", response_model=PushStatusOut, include_in_schema=False)
     async def push_status(
         endpoint: str | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -647,7 +724,7 @@ def create_app() -> FastAPI:
         first = subs[0] if subs else None
         return PushStatusOut(subscribed=first is not None, endpoint=first.endpoint if first else None)
 
-    @app.post("/api/push/subscribe", response_model=PushStatusOut)
+    @app.post("/api/push/subscribe", response_model=PushStatusOut, include_in_schema=False)
     async def push_subscribe(
         payload: PushSubscriptionIn,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -668,7 +745,7 @@ def create_app() -> FastAPI:
         )
         return PushStatusOut(subscribed=True, endpoint=payload.endpoint)
 
-    @app.post("/api/push/unsubscribe", response_model=PushStatusOut)
+    @app.post("/api/push/unsubscribe", response_model=PushStatusOut, include_in_schema=False)
     async def push_unsubscribe(
         payload: PushUnsubscribeIn,
         user: AuthenticatedUser = Depends(get_current_user),
@@ -808,7 +885,7 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
         return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
 
-    @app.get("/api/tasks/queue-positions")
+    @app.get("/api/tasks/queue-positions", include_in_schema=False)
     async def get_queue_positions(
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
@@ -1137,7 +1214,7 @@ def create_app() -> FastAPI:
 </html>"""
         return HTMLResponse(html)
 
-    @app.get("/api/events")
+    @app.get("/api/events", include_in_schema=False)
     async def get_events(
         user: AuthenticatedUser = Depends(get_current_user),
         redis: Redis = Depends(get_redis),

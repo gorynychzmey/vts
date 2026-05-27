@@ -162,6 +162,8 @@ This affects which alternative backends work:
   contract.
 - [docs/SPEC_COMPLIANCE.md](docs/SPEC_COMPLIANCE.md) — spec coverage and gaps.
 - [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md) — LLM backend compatibility.
+- [docs/API.md](docs/API.md) — programmatic access: OpenAPI spec at `/openapi.json`,
+  Swagger UI at `/docs`, and setup notes for ChatGPT Custom Actions / curl.
 - [PROJECT_RULES.md](PROJECT_RULES.md) — release and version-bump conventions.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute, dev setup, code style.
 - [SECURITY.md](SECURITY.md) — security policy and reporting.

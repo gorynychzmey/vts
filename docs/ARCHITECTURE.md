@@ -459,6 +459,13 @@ ssh-keyscan -H <your-hostname>
 
 ## API summary
 
+**Machine-readable spec** (for GPT Custom Actions, curl, generated
+client libs): `GET /openapi.json`. Interactive Swagger UI at `/docs`,
+ReDoc at `/redoc`. Both advertise `securitySchemes.ApiToken` (HTTP
+Bearer); browser/MCP-only routes (`/auth/*`, `/api/me/tokens`,
+`/api/events`, `/api/push/*`, `/player/<id>`) are excluded. See
+[docs/API.md](API.md) for setup notes.
+
 REST endpoints:
 
 - `POST /api/tasks`

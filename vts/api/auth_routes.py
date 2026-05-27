@@ -48,7 +48,7 @@ def _safe_next(value: str | None) -> str:
     return value
 
 
-@router.get("/auth/login")
+@router.get("/auth/login", include_in_schema=False)
 async def auth_login(request: Request):
     settings = get_settings()
     if not settings.oauth_enabled:
@@ -61,7 +61,7 @@ async def auth_login(request: Request):
     return await google.authorize_redirect(request, redirect_uri)
 
 
-@router.get("/auth/callback")
+@router.get("/auth/callback", include_in_schema=False)
 async def auth_callback(request: Request):
     settings = get_settings()
     if not settings.oauth_enabled:
@@ -112,7 +112,7 @@ async def auth_callback(request: Request):
     return RedirectResponse(url=next_path, status_code=302)
 
 
-@router.post("/auth/logout", dependencies=[Depends(require_same_site)])
+@router.post("/auth/logout", dependencies=[Depends(require_same_site)], include_in_schema=False)
 async def auth_logout(request: Request):
     sid = (request.session.get("sid") or "").strip()
     if sid:
