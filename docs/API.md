@@ -115,8 +115,10 @@ do this independently:
    > shares a YouTube URL, submit it via `POST /api/tasks` with
    > `transcript=true` and `summary=true`. Poll `GET /api/tasks/{id}`
    > until done, then fetch the summary. When the user asks for a
-   > recap of an old task, search via `GET /api/tasks` and fetch the
-   > relevant artifact.
+   > recap of an old task, list with `GET /api/tasks?compact=true&limit=50`
+   > (ChatGPT Actions have a ~30KB response budget — `compact=true` and
+   > a small `limit` keep responses well under it) and fetch the
+   > specific artifact when you've identified the right task.
 
 7. **Save** the GPT (top-right). It is private to your account by
    default. You can leave it that way; no need to publish.

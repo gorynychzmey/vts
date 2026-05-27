@@ -38,6 +38,7 @@ from vts.api.schemas import (
     ApiTokenOut,
     BatchResultOut,
     MeOut,
+    TaskCompactOut,
     PushConfigOut,
     PushStatusOut,
     PushSubscriptionIn,
@@ -367,6 +368,41 @@ def serialize_task(
             }
             for step in sorted(task.steps, key=lambda item: item.name)
         ],
+        progress={
+            "transcribe": {"current": transcribe_current, "total": transcribe_total},
+            "summary": {"current": summary_current, "total": summary_total},
+        },
+        stats=_task_stats_for_serialization(task),
+    )
+
+
+def serialize_task_compact(
+    task: Task,
+    queue_positions: dict[uuid.UUID, int] | None = None,
+    asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+    summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+) -> "TaskCompactOut":
+    """Compact serializer for list views. Drops steps/options/paths/error
+    message — see TaskCompactOut docstring for the rationale."""
+    from vts.api.schemas import TaskCompactOut
+    queue_position: int | None = None
+    if queue_positions is not None:
+        queue_position = queue_positions.get(task.id)
+    transcribe_current, transcribe_total = (0, 0)
+    if asr_progress is not None:
+        transcribe_current, transcribe_total = asr_progress.get(task.id, (0, 0))
+    summary_current, summary_total = (0, 0)
+    if summary_progress is not None:
+        summary_current, summary_total = summary_progress.get(task.id, (0, 0))
+    return TaskCompactOut(
+        id=task.id,
+        source_url=task.source_url,
+        source_title=task.source_title,
+        status=task.status.value,
+        queue_position=queue_position,
+        failure_code=classify_failure_code(task.error_message),
+        created_at=task.created_at,
+        updated_at=task.updated_at,
         progress={
             "transcribe": {"current": transcribe_current, "total": transcribe_total},
             "summary": {"current": summary_current, "total": summary_total},
@@ -870,19 +906,45 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
-    @app.get("/api/tasks", response_model=list[TaskOut])
+    @app.get(
+        "/api/tasks",
+        response_model=list[TaskOut] | list[TaskCompactOut],
+    )
     async def list_tasks(
+        limit: int | None = None,
+        offset: int = 0,
+        compact: bool = False,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
-    ) -> list[TaskOut]:
+    ) -> list[TaskOut] | list[TaskCompactOut]:
+        """List tasks owned by the current user, newest first.
+
+        Query params (added for external clients with small response budgets,
+        e.g. ChatGPT Custom Actions which cap responses at ~30KB):
+          - `limit`: maximum number of tasks to return (default: all).
+          - `offset`: skip the first N tasks; combine with `limit` to paginate.
+          - `compact`: when true, return slim `TaskCompactOut` records
+            (no steps, no options, no paths). Roughly an order of magnitude
+            smaller per task than the full TaskOut.
+        """
+        if limit is not None and limit < 0:
+            raise HTTPException(status_code=422, detail="limit must be non-negative")
+        if offset < 0:
+            raise HTTPException(status_code=422, detail="offset must be non-negative")
+        if limit is not None and limit > 500:
+            raise HTTPException(status_code=422, detail="limit must be <= 500")
         repo = Repo(session)
-        tasks = await repo.list_tasks_for_user(uuid.UUID(user.id))
+        tasks = await repo.list_tasks_for_user(
+            uuid.UUID(user.id), limit=limit, offset=offset,
+        )
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         task_ids = [task.id for task in tasks]
         asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
         summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
+        if compact:
+            return [serialize_task_compact(task, queue_positions, asr_progress, summary_progress) for task in tasks]
         return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
 
     @app.get("/api/tasks/queue-positions", include_in_schema=False)

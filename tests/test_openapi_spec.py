@@ -97,6 +97,18 @@ async def test_openapi_text_endpoints_declare_content_type(app_no_oauth) -> None
         )
 
 
+async def test_list_tasks_exposes_pagination_and_compact(app_no_oauth) -> None:
+    """GET /api/tasks should advertise limit/offset/compact query params so
+    constrained clients (GPT Actions, 30KB response cap) can chunk the list."""
+    transport = ASGITransport(app=app_no_oauth)
+    async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
+        r = await client.get("/openapi.json")
+    spec = r.json()
+    op = spec["paths"]["/api/tasks"]["get"]
+    param_names = {p["name"] for p in op.get("parameters", [])}
+    assert {"limit", "offset", "compact"}.issubset(param_names), param_names
+
+
 async def test_openapi_tags_routes_by_prefix(app_no_oauth) -> None:
     transport = ASGITransport(app=app_no_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:

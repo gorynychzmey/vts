@@ -69,13 +69,23 @@ class Repo:
         await self.session.flush()
         return task
 
-    async def list_tasks_for_user(self, user_id: uuid.UUID) -> list[Task]:
+    async def list_tasks_for_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Task]:
         stmt = (
             select(Task)
             .options(selectinload(Task.steps))
             .where(Task.user_id == user_id)
             .order_by(Task.created_at.desc())
         )
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.session.scalars(stmt)
         return list(result.all())
 

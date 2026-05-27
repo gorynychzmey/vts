@@ -67,6 +67,25 @@ class TaskOut(BaseModel):
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
 
 
+class TaskCompactOut(BaseModel):
+    """Slimmed-down task representation for list views.
+
+    Drops `steps`, `options`, `error_message`, `*_path`. Roughly an order
+    of magnitude smaller per task than `TaskOut`, which matters when the
+    client has a small response budget (ChatGPT Custom Actions cap at ~30KB).
+    """
+    id: UUID
+    source_url: str
+    source_title: str | None = None
+    status: str
+    queue_position: int | None = Field(default=None, ge=1)
+    failure_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
+    stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
+
+
 class TaskIdsRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1, max_length=100)
 
