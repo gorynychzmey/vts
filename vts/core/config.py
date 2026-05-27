@@ -204,6 +204,25 @@ class Settings(BaseSettings):
 
     media_ttl_hours: int = 72
 
+    # Operator identity for the rendered /privacy page. All optional; if
+    # left unset, /privacy renders without a specific operator name and
+    # tells the reader to ask whoever shared the instance.
+    operator_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_OPERATOR_NAME", "operator_name"),
+    )
+    operator_contact: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_OPERATOR_CONTACT", "operator_contact"),
+    )
+    operator_instance_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VTS_OPERATOR_INSTANCE_NAME",
+            "operator_instance_name",
+        ),
+    )
+
     # Token budgeting for the summarization pipeline
     summary_safety_margin: int = 768
 

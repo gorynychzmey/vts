@@ -238,6 +238,14 @@ Defaults shown match [`vts/core/config.py`](../vts/core/config.py). Every key li
 | `dirs.artifacts` | `VTS_ARTIFACTS_ROOT` | `/srv/vts-data` |
 | `dirs.prompts` | `VTS_PROMPTS_DIR` | `/opt/vts/prompts` |
 | `timezone` | `VTS_TIMEZONE` | `null` (use system) |
+| `operator_name` | `VTS_OPERATOR_NAME` | `null` |
+| `operator_contact` | `VTS_OPERATOR_CONTACT` | `null` |
+| `operator_instance_name` | `VTS_OPERATOR_INSTANCE_NAME` | `null` |
+
+The three `operator_*` keys, when set, are rendered on the public
+`/privacy` page so users know who is running the instance they are
+talking to. Leave them unset to keep the page neutral; the page will
+say "ask whoever gave you the link" instead.
 
 **External services:**
 
