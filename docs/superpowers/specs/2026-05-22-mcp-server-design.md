@@ -1,4 +1,3 @@
-# MCP Server for vts — Design
 
 **Date:** 2026-05-22
 **Status:** Draft, awaiting user review
