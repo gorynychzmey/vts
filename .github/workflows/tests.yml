@@ -34,3 +34,31 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit runtime requirements for known vulnerabilities
+        # --strict makes pip-audit exit non-zero on resolution errors too,
+        # not just on found vulnerabilities — catches situations where the
+        # requirements file no longer resolves cleanly.
+        # If a CVE is published before a fix exists upstream, add a one-line
+        # `--ignore-vuln <ID>` here with a comment pointing at the tracking
+        # issue, rather than blocking the whole pipeline.
+        run: pip-audit --strict --requirement requirements.txt
