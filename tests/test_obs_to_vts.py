@@ -134,7 +134,7 @@ def test_read_config_bool_missing_ui_falls_back_to_env(obs_module, monkeypatch):
 
 def test_read_config_defaults_when_nothing_set(obs_module, monkeypatch):
     for k in ("VTS_BASE_URL", "VTS_API_TOKEN", "VTS_TRANSCRIPT",
-              "VTS_SUMMARY", "VTS_LANGUAGE", "VTS_AUDIO_ONLY"):
+              "VTS_SUMMARY", "VTS_LANGUAGE", "VTS_AUDIO_ONLY", "VTS_NOTIFY"):
         monkeypatch.delenv(k, raising=False)
     cfg = obs_module._read_config(_empty_settings())
     assert cfg == {
@@ -144,7 +144,21 @@ def test_read_config_defaults_when_nothing_set(obs_module, monkeypatch):
         "summary": True,
         "language": "",
         "audio_only": False,
+        "notify": True,
     }
+
+
+def test_read_config_notify_can_be_disabled_via_env(obs_module, monkeypatch):
+    monkeypatch.setenv("VTS_NOTIFY", "false")
+    cfg = obs_module._read_config(_empty_settings())
+    assert cfg["notify"] is False
+
+
+def test_read_config_notify_ui_wins_over_env(obs_module, monkeypatch):
+    monkeypatch.setenv("VTS_NOTIFY", "true")
+    s = _FakeObsData({"vts_notify": False})
+    cfg = obs_module._read_config(s)
+    assert cfg["notify"] is False
 
 
 def test_multipart_body_contains_all_fields(obs_module, tmp_path: Path):
@@ -173,3 +187,81 @@ def test_multipart_body_skips_no_fields(obs_module, tmp_path: Path):
     # Even with no form fields, file part + closing boundary must be present.
     assert f"--{boundary}--".encode() in body
     assert b'name="file"' in body
+
+
+# ---------------------------------------------------------------- notify
+
+def test_notify_command_linux_with_notify_send(obs_module, monkeypatch):
+    monkeypatch.setattr(obs_module.sys, "platform", "linux")
+    monkeypatch.setattr(obs_module.shutil, "which",
+                        lambda name: "/usr/bin/notify-send" if name == "notify-send" else None)
+    cmd = obs_module._notify_command("Title", "Body")
+    assert cmd is not None
+    assert cmd[0] == "notify-send"
+    assert "Title" in cmd and "Body" in cmd
+
+
+def test_notify_command_linux_without_notify_send(obs_module, monkeypatch):
+    monkeypatch.setattr(obs_module.sys, "platform", "linux")
+    monkeypatch.setattr(obs_module.shutil, "which", lambda _name: None)
+    assert obs_module._notify_command("Title", "Body") is None
+
+
+def test_notify_command_macos_uses_osascript(obs_module, monkeypatch):
+    monkeypatch.setattr(obs_module.sys, "platform", "darwin")
+    cmd = obs_module._notify_command("VTS", "Done")
+    assert cmd is not None
+    assert cmd[0] == "osascript"
+    # Both title and body must end up inside the AppleScript expression.
+    joined = " ".join(cmd)
+    assert "Done" in joined and "VTS" in joined
+
+
+def test_notify_command_windows_uses_powershell(obs_module, monkeypatch):
+    monkeypatch.setattr(obs_module.sys, "platform", "win32")
+    monkeypatch.setattr(obs_module.shutil, "which",
+                        lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    cmd = obs_module._notify_command("Title", "Body")
+    assert cmd is not None
+    assert cmd[0] == "powershell.exe"
+    # The PS script should mention both strings.
+    ps = cmd[-1]
+    assert "Title" in ps and "Body" in ps
+
+
+def test_notify_command_unknown_platform_returns_none(obs_module, monkeypatch):
+    monkeypatch.setattr(obs_module.sys, "platform", "freebsd14")
+    assert obs_module._notify_command("Title", "Body") is None
+
+
+def test_notify_disabled_does_not_run_subprocess(obs_module, monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(obs_module.subprocess, "run",
+                        lambda *a, **kw: calls.append(list(a[0])) or None)
+    obs_module._notify("T", "B", enabled=False)
+    assert calls == []
+
+
+def test_notify_swallows_subprocess_errors(obs_module, monkeypatch):
+    """A broken notifier (timeout, missing binary, etc.) must NOT interrupt
+    the upload thread — _notify swallows every OSError / SubprocessError."""
+    monkeypatch.setattr(obs_module.sys, "platform", "linux")
+    monkeypatch.setattr(obs_module.shutil, "which",
+                        lambda _name: "/usr/bin/notify-send")
+
+    def _boom(*_a, **_kw):
+        raise OSError("simulated broken pipe")
+    monkeypatch.setattr(obs_module.subprocess, "run", _boom)
+    # Must not raise.
+    obs_module._notify("T", "B", enabled=True)
+
+
+def test_notify_no_op_when_no_notifier_available(obs_module, monkeypatch):
+    """Linux without notify-send: enabled=True but no command → no subprocess."""
+    monkeypatch.setattr(obs_module.sys, "platform", "linux")
+    monkeypatch.setattr(obs_module.shutil, "which", lambda _name: None)
+    calls: list[object] = []
+    monkeypatch.setattr(obs_module.subprocess, "run",
+                        lambda *a, **kw: calls.append(a) or None)
+    obs_module._notify("T", "B", enabled=True)
+    assert calls == []

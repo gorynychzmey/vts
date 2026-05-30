@@ -20,6 +20,9 @@ Env vars (also the names of the UI fields):
   VTS_SUMMARY      — bool, default true  (requires transcript=true)
   VTS_LANGUAGE     — "" / "ru" / "en" / "de" / "fr" / …  ("" = auto-detect)
   VTS_AUDIO_ONLY   — bool, default false
+  VTS_NOTIFY       — bool, default true  (show desktop notification on
+                     upload result; uses notify-send/osascript/PowerShell
+                     toast depending on platform; no-op if unavailable)
 
 Limitations
 -----------
@@ -35,7 +38,10 @@ Limitations
 from __future__ import annotations
 
 import os
+import shutil
 import ssl
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -53,6 +59,7 @@ _PROP_TRANSCRIPT = "vts_transcript"
 _PROP_SUMMARY = "vts_summary"
 _PROP_LANGUAGE = "vts_language"
 _PROP_AUDIO_ONLY = "vts_audio_only"
+_PROP_NOTIFY = "vts_notify"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -95,6 +102,7 @@ def _read_config(settings) -> dict[str, object]:
         "summary": _bool(_PROP_SUMMARY, "VTS_SUMMARY", True),
         "language": language,
         "audio_only": _bool(_PROP_AUDIO_ONLY, "VTS_AUDIO_ONLY", False),
+        "notify": _bool(_PROP_NOTIFY, "VTS_NOTIFY", True),
     }
 
 
@@ -133,6 +141,68 @@ def _build_multipart_body(
     return body, content_type
 
 
+# ---------------------------------------------------------------- notifications
+
+def _notify_command(title: str, message: str) -> list[str] | None:
+    """Pick a per-platform CLI command for a desktop notification.
+
+    Returns None if no usable notifier is found for this platform —
+    callers fall back to log-only.
+    """
+    platform = sys.platform
+    if platform.startswith("linux"):
+        if shutil.which("notify-send"):
+            return ["notify-send", "--app-name=OBS → VTS", title, message]
+        return None
+    if platform == "darwin":
+        # AppleScript is always present on macOS.
+        script = (
+            f'display notification {message!r} '
+            f'with title {title!r}'
+        )
+        return ["osascript", "-e", script]
+    if platform.startswith("win"):
+        if not shutil.which("powershell.exe"):
+            return None
+        # Native Windows 10/11 toast via WinRT. The single-line PS script
+        # uses an empty Toast template, so it doesn't depend on extra
+        # modules like BurntToast. Newlines in message must be encoded.
+        msg = message.replace('"', '`"').replace("\n", " ")
+        hdr = title.replace('"', '`"').replace("\n", " ")
+        ps = (
+            "[Windows.UI.Notifications.ToastNotificationManager,"
+            "Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null;"
+            "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0);"
+            f"$t.GetElementsByTagName('text').Item(0).AppendChild($t.CreateTextNode('{hdr}'))|Out-Null;"
+            f"$t.GetElementsByTagName('text').Item(1).AppendChild($t.CreateTextNode('{msg}'))|Out-Null;"
+            "$n=[Windows.UI.Notifications.ToastNotification]::new($t);"
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('OBS → VTS').Show($n)"
+        )
+        return ["powershell.exe", "-NoProfile", "-Command", ps]
+    return None
+
+
+def _notify(title: str, message: str, *, enabled: bool) -> None:
+    """Best-effort desktop notification. Never raises; silently no-ops on
+    platforms without a usable notifier, or when the user disabled them.
+
+    The OBS script log line is always written regardless — this is just
+    an additional channel for the user."""
+    if not enabled:
+        return
+    cmd = _notify_command(title, message)
+    if cmd is None:
+        return
+    try:
+        subprocess.run(
+            cmd, check=False, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Don't let a notifier hiccup interrupt the upload thread.
+        pass
+
+
 # ---------------------------------------------------------------- upload
 
 def _upload_blocking(file_path: Path, cfg: dict[str, object]) -> None:
@@ -160,10 +230,16 @@ def _upload_blocking(file_path: Path, cfg: dict[str, object]) -> None:
             "Accept": "application/json",
         },
     )
+    notify_enabled = bool(cfg.get("notify", True))
     ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=300) as resp:
             print(f"[obs_to_vts] upload OK: HTTP {resp.status} for {file_path.name}")
+            _notify(
+                "VTS upload OK",
+                f"Uploaded {file_path.name}",
+                enabled=notify_enabled,
+            )
     except urllib.error.HTTPError as e:
         body_preview = ""
         try:
@@ -171,8 +247,18 @@ def _upload_blocking(file_path: Path, cfg: dict[str, object]) -> None:
         except Exception:
             pass
         print(f"[obs_to_vts] upload FAILED: HTTP {e.code}: {body_preview}")
+        _notify(
+            "VTS upload failed",
+            f"HTTP {e.code} for {file_path.name}",
+            enabled=notify_enabled,
+        )
     except (urllib.error.URLError, OSError) as e:
         print(f"[obs_to_vts] upload FAILED: network error: {e}")
+        _notify(
+            "VTS upload failed",
+            f"Network error: {e}",
+            enabled=notify_enabled,
+        )
 
 
 def _kick_off_upload(file_path: Path) -> None:
@@ -218,6 +304,7 @@ def script_defaults(settings):
     obs.obs_data_set_default_bool(settings, _PROP_TRANSCRIPT, True)
     obs.obs_data_set_default_bool(settings, _PROP_SUMMARY, True)
     obs.obs_data_set_default_bool(settings, _PROP_AUDIO_ONLY, False)
+    obs.obs_data_set_default_bool(settings, _PROP_NOTIFY, True)
 
 
 def script_properties():
@@ -231,6 +318,10 @@ def script_properties():
     obs.obs_properties_add_bool(props, _PROP_TRANSCRIPT, "Generate transcript")
     obs.obs_properties_add_bool(props, _PROP_SUMMARY, "Generate summary")
     obs.obs_properties_add_bool(props, _PROP_AUDIO_ONLY, "Audio only")
+    obs.obs_properties_add_bool(
+        props, _PROP_NOTIFY,
+        "Desktop notification on upload result",
+    )
     obs.obs_properties_add_text(
         props, _PROP_LANGUAGE,
         'Language ("" = auto, or "ru" / "en" / "de" / …)',

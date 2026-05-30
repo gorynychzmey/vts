@@ -86,6 +86,7 @@ must match OBS — 64-bit OBS needs 64-bit Python.
 | `VTS_SUMMARY`     | no  | `true` | Run the LLM summary; requires transcript=true |
 | `VTS_LANGUAGE`    | no  | (empty = auto) | Force ASR language: `ru`, `en`, `de`, `fr`, … |
 | `VTS_AUDIO_ONLY`  | no  | `false` | Skip the video stream during processing |
+| `VTS_NOTIFY`      | no  | `true` | Show a desktop notification on upload result. Uses `notify-send` (Linux), `osascript` (macOS), or PowerShell toast (Windows). Silently no-op if the platform notifier isn't available. |
 
 Env-var bool values: `true` / `false` / `1` / `0` / `yes` / `no` (case-insensitive).
 
