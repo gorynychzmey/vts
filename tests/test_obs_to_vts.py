@@ -227,6 +227,38 @@ def test_notify_command_windows_uses_powershell(obs_module, monkeypatch):
     # The PS script should mention both strings.
     ps = cmd[-1]
     assert "Title" in ps and "Body" in ps
+    # Belt-and-braces against PS console flashing: -WindowStyle Hidden.
+    # (The real fix is CREATE_NO_WINDOW; this is the second line of defence.)
+    assert "Hidden" in cmd
+
+
+def test_notify_passes_create_no_window_flag_only_on_windows(obs_module, monkeypatch):
+    """The flash-suppressing CREATE_NO_WINDOW flag must NOT leak into the
+    subprocess call on non-Windows platforms — `creationflags=` is a
+    Windows-only kwarg and crashes everywhere else."""
+    captured: dict[str, object] = {}
+
+    def _capture_run(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(obs_module.subprocess, "run", _capture_run)
+
+    # Linux: no creationflags expected.
+    monkeypatch.setattr(obs_module.sys, "platform", "linux")
+    monkeypatch.setattr(obs_module.shutil, "which",
+                        lambda _name: "/usr/bin/notify-send")
+    obs_module._notify("T", "B", enabled=True)
+    assert "creationflags" not in captured["kwargs"]
+
+    # Windows: flag is set and matches the documented constant.
+    captured.clear()
+    monkeypatch.setattr(obs_module.sys, "platform", "win32")
+    monkeypatch.setattr(obs_module.shutil, "which",
+                        lambda _name: "powershell.exe")
+    obs_module._notify("T", "B", enabled=True)
+    assert captured["kwargs"].get("creationflags") == 0x08000000
 
 
 def test_notify_command_unknown_platform_returns_none(obs_module, monkeypatch):

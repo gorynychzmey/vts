@@ -178,8 +178,21 @@ def _notify_command(title: str, message: str) -> list[str] | None:
             "$n=[Windows.UI.Notifications.ToastNotification]::new($t);"
             "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('OBS → VTS').Show($n)"
         )
-        return ["powershell.exe", "-NoProfile", "-Command", ps]
+        return [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle", "Hidden",
+            "-Command", ps,
+        ]
     return None
+
+
+# subprocess.CREATE_NO_WINDOW is defined only on Windows in the stdlib.
+# Use the integer literal so the module still imports on Linux/macOS
+# (where the constant is missing). We only pass this flag when running
+# on Windows, but referencing it at module scope must not crash.
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def _notify(title: str, message: str, *, enabled: bool) -> None:
@@ -193,10 +206,17 @@ def _notify(title: str, message: str, *, enabled: bool) -> None:
     cmd = _notify_command(title, message)
     if cmd is None:
         return
+    # On Windows, suppress the console flash from powershell.exe by
+    # creating the child process with CREATE_NO_WINDOW. The flag is a
+    # no-op (and not accepted) on other platforms.
+    extra: dict[str, object] = {}
+    if sys.platform.startswith("win"):
+        extra["creationflags"] = _CREATE_NO_WINDOW
     try:
         subprocess.run(
             cmd, check=False, timeout=5,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **extra,
         )
     except (OSError, subprocess.SubprocessError):
         # Don't let a notifier hiccup interrupt the upload thread.
