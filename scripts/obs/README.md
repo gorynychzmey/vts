@@ -4,6 +4,46 @@
 recording to your VTS instance via `/api/tasks/upload`. Auth uses a
 personal API token (see [docs/AUTH.md](../../docs/AUTH.md#personal-api-tokens)).
 
+## Prerequisites: Python interpreter
+
+**OBS Studio does not ship with Python.** You must install one yourself
+and point OBS at it; otherwise the script silently won't appear in the
+scripts list — OBS doesn't show an error message in that state, which is
+the usual source of confusion.
+
+Supported versions (per [OBS docs](https://docs.obsproject.com/scripting)):
+**Python 3.6 – 3.12**. Python 3.13+ is not yet supported. Architecture
+must match OBS — 64-bit OBS needs 64-bit Python.
+
+### Install Python
+
+- **Linux:** usually already installed (`python3 --version` should print
+  something between 3.6 and 3.12). If it's 3.13+, install an older
+  series via your package manager (e.g. `apt install python3.12` on
+  Debian/Ubuntu, then point OBS at it as described below).
+- **macOS:** [python.org installer](https://www.python.org/downloads/macos/)
+  for Python 3.12; or `brew install python@3.12`.
+- **Windows:** [python.org installer](https://www.python.org/downloads/windows/)
+  for **64-bit** Python 3.12. During install, leave the default
+  install location and untick "Add to PATH" if you only need it for OBS.
+
+### Tell OBS where Python lives
+
+1. OBS → Tools → Scripts → switch to the **Python Settings** tab
+   (it's the second tab in the dialog, easy to miss).
+2. Click **Browse** and pick the **folder** containing the Python
+   install — not the interpreter executable itself.
+
+   Typical paths:
+   - **Linux** (system Python): `/usr` (when `python3` is `/usr/bin/python3`).
+     For a non-default version installed alongside the system one,
+     find it with `which python3.12 | xargs dirname | xargs dirname`.
+   - **macOS** (python.org installer): `/Library/Frameworks/Python.framework/Versions/3.12`.
+   - **Windows**: e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python312`.
+
+3. Switch back to the **Scripts** tab. You should now be able to add
+   the script with `+`.
+
 ## Setup
 
 1. **Generate an API token in VTS.** Open the VTS UI → key icon in the
@@ -11,12 +51,14 @@ personal API token (see [docs/AUTH.md](../../docs/AUTH.md#personal-api-tokens)).
    the `vts_…` value once. The raw value is never shown again.
 
 2. **Install the script.** OBS Studio → Tools → Scripts → `+` →
-   pick `scripts/obs/obs_to_vts.py`.
+   pick `scripts/obs/obs_to_vts.py`. (Make sure the Python prerequisites
+   above are met first — without them the `+` button might still let you
+   pick the file but no configuration UI will appear on the right.)
 
 3. **Configure.** Two paths — pick whichever fits:
-   - **Easy path:** fill the fields shown in the OBS Scripts dialog
-     (VTS base URL, API token, etc.). Changes take effect immediately;
-     no OBS restart needed.
+   - **Easy path:** fill the fields shown on the **right side of the
+     Scripts dialog** (VTS base URL, API token, etc.). Changes take
+     effect immediately; no OBS restart needed.
    - **Scripted/headless path:** leave the UI fields empty and supply
      the values via env vars (see table below). OBS reads env vars
      once at script load — restart OBS or reload the script after
@@ -29,6 +71,10 @@ personal API token (see [docs/AUTH.md](../../docs/AUTH.md#personal-api-tokens)).
    stopping a recording. You should see one of:
    - `[obs_to_vts] uploading <file>.mkv → https://...`
    - `[obs_to_vts] upload OK: HTTP 200 …`
+
+   If you don't see any `[obs_to_vts]` lines at all (not even on script
+   load), Python is probably not configured — go back to *Prerequisites*
+   above.
 
 ## Settings (UI field name = env var name)
 
@@ -103,9 +149,16 @@ keeps the original on its end (subject to `media_ttl_hours`, default
 
 ## Troubleshooting
 
+- **No config fields show up after adding the script, and no
+  `[obs_to_vts]` lines in the Script Log.** OBS hasn't loaded the
+  script because Python is not configured. See *Prerequisites: Python
+  interpreter* above. OBS does **not** show an explicit error for this
+  state — the script just silently does nothing.
+
 - **"skipping upload: VTS_BASE_URL or VTS_API_TOKEN not set"** — OBS
-  didn't see the env vars. Check that you launched OBS from a context
-  where they were exported (e.g. the same shell that ran `export`).
+  didn't see the env vars. Fill the fields in the OBS Scripts dialog
+  instead (easier), or launch OBS from a context where the env vars
+  are exported.
 
 - **HTTP 401** — token is wrong, revoked, or the owner was removed
   from the VTS allow-list. Generate a new one in the UI.
