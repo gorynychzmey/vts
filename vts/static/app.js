@@ -998,7 +998,67 @@ function setTaskStatusAppearance(statusEl, status, queuePosition = null) {
   statusEl.classList.add(`status-${status}`);
 }
 
+function enterTitleEdit(taskEl) {
+  const runtime = taskEl._runtime;
+  const elements = taskEl._elements;
+  if (!runtime || !elements) return;
+  const isUpload = typeof runtime.sourceUrl === "string" && runtime.sourceUrl.startsWith("file://");
+  const uploadName = isUpload ? runtime.sourceUrl.slice("file://".length) : "";
+  const prefill = runtime.displayName || uploadName || runtime.sourceUrl || "";
+  taskEl._editingTitle = true;
+  elements.linkEl.classList.add("hidden");
+  elements.editNameBtn.classList.add("hidden");
+  if (elements.expiredEl) elements.expiredEl.classList.add("hidden");
+  elements.nameEditWrap.classList.remove("hidden");
+  elements.nameInput.value = prefill;
+  elements.nameInput.disabled = false;
+  elements.nameOkBtn.disabled = false;
+  elements.nameInput.focus();
+  elements.nameInput.select();
+}
+
+function cancelTitleEdit(taskEl) {
+  const elements = taskEl._elements;
+  if (!elements) return;
+  taskEl._editingTitle = false;
+  elements.nameEditWrap.classList.add("hidden");
+  elements.linkEl.classList.remove("hidden");
+  elements.editNameBtn.classList.remove("hidden");
+  renderTaskTitle(taskEl);
+}
+
+async function commitTitleEdit(taskEl) {
+  const runtime = taskEl._runtime;
+  const elements = taskEl._elements;
+  if (!runtime || !elements) return;
+  const value = elements.nameInput.value.trim();
+  elements.nameOkBtn.disabled = true;
+  elements.nameInput.disabled = true;
+  try {
+    const updated = await api(`/api/tasks/${encodeURIComponent(runtime.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: value }),
+    });
+    runtime.displayName = typeof updated.source_title === "string" ? updated.source_title.trim() : "";
+    taskEl._editingTitle = false;
+    elements.nameEditWrap.classList.add("hidden");
+    elements.linkEl.classList.remove("hidden");
+    elements.editNameBtn.classList.remove("hidden");
+    renderTaskTitle(taskEl);
+  } catch (err) {
+    // Keep the editor open so the user can retry or cancel.
+    elements.nameInput.disabled = false;
+    elements.nameOkBtn.disabled = false;
+    elements.nameInput.focus();
+    console.error("rename failed", err);
+  }
+}
+
 function renderTaskTitle(taskEl) {
+  if (taskEl._editingTitle) {
+    return;  // don't repaint the title while the user is editing it
+  }
   const runtime = taskEl._runtime;
   const elements = taskEl._elements;
   const hasName = Boolean(runtime.displayName);
