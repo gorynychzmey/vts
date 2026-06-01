@@ -130,6 +130,16 @@ The single resolver handles both paths: if `Authorization: Bearer …` is
 present it calls FastMCP's `get_access_token()` and reads the `email`
 claim; otherwise it follows the cookie path.
 
+**MCP rejects cookie auth.** Requests under `mcp_path` (default `/mcp`)
+must carry `Authorization: Bearer …` — either a personal API token
+(`vts_…`) or a FastMCP-issued OAuth token. The browser session cookie
+is **not** accepted on `/mcp`, even though the browser will happily
+attach it. This is a deliberate channel boundary so that the
+per-request Bearer allow-list re-check cannot be bypassed by routing a
+cookie-authenticated request to the MCP transport. Discovery routes at
+host root (`/.well-known/oauth-*`, `/authorize`, etc.) are
+unauthenticated by design and out of scope for this rule.
+
 ## Logout
 
 `POST /auth/logout` is gated by the

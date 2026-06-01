@@ -23,6 +23,30 @@ class AuthenticatedUser:
     acting_as: str
 
 
+def _is_mcp_path(request: Request, settings: Settings) -> bool:
+    """True if the request targets the MCP sub-app or one of its OAuth
+    discovery routes mounted at host root by FastMCP.
+
+    vts-rxy: cookie auth must not pass on these paths — only Bearer.
+    """
+    try:
+        path = request.url.path or ""
+    except (KeyError, AttributeError):
+        # Test fixtures sometimes build minimal ASGI scopes without 'path'.
+        # Failing safe = not-MCP = cookie auth continues to work as before.
+        return False
+    mcp_path = (settings.mcp_path or "/mcp").rstrip("/")
+    if mcp_path and (path == mcp_path or path.startswith(mcp_path + "/")):
+        return True
+    # FastMCP publishes its OAuth metadata + /authorize, /token, /register,
+    # /consent at host root (RFC 8414). These are read by MCP clients
+    # before they have a token — they MUST NOT be classified as MCP-protected
+    # for auth purposes, because the discovery itself is unauthenticated.
+    # We therefore intentionally do NOT block them here; only mcp_path
+    # (the JSON-RPC transport) is gated.
+    return False
+
+
 async def resolve_user_from_request(
     request: Request,
     session: AsyncSession,
@@ -36,6 +60,11 @@ async def resolve_user_from_request(
     3. oauth_enabled=True + Authorization: Bearer → FastMCP access token claims.
     4. oauth_enabled=True + signed session cookie → server-side session
        record in Redis (vts-pa9), falling back to legacy email-only cookies.
+
+    vts-rxy: branch 4 (cookie auth) is rejected for paths under
+    `settings.mcp_path`. The MCP channel only accepts Bearer (API token
+    or FastMCP OAuth token); cookies smuggled by the browser must not
+    cross into it.
     """
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
@@ -65,6 +94,18 @@ async def resolve_user_from_request(
         ):
             raise HTTPException(status_code=403, detail="Email not allowed")
         return await _materialize_user(email, request, session, settings)
+
+    # vts-rxy: reject cookie auth on the MCP mount. Legitimate MCP clients
+    # (Claude Desktop, claude.ai, ChatGPT) all speak Bearer; a cookie on
+    # /mcp means a browser session is being smuggled into the MCP channel,
+    # which would bypass the per-request Bearer allow-list. Once vts-tlw
+    # introduces channel-specific allow-lists this becomes a real bug; we
+    # tighten it now so the resolver shape is unambiguous.
+    if _is_mcp_path(request, settings):
+        raise HTTPException(
+            status_code=401,
+            detail="MCP requires Authorization: Bearer; cookie auth not accepted on /mcp",
+        )
 
     # Browser path: session cookie via Starlette SessionMiddleware.
     starlette_session = getattr(request, "session", None) or {}
