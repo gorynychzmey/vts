@@ -43,7 +43,13 @@ def probe_duration(path: Path) -> float:
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe failed for {path}")
     payload = json.loads(proc.stdout)
-    return float(payload["format"]["duration"])
+    # A zero-sample WAV (e.g. silenceremove stripped all audio) yields
+    # {"format": {}} with no "duration" key. Treat that as zero length so
+    # callers' empty-output guards can engage instead of crashing.
+    raw = payload.get("format", {}).get("duration")
+    if raw is None:
+        return 0.0
+    return float(raw)
 
 
 def extract_audio_16k_mono(input_file: Path, output_wav: Path, log_path: Path) -> None:
