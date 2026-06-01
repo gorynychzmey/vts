@@ -961,3 +961,26 @@ input[type="file"] {
   font-size: 0.85rem;
 }
 
+.task-name-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-name-input {
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid var(--line, #888);
+  border-radius: 4px;
+  min-width: 12rem;
+  max-width: 100%;
+  background: var(--bg-card, #fff);
+  color: inherit;
+}
+
+.task-edit-name-btn svg,
+.task-name-ok-btn svg,
+.task-name-cancel-btn svg {
+  width: 16px;
+  height: 16px;
+}
