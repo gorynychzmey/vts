@@ -56,11 +56,13 @@ class Repo:
         options: dict[str, object],
         artifact_dir: str,
         task_id: uuid.UUID | None = None,
+        source_title: str | None = None,
     ) -> Task:
         task = Task(
             id=task_id or uuid.uuid4(),
             user_id=user_id,
             source_url=source_url,
+            source_title=source_title,
             options=options,
             artifact_dir=artifact_dir,
             status=TaskStatus.queued,

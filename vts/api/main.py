@@ -295,6 +295,21 @@ def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
     }
 
 
+_MAX_DISPLAY_NAME_CHARS = 500  # matches Text column; keep titles sane
+
+
+def normalize_display_name(raw: str | None) -> str | None:
+    """Normalize a user-supplied task title. Empty/whitespace-only input
+    becomes None (so the UI falls back to source_url); otherwise trim
+    surrounding whitespace and cap length to keep titles bounded."""
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    return cleaned[:_MAX_DISPLAY_NAME_CHARS]
+
+
 _QUEUE_POS_CACHE_SUFFIX = "cache:queue_positions"
 _QUEUE_POS_TTL_SECONDS = 2
 
@@ -1117,6 +1132,7 @@ def create_app() -> FastAPI:
     async def upload_task(
         file: UploadFile = File(...),
         language: str | None = Form(default=None),
+        display_name: str | None = Form(default=None),
         audio_only: bool = Form(default=False),
         transcript: bool = Form(default=True),
         summary: bool = Form(default=True),
@@ -1158,6 +1174,7 @@ def create_app() -> FastAPI:
             options=options,
             artifact_dir=str(artifact),
             task_id=task_id,
+            source_title=normalize_display_name(display_name),
         )
         await session.commit()
         bus = RedisBus(redis, settings)

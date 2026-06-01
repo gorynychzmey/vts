@@ -87,6 +87,7 @@ must match OBS — 64-bit OBS needs 64-bit Python.
 | `VTS_LANGUAGE`    | no  | (empty = auto) | Force ASR language: `ru`, `en`, `de`, `fr`, … |
 | `VTS_AUDIO_ONLY`  | no  | `false` | Skip the video stream during processing |
 | `VTS_NOTIFY`      | no  | `true` | Show a desktop notification on upload result. Uses `notify-send` (Linux), `osascript` (macOS), or PowerShell toast (Windows). Silently no-op if the platform notifier isn't available. |
+| `VTS_DISPLAY_NAME_TEMPLATE` | no | (empty = filename) | Task name shown in VTS. Plain text, or use the `{filename}` placeholder (recording name without extension). Empty → VTS falls back to the uploaded file name. Example: `OBS: {filename}` → `OBS: 2026-06-01 22-57-08`. |
 
 Env-var bool values: `true` / `false` / `1` / `0` / `yes` / `no` (case-insensitive).
 

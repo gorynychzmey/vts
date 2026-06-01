@@ -134,7 +134,8 @@ def test_read_config_bool_missing_ui_falls_back_to_env(obs_module, monkeypatch):
 
 def test_read_config_defaults_when_nothing_set(obs_module, monkeypatch):
     for k in ("VTS_BASE_URL", "VTS_API_TOKEN", "VTS_TRANSCRIPT",
-              "VTS_SUMMARY", "VTS_LANGUAGE", "VTS_AUDIO_ONLY", "VTS_NOTIFY"):
+              "VTS_SUMMARY", "VTS_LANGUAGE", "VTS_AUDIO_ONLY", "VTS_NOTIFY",
+              "VTS_DISPLAY_NAME_TEMPLATE"):
         monkeypatch.delenv(k, raising=False)
     cfg = obs_module._read_config(_empty_settings())
     assert cfg == {
@@ -145,6 +146,7 @@ def test_read_config_defaults_when_nothing_set(obs_module, monkeypatch):
         "language": "",
         "audio_only": False,
         "notify": True,
+        "display_name_template": "",
     }
 
 
@@ -187,6 +189,49 @@ def test_multipart_body_skips_no_fields(obs_module, tmp_path: Path):
     # Even with no form fields, file part + closing boundary must be present.
     assert f"--{boundary}--".encode() in body
     assert b'name="file"' in body
+
+
+# ---------------------------------------------------------------- display name
+
+def test_render_display_name_empty_template_yields_empty(obs_module, tmp_path: Path):
+    f = tmp_path / "2026-06-01 22-57-08.mp4"
+    # Empty template → "" → caller sends no display_name, VTS uses file:// label.
+    assert obs_module._render_display_name("", f) == ""
+    assert obs_module._render_display_name("   ", f) == ""
+
+
+def test_render_display_name_static_template(obs_module, tmp_path: Path):
+    f = tmp_path / "rec.mkv"
+    assert obs_module._render_display_name("Weekly standup", f) == "Weekly standup"
+
+
+def test_render_display_name_filename_placeholder(obs_module, tmp_path: Path):
+    f = tmp_path / "2026-06-01 22-57-08.mp4"
+    # {filename} expands to the stem (no extension); result is trimmed.
+    assert obs_module._render_display_name("OBS: {filename}", f) == "OBS: 2026-06-01 22-57-08"
+
+
+def test_render_display_name_unknown_placeholder_left_intact(obs_module, tmp_path: Path):
+    f = tmp_path / "rec.mp4"
+    # A typo'd placeholder must not crash the upload — template is used as-is.
+    assert obs_module._render_display_name("Call {nope}", f) == "Call {nope}"
+
+
+def test_read_config_display_name_template_from_env(obs_module, monkeypatch):
+    monkeypatch.setenv("VTS_DISPLAY_NAME_TEMPLATE", "OBS: {filename}")
+    cfg = obs_module._read_config(_empty_settings())
+    assert cfg["display_name_template"] == "OBS: {filename}"
+
+
+def test_multipart_omits_display_name_when_template_empty(obs_module, tmp_path: Path):
+    f = tmp_path / "clip.mp4"
+    f.write_bytes(b"x")
+    rendered = obs_module._render_display_name("", f)
+    assert rendered == ""
+    # The caller only adds the field when rendered is truthy; assert the
+    # rendered value is what gates it (no display_name part for empty template).
+    body, _ = obs_module._build_multipart_body(f, {"transcript": "true"})
+    assert b'name="display_name"' not in body
 
 
 # ---------------------------------------------------------------- notify

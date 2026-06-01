@@ -60,6 +60,7 @@ _PROP_SUMMARY = "vts_summary"
 _PROP_LANGUAGE = "vts_language"
 _PROP_AUDIO_ONLY = "vts_audio_only"
 _PROP_NOTIFY = "vts_notify"
+_PROP_DISPLAY_NAME = "vts_display_name_template"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -77,6 +78,25 @@ def _pick_str(ui_value: str, env_name: str) -> str:
     return os.environ.get(env_name, "").strip()
 
 
+def _render_display_name(template: str, file_path: Path) -> str:
+    """Render the task title the user wants shown in VTS.
+
+    The template may contain the placeholder ``{filename}`` (the recording's
+    name without extension). An empty template yields an empty string, which
+    the caller treats as "send no display_name" so VTS falls back to the
+    file:// source label. Unknown placeholders are left intact rather than
+    raising, so a typo never breaks an upload.
+    """
+    template = (template or "").strip()
+    if not template:
+        return ""
+    stem = file_path.stem
+    try:
+        return template.format(filename=stem).strip()
+    except (KeyError, IndexError, ValueError):
+        return template.strip()
+
+
 def _read_config(settings) -> dict[str, object]:
     """Merge OBS UI properties with env-var fallbacks.
 
@@ -89,6 +109,9 @@ def _read_config(settings) -> dict[str, object]:
     base = _pick_str(obs.obs_data_get_string(settings, _PROP_BASE_URL), "VTS_BASE_URL").rstrip("/")
     token = _pick_str(obs.obs_data_get_string(settings, _PROP_API_TOKEN), "VTS_API_TOKEN")
     language = _pick_str(obs.obs_data_get_string(settings, _PROP_LANGUAGE), "VTS_LANGUAGE")
+    display_name_template = _pick_str(
+        obs.obs_data_get_string(settings, _PROP_DISPLAY_NAME), "VTS_DISPLAY_NAME_TEMPLATE"
+    )
 
     def _bool(prop: str, env_name: str, default: bool) -> bool:
         if obs.obs_data_has_user_value(settings, prop):
@@ -103,6 +126,7 @@ def _read_config(settings) -> dict[str, object]:
         "language": language,
         "audio_only": _bool(_PROP_AUDIO_ONLY, "VTS_AUDIO_ONLY", False),
         "notify": _bool(_PROP_NOTIFY, "VTS_NOTIFY", True),
+        "display_name_template": display_name_template,
     }
 
 
@@ -239,6 +263,10 @@ def _upload_blocking(file_path: Path, cfg: dict[str, object]) -> None:
     if language:
         form["language"] = language
 
+    display_name = _render_display_name(str(cfg.get("display_name_template", "")), file_path)
+    if display_name:
+        form["display_name"] = display_name
+
     body, content_type = _build_multipart_body(file_path, form)
     req = urllib.request.Request(
         f"{base_url}/api/tasks/upload",
@@ -321,6 +349,7 @@ def script_defaults(settings):
     obs.obs_data_set_default_string(settings, _PROP_BASE_URL, "")
     obs.obs_data_set_default_string(settings, _PROP_API_TOKEN, "")
     obs.obs_data_set_default_string(settings, _PROP_LANGUAGE, "")
+    obs.obs_data_set_default_string(settings, _PROP_DISPLAY_NAME, "")
     obs.obs_data_set_default_bool(settings, _PROP_TRANSCRIPT, True)
     obs.obs_data_set_default_bool(settings, _PROP_SUMMARY, True)
     obs.obs_data_set_default_bool(settings, _PROP_AUDIO_ONLY, False)
@@ -347,6 +376,11 @@ def script_properties():
         'Language ("" = auto, or "ru" / "en" / "de" / …)',
         obs.OBS_TEXT_DEFAULT,
     )
+    obs.obs_properties_add_text(
+        props, _PROP_DISPLAY_NAME,
+        'Task name template ("" = filename; {filename} = recording name)',
+        obs.OBS_TEXT_DEFAULT,
+    )
     return props
 
 
@@ -362,7 +396,8 @@ def _log_loaded_summary() -> None:
         f"[obs_to_vts] config: target={_config['base_url']}, "
         f"transcript={_config['transcript']}, summary={_config['summary']}, "
         f"audio_only={_config['audio_only']}, "
-        f"language={_config['language'] or 'auto'}"
+        f"language={_config['language'] or 'auto'}, "
+        f"name_template={_config.get('display_name_template') or '(filename)'}"
     )
 
 
