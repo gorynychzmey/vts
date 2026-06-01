@@ -1291,6 +1291,11 @@ function renderTasks(tasks) {
       linkEl: root.querySelector(".task-link"),
       expiredEl: root.querySelector(".task-expired"),
       sourceEl: root.querySelector(".task-source"),
+      editNameBtn: root.querySelector(".task-edit-name-btn"),
+      nameEditWrap: root.querySelector(".task-name-edit"),
+      nameInput: root.querySelector(".task-name-input"),
+      nameOkBtn: root.querySelector(".task-name-ok-btn"),
+      nameCancelBtn: root.querySelector(".task-name-cancel-btn"),
       statusEl: root.querySelector(".task-status"),
       taskRuntimeEl: root.querySelector(".task-runtime"),
       pauseBtn,
@@ -1320,6 +1325,14 @@ function renderTasks(tasks) {
       messageEl: root.querySelector(".task-message")
     };
     root._runtime = createRuntime(task);
+    const _els = root._elements;
+    _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
+    _els.nameOkBtn.addEventListener("click", () => commitTitleEdit(root));
+    _els.nameCancelBtn.addEventListener("click", () => cancelTitleEdit(root));
+    _els.nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
+      else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
+    });
     renderTaskRuntime(root);
     taskList.appendChild(node);
   });
