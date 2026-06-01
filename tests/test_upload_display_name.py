@@ -28,3 +28,15 @@ def test_overlong_name_is_capped() -> None:
     result = normalize_display_name(raw)
     assert result is not None
     assert len(result) == _MAX_DISPLAY_NAME_CHARS
+
+
+def test_blank_display_name_clears_title() -> None:
+    # PATCH with a blank name must clear source_title (None), so the UI
+    # falls back to the source label rather than showing an empty title.
+    assert normalize_display_name("") is None
+    assert normalize_display_name("   ") is None
+
+
+def test_display_name_is_stored_trimmed() -> None:
+    # A renamed task stores the trimmed value, not the raw input.
+    assert normalize_display_name("  Standup  ") == "Standup"
