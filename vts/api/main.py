@@ -48,6 +48,7 @@ from vts.api.schemas import (
     TaskCreateRequest,
     TaskIdsRequest,
     TaskOut,
+    TaskUpdate,
 )
 from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
@@ -1249,6 +1250,26 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        asr_progress = await repo.get_asr_progress_for_tasks([task.id])
+        summary_progress = {task.id: summary_progress_for_task(task)}
+        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+
+    @app.patch("/api/tasks/{task_id}", response_model=TaskOut)
+    async def update_task(
+        task_id: uuid.UUID,
+        payload: TaskUpdate,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> TaskOut:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task.source_title = normalize_display_name(payload.display_name)
+        await session.commit()
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: summary_progress_for_task(task)}

@@ -21,6 +21,10 @@ class TaskCreateRequest(BaseModel):
         return self
 
 
+class TaskUpdate(BaseModel):
+    display_name: str | None = None
+
+
 class StepOut(BaseModel):
     name: str
     status: str
