@@ -681,7 +681,9 @@ function parseTaskStats(task) {
     processingSeconds: parseNonNegativeInt(stats && stats.processing_seconds),
     transcriptChars: parseNonNegativeInt(stats && stats.transcript_chars),
     summaryChars: parseNonNegativeInt(stats && stats.summary_chars),
-    redactedChars: parseNonNegativeInt(stats && stats.redacted_chars)
+    redactedChars: parseNonNegativeInt(stats && stats.redacted_chars),
+    mediaSeconds: parseNonNegativeInt(stats && stats.media_seconds),
+    mediaBytes: parseNonNegativeInt(stats && stats.media_bytes)
   };
 }
 
@@ -733,6 +735,38 @@ function formatMetricDuration(seconds) {
     return t("stats.unknown");
   }
   return formatDuration(seconds);
+}
+
+function formatMegabytes(bytes) {
+  // One decimal place, locale-aware. 1 MB = 1024*1024 bytes (binary MB,
+  // matching what file managers report). Any nonzero size floors to 0.1 so a
+  // tiny-but-present file never reads as "0.0 MB".
+  const mb = bytes / (1024 * 1024);
+  const rounded = mb > 0 ? Math.max(0.1, mb) : 0;
+  return new Intl.NumberFormat(state.locale || "en", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  }).format(rounded);
+}
+
+// Compact "duration · size MB" line under the task link, filled in as the
+// media file becomes available. Hidden until at least one metric is known.
+function renderTaskStats(taskEl) {
+  const runtime = taskEl._runtime;
+  const elements = taskEl._elements;
+  if (!runtime || !elements || !elements.statsEl) {
+    return;
+  }
+  const stats = runtime.stats || {};
+  const parts = [];
+  if (Number.isInteger(stats.mediaSeconds) && stats.mediaSeconds > 0) {
+    parts.push(t("stats.media_duration", { duration: formatDuration(stats.mediaSeconds) }));
+  }
+  if (Number.isInteger(stats.mediaBytes) && stats.mediaBytes > 0) {
+    parts.push(t("stats.media_size", { size: formatMegabytes(stats.mediaBytes) }));
+  }
+  elements.statsEl.textContent = parts.join(" · ");
+  elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }
 
 function resolveCompletedMessage(runtime) {
@@ -1098,6 +1132,7 @@ function renderTaskRuntime(taskEl) {
   const elements = taskEl._elements;
 
   renderTaskTitle(taskEl);
+  renderTaskStats(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
   const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
@@ -1351,6 +1386,7 @@ function renderTasks(tasks) {
       linkEl: root.querySelector(".task-link"),
       expiredEl: root.querySelector(".task-expired"),
       sourceEl: root.querySelector(".task-source"),
+      statsEl: root.querySelector(".task-stats"),
       editNameBtn: root.querySelector(".task-edit-name-btn"),
       nameEditWrap: root.querySelector(".task-name-edit"),
       nameInput: root.querySelector(".task-name-input"),

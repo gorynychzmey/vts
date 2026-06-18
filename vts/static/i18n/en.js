@@ -98,6 +98,8 @@ window.__VTS_I18N.en = {
 "success.completed_stats": "Done. Total time: {time}. Raw transcript: {transcript}. Processed transcript: {redacted}. Summary: {summary}.",
 "stats.chars": "{count} chars",
 "stats.unknown": "n/a",
+"stats.media_duration": "{duration}",
+"stats.media_size": "{size} MB",
 "confirm.delete": "Delete task? This action cannot be undone.",
 "confirm.archive": "Archive task artifacts? Transcript and summary will be kept, other files will be removed.",
 "confirm.restart_summary": "Reset summary stages and run summarization again?",

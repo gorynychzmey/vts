@@ -98,6 +98,8 @@ window.__VTS_I18N.ru = {
 "success.completed_stats": "Готово. Время: {time}. Сырой транскрипт: {transcript}. Обработанный: {redacted}. Саммари: {summary}.",
 "stats.chars": "{count} симв.",
 "stats.unknown": "н/д",
+"stats.media_duration": "{duration}",
+"stats.media_size": "{size} МБ",
 "confirm.delete": "Удалить задачу? Это действие необратимо.",
 "confirm.archive": "Архивировать артефакты задачи? Транскрипт и сводка сохранятся, остальные файлы будут удалены.",
 "confirm.restart_summary": "Сбросить этапы summary и запустить их заново?",

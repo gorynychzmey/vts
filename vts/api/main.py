@@ -56,6 +56,7 @@ from vts.core.logging import configure_logging
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
+from vts.services.media import probe_duration
 from vts.services.media_kind import media_content_type, media_kind
 from vts.services.push import (
     SubscriptionPayload,
@@ -288,11 +289,22 @@ def _text_length_from_path(path_value: str | Path | None, *, prefer_json_text_fi
 
 def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
     redacted_path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
+    media_file = _find_media_file(task.artifact_dir)
+    media_bytes: int | None = None
+    media_seconds: int | None = None
+    if media_file is not None:
+        try:
+            media_bytes = media_file.stat().st_size
+        except OSError:
+            media_bytes = None
+        media_seconds = _media_seconds_for_file(media_file)
     return {
         "processing_seconds": _processing_seconds_for_task(task),
         "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
         "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
         "redacted_chars": _text_length_from_path(redacted_path, prefer_json_text_field=False),
+        "media_seconds": media_seconds,
+        "media_bytes": media_bytes,
     }
 
 
@@ -511,10 +523,51 @@ def _find_media_file(artifact_dir: str | None) -> Path | None:
         return None
     media_dir = Path(artifact_dir) / "media"
     for pattern in ("video.mkv", "audio.original.*"):
-        matches = sorted(media_dir.glob(pattern)) if media_dir.exists() else []
+        matches = sorted(
+            p for p in (media_dir.glob(pattern) if media_dir.exists() else [])
+            # Skip our own probe sidecar (audio.original.*.probe.json), which
+            # the wildcard would otherwise pick up as the "media" file.
+            if not p.name.endswith(".probe.json")
+        )
         if matches:
             return matches[-1]
     return None
+
+
+def _media_seconds_for_file(media_file: Path) -> int | None:
+    """Media (audio/video) length in whole seconds, probed via ffprobe.
+
+    ffprobe spawns a subprocess, so the result is cached in a sidecar JSON
+    keyed on the media file's size+mtime. List serialization probes each
+    task at most once per file; later renders read the sidecar."""
+    try:
+        stat = media_file.stat()
+    except OSError:
+        return None
+    sidecar = media_file.with_suffix(media_file.suffix + ".probe.json")
+    cache_key = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    try:
+        cached = json.loads(sidecar.read_text(encoding="utf-8"))
+        if (
+            isinstance(cached, dict)
+            and cached.get("size") == cache_key["size"]
+            and cached.get("mtime_ns") == cache_key["mtime_ns"]
+            and isinstance(cached.get("seconds"), int)
+        ):
+            return cached["seconds"]
+    except (OSError, json.JSONDecodeError):
+        pass
+    try:
+        seconds = int(probe_duration(media_file))
+    except (RuntimeError, ValueError):
+        return None
+    if seconds < 0:
+        seconds = 0
+    try:
+        sidecar.write_text(json.dumps({**cache_key, "seconds": seconds}), encoding="utf-8")
+    except OSError:
+        pass  # best-effort cache; still return the freshly probed value
+    return seconds
 
 
 def serialize_task(

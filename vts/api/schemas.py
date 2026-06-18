@@ -49,6 +49,8 @@ class TaskStatsOut(BaseModel):
     transcript_chars: int | None = Field(default=None, ge=0)
     summary_chars: int | None = Field(default=None, ge=0)
     redacted_chars: int | None = Field(default=None, ge=0)
+    media_seconds: int | None = Field(default=None, ge=0)
+    media_bytes: int | None = Field(default=None, ge=0)
 
 
 class TaskOut(BaseModel):

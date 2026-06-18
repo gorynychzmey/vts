@@ -99,6 +99,8 @@ window.__VTS_I18N.de = {
 "success.completed_stats": "Fertig. Gesamtdauer: {time}. Rohtranskript: {transcript}. Verarbeitetes Transkript: {redacted}. Zusammenfassung: {summary}.",
 "stats.chars": "{count} Zeichen",
 "stats.unknown": "k.A.",
+"stats.media_duration": "{duration}",
+"stats.media_size": "{size} MB",
 "confirm.delete": "Aufgabe löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
 "confirm.archive": "Aufgabenartefakte archivieren? Transkript und Zusammenfassung bleiben erhalten, andere Dateien werden entfernt.",
 "confirm.restart_summary": "Summary-Stufen zurücksetzen und Zusammenfassung neu starten?",

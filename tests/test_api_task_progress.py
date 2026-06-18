@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -153,6 +154,31 @@ def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
     assert payload.stats.transcript_chars == len(transcript_text)
     assert payload.stats.summary_chars == len(summary_text)
     assert payload.stats.redacted_chars == len(redacted_text.strip())
+    # No media file on disk → media stats are absent rather than zero.
+    assert payload.stats.media_seconds is None
+    assert payload.stats.media_bytes is None
+
+
+def test_serialize_task_includes_media_size_and_cached_duration(tmp_path: Path) -> None:
+    media_dir = tmp_path / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    media_file = media_dir / "audio.original.m4a"
+    media_bytes = b"x" * 2048
+    media_file.write_bytes(media_bytes)
+    # Pre-seed the probe sidecar so duration is read from cache, keyed on the
+    # file's current size+mtime — avoids needing ffprobe in the test env.
+    stat = media_file.stat()
+    sidecar = media_file.with_suffix(media_file.suffix + ".probe.json")
+    sidecar.write_text(
+        json.dumps({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "seconds": 754}),
+        encoding="utf-8",
+    )
+
+    task = _task(tmp_path, steps=[])
+    payload = serialize_task(task)
+
+    assert payload.stats.media_bytes == len(media_bytes)
+    assert payload.stats.media_seconds == 754
 
 
 def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> None:

@@ -464,6 +464,14 @@ input[type="file"] {
   white-space: nowrap;
 }
 
+.task-stats {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .task-right {
   display: flex;
   flex-direction: column;
@@ -968,6 +976,11 @@ input[type="file"] {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  /* Occupy the same horizontal space the .task-link held in view mode
+     (which is flex:1 in .task-title-row), so the editor width matches the
+     title width instead of collapsing to the input's min-width. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .task-name-input {
@@ -975,8 +988,10 @@ input[type="file"] {
   padding: 2px 6px;
   border: 1px solid var(--line, #888);
   border-radius: 4px;
-  min-width: 12rem;
-  max-width: 100%;
+  /* Fill the editor span (which now grows to title width). Drop the old
+     12rem min so it can shrink with a narrow card rather than overflow. */
+  flex: 1 1 auto;
+  min-width: 0;
   background: var(--bg-card, #fff);
   color: inherit;
 }
