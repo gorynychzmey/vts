@@ -178,10 +178,10 @@
               <input id="transcript" name="transcript" type="checkbox" checked />
               <span data-i18n="new_task.transcript">Transcript</span>
             </label>
-            <label class="option-pill">
-              <input id="summary" name="summary" type="checkbox" checked />
-              <span data-i18n="new_task.summary">Summary</span>
-            </label>
+            <div class="prompt-select-field">
+              <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
+              <div class="prompt-select" id="prompt-select"></div>
+            </div>
             <label class="language-control">
               <span data-i18n="new_task.language">Language</span>
               <select id="language" name="language">

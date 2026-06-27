@@ -12,6 +12,7 @@ const adminApplyBtn = document.getElementById("admin-apply-btn");
 const adminResetBtn = document.getElementById("admin-reset-btn");
 const appVersionLabel = document.getElementById("app-version");
 const refreshBtn = document.getElementById("refresh-btn");
+const promptSelect = document.getElementById("prompt-select");
 const BUILD_VERSION = String(window.__VTS_BUILD_VERSION__ || "0.0.0");
 const VERSION_CHECK_INTERVAL_MS = 300000;
 const QUEUE_POLL_INTERVAL_MS = 5000;
@@ -1507,6 +1508,77 @@ function uploadFileWithProgress(fd) {
   });
 }
 
+let promptsCache = [];
+
+function promptDisplayName(prompt) {
+  if (prompt.source === "system") {
+    const translated = t(prompt.name);
+    return translated === prompt.name ? prompt.name : translated;
+  }
+  return prompt.name;
+}
+
+function renderPromptSelect(prompts) {
+  if (!promptSelect) {
+    return;
+  }
+  promptsCache = Array.isArray(prompts) ? prompts : [];
+  promptSelect.innerHTML = "";
+  for (const prompt of promptsCache) {
+    const isDefault = prompt.source === "system" && prompt.id === "summary";
+    const label = document.createElement("label");
+    label.className = "option-pill prompt-pill";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = isDefault;
+    checkbox.dataset.source = prompt.source;
+    checkbox.dataset.id = prompt.id;
+
+    const name = document.createElement("span");
+    name.className = "prompt-name";
+    name.textContent = promptDisplayName(prompt);
+
+    const badge = document.createElement("span");
+    badge.className = `prompt-badge prompt-badge-${prompt.source}`;
+    badge.textContent = t(`prompt.badge.${prompt.source}`);
+
+    label.append(checkbox, name, badge);
+    promptSelect.appendChild(label);
+  }
+  syncSummaryToggle();
+}
+
+async function loadPrompts() {
+  if (!promptSelect) {
+    return;
+  }
+  try {
+    const prompts = await api("/api/prompts");
+    renderPromptSelect(prompts);
+  } catch (err) {
+    console.error("Failed to load prompts", err);
+  }
+}
+
+function resetPromptSelection() {
+  if (!promptSelect) {
+    return;
+  }
+  promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.checked = cb.dataset.source === "system" && cb.dataset.id === "summary";
+  });
+}
+
+function getSelectedPrompts() {
+  if (!promptSelect) {
+    return [];
+  }
+  return Array.from(
+    promptSelect.querySelectorAll('input[type="checkbox"]:checked')
+  ).map((cb) => ({ source: cb.dataset.source, id: cb.dataset.id }));
+}
+
 async function createTask(event) {
   event.preventDefault();
   const isFile = getSourceType() === "file";
@@ -1517,7 +1589,7 @@ async function createTask(event) {
     if (form.language.value) fd.append("language", form.language.value);
     fd.append("audio_only", form.audio_only.checked ? "true" : "false");
     fd.append("transcript", form.transcript.checked ? "true" : "false");
-    fd.append("summary", form.summary.checked ? "true" : "false");
+    fd.append("prompts", JSON.stringify(getSelectedPrompts()));
     await uploadFileWithProgress(fd);
   } else {
     const payload = {
@@ -1525,7 +1597,7 @@ async function createTask(event) {
       language: form.language.value || null,
       audio_only: form.audio_only.checked,
       transcript: form.transcript.checked,
-      summary: form.summary.checked
+      prompts: getSelectedPrompts()
     };
     await api("/api/tasks", {
       method: "POST",
@@ -1535,19 +1607,21 @@ async function createTask(event) {
   }
   form.reset();
   form.transcript.checked = true;
-  form.summary.checked = true;
+  resetPromptSelection();
   syncSummaryToggle();
   syncSourceType();
   await loadTasks();
 }
 
 function syncSummaryToggle() {
-  if (!form.transcript.checked) {
-    form.summary.checked = false;
-    form.summary.disabled = true;
+  if (!promptSelect) {
     return;
   }
-  form.summary.disabled = false;
+  const disabled = !form.transcript.checked;
+  promptSelect.classList.toggle("disabled", disabled);
+  promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.disabled = disabled;
+  });
 }
 
 function apiBatchPost(url, body, method = "POST") {
@@ -2394,6 +2468,7 @@ async function bootstrap() {
   applySharedUrlIfAny();
   await applyPendingSharedFileIfAny();
   await refreshAll();
+  await loadPrompts();
   await loadPushConfig();
 }
 
