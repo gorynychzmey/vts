@@ -38,6 +38,9 @@ from vts.api.schemas import (
     ApiTokenOut,
     BatchResultOut,
     MeOut,
+    PromptCreateRequest,
+    PromptOut,
+    PromptUpdateRequest,
     TaskCompactOut,
     TextSliceOut,
     PushConfigOut,
@@ -1075,6 +1078,63 @@ def create_app() -> FastAPI:
         ok = await repo.revoke_api_token(uuid.UUID(user.id), token_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Token not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/prompts", response_model=list[PromptOut])
+    async def list_prompts_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[PromptOut]:
+        from vts.services.prompt_registry import list_system_prompts
+        out: list[PromptOut] = [
+            PromptOut(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+            for p in list_system_prompts()
+        ]
+        repo = Repo(session)
+        for row in await repo.list_prompts(uuid.UUID(user.id)):
+            out.append(PromptOut(source="user", id=str(row.id), name=row.name, editable=True))
+        return out
+
+    @app.post("/api/prompts", response_model=PromptOut)
+    async def create_prompt_endpoint(
+        payload: PromptCreateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptOut:
+        repo = Repo(session)
+        row = await repo.create_prompt(uuid.UUID(user.id), payload.name.strip(), payload.system_prompt)
+        await session.commit()
+        return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+
+    @app.patch("/api/prompts/{prompt_id}", response_model=PromptOut)
+    async def update_prompt_endpoint(
+        prompt_id: uuid.UUID,
+        payload: PromptUpdateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptOut:
+        repo = Repo(session)
+        row = await repo.update_prompt(
+            uuid.UUID(user.id), prompt_id,
+            name=payload.name.strip() if payload.name is not None else None,
+            system_prompt=payload.system_prompt,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        await session.commit()
+        return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+
+    @app.delete("/api/prompts/{prompt_id}", status_code=204)
+    async def delete_prompt_endpoint(
+        prompt_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        ok = await repo.delete_prompt(uuid.UUID(user.id), prompt_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Prompt not found")
         await session.commit()
         return Response(status_code=204)
 
