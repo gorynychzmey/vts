@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Final
 
+from vts.services.prompt_registry import ref_key
+from vts.services.task_progress import selected_prompt_refs
 
-DAG_STEPS: Final[list[str]] = [
+DAG_HEAD: Final[list[str]] = [
     "download",
     "extract_audio",
     "trim_initial_silence",
@@ -15,5 +17,19 @@ DAG_STEPS: Final[list[str]] = [
     "prepare_summary_chunks",
     "summarize_windows",
     "pack_window_notes",
-    "summarize_final",
 ]
+
+# Back-compat: the full static list (summary-only pipeline). Kept for any
+# consumer that imported DAG_STEPS expecting the legacy shape.
+DAG_STEPS: Final[list[str]] = DAG_HEAD + ["summarize_final"]
+
+
+def finalize_step_name(source: str, id: str) -> str:
+    if source == "system" and id == "summary":
+        return "summarize_final"
+    return f"finalize:{ref_key(source, id)}"
+
+
+def build_dag_steps(options: dict) -> list[str]:
+    tail = [finalize_step_name(r["source"], r["id"]) for r in selected_prompt_refs(options)]
+    return DAG_HEAD + tail

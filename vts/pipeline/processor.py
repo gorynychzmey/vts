@@ -20,7 +20,7 @@ from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
-from vts.pipeline.types import DAG_STEPS
+from vts.pipeline.types import build_dag_steps
 from vts.services.downloader import download_video_and_audio
 from vts.services.heavy_slot import HeavySlot
 from vts.services.media import (
@@ -240,7 +240,7 @@ class TaskProcessor:
             _task_wall_t0 = time.monotonic()
 
             try:
-                for step_name in DAG_STEPS:
+                for step_name in build_dag_steps(task_options):
                     await self._check_paused(task.id)
                     await session.refresh(task)
                     if task.status == TaskStatus.canceled:
