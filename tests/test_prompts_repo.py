@@ -101,6 +101,7 @@ async def test_prompt_isolation_between_users(session):
     uid_b = await _make_user(session)
     p = await repo.create_prompt(uid_a, "A", "a")
     assert await repo.get_prompt(uid_b, p.id) is None
+    assert await repo.update_prompt(uid_b, p.id, name="X", system_prompt=None) is None
     assert await repo.delete_prompt(uid_b, p.id) is False
 
 
