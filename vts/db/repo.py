@@ -7,7 +7,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vts.db.models import ApiToken, AsrSegment, Step, StepStatus, Task, TaskStatus, User
+from vts.db.models import ApiToken, AsrSegment, Prompt, Step, StepStatus, Task, TaskStatus, User
 
 
 def utcnow() -> datetime:
@@ -413,4 +413,60 @@ class Repo:
                 raw_json=seg.raw_json,
             )
             self.session.add(new_seg)
+        await self.session.flush()
+
+    # ------------------------------------------------------------------
+    # Prompt CRUD
+    # ------------------------------------------------------------------
+
+    async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> Prompt:
+        prompt = Prompt(user_id=user_id, name=name, system_prompt=system_prompt)
+        self.session.add(prompt)
+        await self.session.flush()
+        return prompt
+
+    async def list_prompts(self, user_id: uuid.UUID) -> list[Prompt]:
+        stmt = (
+            select(Prompt)
+            .where(Prompt.user_id == user_id)
+            .order_by(Prompt.created_at.desc())
+        )
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> Prompt | None:
+        stmt = select(Prompt).where(Prompt.id == prompt_id, Prompt.user_id == user_id)
+        return await self.session.scalar(stmt)
+
+    async def update_prompt(
+        self,
+        user_id: uuid.UUID,
+        prompt_id: uuid.UUID,
+        *,
+        name: str | None,
+        system_prompt: str | None,
+    ) -> Prompt | None:
+        prompt = await self.get_prompt(user_id, prompt_id)
+        if prompt is None:
+            return None
+        if name is not None:
+            prompt.name = name
+        if system_prompt is not None:
+            prompt.system_prompt = system_prompt
+        await self.session.flush()
+        return prompt
+
+    async def delete_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> bool:
+        prompt = await self.get_prompt(user_id, prompt_id)
+        if prompt is None:
+            return False
+        await self.session.delete(prompt)
+        await self.session.flush()
+        return True
+
+    async def set_task_prompt_results(self, task: Task, prompt_results: list[dict]) -> None:
+        new_options = dict(task.options or {})
+        new_options["prompt_results"] = prompt_results
+        task.options = new_options  # reassign so SQLAlchemy flushes the JSON column
+        task.updated_at = utcnow()
         await self.session.flush()
