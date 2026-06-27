@@ -984,8 +984,11 @@ function createRuntime(task) {
     enabledSteps,
     stepStatusByName,
     transcriptReady: Boolean(task.transcript_path),
-    summaryExpected: enabledSteps.includes("summarize_final"),
-    summaryReady: Boolean(task.summary_path),
+    summaryExpected: enabledSteps.some((s) => s === "summarize_final" || s.startsWith("finalize:")),
+    summaryReady:
+      Boolean(task.summary_path) ||
+      (Array.isArray(task.options && task.options.prompt_results) &&
+        task.options.prompt_results.some((r) => r && r.status === "completed")),
     promptResults: Array.isArray(task.options && task.options.prompt_results)
       ? task.options.prompt_results
       : [],
@@ -1977,9 +1980,12 @@ function patchTaskStep(taskId, name, status) {
         runtime.promptResults = Array.isArray(task.options.prompt_results)
           ? task.options.prompt_results
           : runtime.promptResults;
-        if (getActiveTabName(taskEl) === "summary") {
-          renderResultPromptSelect(taskEl);
+        // A completed result means the Results tab can open even for a
+        // custom-prompt-only task (no summary_path).
+        if (runtime.promptResults.some((r) => r && r.status === "completed")) {
+          runtime.summaryReady = true;
         }
+        renderTaskRuntime(taskEl);
       }
     }).catch(() => {});
   }
