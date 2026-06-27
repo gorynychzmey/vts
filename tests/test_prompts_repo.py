@@ -4,11 +4,13 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.db.base import Base
 from vts.db.models import Prompt, Task, TaskStatus, User
 from vts.db.repo import Repo
+
+from _db import make_test_engine
 
 
 # ---------------------------------------------------------------------------
@@ -18,16 +20,24 @@ from vts.db.repo import Repo
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory SQLite async session for repo integration tests."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    """Postgres-backed async session for repo integration tests.
+
+    Drops+recreates the schema around each test so tests don't bleed state
+    (Postgres has no per-connection in-memory database like SQLite :memory:).
+    """
+    engine = make_test_engine()
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        yield sess
-
-    await engine.dispose()
+    try:
+        async with factory() as sess:
+            yield sess
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
