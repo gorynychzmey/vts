@@ -1235,6 +1235,24 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
+    @app.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
+    async def get_prompt_result(
+        task_id: uuid.UUID,
+        source: str,
+        ref: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PlainTextResponse:
+        repo = Repo(session)
+        task = await repo.get_task_by_id(task_id)
+        if task is None or str(task.user_id) != user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        from vts.services.prompt_results import resolve_result_path
+        path = resolve_result_path(task, source, ref)
+        if path is None or not Path(path).exists():
+            raise HTTPException(status_code=404, detail="Result not found")
+        return PlainTextResponse(Path(path).read_text(encoding="utf-8"))
+
     _ALLOWED_UPLOAD_SUFFIXES = frozenset(
         {
             ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v",
