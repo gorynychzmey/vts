@@ -1154,7 +1154,7 @@ def create_app() -> FastAPI:
         repo = Repo(session)
         row = await repo.update_prompt(
             uuid.UUID(user.id), prompt_id,
-            name=payload.name.strip() if payload.name is not None else None,
+            name=payload.name,  # validated + stripped by PromptUpdateRequest; None = unchanged
             system_prompt=payload.system_prompt,
         )
         if row is None:

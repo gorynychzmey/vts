@@ -62,6 +62,32 @@ async def test_prompt_create_list_update_delete(client):
     assert (await client.delete(f"/api/prompts/{pid}")).status_code == 204
 
 
+@pytest.mark.asyncio
+async def test_prompt_update_rejects_blank_name(client):
+    created = (await client.post("/api/prompts",
+               json={"name": "Mine", "system_prompt": "Do X"})).json()
+    pid = created["id"]
+
+    # whitespace-only name → 422
+    assert (await client.patch(f"/api/prompts/{pid}",
+            json={"name": "   "})).status_code == 422
+    # empty name → 422
+    assert (await client.patch(f"/api/prompts/{pid}",
+            json={"name": ""})).status_code == 422
+
+    # body-only update (no name) → 200, name unchanged
+    patched = await client.patch(f"/api/prompts/{pid}",
+                                 json={"system_prompt": "new body"})
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Mine"
+
+    # valid name with surrounding whitespace → 200 and trimmed
+    patched = await client.patch(f"/api/prompts/{pid}",
+                                 json={"name": "  Renamed  "})
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Renamed"
+
+
 # ---------------------------------------------------------------------------
 # Detail / system-text endpoints (Task 12 — used by the duplicate feature).
 # ---------------------------------------------------------------------------

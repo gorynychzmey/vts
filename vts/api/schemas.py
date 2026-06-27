@@ -40,6 +40,17 @@ class PromptUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     system_prompt: str | None = None
 
+    @model_validator(mode="after")
+    def validate_name(self) -> "PromptUpdateRequest":
+        # name is optional (None = leave unchanged), but when provided it must
+        # be non-empty after trimming — consistent with create's min_length=1.
+        if self.name is not None:
+            stripped = self.name.strip()
+            if not stripped:
+                raise ValueError("name must not be blank")
+            self.name = stripped
+        return self
+
 
 def _default_prompts() -> list["PromptRef"]:
     return [PromptRef(source="system", id="summary")]

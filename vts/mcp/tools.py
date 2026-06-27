@@ -304,10 +304,16 @@ async def update_prompt(
     system_prompt: str | None = None,
 ) -> PromptInfo:
     """Update a user-defined prompt's name and/or body. 404 if not found."""
+    # name is optional (None = leave unchanged), but a provided name must be
+    # non-empty after trimming — consistent with create and the HTTP endpoint.
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name must not be blank")
     row = await repo.update_prompt(
         uuid.UUID(user.id),
         prompt_id,
-        name=name.strip() if name is not None else None,
+        name=name,
         system_prompt=system_prompt,
     )
     if row is None:

@@ -154,6 +154,17 @@ async def test_update_prompt() -> None:
     assert repo.prompts[row.id].system_prompt == "newbody"
 
 
+async def test_update_prompt_rejects_blank_name() -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    row = await repo.create_prompt(uuid.UUID(user.id), "old", "body")
+    with pytest.raises(HTTPException) as exc:
+        await tools.update_prompt(prompt_id=row.id, name="   ", user=user, repo=repo)
+    assert exc.value.status_code == 422
+    # name unchanged after the rejected update
+    assert repo.prompts[row.id].name == "old"
+
+
 async def test_update_prompt_not_found() -> None:
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
