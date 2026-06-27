@@ -70,7 +70,7 @@ from vts.services.push import (
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
-from vts.services.task_progress import summary_progress_for_task
+from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -92,8 +92,9 @@ SUMMARY_STEP_NAMES = frozenset(
 
 
 def can_restart_summary_task(task: Task) -> bool:
-    options = task.options if isinstance(task.options, dict) else {}
-    if options.get("summary") is False:
+    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
+    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
+    if not summary_selected:
         return False
     if task.status == TaskStatus.completed:
         return True
@@ -103,8 +104,9 @@ def can_restart_summary_task(task: Task) -> bool:
 
 
 def can_restart_final_summary_task(task: Task) -> bool:
-    options = task.options if isinstance(task.options, dict) else {}
-    if options.get("summary") is False:
+    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
+    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
+    if not summary_selected:
         return False
     summarize_windows_status = _find_step_status(task, "summarize_windows")
     if summarize_windows_status != StepStatus.completed:
@@ -1267,14 +1269,31 @@ def create_app() -> FastAPI:
         display_name: str | None = Form(default=None),
         audio_only: bool = Form(default=False),
         transcript: bool = Form(default=True),
-        summary: bool = Form(default=True),
+        prompts: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
-        if summary and not transcript:
-            raise HTTPException(status_code=422, detail="summary requires transcript")
+        from vts.services.prompt_registry import parse_ref, ref_to_dict
+        if prompts is None:
+            normalized_prompts = [{"source": "system", "id": "summary"}]
+        else:
+            try:
+                raw_refs = json.loads(prompts)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail="prompts must be valid JSON") from exc
+            if not isinstance(raw_refs, list):
+                raise HTTPException(status_code=422, detail="prompts must be a JSON list")
+            normalized_prompts = []
+            for entry in raw_refs:
+                try:
+                    source, ref_id = parse_ref(entry)
+                except (ValueError, TypeError) as exc:
+                    raise HTTPException(status_code=422, detail=f"invalid prompt ref: {entry!r}") from exc
+                normalized_prompts.append(ref_to_dict(source, ref_id))
+        if normalized_prompts and not transcript:
+            raise HTTPException(status_code=422, detail="prompts require transcript")
         original_filename = file.filename or "upload"
         suffix = Path(original_filename).suffix.lower()
         if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
@@ -1298,7 +1317,7 @@ def create_app() -> FastAPI:
             "language": language or None,
             "audio_only": audio_only,
             "transcript": transcript,
-            "summary": summary,
+            "prompts": normalized_prompts,
         }
         task = await repo.create_task(
             user_id=effective_user_id,

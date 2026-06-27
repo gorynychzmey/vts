@@ -99,6 +99,24 @@ async def test_create_task_stores_prompts_in_options(authed_app, client, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_upload_task_stores_prompts_in_options(authed_app, client, tmp_path, monkeypatch):
+    monkeypatch.setenv("VTS_ARTIFACTS_ROOT", str(tmp_path))
+    from vts.core.config import get_settings
+    get_settings.cache_clear()
+    app, _factory = authed_app
+    app.state.redis = _FakeRedis()
+    resp = await client.post(
+        "/api/tasks/upload",
+        files={"file": ("clip.mp3", b"fake-audio-bytes", "audio/mpeg")},
+        data={"prompts": '[{"source": "system", "id": "summary"}]'},
+    )
+    assert resp.status_code == 200, resp.text
+    options = resp.json()["options"]
+    assert options["prompts"] == [{"source": "system", "id": "summary"}]
+    assert "summary" not in options
+
+
+@pytest.mark.asyncio
 async def test_get_prompt_result_from_index(authed_app, client, tmp_path):
     """A result registered in options['prompt_results'] is read back as text."""
     _app, factory = authed_app
