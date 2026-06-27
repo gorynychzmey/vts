@@ -19,7 +19,10 @@ const QUEUE_POLL_INTERVAL_MS = 5000;
 const LOG_POLL_INTERVAL_MS = 2000;
 const ARCHIVED_LOG_MARKER = "__VTS_LOG_ARCHIVED__";
 
-const DAG_STEPS = [
+// Mirrors server-side vts/pipeline/types.py DAG_HEAD (the static, non-finalize
+// part of the pipeline). The finalize tail is built dynamically per selected
+// prompt in getEnabledSteps (one finalize step per options.prompts entry).
+const DAG_HEAD = [
   "download",
   "extract_audio",
   "trim_initial_silence",
@@ -30,15 +33,34 @@ const DAG_STEPS = [
   "prepare_llama_model",
   "prepare_summary_chunks",
   "summarize_windows",
-  "summarize_final"
+  "pack_window_notes"
 ];
+// Transcript-only head: the steps that run regardless of whether any prompt is
+// selected. The summary-head steps below only run when >=1 prompt is selected.
+const TRANSCRIPT_HEAD = [
+  "download",
+  "extract_audio",
+  "trim_initial_silence",
+  "segment_audio",
+  "detect_language",
+  "transcribe_segments",
+  "merge_transcript"
+];
+// Back-compat alias kept for any legacy references (full static summary path).
+const DAG_STEPS = [...DAG_HEAD, "summarize_final"];
 const SUMMARY_STEPS = new Set([
   "prepare_llama_model",
   "prepare_summary_chunks",
   "summarize_windows",
+  "pack_window_notes",
   "summarize_final"
 ]);
-// Relative per-step weights (in seconds) averaged over the last 4 completed pipeline runs.
+// Relative per-step weights (in seconds) averaged over the last 4 completed
+// pipeline runs.
+// TODO(vts-b6t): recalibrate these constants (and FINAL_SUMMARY_WEIGHT_FALLBACK
+// _SECONDS below) against accumulated run metrics once fresh per-step durations
+// are available; current values are a stale 4-run average, not yet re-measured
+// for the per-prompt finalize fan-out.
 const STEP_WEIGHT_SECONDS = {
   download: 14.5,
   extract_audio: 6.8,
@@ -452,7 +474,12 @@ async function loadTabContent(taskEl, taskId, tabName) {
     taskEl._lastLogText = value;
     return value;
   }
-  const endpoint = tabName === "transcript" ? "transcript" : tabName === "summary" ? "summary" : tabName === "redacted" ? "redacted" : "";
+  if (tabName === "summary") {
+    // The summary tab is the "results" view: route through the selected prompt
+    // result rather than the fixed /summary endpoint.
+    return loadSelectedResult(taskEl, taskId);
+  }
+  const endpoint = tabName === "transcript" ? "transcript" : tabName === "redacted" ? "redacted" : "";
   if (!endpoint) {
     return "";
   }
@@ -463,6 +490,90 @@ async function loadTabContent(taskEl, taskId, tabName) {
     panel.textContent = value;
   }
   return value;
+}
+
+function resultEntryLabel(entry) {
+  const source = String(entry && entry.source ? entry.source : "");
+  const name = String(entry && entry.name ? entry.name : "");
+  if (source === "system" && name) {
+    const translated = t(name);
+    return translated === name ? name : translated;
+  }
+  return name || `${source}:${entry && entry.id ? entry.id : ""}`;
+}
+
+function resultEntryValue(entry) {
+  return `${entry && entry.source ? entry.source : ""}:${entry && entry.id ? entry.id : ""}`;
+}
+
+// Populate the per-task result dropdown from runtime.promptResults. Preserves
+// the current selection if it is still present, otherwise defaults to
+// system:summary if available, else the first completed entry.
+function renderResultPromptSelect(taskEl) {
+  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+    return;
+  }
+  const select = taskEl._elements.resultPromptSelect;
+  if (!select) {
+    return;
+  }
+  const entries = Array.isArray(taskEl._runtime.promptResults) ? taskEl._runtime.promptResults : [];
+  const previous = select.value;
+  select.innerHTML = "";
+  for (const entry of entries) {
+    const value = resultEntryValue(entry);
+    const completed = String(entry && entry.status ? entry.status : "") === "completed";
+    const option = document.createElement("option");
+    option.value = value;
+    option.disabled = !completed;
+    option.textContent = completed ? resultEntryLabel(entry) : `${resultEntryLabel(entry)}${t("results.pending")}`;
+    select.appendChild(option);
+  }
+  const hasValue = (val) =>
+    val && entries.some((e) => resultEntryValue(e) === val && String(e.status || "") === "completed");
+  let target = "";
+  if (hasValue(previous)) {
+    target = previous;
+  } else if (hasValue("system:summary")) {
+    target = "system:summary";
+  } else {
+    const firstCompleted = entries.find((e) => String(e.status || "") === "completed");
+    target = firstCompleted ? resultEntryValue(firstCompleted) : "";
+  }
+  if (target) {
+    select.value = target;
+  }
+  // Show the dropdown only when there is more than one result to choose from;
+  // a single (summary-only) result needs no picker.
+  const completedCount = entries.filter((e) => String(e.status || "") === "completed").length;
+  if (taskEl._elements.resultPromptBar) {
+    taskEl._elements.resultPromptBar.classList.toggle("hidden", entries.length <= 1 && completedCount <= 1);
+  }
+}
+
+// Load the text for the currently selected result into the summary/results
+// panel. Falls back to the legacy /summary endpoint when no result is selected
+// (e.g. summary-only task before prompt_results is populated).
+async function loadSelectedResult(taskEl, taskId) {
+  const select = taskEl && taskEl._elements ? taskEl._elements.resultPromptSelect : null;
+  const panel = getTabPanel(taskEl, "summary");
+  const value = select ? String(select.value || "") : "";
+  let text;
+  if (value) {
+    const idx = value.indexOf(":");
+    const source = idx >= 0 ? value.slice(0, idx) : value;
+    const ref = idx >= 0 ? value.slice(idx + 1) : "";
+    text = await api(
+      `/api/tasks/${taskId}/results/${encodeURIComponent(source)}/${encodeURIComponent(ref)}`
+    ).catch((err) => err.message);
+  } else {
+    text = await api(`/api/tasks/${taskId}/summary`).catch((err) => err.message);
+  }
+  const out = String(text || "");
+  if (panel) {
+    panel.textContent = out;
+  }
+  return out;
 }
 
 async function getActiveTabPayload(taskEl, taskId) {
@@ -526,6 +637,14 @@ async function activateTaskTab(taskEl, taskId, tabName) {
     return;
   }
   stopLogPolling(taskEl);
+  // The result-prompt picker belongs to the summary/results tab only.
+  if (taskEl._elements && taskEl._elements.resultPromptBar) {
+    if (tab === "summary") {
+      renderResultPromptSelect(taskEl);
+    } else {
+      taskEl._elements.resultPromptBar.classList.add("hidden");
+    }
+  }
   if (tab === "transcript" || tab === "summary" || tab === "redacted") {
     await loadTabContent(taskEl, taskId, tab);
   }
@@ -579,17 +698,61 @@ function isLocalDevHost() {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+// Mirrors vts/pipeline/types.py finalize_step_name.
+function finalizeStepName(source, id) {
+  if (source === "system" && id === "summary") {
+    return "summarize_final";
+  }
+  return `finalize:${source}:${id}`;
+}
+
+// Mirrors vts/services/task_progress.py selected_prompt_refs: returns the list
+// of {source, id} the pipeline will finalize. Prefers the explicit
+// options.prompts list; falls back to legacy options.summary semantics.
+function selectedPromptRefs(options) {
+  if (Array.isArray(options.prompts)) {
+    const refs = [];
+    for (const entry of options.prompts) {
+      let source = "";
+      let id = "";
+      if (typeof entry === "string") {
+        const idx = entry.indexOf(":");
+        source = idx >= 0 ? entry.slice(0, idx) : entry;
+        id = idx >= 0 ? entry.slice(idx + 1) : "";
+      } else if (entry && typeof entry === "object") {
+        source = String(entry.source || "");
+        id = String(entry.id || "");
+      }
+      if ((source === "system" || source === "user") && id) {
+        refs.push({ source, id });
+      }
+    }
+    return refs;
+  }
+  // Legacy fallback: no prompts list -> one summary unless summary disabled.
+  if (options.summary === false) {
+    return [];
+  }
+  return [{ source: "system", id: "summary" }];
+}
+
+// Mirrors server build_dag_steps: head + one finalize step per selected prompt.
+// The summary-head steps (prepare_llama_model..pack_window_notes) only run when
+// at least one prompt is selected (server gates them on selected_prompt_refs).
 function getEnabledSteps(task) {
   const options = task.options || {};
   const transcriptEnabled = options.transcript !== false;
-  const summaryEnabled = options.summary !== false;
   if (!transcriptEnabled) {
     return ["download"];
   }
-  if (!summaryEnabled) {
-    return DAG_STEPS.filter((step) => !SUMMARY_STEPS.has(step));
+  const refs = selectedPromptRefs(options);
+  if (refs.length === 0) {
+    // No prompts selected: no summarization work, so omit the summary-head and
+    // any finalize steps.
+    return [...TRANSCRIPT_HEAD];
   }
-  return [...DAG_STEPS];
+  const tail = refs.map((ref) => finalizeStepName(ref.source, ref.id));
+  return [...DAG_HEAD, ...tail];
 }
 
 function buildStepStatusMap(task) {
@@ -619,7 +782,9 @@ function estimateFinalSummaryWeight(runtime) {
 }
 
 function getStepWeight(runtime, stepName) {
-  if (stepName === "summarize_final") {
+  // Every finalize step (the summary's "summarize_final" plus each custom
+  // prompt's "finalize:source:id") is roughly one final-summary call.
+  if (stepName === "summarize_final" || stepName.startsWith("finalize:")) {
     return estimateFinalSummaryWeight(runtime);
   }
   const value = STEP_WEIGHT_SECONDS[stepName];
@@ -821,6 +986,9 @@ function createRuntime(task) {
     transcriptReady: Boolean(task.transcript_path),
     summaryExpected: enabledSteps.includes("summarize_final"),
     summaryReady: Boolean(task.summary_path),
+    promptResults: Array.isArray(task.options && task.options.prompt_results)
+      ? task.options.prompt_results
+      : [],
     redactedReady: Boolean(task.redacted_path),
     mediaReady: Boolean(task.media_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
@@ -932,8 +1100,8 @@ function computeActiveStepLocalProgress(runtime, active) {
       textOverride = `${currentWindows}/${totalWindows}`;
     }
     // else: value = 0, indeterminate = false → показываем 0% пока не получен total
-  } else if (active === "summarize_final") {
-    const finalStatus = runtime.stepStatusByName.summarize_final || "";
+  } else if (active === "summarize_final" || active.startsWith("finalize:")) {
+    const finalStatus = runtime.stepStatusByName[active] || "";
     if (finalStatus === "completed") {
       value = 1;
     } else {
@@ -1180,6 +1348,12 @@ function renderTaskRuntime(taskEl) {
   }
   ensureActiveTabSelection(taskEl);
 
+  // Keep the results dropdown in sync as prompt_results grows on each poll,
+  // but only when the results (summary) tab is the active one.
+  if (getActiveTabName(taskEl) === "summary") {
+    renderResultPromptSelect(taskEl);
+  }
+
   if (runtime.baseStatus === "running") {
     if (!runtime.taskStartedAt) {
       runtime.taskStartedAt = Date.now();
@@ -1249,6 +1423,8 @@ function renderTasks(tasks) {
     const downloadMediaBtn = root.querySelector(".download-media-btn");
     const archiveBtn = root.querySelector(".archive-btn");
     const deleteBtn = root.querySelector(".delete-btn");
+    const resultPromptBar = root.querySelector(".result-prompt-bar");
+    const resultPromptSelect = root.querySelector(".result-prompt-select");
     const transcriptPre = root.querySelector(".tab-content.transcript");
     const summaryPre = root.querySelector(".tab-content.summary");
     const redactedPre = root.querySelector(".tab-content.redacted");
@@ -1383,6 +1559,12 @@ function renderTasks(tasks) {
       });
     });
 
+    if (resultPromptSelect) {
+      resultPromptSelect.addEventListener("change", () => {
+        void loadSelectedResult(root, task.id);
+      });
+    }
+
     root._elements = {
       linkEl: root.querySelector(".task-link"),
       expiredEl: root.querySelector(".task-expired"),
@@ -1407,6 +1589,8 @@ function renderTasks(tasks) {
       redactedTabBtn,
       copyTabBtn,
       saveTabBtn,
+      resultPromptBar,
+      resultPromptSelect,
       transcriptPanel: transcriptPre,
       summaryPanel: summaryPre,
       redactedPanel: redactedPre,
@@ -1737,6 +1921,9 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
       if (taskEl._runtime === runtime && task) {
         if (task.stats) runtime.stats = parseTaskStats(task);
         runtime.mediaReady = Boolean(task.media_path);
+        if (task.options && Array.isArray(task.options.prompt_results)) {
+          runtime.promptResults = task.options.prompt_results;
+        }
         renderTaskRuntime(taskEl);
       }
     }).catch(() => {});
@@ -1777,6 +1964,24 @@ function patchTaskStep(taskId, name, status) {
   }
   if (stepStatus === "completed" && stepName === "merge_transcript") {
     runtime.transcriptReady = true;
+  }
+  // When a finalize step completes a new prompt_results entry has been written
+  // server-side. Re-fetch the task so the results dropdown picks it up without
+  // waiting for the next full poll.
+  if (
+    stepStatus === "completed" &&
+    (stepName === "summarize_final" || stepName.startsWith("finalize:"))
+  ) {
+    void api(`/api/tasks/${taskId}`).then((task) => {
+      if (taskEl._runtime === runtime && task && task.options) {
+        runtime.promptResults = Array.isArray(task.options.prompt_results)
+          ? task.options.prompt_results
+          : runtime.promptResults;
+        if (getActiveTabName(taskEl) === "summary") {
+          renderResultPromptSelect(taskEl);
+        }
+      }
+    }).catch(() => {});
   }
   renderTaskRuntime(taskEl);
 }

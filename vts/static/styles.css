@@ -753,6 +753,32 @@ input[type="file"] {
   color: #fff;
 }
 
+.result-prompt-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.8rem 0 0;
+}
+
+.result-prompt-bar.hidden {
+  display: none;
+}
+
+.result-prompt-label {
+  font-size: 0.85rem;
+  color: var(--muted, #555);
+}
+
+.result-prompt-select {
+  flex: 1 1 auto;
+  max-width: 320px;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fffcf2;
+  font-family: inherit;
+}
+
 .tab-content {
   display: none;
   margin: 0.8rem 0 0;
