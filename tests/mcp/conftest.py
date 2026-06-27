@@ -28,12 +28,23 @@ class FakeTask:
     updated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
+@dataclass
+class FakePrompt:
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    system_prompt: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
 class FakeRepo:
     """Mirrors the subset of vts.db.repo.Repo that the MCP tools call."""
 
     def __init__(self) -> None:
         self.tasks: dict[uuid.UUID, FakeTask] = {}
         self._asr_progress: dict[uuid.UUID, tuple[int, int]] = {}
+        self.prompts: dict[uuid.UUID, FakePrompt] = {}
+        self.last_options: dict[str, Any] | None = None
 
     async def create_task(
         self,
@@ -43,6 +54,7 @@ class FakeRepo:
         artifact_dir: str,
         task_id: uuid.UUID | None = None,
     ) -> FakeTask:
+        self.last_options = options or {}
         task = FakeTask(
             id=task_id or uuid.uuid4(),
             user_id=user_id,
@@ -52,6 +64,48 @@ class FakeRepo:
         )
         self.tasks[task.id] = task
         return task
+
+    # ---- Prompt CRUD (mirrors vts.db.repo.Repo prompt methods) ----
+
+    async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> "FakePrompt":
+        prompt = FakePrompt(
+            id=uuid.uuid4(), user_id=user_id, name=name, system_prompt=system_prompt
+        )
+        self.prompts[prompt.id] = prompt
+        return prompt
+
+    async def list_prompts(self, user_id: uuid.UUID) -> list["FakePrompt"]:
+        return [p for p in self.prompts.values() if p.user_id == user_id]
+
+    async def get_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> "FakePrompt | None":
+        p = self.prompts.get(prompt_id)
+        if p is None or p.user_id != user_id:
+            return None
+        return p
+
+    async def update_prompt(
+        self,
+        user_id: uuid.UUID,
+        prompt_id: uuid.UUID,
+        *,
+        name: str | None,
+        system_prompt: str | None,
+    ) -> "FakePrompt | None":
+        p = await self.get_prompt(user_id, prompt_id)
+        if p is None:
+            return None
+        if name is not None:
+            p.name = name
+        if system_prompt is not None:
+            p.system_prompt = system_prompt
+        return p
+
+    async def delete_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> bool:
+        p = await self.get_prompt(user_id, prompt_id)
+        if p is None:
+            return False
+        del self.prompts[prompt_id]
+        return True
 
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> FakeTask | None:
         t = self.tasks.get(task_id)
