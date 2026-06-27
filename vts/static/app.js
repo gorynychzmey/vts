@@ -1705,16 +1705,81 @@ function promptDisplayName(prompt) {
   return prompt.name;
 }
 
+function setPromptPopoverOpen(open) {
+  if (!promptSelect) {
+    return;
+  }
+  const toggle = promptSelect.querySelector(".prompt-select-toggle");
+  const popover = promptSelect.querySelector(".prompt-select-popover");
+  if (!toggle || !popover) {
+    return;
+  }
+  if (open && toggle.disabled) {
+    return;
+  }
+  promptSelect.classList.toggle("open", open);
+  popover.hidden = !open;
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function togglePromptPopover() {
+  const isOpen = promptSelect && promptSelect.classList.contains("open");
+  setPromptPopoverOpen(!isOpen);
+}
+
+function updatePromptSelectSummary() {
+  if (!promptSelect) {
+    return;
+  }
+  const summary = promptSelect.querySelector(".prompt-select-summary");
+  if (!summary) {
+    return;
+  }
+  const checked = Array.from(
+    promptSelect.querySelectorAll('input[type="checkbox"]:checked')
+  );
+  let text;
+  if (checked.length === 0) {
+    text = t("new_task.prompts_none");
+  } else if (checked.length === 1) {
+    const label = checked[0].closest(".prompt-row");
+    const name = label && label.querySelector(".prompt-name");
+    text = name ? name.textContent : t("new_task.prompts_count", { count: 1 });
+  } else {
+    text = t("new_task.prompts_count", { count: checked.length });
+  }
+  summary.textContent = text;
+}
+
 function renderPromptSelect(prompts) {
   if (!promptSelect) {
     return;
   }
   promptsCache = Array.isArray(prompts) ? prompts : [];
   promptSelect.innerHTML = "";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "prompt-select-toggle";
+  toggle.setAttribute("aria-haspopup", "true");
+  toggle.setAttribute("aria-expanded", "false");
+
+  const summary = document.createElement("span");
+  summary.className = "prompt-select-summary";
+  const caret = document.createElement("span");
+  caret.className = "prompt-select-caret";
+  caret.textContent = "▾";
+  caret.setAttribute("aria-hidden", "true");
+  toggle.append(summary, caret);
+
+  const popover = document.createElement("div");
+  popover.className = "prompt-select-popover";
+  popover.hidden = true;
+
   for (const prompt of promptsCache) {
     const isDefault = prompt.source === "system" && prompt.id === "summary";
     const label = document.createElement("label");
-    label.className = "option-pill prompt-pill";
+    label.className = "prompt-row";
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -1731,8 +1796,14 @@ function renderPromptSelect(prompts) {
     badge.textContent = t(`prompt.badge.${prompt.source}`);
 
     label.append(checkbox, name, badge);
-    promptSelect.appendChild(label);
+    popover.appendChild(label);
   }
+
+  toggle.addEventListener("click", togglePromptPopover);
+  popover.addEventListener("change", updatePromptSelectSummary);
+
+  promptSelect.append(toggle, popover);
+  updatePromptSelectSummary();
   syncSummaryToggle();
 }
 
@@ -1755,6 +1826,7 @@ function resetPromptSelection() {
   promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.checked = cb.dataset.source === "system" && cb.dataset.id === "summary";
   });
+  updatePromptSelectSummary();
 }
 
 function getSelectedPrompts() {
@@ -1806,9 +1878,16 @@ function syncSummaryToggle() {
   }
   const disabled = !form.transcript.checked;
   promptSelect.classList.toggle("disabled", disabled);
+  const toggle = promptSelect.querySelector(".prompt-select-toggle");
+  if (toggle) {
+    toggle.disabled = disabled;
+  }
   promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.disabled = disabled;
   });
+  if (disabled) {
+    setPromptPopoverOpen(false);
+  }
 }
 
 function apiBatchPost(url, body, method = "POST") {
@@ -2325,8 +2404,21 @@ async function refreshAll() {
   startDurationTicker();
 }
 
-document.addEventListener("click", () => {
+document.addEventListener("click", (event) => {
   document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+  if (
+    promptSelect &&
+    promptSelect.classList.contains("open") &&
+    !promptSelect.contains(event.target)
+  ) {
+    setPromptPopoverOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && promptSelect && promptSelect.classList.contains("open")) {
+    setPromptPopoverOpen(false);
+  }
 });
 
 refreshBtn.addEventListener("click", loadTasks);

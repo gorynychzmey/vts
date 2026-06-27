@@ -20,6 +20,8 @@ window.__VTS_I18N.ru = {
 "new_task.transcript": "Транскрипт",
 "new_task.summary": "Сводка",
 "new_task.prompts": "Промпты",
+"new_task.prompts_none": "Без промптов",
+"new_task.prompts_count": "Промптов: {count}",
 "prompt.system.summary": "Саммари",
 "prompt.badge.system": "система",
 "prompt.badge.user": "пользователь",

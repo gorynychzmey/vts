@@ -20,6 +20,8 @@ window.__VTS_I18N.de = {
 "new_task.transcript": "Transkript",
 "new_task.summary": "Zusammenfassung",
 "new_task.prompts": "Prompts",
+"new_task.prompts_none": "Keine Prompts",
+"new_task.prompts_count": "{count} Prompts",
 "prompt.system.summary": "Zusammenfassung",
 "prompt.badge.system": "System",
 "prompt.badge.user": "Benutzer",
