@@ -62,6 +62,72 @@ async def test_prompt_create_list_update_delete(client):
     assert (await client.delete(f"/api/prompts/{pid}")).status_code == 204
 
 
+# ---------------------------------------------------------------------------
+# Detail / system-text endpoints (Task 12 — used by the duplicate feature).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prompt_detail_returns_system_prompt(client):
+    created = (await client.post("/api/prompts",
+               json={"name": "Detail", "system_prompt": "Body text here"})).json()
+    pid = created["id"]
+
+    resp = await client.get(f"/api/prompts/{pid}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "user"
+    assert body["id"] == pid
+    assert body["name"] == "Detail"
+    assert body["system_prompt"] == "Body text here"
+    assert body["editable"] is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_detail_404_for_missing_id(client):
+    missing = uuid.uuid4()
+    resp = await client.get(f"/api/prompts/{missing}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_prompt_detail_404_for_other_users_prompt(authed_app, client):
+    """A prompt owned by a different user must not be readable."""
+    _app, factory = authed_app
+    from vts.db.models import User
+    from vts.db.repo import Repo
+
+    other_id = uuid.uuid4()
+    async with factory() as session:
+        session.add(User(id=other_id, username="other"))
+        await session.flush()
+        repo = Repo(session)
+        row = await repo.create_prompt(other_id, "Theirs", "secret body")
+        await session.commit()
+        other_pid = str(row.id)
+
+    resp = await client.get(f"/api/prompts/{other_pid}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_text_returns_file_contents(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("VTS_PROMPTS_DIR", str(tmp_path))
+    from vts.core.config import get_settings
+    get_settings.cache_clear()
+    (tmp_path / "global_prompt.md").write_text("SYSTEM SUMMARY BODY", encoding="utf-8")
+
+    resp = await client.get("/api/prompts/system/summary/text")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["system_prompt"] == "SYSTEM SUMMARY BODY"
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_text_404_for_unknown_key(client):
+    resp = await client.get("/api/prompts/system/nope/text")
+    assert resp.status_code == 404
+
+
 class _FakeRedis:
     """Minimal async Redis stub: enough for create_task's RedisBus calls
     (publish) and queue-position cache (get/setex)."""

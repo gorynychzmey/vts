@@ -41,6 +41,22 @@
           </button>
           <button
             type="button"
+            id="prompts-btn"
+            class="icon-btn ghost"
+            data-i18n-title="prompts.manage.open"
+            data-i18n-aria-label="prompts.manage.open"
+            title="Manage prompts"
+            aria-label="Manage prompts"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5h16" />
+              <path d="M4 10h16" />
+              <path d="M4 15h10" />
+              <path d="M16 18l2 2 4-4" />
+            </svg>
+          </button>
+          <button
+            type="button"
             id="tokens-btn"
             class="icon-btn ghost"
             data-i18n-title="tokens.open"
@@ -467,6 +483,39 @@
                   data-i18n="tokens.copy">Copy</button>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="prompts-dialog" class="tokens-dialog prompts-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="prompts.manage.title">Manage prompts</h2>
+        <button type="button" id="prompts-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <div id="prompts-list" class="tokens-list prompts-list"></div>
+
+      <form id="prompt-form" class="tokens-create-form prompt-form">
+        <input type="hidden" id="prompt-edit-id" value="" />
+        <input type="text" id="prompt-name-input" name="name" required
+               maxlength="255" autocomplete="off"
+               data-i18n-placeholder="prompts.manage.name"
+               placeholder="Name" />
+        <textarea id="prompt-body-input" name="system_prompt" required rows="6"
+                  data-i18n-placeholder="prompts.manage.body"
+                  placeholder="Prompt text"></textarea>
+        <div class="prompt-form-actions">
+          <button type="submit" id="prompt-submit-btn" class="btn-text primary"
+                  data-i18n="prompts.manage.create">Create prompt</button>
+          <button type="button" id="prompt-cancel-btn" class="btn-text ghost hidden"
+                  data-i18n="tokens.close">Cancel</button>
+        </div>
+      </form>
     </dialog>
 
     <script src="/static/app.js?v=__VTS_VERSION__"></script>

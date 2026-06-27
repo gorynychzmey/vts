@@ -39,8 +39,10 @@ from vts.api.schemas import (
     BatchResultOut,
     MeOut,
     PromptCreateRequest,
+    PromptDetailOut,
     PromptOut,
     PromptUpdateRequest,
+    SystemPromptTextOut,
     TaskCompactOut,
     TextSliceOut,
     PushConfigOut,
@@ -1108,6 +1110,39 @@ def create_app() -> FastAPI:
         row = await repo.create_prompt(uuid.UUID(user.id), payload.name.strip(), payload.system_prompt)
         await session.commit()
         return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+
+    @app.get("/api/prompts/system/{key}/text", response_model=SystemPromptTextOut)
+    async def get_system_prompt_text_endpoint(
+        key: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> SystemPromptTextOut:
+        from vts.services.prompt_registry import list_system_prompts
+        from vts.services.summarizer import load_prompt
+
+        spec = next((p for p in list_system_prompts() if p.key == key), None)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="System prompt not found")
+        text = load_prompt(settings.prompts_dir, spec.file, "")
+        return SystemPromptTextOut(system_prompt=text)
+
+    @app.get("/api/prompts/{prompt_id}", response_model=PromptDetailOut)
+    async def get_prompt_detail_endpoint(
+        prompt_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptDetailOut:
+        repo = Repo(session)
+        row = await repo.get_prompt(uuid.UUID(user.id), prompt_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        return PromptDetailOut(
+            source="user",
+            id=str(row.id),
+            name=row.name,
+            system_prompt=row.system_prompt,
+            editable=True,
+        )
 
     @app.patch("/api/prompts/{prompt_id}", response_model=PromptOut)
     async def update_prompt_endpoint(

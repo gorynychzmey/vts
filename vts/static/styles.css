@@ -951,6 +951,55 @@ input[type="file"] {
   line-height: 1.4;
 }
 
+/* Manage-prompts dialog (mirrors the tokens dialog). */
+.prompts-row {
+  align-items: center;
+}
+
+.prompts-meta {
+  flex-wrap: wrap;
+}
+
+.prompts-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prompts-readonly {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-style: italic;
+  align-self: center;
+}
+
+.prompt-form {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.prompt-form input,
+.prompt-form textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  line-height: 1.4;
+}
+
+.prompt-form textarea {
+  resize: vertical;
+}
+
+.prompt-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 /* Text buttons inside the tokens dialog. Unlike .icon-btn (which forces
    a 2.25rem square), .btn-text sizes to its label. */
 .btn-text {

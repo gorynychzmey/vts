@@ -2252,6 +2252,185 @@ document.getElementById("tokens-copy-btn")?.addEventListener("click", async () =
   }
 });
 
+// ---------- Manage prompts ----------
+
+const promptsDialog = document.getElementById("prompts-dialog");
+const promptsListEl = document.getElementById("prompts-list");
+const promptForm = document.getElementById("prompt-form");
+const promptEditIdInput = document.getElementById("prompt-edit-id");
+const promptNameInput = document.getElementById("prompt-name-input");
+const promptBodyInput = document.getElementById("prompt-body-input");
+const promptSubmitBtn = document.getElementById("prompt-submit-btn");
+const promptCancelBtn = document.getElementById("prompt-cancel-btn");
+
+function setPromptFormMode(editId) {
+  if (promptEditIdInput) promptEditIdInput.value = editId || "";
+  if (promptSubmitBtn) {
+    promptSubmitBtn.textContent = editId
+      ? t("prompts.manage.edit")
+      : t("prompts.manage.create");
+  }
+  if (promptCancelBtn) promptCancelBtn.classList.toggle("hidden", !editId);
+}
+
+function resetPromptForm() {
+  if (promptNameInput) promptNameInput.value = "";
+  if (promptBodyInput) promptBodyInput.value = "";
+  setPromptFormMode("");
+}
+
+function fillPromptForm({ name, body, editId }) {
+  if (promptNameInput) promptNameInput.value = name || "";
+  if (promptBodyInput) promptBodyInput.value = body || "";
+  setPromptFormMode(editId || "");
+  promptNameInput?.focus();
+}
+
+async function duplicatePrompt(prompt) {
+  let body = "";
+  let baseName = "";
+  if (prompt.source === "system") {
+    const detail = await api(`/api/prompts/system/${encodeURIComponent(prompt.id)}/text`);
+    body = detail.system_prompt || "";
+    baseName = promptDisplayName(prompt);
+  } else {
+    const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
+    body = detail.system_prompt || "";
+    baseName = detail.name;
+  }
+  fillPromptForm({
+    name: `${baseName}${t("prompts.manage.copy_suffix")}`,
+    body,
+    editId: "",
+  });
+}
+
+function renderPromptsList(prompts) {
+  if (!promptsListEl) return;
+  promptsListEl.innerHTML = "";
+  for (const prompt of prompts) {
+    const row = document.createElement("div");
+    row.className = "tokens-row prompts-row";
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta prompts-meta";
+    const name = document.createElement("span");
+    name.className = "tokens-name prompt-name";
+    name.textContent = promptDisplayName(prompt);
+    meta.appendChild(name);
+    if (prompt.source === "system") {
+      const badge = document.createElement("span");
+      badge.className = "prompt-badge prompt-badge-system";
+      badge.textContent = t("prompt.badge.system");
+      meta.appendChild(badge);
+    }
+    row.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "prompts-actions";
+
+    if (prompt.editable) {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn-text ghost";
+      editBtn.textContent = t("prompts.manage.edit");
+      editBtn.addEventListener("click", async () => {
+        const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
+        fillPromptForm({
+          name: detail.name,
+          body: detail.system_prompt || "",
+          editId: detail.id,
+        });
+      });
+      actions.appendChild(editBtn);
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn-text ghost";
+      delBtn.textContent = t("prompts.manage.delete");
+      delBtn.addEventListener("click", async () => {
+        const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(prompt.id)}`), { method: "DELETE" });
+        if (resp.ok) {
+          if (promptEditIdInput?.value === prompt.id) resetPromptForm();
+          await refreshPromptsManager();
+          await loadPrompts();
+        }
+      });
+      actions.appendChild(delBtn);
+    } else {
+      const badge = document.createElement("span");
+      badge.className = "prompts-readonly";
+      badge.textContent = t("prompts.manage.system_readonly");
+      actions.appendChild(badge);
+    }
+
+    const dupBtn = document.createElement("button");
+    dupBtn.type = "button";
+    dupBtn.className = "btn-text ghost";
+    dupBtn.textContent = t("prompts.manage.duplicate");
+    dupBtn.addEventListener("click", () => duplicatePrompt(prompt));
+    actions.appendChild(dupBtn);
+
+    row.appendChild(actions);
+    promptsListEl.appendChild(row);
+  }
+}
+
+async function refreshPromptsManager() {
+  if (!promptsListEl) return;
+  try {
+    const prompts = await api("/api/prompts");
+    renderPromptsList(prompts);
+  } catch (err) {
+    console.error("Failed to load prompts", err);
+  }
+}
+
+document.getElementById("prompts-btn")?.addEventListener("click", async () => {
+  if (!promptsDialog) return;
+  resetPromptForm();
+  await refreshPromptsManager();
+  if (typeof promptsDialog.showModal === "function") {
+    promptsDialog.showModal();
+  } else {
+    promptsDialog.setAttribute("open", "");
+  }
+});
+
+document.getElementById("prompts-close-btn")?.addEventListener("click", () => {
+  promptsDialog?.close();
+});
+
+promptCancelBtn?.addEventListener("click", () => {
+  resetPromptForm();
+});
+
+promptForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = (promptNameInput?.value || "").trim();
+  const systemPrompt = promptBodyInput?.value || "";
+  if (!name || !systemPrompt.trim()) return;
+  const editId = promptEditIdInput?.value || "";
+  let resp;
+  if (editId) {
+    resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(editId)}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, system_prompt: systemPrompt }),
+    });
+  } else {
+    resp = await fetch(buildPath("/api/prompts"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, system_prompt: systemPrompt }),
+    });
+  }
+  if (!resp.ok) return;
+  resetPromptForm();
+  await refreshPromptsManager();
+  await loadPrompts();
+});
+
 // ---------- Web Push ----------
 
 const pushToggleBtn = document.getElementById("push-toggle-btn");

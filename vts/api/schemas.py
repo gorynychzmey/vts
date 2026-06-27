@@ -19,6 +19,18 @@ class PromptOut(BaseModel):
     editable: bool
 
 
+class PromptDetailOut(BaseModel):
+    source: str
+    id: str
+    name: str
+    system_prompt: str
+    editable: bool
+
+
+class SystemPromptTextOut(BaseModel):
+    system_prompt: str
+
+
 class PromptCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     system_prompt: str = Field(min_length=1)
