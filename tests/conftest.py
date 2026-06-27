@@ -22,7 +22,9 @@ import uuid
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from _db import make_test_engine
 
 # Patch BEFORE any test imports vts modules. Tests must not see the host
 # config.yaml regardless of fixture ordering.
@@ -47,7 +49,7 @@ def _isolate_settings_per_test(monkeypatch):
 # Authenticated-client harness for API endpoint tests.
 #
 # Builds a fresh app via create_app() and overrides two dependencies:
-#   * vts.db.session.get_db_session  -> an in-memory sqlite AsyncSession
+#   * vts.db.session.get_db_session  -> a Postgres-backed AsyncSession
 #     (the SAME session/engine is shared with the seed step, so rows
 #     written during setup persist within a test).
 #   * vts.services.auth.require_user -> a fixed fake AuthenticatedUser whose
@@ -63,16 +65,19 @@ _TEST_USER_ID = "00000000-0000-0000-0000-0000000000a1"
 async def authed_app():
     """Fresh app instance with DB + auth dependencies overridden.
 
-    Yields (app, sessionmaker). A single in-memory sqlite engine backs both
-    the dependency override and the seed step within the test.
+    Yields (app, sessionmaker). A single Postgres engine backs both the
+    dependency override and the seed step within the test. The schema is
+    dropped+recreated around the test for isolation (Postgres has no
+    per-connection in-memory database like SQLite :memory:).
     """
     from vts.db.base import Base
     from vts.db.models import User
     from vts.db.session import get_db_session
     from vts.services.auth import AuthenticatedUser, require_user
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    engine = make_test_engine()
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -104,6 +109,8 @@ async def authed_app():
         yield app, factory
     finally:
         app.dependency_overrides.clear()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
         await engine.dispose()
 
 

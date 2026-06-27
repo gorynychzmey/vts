@@ -30,6 +30,8 @@ PYTEST_ASYNCIO_VERSION="${PYTEST_ASYNCIO_VERSION:-0.26.0}"
 run_tests_in_container() {
   local runtime="${1}"
   local tests_dir="${PWD}/tests"
+  local pg_container="vts-test-pg"
+  local pg_network="vts-test-net"
   local -a run_args
   run_args=(run --rm --entrypoint sh)
   if [[ -d "${tests_dir}" ]]; then
@@ -38,6 +40,44 @@ run_tests_in_container() {
     echo "Tests directory not found at ${tests_dir}"
     exit 1
   fi
+
+  # DB-integration tests require a real Postgres (no sqlite fallback, VOS-63).
+  # Bring up a throwaway Postgres on a dedicated network so the test
+  # container can reach it by name, then tear both down no matter how
+  # pytest exits. set -euo pipefail makes a failed pytest abort the script,
+  # so cleanup is wired through a trap to avoid leaking the container/network.
+  cleanup_test_pg() {
+    "${runtime}" rm -f "${pg_container}" >/dev/null 2>&1 || true
+    "${runtime}" network rm "${pg_network}" >/dev/null 2>&1 || true
+  }
+  trap cleanup_test_pg EXIT
+
+  echo "Creating test network ${pg_network}"
+  "${runtime}" network create "${pg_network}" >/dev/null 2>&1 || true
+
+  echo "Starting Postgres container ${pg_container}"
+  "${runtime}" run -d --rm --name "${pg_container}" --network "${pg_network}" \
+    -e POSTGRES_USER=vts -e POSTGRES_PASSWORD=vts -e POSTGRES_DB=vts_test \
+    postgres:16 >/dev/null
+
+  echo "Waiting for Postgres to become ready"
+  local ready=false
+  local i
+  for i in $(seq 1 30); do
+    if "${runtime}" exec "${pg_container}" pg_isready -U vts >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${ready}" != "true" ]]; then
+    echo "Postgres did not become ready in time"
+    exit 1
+  fi
+
+  run_args+=(--network "${pg_network}")
+  run_args+=(-e "VTS_TEST_DATABASE_URL=postgresql+asyncpg://vts:vts@${pg_container}:5432/vts_test")
+
   echo "Running tests inside container ${VTS_IMAGE}"
   # Test dependencies install + presence assert before pytest runs (vts-gxw):
   # async tests silently report 'passed' if pytest-asyncio is missing
