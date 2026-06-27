@@ -46,9 +46,12 @@ run_tests_in_container() {
   # container can reach it by name, then tear both down no matter how
   # pytest exits. set -euo pipefail makes a failed pytest abort the script,
   # so cleanup is wired through a trap to avoid leaking the container/network.
+  _CLEANUP_RUNTIME="${runtime}"
+  _CLEANUP_PG_CONTAINER="${pg_container}"
+  _CLEANUP_PG_NETWORK="${pg_network}"
   cleanup_test_pg() {
-    "${runtime}" rm -f "${pg_container}" >/dev/null 2>&1 || true
-    "${runtime}" network rm "${pg_network}" >/dev/null 2>&1 || true
+    "${_CLEANUP_RUNTIME}" rm -f "${_CLEANUP_PG_CONTAINER}" >/dev/null 2>&1 || true
+    "${_CLEANUP_RUNTIME}" network rm "${_CLEANUP_PG_NETWORK}" >/dev/null 2>&1 || true
   }
   trap cleanup_test_pg EXIT
 
