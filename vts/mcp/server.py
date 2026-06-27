@@ -10,19 +10,24 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
 from vts.mcp.schemas import (
+    PromptInfo,
+    PromptResult,
     SubmitVideoResult,
-    SummaryResult,
     TaskStatusResult,
     TaskSummary,
     TranscriptResult,
     WaitResult,
 )
 from vts.mcp.tools import (
+    create_prompt,
+    delete_prompt,
+    get_prompt_result,
     get_status,
-    get_summary,
     get_transcript,
+    list_prompts,
     list_tasks,
     submit_video,
+    update_prompt,
     wait_for_task,
 )
 from vts.core.config import get_settings
@@ -30,7 +35,7 @@ from vts.services.redis_bus import RedisBus
 
 
 def build_mcp_server() -> FastMCP:
-    """Construct the FastMCP server with all six MCP tools registered."""
+    """Construct the FastMCP server with all ten MCP tools registered."""
     settings = get_settings()
     auth_provider = None
     if settings.oauth_enabled:
@@ -74,7 +79,7 @@ def build_mcp_server() -> FastMCP:
         language: str | None = None,
         audio_only: bool = False,
         transcript: bool = True,
-        summary: bool = True,
+        prompts: list[dict] | None = None,
     ) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately.
 
@@ -85,9 +90,11 @@ def build_mcp_server() -> FastMCP:
             audio_only: Download audio track only, skip video. Default: False.
             transcript: Run ASR transcription. Default: True. Set False to
                 skip transcription entirely (audio/video download only).
-            summary: Generate markdown summary. Default: True. Requires
-                transcript=True (the worker has nothing to summarise
-                otherwise — request is rejected with 422).
+            prompts: Prompts to run against the transcript, each a ref like
+                {"source": "system", "id": "summary"} or
+                {"source": "user", "id": "<prompt-uuid>"}. Defaults to the
+                single system "summary" prompt. Non-empty prompts require
+                transcript=True (rejected with 422 otherwise).
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -102,7 +109,7 @@ def build_mcp_server() -> FastMCP:
                     language=language,
                     audio_only=audio_only,
                     transcript=transcript,
-                    summary=summary,
+                    prompts=prompts,
                 )
                 await session.commit()
                 return result
@@ -145,13 +152,62 @@ def build_mcp_server() -> FastMCP:
             user, _settings = await mcp_authenticate(session)
             return await get_transcript(task_id=task_id, variant=variant, user=user, repo=Repo(session))
 
-    @mcp.tool(name="get_summary")
-    async def _get_summary(task_id: uuid.UUID) -> SummaryResult:
-        """Fetch the markdown summary for a task."""
+    @mcp.tool(name="get_prompt_result")
+    async def _get_prompt_result(task_id: uuid.UUID, ref: str = "system:summary") -> PromptResult:
+        """Fetch the rendered text for one prompt result of a task.
+
+        ref is a "source:id" string, e.g. "system:summary" (the default,
+        which returns the markdown summary) or "user:<prompt-uuid>".
+        """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
-            return await get_summary(task_id=task_id, user=user, repo=Repo(session))
+            return await get_prompt_result(task_id=task_id, ref=ref, user=user, repo=Repo(session))
+
+    @mcp.tool(name="list_prompts")
+    async def _list_prompts() -> list[PromptInfo]:
+        """List prompts available to the caller (system + user-defined)."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            return await list_prompts(user=user, repo=Repo(session))
+
+    @mcp.tool(name="create_prompt")
+    async def _create_prompt(name: str, system_prompt: str) -> PromptInfo:
+        """Create a user-defined prompt. Returns the new prompt's info."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await create_prompt(
+                name=name, system_prompt=system_prompt, user=user, repo=Repo(session)
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="update_prompt")
+    async def _update_prompt(
+        prompt_id: uuid.UUID, name: str | None = None, system_prompt: str | None = None
+    ) -> PromptInfo:
+        """Update a user-defined prompt's name and/or body."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await update_prompt(
+                prompt_id=prompt_id, name=name, system_prompt=system_prompt,
+                user=user, repo=Repo(session),
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="delete_prompt")
+    async def _delete_prompt(prompt_id: uuid.UUID) -> dict[str, Any]:
+        """Delete a user-defined prompt."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await delete_prompt(prompt_id=prompt_id, user=user, repo=Repo(session))
+            await session.commit()
+            return result
 
     @mcp.tool(name="wait_for_task")
     async def _wait_for_task(

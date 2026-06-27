@@ -38,6 +38,11 @@ from vts.api.schemas import (
     ApiTokenOut,
     BatchResultOut,
     MeOut,
+    PromptCreateRequest,
+    PromptDetailOut,
+    PromptOut,
+    PromptUpdateRequest,
+    SystemPromptTextOut,
     TaskCompactOut,
     TextSliceOut,
     PushConfigOut,
@@ -67,7 +72,7 @@ from vts.services.push import (
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
-from vts.services.task_progress import summary_progress_for_task
+from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -89,8 +94,9 @@ SUMMARY_STEP_NAMES = frozenset(
 
 
 def can_restart_summary_task(task: Task) -> bool:
-    options = task.options if isinstance(task.options, dict) else {}
-    if options.get("summary") is False:
+    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
+    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
+    if not summary_selected:
         return False
     if task.status == TaskStatus.completed:
         return True
@@ -100,8 +106,9 @@ def can_restart_summary_task(task: Task) -> bool:
 
 
 def can_restart_final_summary_task(task: Task) -> bool:
-    options = task.options if isinstance(task.options, dict) else {}
-    if options.get("summary") is False:
+    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
+    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
+    if not summary_selected:
         return False
     summarize_windows_status = _find_step_status(task, "summarize_windows")
     if summarize_windows_status != StepStatus.completed:
@@ -1078,6 +1085,96 @@ def create_app() -> FastAPI:
         await session.commit()
         return Response(status_code=204)
 
+    @app.get("/api/prompts", response_model=list[PromptOut])
+    async def list_prompts_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[PromptOut]:
+        from vts.services.prompt_registry import list_system_prompts
+        out: list[PromptOut] = [
+            PromptOut(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+            for p in list_system_prompts()
+        ]
+        repo = Repo(session)
+        for row in await repo.list_prompts(uuid.UUID(user.id)):
+            out.append(PromptOut(source="user", id=str(row.id), name=row.name, editable=True))
+        return out
+
+    @app.post("/api/prompts", response_model=PromptOut)
+    async def create_prompt_endpoint(
+        payload: PromptCreateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptOut:
+        repo = Repo(session)
+        row = await repo.create_prompt(uuid.UUID(user.id), payload.name.strip(), payload.system_prompt)
+        await session.commit()
+        return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+
+    @app.get("/api/prompts/system/{key}/text", response_model=SystemPromptTextOut)
+    async def get_system_prompt_text_endpoint(
+        key: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> SystemPromptTextOut:
+        from vts.services.prompt_registry import list_system_prompts
+        from vts.services.summarizer import load_prompt
+
+        spec = next((p for p in list_system_prompts() if p.key == key), None)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="System prompt not found")
+        text = load_prompt(settings.prompts_dir, spec.file, "")
+        return SystemPromptTextOut(system_prompt=text)
+
+    @app.get("/api/prompts/{prompt_id}", response_model=PromptDetailOut)
+    async def get_prompt_detail_endpoint(
+        prompt_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptDetailOut:
+        repo = Repo(session)
+        row = await repo.get_prompt(uuid.UUID(user.id), prompt_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        return PromptDetailOut(
+            source="user",
+            id=str(row.id),
+            name=row.name,
+            system_prompt=row.system_prompt,
+            editable=True,
+        )
+
+    @app.patch("/api/prompts/{prompt_id}", response_model=PromptOut)
+    async def update_prompt_endpoint(
+        prompt_id: uuid.UUID,
+        payload: PromptUpdateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PromptOut:
+        repo = Repo(session)
+        row = await repo.update_prompt(
+            uuid.UUID(user.id), prompt_id,
+            name=payload.name,  # validated + stripped by PromptUpdateRequest; None = unchanged
+            system_prompt=payload.system_prompt,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        await session.commit()
+        return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+
+    @app.delete("/api/prompts/{prompt_id}", status_code=204)
+    async def delete_prompt_endpoint(
+        prompt_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        ok = await repo.delete_prompt(uuid.UUID(user.id), prompt_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        await session.commit()
+        return Response(status_code=204)
+
     @app.get("/api/push/config", response_model=PushConfigOut, include_in_schema=False)
     async def push_config(settings: Settings = Depends(get_settings_dep)) -> PushConfigOut:
         if not is_push_enabled(settings):
@@ -1175,6 +1272,24 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
+    @app.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
+    async def get_prompt_result(
+        task_id: uuid.UUID,
+        source: str,
+        ref: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> PlainTextResponse:
+        repo = Repo(session)
+        task = await repo.get_task_by_id(task_id)
+        if task is None or str(task.user_id) != user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        from vts.services.prompt_results import resolve_result_path
+        path = resolve_result_path(task, source, ref)
+        if path is None or not Path(path).exists():
+            raise HTTPException(status_code=404, detail="Result not found")
+        return PlainTextResponse(Path(path).read_text(encoding="utf-8"))
+
     _ALLOWED_UPLOAD_SUFFIXES = frozenset(
         {
             ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v",
@@ -1189,14 +1304,31 @@ def create_app() -> FastAPI:
         display_name: str | None = Form(default=None),
         audio_only: bool = Form(default=False),
         transcript: bool = Form(default=True),
-        summary: bool = Form(default=True),
+        prompts: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
-        if summary and not transcript:
-            raise HTTPException(status_code=422, detail="summary requires transcript")
+        from vts.services.prompt_registry import parse_ref, ref_to_dict
+        if prompts is None:
+            normalized_prompts = [{"source": "system", "id": "summary"}]
+        else:
+            try:
+                raw_refs = json.loads(prompts)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail="prompts must be valid JSON") from exc
+            if not isinstance(raw_refs, list):
+                raise HTTPException(status_code=422, detail="prompts must be a JSON list")
+            normalized_prompts = []
+            for entry in raw_refs:
+                try:
+                    source, ref_id = parse_ref(entry)
+                except (ValueError, TypeError) as exc:
+                    raise HTTPException(status_code=422, detail=f"invalid prompt ref: {entry!r}") from exc
+                normalized_prompts.append(ref_to_dict(source, ref_id))
+        if normalized_prompts and not transcript:
+            raise HTTPException(status_code=422, detail="prompts require transcript")
         original_filename = file.filename or "upload"
         suffix = Path(original_filename).suffix.lower()
         if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
@@ -1220,7 +1352,7 @@ def create_app() -> FastAPI:
             "language": language or None,
             "audio_only": audio_only,
             "transcript": transcript,
-            "summary": summary,
+            "prompts": normalized_prompts,
         }
         task = await repo.create_task(
             user_id=effective_user_id,

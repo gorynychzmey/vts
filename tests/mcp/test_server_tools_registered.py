@@ -7,5 +7,17 @@ async def test_server_registers_expected_tools() -> None:
     mcp = build_mcp_server()
     tools = await mcp.list_tools()
     names = {tool.name for tool in tools}
-    expected = {"submit_video", "list_tasks", "get_status", "get_transcript", "get_summary", "wait_for_task"}
+    expected = {
+        "submit_video",
+        "list_tasks",
+        "get_status",
+        "get_transcript",
+        "get_prompt_result",
+        "list_prompts",
+        "create_prompt",
+        "update_prompt",
+        "delete_prompt",
+        "wait_for_task",
+    }
     assert expected.issubset(names), f"missing tools: {expected - names}"
+    assert "get_summary" not in names

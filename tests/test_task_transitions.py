@@ -52,6 +52,29 @@ def test_can_restart_summary_task_allows_completed_or_summary_failed() -> None:
     assert not can_restart_summary_task(completed_without_summary)
 
 
+def test_can_restart_summary_task_with_prompts_selection() -> None:
+    # New tasks carry a `prompts` list instead of the legacy `summary` bool.
+    prompts_summary = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": [{"source": "system", "id": "summary"}]},
+        steps=[],
+    )
+    prompts_empty = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": []},
+        steps=[],
+    )
+    legacy_no_summary = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "summary": False},
+        steps=[],
+    )
+
+    assert can_restart_summary_task(prompts_summary)
+    assert not can_restart_summary_task(prompts_empty)
+    assert not can_restart_summary_task(legacy_no_summary)
+
+
 def test_can_restart_final_summary_task() -> None:
     windows_ok = SimpleNamespace(name="summarize_windows", status=StepStatus.completed)
     final_failed = SimpleNamespace(name="summarize_final", status=StepStatus.failed)

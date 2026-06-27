@@ -7,17 +7,66 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
+class PromptRef(BaseModel):
+    source: Literal["system", "user"]
+    id: str = Field(min_length=1)
+
+
+class PromptOut(BaseModel):
+    source: str
+    id: str
+    name: str
+    editable: bool
+
+
+class PromptDetailOut(BaseModel):
+    source: str
+    id: str
+    name: str
+    system_prompt: str
+    editable: bool
+
+
+class SystemPromptTextOut(BaseModel):
+    system_prompt: str
+
+
+class PromptCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    system_prompt: str = Field(min_length=1)
+
+
+class PromptUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    system_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def validate_name(self) -> "PromptUpdateRequest":
+        # name is optional (None = leave unchanged), but when provided it must
+        # be non-empty after trimming — consistent with create's min_length=1.
+        if self.name is not None:
+            stripped = self.name.strip()
+            if not stripped:
+                raise ValueError("name must not be blank")
+            self.name = stripped
+        return self
+
+
+def _default_prompts() -> list["PromptRef"]:
+    return [PromptRef(source="system", id="summary")]
+
+
 class TaskCreateRequest(BaseModel):
     url: str = Field(min_length=3)
     language: str | None = None
     audio_only: bool = False
     transcript: bool = Field(default=True, validation_alias=AliasChoices("transcript", "do_transcribe"))
-    summary: bool = Field(default=True, validation_alias=AliasChoices("summary", "do_summary"))
+    prompts: list[PromptRef] = Field(default_factory=_default_prompts)
 
     @model_validator(mode="after")
     def validate_stage_dependencies(self) -> "TaskCreateRequest":
-        if self.summary and not self.transcript:
-            raise ValueError("summary requires transcript")
+        if self.prompts and not self.transcript:
+            raise ValueError("prompts require transcript")
         return self
 
 

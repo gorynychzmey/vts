@@ -49,10 +49,19 @@ class TranscriptResult(BaseModel):
     format: Literal["txt", "json"]
 
 
-class SummaryResult(BaseModel):
+class PromptInfo(BaseModel):
+    """One prompt available to the calling user (system or user-defined)."""
+    source: Literal["system", "user"]
+    id: str
+    name: str
+    editable: bool
+
+
+class PromptResult(BaseModel):
     task_id: uuid.UUID
+    source: str
+    id: str
     content: str
-    format: Literal["markdown"]
 
 
 class WaitResult(BaseModel):

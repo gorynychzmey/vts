@@ -8,7 +8,18 @@ from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
-from vts.mcp.schemas import ProgressCounts, SubmitVideoResult, SummaryResult, TaskStatusResult, TaskSummary, TranscriptResult, WaitResult
+from vts.mcp.schemas import (
+    ProgressCounts,
+    PromptInfo,
+    PromptResult,
+    SubmitVideoResult,
+    TaskStatusResult,
+    TaskSummary,
+    TranscriptResult,
+    WaitResult,
+)
+from vts.services.prompt_registry import list_system_prompts, parse_ref, ref_to_dict
+from vts.services.prompt_results import resolve_result_path
 from vts.services.storage import task_dir
 from vts.services.task_progress import summary_progress_for_task
 
@@ -56,19 +67,30 @@ async def submit_video(
     language: str | None = None,
     audio_only: bool = False,
     transcript: bool = True,
-    summary: bool = True,
+    prompts: list[dict] | None = None,
 ) -> SubmitVideoResult:
     """Create a new task in the queued state and notify the worker.
 
-    Pipeline options mirror web /api/tasks (vts-08l) so a bare URL submit
-    runs the full transcript+summary pipeline by default. `summary=True`
-    requires `transcript=True` — the worker would otherwise have nothing
-    to summarise.
+    Pipeline options mirror web /api/tasks (VOS-63) so a bare URL submit
+    runs the full transcript+summary pipeline by default. `prompts` defaults
+    to the single system "summary" prompt; non-empty prompts require
+    `transcript=True` — the worker would otherwise have nothing to run
+    prompts against.
     """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
-    if summary and not transcript:
-        raise HTTPException(status_code=422, detail="summary requires transcript")
+    if prompts is None:
+        norm: list[dict] = [ref_to_dict("system", "summary")]
+    else:
+        norm = []
+        for entry in prompts:
+            try:
+                source, ref_id = parse_ref(entry)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            norm.append(ref_to_dict(source, ref_id))
+    if norm and not transcript:
+        raise HTTPException(status_code=422, detail="prompts require transcript")
     task_id = uuid.uuid4()
     artifact = task_dir(artifacts_root, user.username, task_id)
     artifact.mkdir(parents=True, exist_ok=True)
@@ -76,7 +98,7 @@ async def submit_video(
         "language": language,
         "audio_only": audio_only,
         "transcript": transcript,
-        "summary": summary,
+        "prompts": norm,
     }
     task = await repo.create_task(
         user_id=uuid.UUID(user.id),
@@ -196,21 +218,120 @@ async def get_status(
     )
 
 
-async def get_summary(
+async def get_prompt_result(
     *,
     task_id: uuid.UUID,
+    ref: str,
     user: _UserLike,
     repo: _RepoStatusLike,
-) -> SummaryResult:
+) -> PromptResult:
+    """Fetch the rendered text for one prompt result of a task.
+
+    ``ref`` is a "source:id" string (e.g. "system:summary" or
+    "user:<uuid>"). 404 when the task is unknown or the result is missing.
+    """
+    try:
+        source, ref_id = parse_ref(ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not task.summary_path:
-        raise HTTPException(status_code=404, detail="Summary is not ready")
-    path = Path(task.summary_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Summary file missing")
-    return SummaryResult(task_id=task.id, content=path.read_text(encoding="utf-8"), format="markdown")
+    path = resolve_result_path(task, source, ref_id)
+    if path is None or not Path(path).exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+    return PromptResult(
+        task_id=task.id,
+        source=source,
+        id=ref_id,
+        content=Path(path).read_text(encoding="utf-8"),
+    )
+
+
+class _RepoPromptLike(Protocol):
+    async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> Any: ...
+    async def list_prompts(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def update_prompt(
+        self,
+        user_id: uuid.UUID,
+        prompt_id: uuid.UUID,
+        *,
+        name: str | None,
+        system_prompt: str | None,
+    ) -> Any | None: ...
+    async def delete_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> bool: ...
+
+
+async def list_prompts(
+    *,
+    user: _UserLike,
+    repo: _RepoPromptLike,
+) -> list[PromptInfo]:
+    """List prompts available to the caller: built-in system prompts first,
+    then the user's own prompts (mirrors web GET /api/prompts)."""
+    out: list[PromptInfo] = [
+        PromptInfo(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+        for p in list_system_prompts()
+    ]
+    for row in await repo.list_prompts(uuid.UUID(user.id)):
+        out.append(PromptInfo(source="user", id=str(row.id), name=row.name, editable=True))
+    return out
+
+
+async def create_prompt(
+    *,
+    name: str,
+    system_prompt: str,
+    user: _UserLike,
+    repo: _RepoPromptLike,
+) -> PromptInfo:
+    """Create a user-defined prompt. Returns the new prompt's info."""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    if not system_prompt:
+        raise HTTPException(status_code=422, detail="system_prompt is required")
+    row = await repo.create_prompt(uuid.UUID(user.id), name, system_prompt)
+    return PromptInfo(source="user", id=str(row.id), name=row.name, editable=True)
+
+
+async def update_prompt(
+    *,
+    prompt_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoPromptLike,
+    name: str | None = None,
+    system_prompt: str | None = None,
+) -> PromptInfo:
+    """Update a user-defined prompt's name and/or body. 404 if not found."""
+    # name is optional (None = leave unchanged), but a provided name must be
+    # non-empty after trimming — consistent with create and the HTTP endpoint.
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name must not be blank")
+    row = await repo.update_prompt(
+        uuid.UUID(user.id),
+        prompt_id,
+        name=name,
+        system_prompt=system_prompt,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return PromptInfo(source="user", id=str(row.id), name=row.name, editable=True)
+
+
+async def delete_prompt(
+    *,
+    prompt_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoPromptLike,
+) -> dict[str, Any]:
+    """Delete a user-defined prompt. 404 if not found."""
+    ok = await repo.delete_prompt(uuid.UUID(user.id), prompt_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"deleted": True, "id": str(prompt_id)}
 
 
 async def get_transcript(

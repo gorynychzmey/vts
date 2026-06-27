@@ -87,8 +87,10 @@ async def test_submit_video_defaults_match_web_pipeline(tmp_path: Path) -> None:
         "language": None,
         "audio_only": False,
         "transcript": True,
-        "summary": True,
+        "prompts": [{"source": "system", "id": "summary"}],
     }
+    assert "summary" not in opts
+    assert repo.last_options == opts
 
 
 async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> None:
@@ -104,18 +106,19 @@ async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> N
         language="en",
         audio_only=True,
         transcript=True,
-        summary=False,
+        prompts=[],
     )
     opts = repo.tasks[result.task_id].options
     assert opts == {
         "language": "en",
         "audio_only": True,
         "transcript": True,
-        "summary": False,
+        "prompts": [],
     }
+    assert "summary" not in opts
 
 
-async def test_submit_video_rejects_summary_without_transcript(tmp_path: Path) -> None:
+async def test_submit_video_rejects_prompts_without_transcript(tmp_path: Path) -> None:
     """Mirrors TaskCreateRequest.validate_stage_dependencies in web."""
     from fastapi import HTTPException
 
@@ -130,7 +133,25 @@ async def test_submit_video_rejects_summary_without_transcript(tmp_path: Path) -
             bus=bus,
             artifacts_root=tmp_path,
             transcript=False,
-            summary=True,
+            prompts=[{"source": "system", "id": "summary"}],
         )
     assert exc.value.status_code == 422
     assert "transcript" in exc.value.detail.lower()
+
+
+async def test_submit_video_rejects_bad_prompt_ref(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    with pytest.raises(HTTPException) as exc:
+        await submit_video(
+            url="https://x/abc",
+            user=user,
+            repo=repo,
+            bus=bus,
+            artifacts_root=tmp_path,
+            prompts=[{"source": "bogus", "id": "x"}],
+        )
+    assert exc.value.status_code == 422

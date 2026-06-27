@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 
 from vts.mcp.schemas import (
     ProgressCounts,
+    PromptInfo,
+    PromptResult,
     SubmitVideoResult,
-    SummaryResult,
     TaskStatusResult,
     TaskSummary,
     TranscriptResult,
@@ -48,11 +49,21 @@ def test_task_status_result_includes_progress() -> None:
     assert "summary_progress" not in d
 
 
-def test_transcript_and_summary_shapes() -> None:
+def test_transcript_shape() -> None:
     tr = TranscriptResult(task_id=uuid.uuid4(), variant="raw", content="abc", format="txt")
-    su = SummaryResult(task_id=uuid.uuid4(), content="# md", format="markdown")
     assert tr.format in {"txt", "json"}
-    assert su.format == "markdown"
+
+
+def test_prompt_info_and_result_shapes() -> None:
+    info = PromptInfo(source="system", id="summary", name="Summary", editable=False)
+    d = info.model_dump(mode="json")
+    assert set(d) == {"source", "id", "name", "editable"}
+    assert d["editable"] is False
+
+    res = PromptResult(task_id=uuid.uuid4(), source="system", id="summary", content="# md")
+    rd = res.model_dump(mode="json")
+    assert set(rd) == {"task_id", "source", "id", "content"}
+    assert rd["content"] == "# md"
 
 
 def test_wait_result_reached_flag() -> None:
