@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+import functools
 import json
 import logging
 import re
@@ -21,6 +22,9 @@ from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.types import build_dag_steps
+from vts.services.prompt_registry import list_system_prompts, parse_ref
+from vts.services.prompt_results import upsert_result_entry
+from vts.services.task_progress import selected_prompt_refs
 from vts.services.downloader import download_video_and_audio
 from vts.services.heavy_slot import HeavySlot
 from vts.services.media import (
@@ -352,7 +356,21 @@ class TaskProcessor:
             )
             return
 
-        method = getattr(self, f"step_{step_name}")
+        # Finalize steps are generated per selected prompt and dispatched by a
+        # dynamic name that cannot map to a real method (colons are illegal in
+        # identifiers, and the handler needs extra source/id args). Bind a
+        # functools.partial so the fixed call sites below stay unchanged.
+        if step_name == "summarize_final":
+            method = functools.partial(
+                self.step_finalize_prompt, source="system", id="summary"
+            )
+        elif step_name.startswith("finalize:"):
+            f_source, f_id = parse_ref(step_name.split(":", 1)[1])
+            method = functools.partial(
+                self.step_finalize_prompt, source=f_source, id=f_id
+            )
+        else:
+            method = getattr(self, f"step_{step_name}")
         if step.status == StepStatus.completed and await method(
             task_id,
             user_id,
@@ -1574,7 +1592,65 @@ class TaskProcessor:
         )
         return True
 
-    async def step_summarize_final(
+    async def resolve_prompt_text(
+        self, source: str, id: str, output_language: str | None, user_id: str
+    ) -> str:
+        """Resolve the system-prompt text for a finalize run.
+
+        For ``system`` prompts, load the registered prompt file (rendered with the
+        output language) — for ``system/summary`` this reproduces today's
+        ``global_prompt.md`` rendering exactly. For ``user`` prompts, load the
+        ``system_prompt`` column from the DB.
+        """
+        if source == "system":
+            sysdef = next((p for p in list_system_prompts() if p.key == id), None)
+            if sysdef is None:
+                raise RuntimeError(f"unknown system prompt: {id}")
+            return self._render_prompt_with_language(
+                load_prompt(
+                    self.settings.prompts_dir,
+                    sysdef.file,
+                    "Produce a structured knowledge document from the notes.\n\nOutput language: ${LANG}.",
+                ),
+                output_language,
+            )
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            row = await repo.get_prompt(uuid.UUID(user_id), uuid.UUID(id))
+        if row is None:
+            raise RuntimeError(f"user prompt not found: {id}")
+        return self._render_prompt_with_language(row.system_prompt, output_language)
+
+    async def _prompt_display_name(self, source: str, id: str, user_id: str) -> str:
+        """Display name stored in the prompt_results index.
+
+        For system prompts: the i18n name key (UI localises it). For user prompts:
+        the Prompt row's name.
+        """
+        if source == "system":
+            sysdef = next((p for p in list_system_prompts() if p.key == id), None)
+            return sysdef.i18n_name_key if sysdef else id
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            row = await repo.get_prompt(uuid.UUID(user_id), uuid.UUID(id))
+        return row.name if row is not None else id
+
+    async def _persist_prompt_result(
+        self, task_id: uuid.UUID, source: str, id: str, name: str, path: str
+    ) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            options = dict(task.options or {})
+            entries = upsert_result_entry(
+                options, source, id, name, path, status="completed"
+            )
+            await repo.set_task_prompt_results(task, entries)
+            await session.commit()
+
+    async def step_finalize_prompt(
         self,
         task_id: uuid.UUID,
         user_id: str,
@@ -1582,21 +1658,35 @@ class TaskProcessor:
         logger: logging.Logger,
         task_options: dict[str, Any],
         dry_run: bool,
+        *,
+        source: str,
+        id: str,
     ) -> bool:
+        is_summary = source == "system" and id == "summary"
         summary_dir = dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
-        summary_json = summary_dir / "final.json"
-        summary_md = summary_dir / "final.md"
+        if is_summary:
+            summary_json = summary_dir / "final.json"
+            summary_md = summary_dir / "final.md"
+        else:
+            results_dir = summary_dir / "results"
+            results_dir.mkdir(parents=True, exist_ok=True)
+            summary_json = results_dir / f"{source}__{id}.json"
+            summary_md = results_dir / f"{source}__{id}.md"
         if summary_json.exists() and summary_md.exists():
-            async with self.session_factory() as session:
-                repo = Repo(session)
-                task = await repo.get_task_by_id(task_id)
-                if task is None:
-                    raise RuntimeError("task not found during final summary restore")
-                summary_path = str(summary_md)
-                if task.summary_path != summary_path:
-                    task.summary_path = summary_path
-                    await session.commit()
+            if is_summary:
+                async with self.session_factory() as session:
+                    repo = Repo(session)
+                    task = await repo.get_task_by_id(task_id)
+                    if task is None:
+                        raise RuntimeError("task not found during final summary restore")
+                    summary_path = str(summary_md)
+                    if task.summary_path != summary_path:
+                        task.summary_path = summary_path
+                        await session.commit()
+            else:
+                name = await self._prompt_display_name(source, id, user_id)
+                await self._persist_prompt_result(task_id, source, id, name, str(summary_md))
             return True
         if dry_run:
             return False
@@ -1654,13 +1744,8 @@ class TaskProcessor:
         )
         await self._persist_summary_progress(task_id, total_windows, total_parts)
 
-        global_prompt_base = self._render_prompt_with_language(
-            load_prompt(
-                self.settings.prompts_dir,
-                "global_prompt.md",
-                "Produce a structured knowledge document from the notes.\n\nOutput language: ${LANG}.",
-            ),
-            output_language,
+        global_prompt_base = await self.resolve_prompt_text(
+            source, id, output_language, user_id
         )
         # Stage C: adaptive token budget
         input_tokens = await self._llm.count_tokens(
@@ -1762,9 +1847,11 @@ class TaskProcessor:
                 ),
             })
         write_json(summary_json, {"raw": raw})
-        write_json(dirs["outputs"] / "summary.json", {"raw": raw})
         summary_md.write_text(raw, encoding="utf-8")
-        (dirs["outputs"] / "summary.md").write_text(raw, encoding="utf-8")
+        if is_summary:
+            # Back-compat: the canonical summary mirrors into outputs/summary.*.
+            write_json(dirs["outputs"] / "summary.json", {"raw": raw})
+            (dirs["outputs"] / "summary.md").write_text(raw, encoding="utf-8")
         await self.bus.publish_event(
             user_id=user_id,
             task_id=str(task_id),
@@ -1774,13 +1861,16 @@ class TaskProcessor:
         await self._persist_summary_progress(task_id, total_parts, total_parts)
         logger.info("final summary generated")
 
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                raise RuntimeError("task not found during final summary")
-            task.summary_path = str(summary_md)
-            await session.commit()
+        if is_summary:
+            async with self.session_factory() as session:
+                repo = Repo(session)
+                task = await repo.get_task_by_id(task_id)
+                if task is None:
+                    raise RuntimeError("task not found during final summary")
+                task.summary_path = str(summary_md)
+                await session.commit()
+        name = await self._prompt_display_name(source, id, user_id)
+        await self._persist_prompt_result(task_id, source, id, name, str(summary_md))
         return True
 
     def _extract_window_text(self, window: dict[str, Any]) -> str:
@@ -2117,17 +2207,23 @@ class TaskProcessor:
 
     def _is_step_enabled(self, step_name: str, task_options: dict[str, Any]) -> bool:
         transcript_enabled = self._task_flag(task_options, "transcript", default=True)
-        summary_enabled = self._task_flag(task_options, "summary", default=True)
         if not transcript_enabled:
             return step_name == "download"
-        if not summary_enabled and step_name in {
+        # Finalize steps (summarize_final + finalize:*) only ever appear in the DAG
+        # because build_dag_steps emitted them for a selected prompt, so they are
+        # always enabled here.
+        if step_name == "summarize_final" or step_name.startswith("finalize:"):
+            return True
+        # The summary head (map-reduce that prepares the shared `merged` input) runs
+        # whenever ANY prompt is selected, and is skipped only when none are. The
+        # selection is the source of truth — not the legacy `summary` flag.
+        if step_name in {
             "prepare_llama_model",
             "prepare_summary_chunks",
             "summarize_windows",
             "pack_window_notes",
-            "summarize_final",
         }:
-            return False
+            return bool(selected_prompt_refs(task_options))
         return True
 
     def _tail_prompt(self, text: str, max_chars: int = 800) -> str | None:
