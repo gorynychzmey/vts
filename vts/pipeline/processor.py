@@ -1662,6 +1662,14 @@ class TaskProcessor:
         source: str,
         id: str,
     ) -> bool:
+        # Defense-in-depth: validate the id BEFORE it is used to build any result
+        # path. A user-source id must be a UUID; this rejects path-traversal ids
+        # (e.g. "../../etc/passwd") regardless of downstream call ordering.
+        if source == "user":
+            try:
+                uuid.UUID(id)
+            except (ValueError, TypeError):
+                raise RuntimeError(f"invalid user prompt id: {id!r}")
         is_summary = source == "system" and id == "summary"
         summary_dir = dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)

@@ -275,6 +275,34 @@ def test_finalize_system_summary_keeps_backcompat(tmp_path: Path, monkeypatch) -
     )
 
 
+def test_finalize_rejects_traversal_user_id(tmp_path: Path, monkeypatch) -> None:
+    """A user-source id that is not a UUID is rejected before any path is built,
+    and no file is written outside the results dir."""
+    task = _StubTask({"prompts": [{"source": "user", "id": "../../etc/passwd"}]})
+    proc = _make_processor(tmp_path, monkeypatch, llm_output="X", task=task)
+    dirs = _write_packed_notes(tmp_path)
+
+    before = {p for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises((RuntimeError, ValueError)):
+        asyncio.run(
+            proc.step_finalize_prompt(
+                uuid.uuid4(),
+                str(uuid.uuid4()),
+                dirs,
+                proc.logger,
+                task.options,
+                dry_run=False,
+                source="user",
+                id="../../etc/passwd",
+            )
+        )
+    after = {p for p in tmp_path.rglob("*") if p.is_file()}
+    # No new file created anywhere (in or out of the results dir).
+    assert after == before
+    # And nothing escaped above the task tree.
+    assert not (tmp_path.parent / "passwd").exists()
+
+
 def test_dispatch_routes_summarize_final_and_custom(monkeypatch) -> None:
     """summarize_final and finalize:<src>:<id> both bind step_finalize_prompt
     with the right source/id (mirrors _run_step dispatch logic)."""
