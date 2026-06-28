@@ -95,13 +95,24 @@ def test_can_restart_final_summary_task() -> None:
         options={"summary": True},
         steps=[SimpleNamespace(name="summarize_windows", status=StepStatus.failed), final_failed],
     )
+    # no_summary still returns False — but now via the windows-not-done path
+    # (steps=[] means summarize_windows is not completed), NOT because a summary
+    # prompt is required. The loosened gate no longer checks for a summary ref.
     no_summary = SimpleNamespace(
         status=TaskStatus.completed,
         options={"summary": False},
         steps=[],
+    )
+    # NEW semantics: a custom-only set (no summary prompt) with windows done and
+    # the task completed is now restartable — the gate no longer requires summary.
+    custom_only = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"prompts": [{"source": "user", "id": "a"}]},
+        steps=[windows_ok],  # windows done, no summarize_final present
     )
 
     assert can_restart_final_summary_task(completed)
     assert can_restart_final_summary_task(failed_final)
     assert not can_restart_final_summary_task(windows_not_done)
     assert not can_restart_final_summary_task(no_summary)
+    assert can_restart_final_summary_task(custom_only)  # NEW: gate no longer requires summary

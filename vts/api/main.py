@@ -106,10 +106,6 @@ def can_restart_summary_task(task: Task) -> bool:
 
 
 def can_restart_final_summary_task(task: Task) -> bool:
-    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
-    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
-    if not summary_selected:
-        return False
     summarize_windows_status = _find_step_status(task, "summarize_windows")
     if summarize_windows_status != StepStatus.completed:
         return False
@@ -233,6 +229,33 @@ def _reset_final_summary_step(task: Task) -> None:
         step.started_at = None
         step.finished_at = None
         step.message = None
+
+
+async def _rebuild_finalize_tail(repo: Repo, task: Task, new_options: dict) -> None:
+    """Rebuild the finalize tail (post-DAG_HEAD steps) for ``new_options``.
+
+    Deletes finalize-step rows (``summarize_final`` or ``finalize:*``) that are
+    no longer in the target tail, and upserts each target-tail step forced to
+    pending. Head steps are left untouched.
+    """
+    from vts.pipeline.types import DAG_HEAD, build_dag_steps
+
+    target_tail = [s for s in build_dag_steps(new_options) if s not in DAG_HEAD]
+    current_final = [
+        st.name
+        for st in task.steps
+        if st.name == "summarize_final" or st.name.startswith("finalize:")
+    ]
+    to_delete = [n for n in current_final if n not in target_tail]
+    await repo.delete_steps_by_name(task.id, to_delete)
+    for name in target_tail:
+        step = await repo.upsert_step(task.id, name)
+        step.status = StepStatus.pending
+        step.attempt = 0
+        step.started_at = None
+        step.finished_at = None
+        step.message = None
+    await repo.session.flush()
 
 
 def _reset_final_summary_artifacts(task: Task) -> None:
@@ -1484,8 +1507,22 @@ def create_app() -> FastAPI:
                 if not can_restart_final_summary_task(task):
                     results[tid] = f"cannot_restart_final:{task.status.value}"
                     continue
-                _reset_final_summary_step(task)
-                artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
+                if request.prompts is not None:
+                    # New-set restart: swap options.prompts, clear all finalize
+                    # results, rebuild the finalize tail, re-queue.
+                    from vts.services.prompt_results import clear_all_finalize_results
+
+                    new_refs = [
+                        {"source": p.source, "id": p.id} for p in request.prompts
+                    ]
+                    clear_all_finalize_results(task)  # files, prompt_results, summary_path
+                    new_options = dict(task.options or {})
+                    new_options["prompts"] = new_refs
+                    task.options = new_options
+                    await _rebuild_finalize_tail(repo, task, new_options)
+                else:
+                    _reset_final_summary_step(task)
+                    artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
             else:
                 if not can_restart_summary_task(task):
                     results[tid] = f"cannot_restart:{task.status.value}"
