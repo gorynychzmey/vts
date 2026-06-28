@@ -274,3 +274,33 @@ class TextSliceOut(BaseModel):
     length: int = Field(ge=0)
     total_length: int = Field(ge=0)
     is_end: bool
+
+
+# ---------------------------------------------------------------------------
+# Chunked upload schemas (vts-b8j)
+# ---------------------------------------------------------------------------
+
+class UploadConfigOut(BaseModel):
+    chunked_threshold_bytes: int
+    chunk_bytes: int
+    max_upload_bytes: int
+
+
+class UploadInitRequest(BaseModel):
+    filename: str
+    total_size: int
+    language: str | None = None
+    audio_only: bool = False
+    transcript: bool = True
+    prompts: str | None = None
+    display_name: str | None = None
+
+
+class UploadInitOut(BaseModel):
+    upload_id: str
+    chunk_size: int
+
+
+class UploadOffsetOut(BaseModel):
+    received: int
+    total_size: int

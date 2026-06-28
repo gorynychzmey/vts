@@ -9,6 +9,7 @@ import secrets
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -61,6 +62,10 @@ from vts.api.schemas import (
     TaskIdsRequest,
     TaskOut,
     TaskUpdate,
+    UploadConfigOut,
+    UploadInitOut,
+    UploadInitRequest,
+    UploadOffsetOut,
 )
 from vts.metrics.step_weights import SEED_FINAL_SUMMARY_FALLBACK, SEED_STEP_WEIGHTS
 from vts.core.config import Settings
@@ -81,6 +86,7 @@ from vts.services.push import (
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
 from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
+from vts.services.upload_session import UploadSession
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -1502,6 +1508,121 @@ def create_app() -> FastAPI:
             artifact_dir=str(artifact),
             task_id=task_id,
             source_title=normalize_display_name(display_name),
+        )
+        await session.commit()
+        return await _enqueue_uploaded_task(task, repo, redis, settings)
+
+    # ------------------------------------------------------------------
+    # Chunked-upload endpoints (vts-b8j)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/uploads/config", response_model=UploadConfigOut)
+    async def uploads_config(settings: Settings = Depends(get_settings_dep)) -> UploadConfigOut:
+        return UploadConfigOut(
+            chunked_threshold_bytes=settings.upload_chunked_threshold_bytes,
+            chunk_bytes=settings.upload_chunk_bytes,
+            max_upload_bytes=settings.max_upload_bytes,
+        )
+
+    @app.post("/api/uploads/init", response_model=UploadInitOut)
+    async def uploads_init(
+        payload: UploadInitRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> UploadInitOut:
+        suffix = Path(payload.filename).suffix.lower()
+        if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
+        if payload.total_size <= 0:
+            raise HTTPException(status_code=422, detail="total_size must be positive")
+        if payload.total_size > settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
+        normalized_prompts = _normalize_prompts_json(payload.prompts)
+        if normalized_prompts and not payload.transcript:
+            raise HTTPException(status_code=422, detail="prompts require transcript")
+        upload_id = uuid.uuid4()
+        options = {
+            "language": payload.language or None,
+            "audio_only": payload.audio_only,
+            "transcript": payload.transcript,
+            "prompts": normalized_prompts,
+        }
+        UploadSession.init(
+            settings.artifacts_root, user.username,
+            user_id=user.id, upload_id=upload_id, suffix=suffix,
+            total_size=payload.total_size, options=options,
+            display_name=normalize_display_name(payload.display_name),
+            filename=payload.filename,
+            created_at=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        return UploadInitOut(upload_id=str(upload_id), chunk_size=settings.upload_chunk_bytes)
+
+    def _load_owned_session(settings, user, upload_id_str: str):
+        try:
+            upload_id = uuid.UUID(upload_id_str)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        meta = UploadSession.load(settings.artifacts_root, user.username, upload_id)
+        if meta is None or meta.get("user_id") != user.id:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        return upload_id, meta
+
+    @app.get("/api/uploads/{upload_id}/offset", response_model=UploadOffsetOut)
+    async def uploads_offset(
+        upload_id: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> UploadOffsetOut:
+        uid, meta = _load_owned_session(settings, user, upload_id)
+        part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
+        return UploadOffsetOut(received=UploadSession.received_bytes(part), total_size=meta["total_size"])
+
+    @app.patch("/api/uploads/{upload_id}")
+    async def uploads_patch(
+        upload_id: str,
+        request: Request,
+        offset: int,
+        user: AuthenticatedUser = Depends(get_current_user),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> JSONResponse:
+        uid, meta = _load_owned_session(settings, user, upload_id)
+        part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
+        current = UploadSession.received_bytes(part)
+        if offset != current:
+            raise HTTPException(status_code=409, detail=f"Offset mismatch; expected {current}")
+        data = await request.body()
+        if current + len(data) > meta["total_size"]:
+            raise HTTPException(status_code=413, detail="Chunk exceeds declared total_size")
+        meta_path = UploadSession.meta_path(settings.artifacts_root, user.username, uid)
+        new_size = await asyncio.to_thread(
+            UploadSession.append_chunk, part, meta_path, data, meta["total_size"]
+        )
+        return JSONResponse({"received": new_size})
+
+    @app.post("/api/uploads/{upload_id}/finalize", response_model=TaskOut)
+    async def uploads_finalize(
+        upload_id: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+    ) -> TaskOut:
+        uid, meta = _load_owned_session(settings, user, upload_id)
+        part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
+        if UploadSession.received_bytes(part) != meta["total_size"]:
+            raise HTTPException(status_code=409, detail="Upload incomplete")
+        meta_path = UploadSession.meta_path(settings.artifacts_root, user.username, uid)
+        await asyncio.to_thread(UploadSession.finalize, part, meta["suffix"], meta_path)
+        repo = Repo(session)
+        artifact = task_dir(settings.artifacts_root, user.username, uid)
+        source_url = f"file://{Path(meta['filename']).name}"
+        task = await repo.create_task(
+            user_id=uuid.UUID(user.id),
+            source_url=source_url,
+            options=meta["options"],
+            artifact_dir=str(artifact),
+            task_id=uid,
+            source_title=meta.get("display_name"),
         )
         await session.commit()
         return await _enqueue_uploaded_task(task, repo, redis, settings)
