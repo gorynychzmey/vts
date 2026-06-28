@@ -75,10 +75,13 @@ const STEP_WEIGHT_SECONDS = {
   merge_transcript: 0.1,
   prepare_llama_model: 6.3,
   prepare_summary_chunks: 0.1,
-  summarize_windows: 598.4
+  summarize_windows: 74.8
 };
 // Fallback = median summarize_final over completed runs (recomputed 2026-06-28).
 const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 514.4;
+
+let serverStepWeights = null;
+let serverFinalFallback = null;
 
 window.__VTS_I18N = window.__VTS_I18N || {};
 const I18N = window.__VTS_I18N || {};
@@ -778,18 +781,23 @@ function isStepFinishedStatus(status) {
 
 function estimateFinalSummaryWeight(runtime) {
   const summaryTotal = Number(runtime && runtime.summary ? runtime.summary.total : 0);
-  const windows = Number.isFinite(summaryTotal) && summaryTotal > 1 ? summaryTotal - 1 : 0;
-  if (windows > 0) {
-    return STEP_WEIGHT_SECONDS.summarize_windows / windows;
+  const hasWindows = Number.isFinite(summaryTotal) && summaryTotal > 1;
+  const perWindow = (serverStepWeights && Number.isFinite(Number(serverStepWeights.summarize_windows)))
+    ? Number(serverStepWeights.summarize_windows)
+    : STEP_WEIGHT_SECONDS.summarize_windows;
+  if (hasWindows) {
+    return perWindow;
   }
-  return FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS;
+  return Number.isFinite(serverFinalFallback) ? serverFinalFallback : FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS;
 }
 
 function getStepWeight(runtime, stepName) {
-  // Every finalize step (the summary's "summarize_final" plus each custom
-  // prompt's "finalize:source:id") is roughly one final-summary call.
   if (stepName === "summarize_final" || stepName.startsWith("finalize:")) {
     return estimateFinalSummaryWeight(runtime);
+  }
+  const serverVal = serverStepWeights ? Number(serverStepWeights[stepName]) : NaN;
+  if (Number.isFinite(serverVal) && serverVal > 0) {
+    return serverVal;
   }
   const value = STEP_WEIGHT_SECONDS[stepName];
   if (Number.isFinite(value) && value > 0) {
@@ -3465,6 +3473,20 @@ async function loadPushConfig() {
   setPushButtonState(sub ? "subscribed" : "idle");
 }
 
+async function loadProgressWeights() {
+  try {
+    const data = await api("/api/progress-weights");
+    if (data && data.weights && typeof data.weights === "object") {
+      serverStepWeights = data.weights;
+      serverFinalFallback = Number.isFinite(Number(data.final_summary_fallback))
+        ? Number(data.final_summary_fallback)
+        : null;
+    }
+  } catch {
+    // keep nulls -> getStepWeight falls back to hardcoded STEP_WEIGHT_SECONDS
+  }
+}
+
 async function subscribeToPush() {
   if (!pushConfig || !pushConfig.public_key) {
     window.alert("Push is not configured on the server.");
@@ -3631,6 +3653,7 @@ async function bootstrap() {
   await loadPrompts();
   await loadPresets();
   await loadPushConfig();
+  await loadProgressWeights();
 }
 
 void bootstrap();

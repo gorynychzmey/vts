@@ -44,6 +44,7 @@ from vts.api.schemas import (
     PresetOut,
     PresetRef,
     PresetUpdateRequest,
+    ProgressWeightsOut,
     PromptCreateRequest,
     PromptDetailOut,
     PromptOut,
@@ -61,6 +62,7 @@ from vts.api.schemas import (
     TaskOut,
     TaskUpdate,
 )
+from vts.metrics.step_weights import SEED_FINAL_SUMMARY_FALLBACK, SEED_STEP_WEIGHTS
 from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
@@ -1274,6 +1276,24 @@ def create_app() -> FastAPI:
         await repo.set_user_default_preset(uuid.UUID(user.id), {"source": payload.source, "id": payload.id})
         await session.commit()
         return Response(status_code=204)
+
+    @app.get("/api/progress-weights", response_model=ProgressWeightsOut)
+    async def progress_weights_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> ProgressWeightsOut:
+        repo = Repo(session)
+        row = await repo.get_user_step_weights(uuid.UUID(user.id))
+        if row is not None and isinstance(row.weights, dict) and row.weights:
+            fallback = row.final_summary_fallback
+            return ProgressWeightsOut(
+                weights={k: float(v) for k, v in row.weights.items()},
+                final_summary_fallback=float(fallback) if fallback is not None else SEED_FINAL_SUMMARY_FALLBACK,
+            )
+        return ProgressWeightsOut(
+            weights=dict(SEED_STEP_WEIGHTS),
+            final_summary_fallback=SEED_FINAL_SUMMARY_FALLBACK,
+        )
 
     @app.get("/api/push/config", response_model=PushConfigOut, include_in_schema=False)
     async def push_config(settings: Settings = Depends(get_settings_dep)) -> PushConfigOut:

@@ -72,6 +72,11 @@ class PresetOut(BaseModel):
     editable: bool
 
 
+class ProgressWeightsOut(BaseModel):
+    weights: dict[str, float]
+    final_summary_fallback: float
+
+
 class PresetCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     options: PresetOptions
