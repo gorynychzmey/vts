@@ -243,6 +243,8 @@ input[type="file"] {
 
 #preset-save-btn {
   font-size: 0.82rem;
+  background: #efe9db;
+  color: var(--ink);
 }
 
 .preset-dangling-hint {
@@ -1003,10 +1005,43 @@ input[type="file"] {
   }
 
   .url-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr auto;
+  }
+
+  .options-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .preset-field {
+    grid-column: 1 / -1;
+    flex-wrap: nowrap;
+  }
+
+  .preset-field #preset-select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .prompt-select-field {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+
+  .prompt-select,
+  .prompt-select-toggle {
+    width: 100%;
+    max-width: none;
+  }
+
+  .option-pill {
+    justify-content: flex-start;
   }
 
   .language-control {
+    grid-column: 1 / -1;
     width: 100%;
     justify-content: space-between;
   }
