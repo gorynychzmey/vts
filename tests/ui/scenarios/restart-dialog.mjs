@@ -22,7 +22,18 @@ const COMPLETED_TASK = {
 };
 
 export async function run() {
-  const { server, baseUrl } = await startStubServer({ "/api/tasks": [COMPLETED_TASK] });
+  const { server, baseUrl } = await startStubServer({
+    "/api/tasks": [COMPLETED_TASK],
+    "/api/presets": [
+      { source: "system", id: "default", name: "Default", editable: false,
+        options: { language: null, audio_only: false, transcript: true,
+                   prompts: [{ source: "system", id: "summary" }] } },
+      { source: "user", id: "p1", name: "Memo preset", editable: true,
+        options: { language: null, audio_only: false, transcript: true,
+                   prompts: [{ source: "user", id: "u1" }] } },
+    ],
+    "/api/me/default_preset": { source: "system", id: "default" },
+  });
   const browser = await launch();
   const failures = [];
   try {
@@ -53,6 +64,27 @@ export async function run() {
           failures.push("restart dialog did not open from the menu");
         } else {
           await screenshot(page, "restart-dialog-open");
+
+          // Preset dropdown present and neutral by default
+          const presetVal = await page.evaluate(() => {
+            const el = document.getElementById("restart-final-preset");
+            return el ? el.value : "__missing__";
+          });
+          if (presetVal !== "") failures.push(`restart preset dropdown not neutral on open (got ${JSON.stringify(presetVal)})`);
+
+          // Selecting the user preset applies its prompts to the multiselect
+          const applied = await page.evaluate(() => {
+            const el = document.getElementById("restart-final-preset");
+            el.value = "user:p1";
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            const checked = [...document.querySelectorAll('#restart-final-select input[type="checkbox"]:checked')]
+              .map((c) => `${c.dataset.source}:${c.dataset.id}`);
+            return checked;
+          });
+          if (!(applied.length === 1 && applied[0] === "user:u1")) {
+            failures.push(`preset apply did not set prompts to [user:u1] (got ${JSON.stringify(applied)})`);
+          }
+
           // CLOSE via the X button — must actually close.
           await clickReal(page, "#restart-final-close-btn");
           await page.waitForTimeout(200);

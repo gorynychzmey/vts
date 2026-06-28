@@ -86,6 +86,8 @@ window.__VTS_I18N.ru = {
 "action.restart_summary_final": "Перезапустить итоговое саммари",
 "restart_final.title": "Перезапустить финал с промптами",
 "restart_final.submit": "Перезапустить",
+"restart_final.preset": "Пресет",
+"restart_final.preset_none": "—",
 "action.download_media": "Скачать медиафайл",
 "action.archive": "Архивировать задачу",
 "action.delete": "Удалить",

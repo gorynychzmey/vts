@@ -1278,3 +1278,19 @@ input[type="file"] {
   width: 16px;
   height: 16px;
 }
+
+.restart-final-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.restart-final-preset-row #restart-final-preset {
+  min-width: 10rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.84rem;
+}
