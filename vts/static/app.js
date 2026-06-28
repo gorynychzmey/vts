@@ -1699,8 +1699,9 @@ let promptsCache = [];
 
 function promptDisplayName(prompt) {
   if (prompt.source === "system") {
-    const translated = t(prompt.name);
-    return translated === prompt.name ? prompt.name : translated;
+    const key = `prompt.system.${prompt.id}`;
+    const translated = t(key);
+    return translated === key ? prompt.name : translated;
   }
   return prompt.name;
 }

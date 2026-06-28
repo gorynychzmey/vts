@@ -10,10 +10,11 @@ class SystemPromptDef:
     key: str
     file: str
     i18n_name_key: str
+    display_name: str
 
 
 SYSTEM_PROMPTS: list[SystemPromptDef] = [
-    SystemPromptDef("summary", "global_prompt.md", "prompt.system.summary"),
+    SystemPromptDef("summary", "global_prompt.md", "prompt.system.summary", "Summary"),
 ]
 
 

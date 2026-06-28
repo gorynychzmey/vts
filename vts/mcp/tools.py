@@ -270,7 +270,7 @@ async def list_prompts(
     """List prompts available to the caller: built-in system prompts first,
     then the user's own prompts (mirrors web GET /api/prompts)."""
     out: list[PromptInfo] = [
-        PromptInfo(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+        PromptInfo(source="system", id=p.key, name=p.display_name, editable=False)
         for p in list_system_prompts()
     ]
     for row in await repo.list_prompts(uuid.UUID(user.id)):

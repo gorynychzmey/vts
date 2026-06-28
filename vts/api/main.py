@@ -1115,7 +1115,7 @@ def create_app() -> FastAPI:
     ) -> list[PromptOut]:
         from vts.services.prompt_registry import list_system_prompts
         out: list[PromptOut] = [
-            PromptOut(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+            PromptOut(source="system", id=p.key, name=p.display_name, editable=False)
             for p in list_system_prompts()
         ]
         repo = Repo(session)
