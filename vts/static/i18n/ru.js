@@ -46,6 +46,7 @@ window.__VTS_I18N.ru = {
 "preset.manage.open": "Управление пресетами",
 "preset.manage.title": "Управление пресетами",
 "preset.manage.edit": "Изменить",
+"preset.manage.create": "Создать пресет",
 "preset.manage.delete": "Удалить",
 "preset.manage.duplicate": "Дублировать",
 "preset.manage.make_default": "Сделать основным",

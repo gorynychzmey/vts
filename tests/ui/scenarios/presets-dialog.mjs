@@ -76,6 +76,47 @@ export async function run() {
     );
     if (editBtns !== 1) failures.push(`expected 1 Edit button (user only), got ${editBtns}`);
 
+    // CREATE MODE (default): the form is visible, submit button reads the
+    // create label (not "Edit"), and the prompt multiselect shows rows with
+    // the system "summary" prompt checked by default.
+    if (!(await isVisible(page, "#preset-form"))) {
+      failures.push("#preset-form not visible on open (should be create form by default)");
+    }
+    const createLabel = (await page.$eval("#preset-submit-btn", (b) => b.textContent.trim()));
+    if (createLabel !== "Create preset") {
+      failures.push(`expected submit label "Create preset" in create mode, got "${createLabel}"`);
+    }
+    const cancelHiddenInCreate = await page.$eval("#preset-cancel-btn", (b) => b.classList.contains("hidden"));
+    if (!cancelHiddenInCreate) failures.push("cancel button should be hidden in create mode");
+    const msRows = await page.$$eval("#preset-edit-prompts .prompt-option, #preset-edit-prompts label", (els) => els.length);
+    if (msRows < 1) failures.push(`prompt multiselect shows no rows in create mode (got ${msRows})`);
+    const summaryChecked = await page.$$eval("#preset-edit-prompts input[type=checkbox]", (els) =>
+      els.filter((c) => c.checked).length
+    );
+    if (summaryChecked !== 1) failures.push(`expected exactly 1 checked prompt (summary) in create mode, got ${summaryChecked}`);
+
+    // EDIT MODE: click the user preset's Edit -> submit label switches to
+    // "Edit" and the multiselect reflects that preset's prompts (u1).
+    await page.$$eval("#presets-list button", (els) => {
+      const b = els.find((x) => x.textContent.trim() === "Edit");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(150);
+    const editLabel = (await page.$eval("#preset-submit-btn", (b) => b.textContent.trim()));
+    if (editLabel !== "Edit") {
+      failures.push(`expected submit label "Edit" in edit mode, got "${editLabel}"`);
+    }
+    const editIdVal = await page.$eval("#preset-edit-id", (i) => i.value);
+    if (editIdVal !== "p1") failures.push(`expected preset-edit-id "p1" in edit mode, got "${editIdVal}"`);
+    const cancelHiddenInEdit = await page.$eval("#preset-cancel-btn", (b) => b.classList.contains("hidden"));
+    if (cancelHiddenInEdit) failures.push("cancel button should be visible in edit mode");
+    const nameVal = await page.$eval("#preset-name-input", (i) => i.value);
+    if (nameVal !== "Audio memo") failures.push(`expected name "Audio memo" in edit mode, got "${nameVal}"`);
+    const editChecked = await page.$$eval("#preset-edit-prompts input[type=checkbox]", (els) =>
+      els.filter((c) => c.checked).length
+    );
+    if (editChecked !== 1) failures.push(`expected 1 checked prompt (u1) in edit mode, got ${editChecked}`);
+
     // Close via the X button.
     await clickReal(page, "#presets-close-btn");
     await page.waitForTimeout(200);
