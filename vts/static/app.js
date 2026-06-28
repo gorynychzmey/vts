@@ -3043,6 +3043,230 @@ promptForm?.addEventListener("submit", async (event) => {
   await loadPrompts();
 });
 
+// ---------- Presets manager dialog ----------
+
+const presetsDialog = document.getElementById("presets-dialog");
+const presetsListEl = document.getElementById("presets-list");
+const presetForm = document.getElementById("preset-form");
+const presetEditIdInput = document.getElementById("preset-edit-id");
+const presetNameInput = document.getElementById("preset-name-input");
+const presetEditLanguage = document.getElementById("preset-edit-language");
+const presetEditAudioOnly = document.getElementById("preset-edit-audio_only");
+const presetEditTranscript = document.getElementById("preset-edit-transcript");
+const presetEditPrompts = document.getElementById("preset-edit-prompts");
+const presetCancelBtn = document.getElementById("preset-cancel-btn");
+
+let presetsManagerDefaultRef = null;
+
+function presetRefEquals(a, b) {
+  return !!a && !!b && a.source === b.source && String(a.id) === String(b.id);
+}
+
+function resetPresetForm() {
+  if (presetForm) presetForm.classList.add("hidden");
+  if (presetEditIdInput) presetEditIdInput.value = "";
+  if (presetNameInput) presetNameInput.value = "";
+}
+
+function fillPresetForm(preset) {
+  if (!presetForm) return;
+  presetForm.classList.remove("hidden");
+  if (presetEditIdInput) presetEditIdInput.value = preset.id;
+  if (presetNameInput) presetNameInput.value = preset.name || "";
+  const opts = preset.options || {};
+  if (presetEditLanguage) presetEditLanguage.value = opts.language || "";
+  if (presetEditAudioOnly) presetEditAudioOnly.checked = !!opts.audio_only;
+  if (presetEditTranscript) presetEditTranscript.checked = !!opts.transcript;
+  if (presetEditPrompts) {
+    const { filtered } = filterDanglingPrompts(opts.prompts);
+    renderPromptMultiselect(presetEditPrompts, promptsCache, filtered, {
+      flat: true,
+    });
+  }
+  presetNameInput?.focus();
+}
+
+async function duplicatePreset(preset) {
+  try {
+    await api("/api/presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: `${presetLabel(preset)}${t("preset.copy_suffix")}`,
+        options: preset.options || {},
+      }),
+    });
+  } catch (err) {
+    console.error("Failed to duplicate preset", err);
+    return;
+  }
+  await refreshPresetsManager();
+  await loadPresets();
+}
+
+async function makePresetDefault(preset) {
+  try {
+    await api("/api/me/default_preset", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: preset.source, id: preset.id }),
+    });
+  } catch (err) {
+    console.error("Failed to set default preset", err);
+    return;
+  }
+  await refreshPresetsManager();
+  await loadPresets();
+}
+
+async function deletePreset(preset) {
+  if (!window.confirm(`${t("preset.manage.delete")}: ${preset.name}?`)) {
+    return;
+  }
+  try {
+    const resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(preset.id)}`), {
+      method: "DELETE",
+    });
+    if (!resp.ok) return;
+  } catch (err) {
+    console.error("Failed to delete preset", err);
+    return;
+  }
+  if (presetEditIdInput?.value === String(preset.id)) resetPresetForm();
+  await refreshPresetsManager();
+  await loadPresets();
+}
+
+function renderPresetsList(presets, defaultRef) {
+  if (!presetsListEl) return;
+  presetsListEl.innerHTML = "";
+  for (const preset of presets) {
+    const row = document.createElement("div");
+    row.className = "tokens-row prompts-row";
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta prompts-meta";
+    const name = document.createElement("span");
+    name.className = "tokens-name prompt-name";
+    name.textContent = presetLabel(preset);
+    meta.appendChild(name);
+    if (preset.source === "system") {
+      const badge = document.createElement("span");
+      badge.className = "prompt-badge prompt-badge-system";
+      badge.textContent = t("preset.manage.system_badge");
+      meta.appendChild(badge);
+    }
+    if (presetRefEquals({ source: preset.source, id: preset.id }, defaultRef)) {
+      const badge = document.createElement("span");
+      badge.className = "prompt-badge prompt-badge-default";
+      badge.textContent = t("preset.manage.default_badge");
+      meta.appendChild(badge);
+    }
+    row.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "prompts-actions";
+
+    if (preset.source === "user" && preset.editable) {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn-text ghost";
+      editBtn.textContent = t("preset.manage.edit");
+      editBtn.addEventListener("click", () => fillPresetForm(preset));
+      actions.appendChild(editBtn);
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn-text ghost";
+      delBtn.textContent = t("preset.manage.delete");
+      delBtn.addEventListener("click", () => deletePreset(preset));
+      actions.appendChild(delBtn);
+    }
+
+    const dupBtn = document.createElement("button");
+    dupBtn.type = "button";
+    dupBtn.className = "btn-text ghost";
+    dupBtn.textContent = t("preset.manage.duplicate");
+    dupBtn.addEventListener("click", () => duplicatePreset(preset));
+    actions.appendChild(dupBtn);
+
+    const defBtn = document.createElement("button");
+    defBtn.type = "button";
+    defBtn.className = "btn-text ghost";
+    defBtn.textContent = t("preset.manage.make_default");
+    defBtn.addEventListener("click", () => makePresetDefault(preset));
+    actions.appendChild(defBtn);
+
+    row.appendChild(actions);
+    presetsListEl.appendChild(row);
+  }
+}
+
+async function refreshPresetsManager() {
+  if (!presetsListEl) return;
+  try {
+    const presets = await api("/api/presets");
+    let defaultRef = null;
+    try {
+      defaultRef = await api("/api/me/default_preset");
+    } catch (err) {
+      console.error("Failed to load default preset", err);
+    }
+    presetsManagerDefaultRef = defaultRef;
+    renderPresetsList(Array.isArray(presets) ? presets : [], defaultRef);
+  } catch (err) {
+    console.error("Failed to load presets", err);
+  }
+}
+
+document.getElementById("presets-btn")?.addEventListener("click", async () => {
+  if (!presetsDialog) return;
+  resetPresetForm();
+  await loadPrompts();
+  await refreshPresetsManager();
+  if (typeof presetsDialog.showModal === "function") {
+    presetsDialog.showModal();
+  } else {
+    presetsDialog.setAttribute("open", "");
+  }
+});
+
+document.getElementById("presets-close-btn")?.addEventListener("click", () => {
+  presetsDialog?.close();
+});
+
+presetCancelBtn?.addEventListener("click", () => {
+  resetPresetForm();
+});
+
+presetForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editId = presetEditIdInput?.value || "";
+  if (!editId) return;
+  const name = (presetNameInput?.value || "").trim();
+  if (!name) return;
+  const options = {
+    language: presetEditLanguage ? presetEditLanguage.value || "" : "",
+    audio_only: !!(presetEditAudioOnly && presetEditAudioOnly.checked),
+    transcript: !!(presetEditTranscript && presetEditTranscript.checked),
+    prompts: getSelectedFrom(presetEditPrompts),
+  };
+  try {
+    const resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(editId)}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, options }),
+    });
+    if (!resp.ok) return;
+  } catch (err) {
+    console.error("Failed to save preset", err);
+    return;
+  }
+  resetPresetForm();
+  await refreshPresetsManager();
+  await loadPresets();
+});
+
 // ---------- Restart final dialog ----------
 
 const restartFinalDialog = document.getElementById("restart-final-dialog");

@@ -378,6 +378,12 @@ input[type="file"] {
   color: #2c8a4a;
 }
 
+.prompt-badge-default {
+  background: #fff6e6;
+  border-color: #f3dca8;
+  color: #a76a14;
+}
+
 .row {
   display: flex;
 }
