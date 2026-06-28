@@ -101,7 +101,7 @@ async def test_init_rejects_bad_suffix(client):
 async def test_init_rejects_oversize(client):
     r = await client.post("/api/uploads/init",
                           json={"filename": "x.mp4", "total_size": 2_147_483_649})
-    assert r.status_code in (413, 422)
+    assert r.status_code == 413
 
 
 async def test_finalize_incomplete_conflicts(client):
@@ -114,3 +114,65 @@ async def test_finalize_incomplete_conflicts(client):
 async def test_unknown_upload_is_404(client):
     r = await client.get(f"/api/uploads/{uuid.uuid4()}/offset")
     assert r.status_code == 404
+
+
+async def test_foreign_session_is_404(client):
+    """Owner-isolation: a session that doesn't belong to the authenticated user returns 404.
+
+    Two isolation layers are exercised:
+
+    1. Filesystem-scoping by username: a session planted under a *different*
+       username ("someone-else") is invisible to the "tester" client because
+       UploadSession.load() scopes its lookup to user.username.  The load()
+       call returns None -> 404.
+
+    2. user_id mismatch: a session planted under the *same* username ("tester")
+       but with a *different* user_id is caught by the second guard in
+       _load_owned_session: `meta.get("user_id") != user.id` -> 404.
+       (This branch is reachable because load() finds the meta file — same
+       username means same on-disk path prefix — but the user_id differs.)
+    """
+    from vts.core.config import get_settings
+    from vts.services.upload_session import UploadSession
+
+    settings = get_settings()
+
+    # --- Case 1: session under a completely different username ---
+    foreign_id = uuid.uuid4()
+    UploadSession.init(
+        settings.artifacts_root,
+        "someone-else",
+        user_id="ffffffff-ffff-ffff-ffff-ffffffffffff",
+        upload_id=foreign_id,
+        suffix=".mp4",
+        total_size=10,
+        options={},
+        display_name=None,
+        filename="x.mp4",
+        created_at="t",
+    )
+    # tester's client loads via tester's username path -> load() returns None -> 404
+    r = await client.get(f"/api/uploads/{foreign_id}/offset")
+    assert r.status_code == 404
+    fin = await client.post(f"/api/uploads/{foreign_id}/finalize")
+    assert fin.status_code == 404
+
+    # --- Case 2: session under tester's username but a different user_id ---
+    # load() succeeds (same path), but user_id check fails -> 404
+    hijack_id = uuid.uuid4()
+    UploadSession.init(
+        settings.artifacts_root,
+        "tester",
+        user_id="ffffffff-ffff-ffff-ffff-ffffffffffff",
+        upload_id=hijack_id,
+        suffix=".mp4",
+        total_size=10,
+        options={},
+        display_name=None,
+        filename="x.mp4",
+        created_at="t",
+    )
+    r2 = await client.get(f"/api/uploads/{hijack_id}/offset")
+    assert r2.status_code == 404
+    fin2 = await client.post(f"/api/uploads/{hijack_id}/finalize")
+    assert fin2.status_code == 404
