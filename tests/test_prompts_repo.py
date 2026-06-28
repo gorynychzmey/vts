@@ -165,3 +165,37 @@ async def test_delete_steps_by_name(session):
     assert remaining == {"summarize_windows"}
     # empty names -> no-op
     assert await repo.delete_steps_by_name(task.id, []) == 0
+
+
+# ---------------------------------------------------------------------------
+# clear_all_finalize_results test (pure-function, no DB)
+# ---------------------------------------------------------------------------
+
+
+from pathlib import Path
+from types import SimpleNamespace
+from vts.services.prompt_results import clear_all_finalize_results
+
+
+def test_clear_all_finalize_results(tmp_path):
+    summary = tmp_path / "summary"; (summary / "results").mkdir(parents=True)
+    outputs = tmp_path / "outputs"; outputs.mkdir()
+    (summary / "final.md").write_text("s")
+    (summary / "results" / "user__a.md").write_text("a")
+    (outputs / "summary.md").write_text("s")
+    task = SimpleNamespace(
+        artifact_dir=str(tmp_path),
+        summary_path=str(summary / "final.md"),
+        options={"prompts": [{"source": "user", "id": "a"}],
+                 "prompt_results": [{"source": "user", "id": "a", "name": "A",
+                                     "path": str(summary / "results" / "user__a.md"),
+                                     "status": "completed"}]},
+    )
+    clear_all_finalize_results(task)
+    assert not (summary / "final.md").exists()
+    assert not (summary / "results" / "user__a.md").exists()
+    assert not (outputs / "summary.md").exists()
+    assert task.options["prompt_results"] == []
+    assert task.summary_path is None
+    # options.prompts is left untouched here (endpoint owns it)
+    assert task.options["prompts"] == [{"source": "user", "id": "a"}]

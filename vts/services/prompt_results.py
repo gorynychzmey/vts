@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from vts.db.models import Task
@@ -44,3 +45,38 @@ def resolve_result_path(task: Task, source: str, ref: str) -> str | None:
     if source == "system" and ref == "summary" and task.summary_path:
         return task.summary_path
     return None
+
+
+def clear_all_finalize_results(task) -> None:
+    """Delete every finalize result file and reset the prompt_results index.
+
+    Removes custom result files (summary/results/*), the system summary
+    (summary/final.* + outputs/summary.*), empties options['prompt_results'],
+    and clears task.summary_path. Reassigns task.options so the JSON column
+    persists on commit.
+    """
+    artifact_root = Path(task.artifact_dir) if task.artifact_dir else None
+    if artifact_root is not None:
+        summary_dir = artifact_root / "summary"
+        outputs_dir = artifact_root / "outputs"
+        # custom result files
+        results_dir = summary_dir / "results"
+        if results_dir.exists():
+            for p in results_dir.glob("*"):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        # system summary files
+        for p in (summary_dir / "final.md", summary_dir / "final.json",
+                  outputs_dir / "summary.md", outputs_dir / "summary.json"):
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+    new_options = dict(task.options or {})
+    new_options["prompt_results"] = []
+    task.options = new_options
+    task.summary_path = None
