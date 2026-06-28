@@ -7,7 +7,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.db.base import Base
-from vts.db.models import Prompt, Task, TaskStatus, User
+from vts.db.models import Prompt, Step, StepStatus, Task, TaskStatus, User
 from vts.db.repo import Repo
 
 from _db import make_test_engine
@@ -140,3 +140,28 @@ async def test_set_task_prompt_results_roundtrip(session):
     # Re-read from DB to confirm flush round-trips
     await session.refresh(task)
     assert task.options["prompt_results"] == prompt_results
+
+
+# ---------------------------------------------------------------------------
+# delete_steps_by_name test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_steps_by_name(session):
+    repo = Repo(session)
+    uid = uuid.uuid4()
+    session.add(User(id=uid, username=f"u-{uid.hex[:8]}"))
+    task = Task(id=uuid.uuid4(), user_id=uid, source_url="x", options={}, artifact_dir="/tmp/a")
+    session.add(task)
+    await session.flush()
+    for name in ("summarize_final", "finalize:user:a", "summarize_windows"):
+        session.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
+    await session.flush()
+
+    deleted = await repo.delete_steps_by_name(task.id, ["finalize:user:a", "summarize_final"])
+    assert deleted == 2
+    remaining = {s.name for s in (await repo.get_task_by_id(task.id)).steps}
+    assert remaining == {"summarize_windows"}
+    # empty names -> no-op
+    assert await repo.delete_steps_by_name(task.id, []) == 0
