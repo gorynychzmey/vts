@@ -40,6 +40,9 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

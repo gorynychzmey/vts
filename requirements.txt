@@ -8,11 +8,11 @@ httpx==0.28.1
 orjson>=3.11.5,<4
 pydantic>=2.12.0,<3
 pydantic-settings>=2.12.0,<3
-python-multipart==0.0.29
+python-multipart==0.0.32
 PyYAML==6.0.3
 pywebpush==2.3.0
 tokenizers>=0.21.0,<1
-yt-dlp==2026.3.17
+yt-dlp==2026.6.9
 fastmcp>=3.3,<4
 authlib>=1.6,<2
 itsdangerous>=2.2,<3

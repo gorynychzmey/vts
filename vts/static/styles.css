@@ -1022,16 +1022,21 @@ input[type="file"] {
 
 /* Left-align the prompt rows and the action button in the restart dialog;
    keep the badge next to the name rather than pushed to the far edge. */
-#restart-final-select .prompt-row {
+#restart-final-select .prompt-row,
+#preset-edit-prompts .prompt-row {
   justify-content: flex-start;
 }
 
-#restart-final-select .prompt-name {
+#restart-final-select .prompt-name,
+#preset-edit-prompts .prompt-name {
   flex: 0 0 auto;
 }
 
-/* Flat, always-visible scrollable prompt list (no dropdown in the dialog). */
-#restart-final-select {
+/* Flat, always-visible scrollable prompt list (no dropdown in the dialog).
+   The base `.prompt-select` rule is inline-flex/align-center for the dropdown
+   toggle; flat lists need a left-aligned column or the rows collapse. */
+#restart-final-select,
+#preset-edit-prompts {
   display: flex;
   flex-direction: column;
   /* Override the inline-flex `align-items: center` inherited from the base
