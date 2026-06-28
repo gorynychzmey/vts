@@ -63,26 +63,22 @@ const SUMMARY_STEPS = new Set([
   "pack_window_notes",
   "summarize_final"
 ]);
-// Relative per-step weights (in seconds) averaged over the last 4 completed
-// pipeline runs.
-// TODO(vts-b6t): recalibrate these constants (and FINAL_SUMMARY_WEIGHT_FALLBACK
-// _SECONDS below) against accumulated run metrics once fresh per-step durations
-// are available; current values are a stale 4-run average, not yet re-measured
-// for the per-prompt finalize fan-out.
+// Relative per-step weights (in seconds) — medians recomputed over completed
+// pipeline runs on 2026-06-28 (n=56–64 runs per step).
 const STEP_WEIGHT_SECONDS = {
-  download: 14.5,
-  extract_audio: 6.8,
-  trim_initial_silence: 0.5,
-  segment_audio: 4.7,
-  detect_language: 2.7,
-  transcribe_segments: 399.8,
+  download: 5.5,
+  extract_audio: 2.0,
+  trim_initial_silence: 0.3,
+  segment_audio: 1.2,
+  detect_language: 2.6,
+  transcribe_segments: 174.8,
   merge_transcript: 0.1,
-  prepare_llama_model: 4.9,
-  prepare_summary_chunks: 0.2,
-  summarize_windows: 1171.2
+  prepare_llama_model: 6.3,
+  prepare_summary_chunks: 0.1,
+  summarize_windows: 598.4
 };
-// Fallback equals average summarize_final duration over the last 4 runs.
-const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 369.2;
+// Fallback = median summarize_final over completed runs (recomputed 2026-06-28).
+const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 514.4;
 
 window.__VTS_I18N = window.__VTS_I18N || {};
 const I18N = window.__VTS_I18N || {};
