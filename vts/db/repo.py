@@ -7,7 +7,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User
+from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User, UserStepWeights
+from vts.metrics.step_weights import StepDuration
 
 
 def utcnow() -> datetime:
@@ -530,3 +531,64 @@ class Repo:
         await self.session.delete(preset)
         await self.session.flush()
         return True
+
+    # ------------------------------------------------------------------
+    # Per-user step weights (vts-8cm)
+    # ------------------------------------------------------------------
+
+    async def step_durations_for_user(self, user_id: uuid.UUID) -> list[StepDuration]:
+        stmt = (
+            select(Step.name, Step.started_at, Step.finished_at, Task.summary_progress)
+            .join(Task, Step.task_id == Task.id)
+            .where(
+                Task.user_id == user_id,
+                Task.status == TaskStatus.completed,
+                Step.status == StepStatus.completed,
+                Step.started_at.is_not(None),
+                Step.finished_at.is_not(None),
+            )
+        )
+        rows: list[StepDuration] = []
+        for name, started, finished, summary_progress in await self.session.execute(stmt):
+            duration = (finished - started).total_seconds()
+            if duration < 0:
+                continue
+            total = None
+            if isinstance(summary_progress, dict):
+                raw_total = summary_progress.get("total")
+                if isinstance(raw_total, int) and raw_total >= 1:
+                    total = raw_total
+            rows.append(StepDuration(name, duration, total))
+        return rows
+
+    async def upsert_user_step_weights(
+        self,
+        user_id: uuid.UUID,
+        weights: dict,
+        final_summary_fallback: float | None,
+        computed_at: datetime,
+        sample_counts: dict,
+    ) -> UserStepWeights:
+        row = await self.get_user_step_weights(user_id)
+        if row is None:
+            row = UserStepWeights(user_id=user_id)
+            self.session.add(row)
+        row.weights = weights
+        row.final_summary_fallback = final_summary_fallback
+        row.computed_at = computed_at
+        row.sample_counts = sample_counts
+        await self.session.flush()
+        return row
+
+    async def get_user_step_weights(self, user_id: uuid.UUID) -> UserStepWeights | None:
+        return await self.session.scalar(
+            select(UserStepWeights).where(UserStepWeights.user_id == user_id)
+        )
+
+    async def users_with_completed_tasks(self) -> list[uuid.UUID]:
+        stmt = (
+            select(Task.user_id)
+            .where(Task.status == TaskStatus.completed)
+            .distinct()
+        )
+        return list(await self.session.scalars(stmt))
