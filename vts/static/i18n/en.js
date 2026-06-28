@@ -46,6 +46,7 @@ window.__VTS_I18N.en = {
 "preset.manage.open": "Manage presets",
 "preset.manage.title": "Manage presets",
 "preset.manage.edit": "Edit",
+"preset.manage.create": "Create preset",
 "preset.manage.delete": "Delete",
 "preset.manage.duplicate": "Duplicate",
 "preset.manage.make_default": "Make default",

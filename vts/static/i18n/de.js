@@ -46,6 +46,7 @@ window.__VTS_I18N.de = {
 "preset.manage.open": "Presets verwalten",
 "preset.manage.title": "Presets verwalten",
 "preset.manage.edit": "Bearbeiten",
+"preset.manage.create": "Preset erstellen",
 "preset.manage.delete": "Löschen",
 "preset.manage.duplicate": "Duplizieren",
 "preset.manage.make_default": "Als Standard festlegen",

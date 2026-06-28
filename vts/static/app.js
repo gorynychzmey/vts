@@ -3054,6 +3054,7 @@ const presetEditLanguage = document.getElementById("preset-edit-language");
 const presetEditAudioOnly = document.getElementById("preset-edit-audio_only");
 const presetEditTranscript = document.getElementById("preset-edit-transcript");
 const presetEditPrompts = document.getElementById("preset-edit-prompts");
+const presetSubmitBtn = document.getElementById("preset-submit-btn");
 const presetCancelBtn = document.getElementById("preset-cancel-btn");
 
 let presetsManagerDefaultRef = null;
@@ -3062,16 +3063,34 @@ function presetRefEquals(a, b) {
   return !!a && !!b && a.source === b.source && String(a.id) === String(b.id);
 }
 
+function setPresetFormMode(editId) {
+  if (presetEditIdInput) presetEditIdInput.value = editId || "";
+  if (presetSubmitBtn) {
+    presetSubmitBtn.textContent = editId
+      ? t("preset.manage.edit")
+      : t("preset.manage.create");
+  }
+  if (presetCancelBtn) presetCancelBtn.classList.toggle("hidden", !editId);
+}
+
 function resetPresetForm() {
-  if (presetForm) presetForm.classList.add("hidden");
-  if (presetEditIdInput) presetEditIdInput.value = "";
   if (presetNameInput) presetNameInput.value = "";
+  if (presetEditLanguage) presetEditLanguage.value = "";
+  if (presetEditAudioOnly) presetEditAudioOnly.checked = false;
+  if (presetEditTranscript) presetEditTranscript.checked = true;
+  if (presetEditPrompts) {
+    renderPromptMultiselect(
+      presetEditPrompts,
+      promptsCache,
+      [{ source: "system", id: "summary" }],
+      { flat: true },
+    );
+  }
+  setPresetFormMode("");
 }
 
 function fillPresetForm(preset) {
   if (!presetForm) return;
-  presetForm.classList.remove("hidden");
-  if (presetEditIdInput) presetEditIdInput.value = preset.id;
   if (presetNameInput) presetNameInput.value = preset.name || "";
   const opts = preset.options || {};
   if (presetEditLanguage) presetEditLanguage.value = opts.language || "";
@@ -3083,6 +3102,7 @@ function fillPresetForm(preset) {
       flat: true,
     });
   }
+  setPresetFormMode(preset.id);
   presetNameInput?.focus();
 }
 
@@ -3242,7 +3262,6 @@ presetCancelBtn?.addEventListener("click", () => {
 presetForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const editId = presetEditIdInput?.value || "";
-  if (!editId) return;
   const name = (presetNameInput?.value || "").trim();
   if (!name) return;
   const options = {
@@ -3252,11 +3271,20 @@ presetForm?.addEventListener("submit", async (event) => {
     prompts: getSelectedFrom(presetEditPrompts),
   };
   try {
-    const resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(editId)}`), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, options }),
-    });
+    let resp;
+    if (editId) {
+      resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(editId)}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, options }),
+      });
+    } else {
+      resp = await fetch(buildPath("/api/presets"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, options }),
+      });
+    }
     if (!resp.ok) return;
   } catch (err) {
     console.error("Failed to save preset", err);
