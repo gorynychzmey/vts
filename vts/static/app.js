@@ -1,3 +1,7 @@
+const ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>';
+const ICON_DELETE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
+const ICON_DUPLICATE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_MAKE_DEFAULT = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6.5 7 .9-5 4.8 1.3 7L12 17.8 5.4 21.2 6.7 14.2 1.7 9.4l7-.9z"/></svg>';
 const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
@@ -2944,8 +2948,10 @@ function renderPromptsList(prompts) {
     if (prompt.editable) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
-      editBtn.className = "btn-text ghost";
-      editBtn.textContent = t("prompts.manage.edit");
+      editBtn.className = "icon-btn ghost";
+      editBtn.title = t("prompts.manage.edit");
+      editBtn.setAttribute("aria-label", t("prompts.manage.edit"));
+      editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", async () => {
         const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
         fillPromptForm({
@@ -2958,8 +2964,10 @@ function renderPromptsList(prompts) {
 
       const delBtn = document.createElement("button");
       delBtn.type = "button";
-      delBtn.className = "btn-text ghost";
-      delBtn.textContent = t("prompts.manage.delete");
+      delBtn.className = "icon-btn ghost danger";
+      delBtn.title = t("prompts.manage.delete");
+      delBtn.setAttribute("aria-label", t("prompts.manage.delete"));
+      delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", async () => {
         const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(prompt.id)}`), { method: "DELETE" });
         if (resp.ok) {
@@ -2978,8 +2986,10 @@ function renderPromptsList(prompts) {
 
     const dupBtn = document.createElement("button");
     dupBtn.type = "button";
-    dupBtn.className = "btn-text ghost";
-    dupBtn.textContent = t("prompts.manage.duplicate");
+    dupBtn.className = "icon-btn ghost";
+    dupBtn.title = t("prompts.manage.duplicate");
+    dupBtn.setAttribute("aria-label", t("prompts.manage.duplicate"));
+    dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePrompt(prompt));
     actions.appendChild(dupBtn);
 
@@ -3190,30 +3200,38 @@ function renderPresetsList(presets, defaultRef) {
     if (preset.source === "user" && preset.editable) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
-      editBtn.className = "btn-text ghost";
-      editBtn.textContent = t("preset.manage.edit");
+      editBtn.className = "icon-btn ghost";
+      editBtn.title = t("preset.manage.edit");
+      editBtn.setAttribute("aria-label", t("preset.manage.edit"));
+      editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", () => fillPresetForm(preset));
       actions.appendChild(editBtn);
 
       const delBtn = document.createElement("button");
       delBtn.type = "button";
-      delBtn.className = "btn-text ghost";
-      delBtn.textContent = t("preset.manage.delete");
+      delBtn.className = "icon-btn ghost danger";
+      delBtn.title = t("preset.manage.delete");
+      delBtn.setAttribute("aria-label", t("preset.manage.delete"));
+      delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", () => deletePreset(preset));
       actions.appendChild(delBtn);
     }
 
     const dupBtn = document.createElement("button");
     dupBtn.type = "button";
-    dupBtn.className = "btn-text ghost";
-    dupBtn.textContent = t("preset.manage.duplicate");
+    dupBtn.className = "icon-btn ghost";
+    dupBtn.title = t("preset.manage.duplicate");
+    dupBtn.setAttribute("aria-label", t("preset.manage.duplicate"));
+    dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePreset(preset));
     actions.appendChild(dupBtn);
 
     const defBtn = document.createElement("button");
     defBtn.type = "button";
-    defBtn.className = "btn-text ghost";
-    defBtn.textContent = t("preset.manage.make_default");
+    defBtn.className = "icon-btn ghost";
+    defBtn.title = t("preset.manage.make_default");
+    defBtn.setAttribute("aria-label", t("preset.manage.make_default"));
+    defBtn.innerHTML = ICON_MAKE_DEFAULT;
     defBtn.addEventListener("click", () => makePresetDefault(preset));
     actions.appendChild(defBtn);
 

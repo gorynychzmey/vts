@@ -1144,9 +1144,19 @@ input[type="file"] {
 
 .prompts-actions {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.prompts-actions .icon-btn {
+  width: 2rem;
+  height: 2rem;
+}
+
+.prompts-actions .icon-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .prompts-readonly {
