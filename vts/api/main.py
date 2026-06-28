@@ -883,6 +883,50 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
     app.openapi = custom_openapi  # type: ignore[method-assign]
 
 
+_ALLOWED_UPLOAD_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v",
+        ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".wma",
+    }
+)
+
+
+def _normalize_prompts_json(prompts: str | None) -> list[dict]:
+    from vts.services.prompt_registry import parse_ref, ref_to_dict
+    if prompts is None:
+        return [{"source": "system", "id": "summary"}]
+    try:
+        raw_refs = json.loads(prompts)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="prompts must be valid JSON") from exc
+    if not isinstance(raw_refs, list):
+        raise HTTPException(status_code=422, detail="prompts must be a JSON list")
+    out: list[dict] = []
+    for entry in raw_refs:
+        try:
+            source, ref_id = parse_ref(entry)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"invalid prompt ref: {entry!r}") from exc
+        out.append(ref_to_dict(source, ref_id))
+    return out
+
+
+async def _enqueue_uploaded_task(task, repo, redis, settings) -> "TaskOut":
+    bus = RedisBus(redis, settings)
+    await bus.notify_queued()
+    await bus.publish_event(
+        user_id=str(task.user_id),
+        task_id=str(task.id),
+        event="task_status",
+        data={"status": task.status.value},
+    )
+    set_committed_value(task, "steps", [])
+    queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    asr_progress = await repo.get_asr_progress_for_tasks([task.id])
+    summary_progress = {task.id: summary_progress_for_task(task)}
+    return serialize_task(task, queue_positions, asr_progress, summary_progress)
+
+
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings_dep()
@@ -1410,13 +1454,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Result not found")
         return PlainTextResponse(Path(path).read_text(encoding="utf-8"))
 
-    _ALLOWED_UPLOAD_SUFFIXES = frozenset(
-        {
-            ".mp4", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v",
-            ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".wma",
-        }
-    )
-
     @app.post("/api/tasks/upload", response_model=TaskOut)
     async def upload_task(
         file: UploadFile = File(...),
@@ -1430,23 +1467,7 @@ def create_app() -> FastAPI:
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
-        from vts.services.prompt_registry import parse_ref, ref_to_dict
-        if prompts is None:
-            normalized_prompts = [{"source": "system", "id": "summary"}]
-        else:
-            try:
-                raw_refs = json.loads(prompts)
-            except (ValueError, TypeError) as exc:
-                raise HTTPException(status_code=422, detail="prompts must be valid JSON") from exc
-            if not isinstance(raw_refs, list):
-                raise HTTPException(status_code=422, detail="prompts must be a JSON list")
-            normalized_prompts = []
-            for entry in raw_refs:
-                try:
-                    source, ref_id = parse_ref(entry)
-                except (ValueError, TypeError) as exc:
-                    raise HTTPException(status_code=422, detail=f"invalid prompt ref: {entry!r}") from exc
-                normalized_prompts.append(ref_to_dict(source, ref_id))
+        normalized_prompts = _normalize_prompts_json(prompts)
         if normalized_prompts and not transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
         original_filename = file.filename or "upload"
@@ -1483,19 +1504,7 @@ def create_app() -> FastAPI:
             source_title=normalize_display_name(display_name),
         )
         await session.commit()
-        bus = RedisBus(redis, settings)
-        await bus.notify_queued()
-        await bus.publish_event(
-            user_id=str(task.user_id),
-            task_id=str(task.id),
-            event="task_status",
-            data={"status": task.status.value},
-        )
-        set_committed_value(task, "steps", [])
-        queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
-        asr_progress = await repo.get_asr_progress_for_tasks([task.id])
-        summary_progress = {task.id: summary_progress_for_task(task)}
-        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+        return await _enqueue_uploaded_task(task, repo, redis, settings)
 
     @app.get(
         "/api/tasks",

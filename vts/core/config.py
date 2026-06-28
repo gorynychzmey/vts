@@ -251,6 +251,12 @@ class Settings(BaseSettings):
     vapid_private_key: str | None = None
     vapid_subject: str = "mailto:admin@example.com"
 
+    # Chunked upload settings
+    upload_chunked_threshold_bytes: int = 52_428_800
+    upload_chunk_bytes: int = 8_388_608
+    max_upload_bytes: int = 2_147_483_648
+    upload_session_ttl_seconds: int = 86_400
+
     # Feature flags
     features_donor_clone: bool = False
 
