@@ -963,6 +963,15 @@ input[type="file"] {
   background: rgba(0, 0, 0, 0.45);
 }
 
+#restart-final-dialog {
+  min-width: min(22rem, calc(100% - 2rem));
+}
+
+#restart-final-select {
+  display: flex;
+  margin-bottom: 1rem;
+}
+
 .tokens-dialog-header {
   display: flex;
   justify-content: space-between;

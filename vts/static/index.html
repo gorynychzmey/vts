@@ -522,6 +522,25 @@
       </form>
     </dialog>
 
+    <dialog id="restart-final-dialog" class="tokens-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="restart_final.title">Restart final with prompts</h2>
+        <button type="button" id="restart-final-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+      <div class="prompt-select" id="restart-final-select"></div>
+      <div class="prompt-form-actions">
+        <button type="button" id="restart-final-submit-btn" class="btn-text primary"
+                data-i18n="restart_final.submit">Restart</button>
+      </div>
+    </dialog>
+
     <script src="/static/app.js?v=__VTS_VERSION__"></script>
   </body>
 </html>

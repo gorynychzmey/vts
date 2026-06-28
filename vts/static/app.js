@@ -1532,7 +1532,7 @@ function renderTasks(tasks) {
     if (restartSummaryFinalBtn) {
       restartSummaryFinalBtn.addEventListener("click", () => {
         restartSummaryMenu && restartSummaryMenu.classList.remove("open");
-        restartSummary(task.id, "final_only");
+        openRestartFinalDialog(task);
       });
     }
     if (downloadMediaBtn) {
@@ -2754,6 +2754,62 @@ promptForm?.addEventListener("submit", async (event) => {
   resetPromptForm();
   await refreshPromptsManager();
   await loadPrompts();
+});
+
+// ---------- Restart final dialog ----------
+
+const restartFinalDialog = document.getElementById("restart-final-dialog");
+const restartFinalSelect = document.getElementById("restart-final-select");
+const restartFinalCloseBtn = document.getElementById("restart-final-close-btn");
+const restartFinalSubmitBtn = document.getElementById("restart-final-submit-btn");
+let restartFinalTaskId = null;
+
+function updateRestartFinalSubmitState() {
+  if (!restartFinalSubmitBtn) return;
+  restartFinalSubmitBtn.disabled = getSelectedFrom(restartFinalSelect).length === 0;
+}
+
+async function openRestartFinalDialog(task) {
+  if (!restartFinalDialog || !restartFinalSelect) {
+    restartSummary(task.id, "final_only");
+    return;
+  }
+  restartFinalTaskId = task.id;
+  let prompts = [];
+  try {
+    prompts = await api("/api/prompts");
+  } catch (err) {
+    console.error("Failed to load prompts", err);
+  }
+  const selected =
+    Array.isArray(task.options?.prompts) && task.options.prompts.length
+      ? task.options.prompts
+      : [{ source: "system", id: "summary" }];
+  renderPromptMultiselect(restartFinalSelect, prompts, selected);
+  updateRestartFinalSubmitState();
+  if (typeof restartFinalDialog.showModal === "function") {
+    restartFinalDialog.showModal();
+  } else {
+    restartFinalDialog.setAttribute("open", "");
+  }
+}
+
+restartFinalSelect?.addEventListener("change", updateRestartFinalSubmitState);
+
+restartFinalCloseBtn?.addEventListener("click", () => {
+  restartFinalDialog?.close();
+});
+
+restartFinalSubmitBtn?.addEventListener("click", async () => {
+  const prompts = getSelectedFrom(restartFinalSelect);
+  if (!prompts.length || restartFinalTaskId == null) return;
+  await apiBatchPost("/api/tasks/restart_summary", {
+    task_ids: [restartFinalTaskId],
+    mode: "final_only",
+    prompts,
+  });
+  restartFinalDialog?.close();
+  await loadTasks();
 });
 
 // ---------- Web Push ----------
