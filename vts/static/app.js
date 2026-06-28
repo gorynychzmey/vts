@@ -1755,13 +1755,48 @@ function updatePromptSelectSummary(container) {
 // Builds the toggle + popover into `container`; a checkbox is checked iff its
 // {source,id} appears in `selectedRefs`. Used by the create-form selector and,
 // in a later task, by the restart dialog with its own selection.
-function renderPromptMultiselect(container, prompts, selectedRefs) {
+function buildPromptRow(prompt, refs) {
+  const isSelected = refs.some(
+    (r) => r.source === prompt.source && r.id === prompt.id
+  );
+  const label = document.createElement("label");
+  label.className = "prompt-row";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = isSelected;
+  checkbox.dataset.source = prompt.source;
+  checkbox.dataset.id = prompt.id;
+
+  const name = document.createElement("span");
+  name.className = "prompt-name";
+  name.textContent = promptDisplayName(prompt);
+
+  const badge = document.createElement("span");
+  badge.className = `prompt-badge prompt-badge-${prompt.source}`;
+  badge.textContent = t(`prompt.badge.${prompt.source}`);
+
+  label.append(checkbox, name, badge);
+  return label;
+}
+
+function renderPromptMultiselect(container, prompts, selectedRefs, opts = {}) {
   if (!container) {
     return;
   }
   const refs = Array.isArray(selectedRefs) ? selectedRefs : [];
   const list = Array.isArray(prompts) ? prompts : [];
   container.innerHTML = "";
+
+  // Flat mode: append rows directly into the container as an always-visible
+  // scrollable list — no toggle, no popover, no summary (used by the restart
+  // dialog where there is plenty of vertical room).
+  if (opts.flat === true) {
+    for (const prompt of list) {
+      container.appendChild(buildPromptRow(prompt, refs));
+    }
+    return;
+  }
 
   const toggle = document.createElement("button");
   toggle.type = "button";
@@ -1782,28 +1817,7 @@ function renderPromptMultiselect(container, prompts, selectedRefs) {
   popover.hidden = true;
 
   for (const prompt of list) {
-    const isSelected = refs.some(
-      (r) => r.source === prompt.source && r.id === prompt.id
-    );
-    const label = document.createElement("label");
-    label.className = "prompt-row";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = isSelected;
-    checkbox.dataset.source = prompt.source;
-    checkbox.dataset.id = prompt.id;
-
-    const name = document.createElement("span");
-    name.className = "prompt-name";
-    name.textContent = promptDisplayName(prompt);
-
-    const badge = document.createElement("span");
-    badge.className = `prompt-badge prompt-badge-${prompt.source}`;
-    badge.textContent = t(`prompt.badge.${prompt.source}`);
-
-    label.append(checkbox, name, badge);
-    popover.appendChild(label);
+    popover.appendChild(buildPromptRow(prompt, refs));
   }
 
   toggle.addEventListener("click", () => togglePromptPopover(container));
@@ -2785,7 +2799,7 @@ async function openRestartFinalDialog(task) {
     Array.isArray(task.options?.prompts) && task.options.prompts.length
       ? task.options.prompts
       : [{ source: "system", id: "summary" }];
-  renderPromptMultiselect(restartFinalSelect, prompts, selected);
+  renderPromptMultiselect(restartFinalSelect, prompts, selected, { flat: true });
   updateRestartFinalSubmitState();
   if (typeof restartFinalDialog.showModal === "function") {
     restartFinalDialog.showModal();
