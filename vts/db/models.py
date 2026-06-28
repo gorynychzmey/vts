@@ -212,3 +212,21 @@ class AsrSegment(Base):
         UniqueConstraint("task_id", "segment_index", name="uq_asr_segments_task_segment"),
         Index("ix_asr_segments_task_start", "task_id", "start_sec"),
     )
+
+
+class UserStepWeights(Base):
+    __tablename__ = "user_step_weights"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    weights: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    final_summary_fallback: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    sample_counts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_step_weights_user"),
+        Index("ix_user_step_weights_user", "user_id"),
+    )
