@@ -2,7 +2,7 @@
 // <dialog> must keep the UA display:none — a prior bug leaked dialogs visible),
 // opens from #presets-btn, renders system + user rows from /api/presets, marks
 // the user's default preset, and closes via #presets-close-btn.
-import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal } from "../harness.mjs";
+import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot } from "../harness.mjs";
 
 export const name = "presets-dialog";
 
@@ -19,7 +19,7 @@ export async function run() {
       {
         source: "user",
         id: "p1",
-        name: "Audio memo",
+        name: "Standard (Kopie) long name here",
         editable: true,
         options: {
           language: "ru",
@@ -70,11 +70,26 @@ export async function run() {
     const def = await page.$$eval("#presets-list .prompt-badge-default", (els) => els.length);
     if (def !== 1) failures.push(`expected 1 default badge, got ${def}`);
 
-    // User row exposes Edit + Delete; system row does not (count Edit buttons).
+    // User row exposes Edit + Delete; system row does not. Buttons are now
+    // ICON buttons: identify Edit by its aria-label/title, not text content.
     const editBtns = await page.$$eval("#presets-list button", (els) =>
-      els.filter((b) => b.textContent.trim() === "Edit").length
+      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit").length
     );
     if (editBtns !== 1) failures.push(`expected 1 Edit button (user only), got ${editBtns}`);
+
+    // Action buttons are icon buttons, not text buttons.
+    const iconBtns = await page.$$eval("#presets-list .prompts-actions .icon-btn", (els) => els.length);
+    if (iconBtns < 1) failures.push(`expected .prompts-actions .icon-btn > 0, got ${iconBtns}`);
+    const textBtns = await page.$$eval("#presets-list .prompts-actions .btn-text", (els) => els.length);
+    if (textBtns !== 0) failures.push(`expected 0 .prompts-actions .btn-text, got ${textBtns}`);
+
+    // The (long) user preset name must NOT be clipped now that icons free up width.
+    const presetNameClipped = await page.$$eval("#presets-list .tokens-name", (els) =>
+      els.some((el) => el.scrollWidth > el.clientWidth + 1)
+    );
+    if (presetNameClipped) failures.push("a preset .tokens-name is clipped (scrollWidth > clientWidth)");
+
+    await screenshot(page, "presets-dialog-icon-buttons");
 
     // CREATE MODE (default): the form is visible, submit button reads the
     // create label (not "Edit"), and the prompt multiselect shows rows with
@@ -98,7 +113,7 @@ export async function run() {
     // EDIT MODE: click the user preset's Edit -> submit label switches to
     // "Edit" and the multiselect reflects that preset's prompts (u1).
     await page.$$eval("#presets-list button", (els) => {
-      const b = els.find((x) => x.textContent.trim() === "Edit");
+      const b = els.find((x) => (x.getAttribute("aria-label") || "") === "Edit");
       if (b) b.click();
     });
     await page.waitForTimeout(150);
@@ -111,7 +126,7 @@ export async function run() {
     const cancelHiddenInEdit = await page.$eval("#preset-cancel-btn", (b) => b.classList.contains("hidden"));
     if (cancelHiddenInEdit) failures.push("cancel button should be visible in edit mode");
     const nameVal = await page.$eval("#preset-name-input", (i) => i.value);
-    if (nameVal !== "Audio memo") failures.push(`expected name "Audio memo" in edit mode, got "${nameVal}"`);
+    if (nameVal !== "Standard (Kopie) long name here") failures.push(`expected name "Standard (Kopie) long name here" in edit mode, got "${nameVal}"`);
     const editChecked = await page.$$eval("#preset-edit-prompts input[type=checkbox]", (els) =>
       els.filter((c) => c.checked).length
     );

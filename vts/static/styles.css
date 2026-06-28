@@ -494,6 +494,39 @@ input[type="file"] {
   to { transform: rotate(360deg); }
 }
 
+/* Reusable tooltip: works on hover (desktop) and focus/active (touch tap). */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--ink, #152018);
+  color: #fff;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 50;
+}
+[data-tooltip-below]::after {
+  bottom: auto;
+  top: calc(100% + 0.35rem);
+}
+[data-tooltip]:hover::after,
+[data-tooltip]:focus::after,
+[data-tooltip]:focus-visible::after,
+[data-tooltip]:active::after {
+  opacity: 1;
+}
+
 .submit-progress {
   transform: rotate(-90deg);
   width: 1.7rem;
@@ -1144,9 +1177,19 @@ input[type="file"] {
 
 .prompts-actions {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.prompts-actions .icon-btn {
+  width: 2rem;
+  height: 2rem;
+}
+
+.prompts-actions .icon-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .prompts-readonly {
