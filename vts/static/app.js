@@ -1705,38 +1705,38 @@ function promptDisplayName(prompt) {
   return prompt.name;
 }
 
-function setPromptPopoverOpen(open) {
-  if (!promptSelect) {
+function setPromptPopoverOpen(container, open) {
+  if (!container) {
     return;
   }
-  const toggle = promptSelect.querySelector(".prompt-select-toggle");
-  const popover = promptSelect.querySelector(".prompt-select-popover");
+  const toggle = container.querySelector(".prompt-select-toggle");
+  const popover = container.querySelector(".prompt-select-popover");
   if (!toggle || !popover) {
     return;
   }
   if (open && toggle.disabled) {
     return;
   }
-  promptSelect.classList.toggle("open", open);
+  container.classList.toggle("open", open);
   popover.hidden = !open;
   toggle.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-function togglePromptPopover() {
-  const isOpen = promptSelect && promptSelect.classList.contains("open");
-  setPromptPopoverOpen(!isOpen);
+function togglePromptPopover(container) {
+  const isOpen = container && container.classList.contains("open");
+  setPromptPopoverOpen(container, !isOpen);
 }
 
-function updatePromptSelectSummary() {
-  if (!promptSelect) {
+function updatePromptSelectSummary(container) {
+  if (!container) {
     return;
   }
-  const summary = promptSelect.querySelector(".prompt-select-summary");
+  const summary = container.querySelector(".prompt-select-summary");
   if (!summary) {
     return;
   }
   const checked = Array.from(
-    promptSelect.querySelectorAll('input[type="checkbox"]:checked')
+    container.querySelectorAll('input[type="checkbox"]:checked')
   );
   let text;
   if (checked.length === 0) {
@@ -1751,12 +1751,17 @@ function updatePromptSelectSummary() {
   summary.textContent = text;
 }
 
-function renderPromptSelect(prompts) {
-  if (!promptSelect) {
+// Reusable, container-parameterized prompt multiselect renderer.
+// Builds the toggle + popover into `container`; a checkbox is checked iff its
+// {source,id} appears in `selectedRefs`. Used by the create-form selector and,
+// in a later task, by the restart dialog with its own selection.
+function renderPromptMultiselect(container, prompts, selectedRefs) {
+  if (!container) {
     return;
   }
-  promptsCache = Array.isArray(prompts) ? prompts : [];
-  promptSelect.innerHTML = "";
+  const refs = Array.isArray(selectedRefs) ? selectedRefs : [];
+  const list = Array.isArray(prompts) ? prompts : [];
+  container.innerHTML = "";
 
   const toggle = document.createElement("button");
   toggle.type = "button";
@@ -1776,14 +1781,16 @@ function renderPromptSelect(prompts) {
   popover.className = "prompt-select-popover";
   popover.hidden = true;
 
-  for (const prompt of promptsCache) {
-    const isDefault = prompt.source === "system" && prompt.id === "summary";
+  for (const prompt of list) {
+    const isSelected = refs.some(
+      (r) => r.source === prompt.source && r.id === prompt.id
+    );
     const label = document.createElement("label");
     label.className = "prompt-row";
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = isDefault;
+    checkbox.checked = isSelected;
     checkbox.dataset.source = prompt.source;
     checkbox.dataset.id = prompt.id;
 
@@ -1799,11 +1806,21 @@ function renderPromptSelect(prompts) {
     popover.appendChild(label);
   }
 
-  toggle.addEventListener("click", togglePromptPopover);
-  popover.addEventListener("change", updatePromptSelectSummary);
+  toggle.addEventListener("click", () => togglePromptPopover(container));
+  popover.addEventListener("change", () => updatePromptSelectSummary(container));
 
-  promptSelect.append(toggle, popover);
-  updatePromptSelectSummary();
+  container.append(toggle, popover);
+  updatePromptSelectSummary(container);
+}
+
+function renderPromptSelect(prompts) {
+  if (!promptSelect) {
+    return;
+  }
+  promptsCache = Array.isArray(prompts) ? prompts : [];
+  renderPromptMultiselect(promptSelect, promptsCache, [
+    { source: "system", id: "summary" },
+  ]);
   syncSummaryToggle();
 }
 
@@ -1826,16 +1843,20 @@ function resetPromptSelection() {
   promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.checked = cb.dataset.source === "system" && cb.dataset.id === "summary";
   });
-  updatePromptSelectSummary();
+  updatePromptSelectSummary(promptSelect);
 }
 
-function getSelectedPrompts() {
-  if (!promptSelect) {
+function getSelectedFrom(container) {
+  if (!container) {
     return [];
   }
   return Array.from(
-    promptSelect.querySelectorAll('input[type="checkbox"]:checked')
+    container.querySelectorAll('input[type="checkbox"]:checked')
   ).map((cb) => ({ source: cb.dataset.source, id: cb.dataset.id }));
+}
+
+function getSelectedPrompts() {
+  return promptSelect ? getSelectedFrom(promptSelect) : [];
 }
 
 async function createTask(event) {
@@ -1886,7 +1907,7 @@ function syncSummaryToggle() {
     cb.disabled = disabled;
   });
   if (disabled) {
-    setPromptPopoverOpen(false);
+    setPromptPopoverOpen(promptSelect, false);
   }
 }
 
@@ -2406,18 +2427,19 @@ async function refreshAll() {
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
-  if (
-    promptSelect &&
-    promptSelect.classList.contains("open") &&
-    !promptSelect.contains(event.target)
-  ) {
-    setPromptPopoverOpen(false);
-  }
+  // Close any open prompt-select popover whose container does not contain the click.
+  document.querySelectorAll(".prompt-select.open").forEach((container) => {
+    if (!container.contains(event.target)) {
+      setPromptPopoverOpen(container, false);
+    }
+  });
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && promptSelect && promptSelect.classList.contains("open")) {
-    setPromptPopoverOpen(false);
+  if (event.key === "Escape") {
+    document.querySelectorAll(".prompt-select.open").forEach((container) => {
+      setPromptPopoverOpen(container, false);
+    });
   }
 });
 
