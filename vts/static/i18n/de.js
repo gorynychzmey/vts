@@ -86,6 +86,8 @@ window.__VTS_I18N.de = {
 "action.restart_summary_final": "Nur finale Zusammenfassung neu starten",
 "restart_final.title": "Finale mit Prompts neu starten",
 "restart_final.submit": "Neu starten",
+"restart_final.preset": "Preset",
+"restart_final.preset_none": "—",
 "action.download_media": "Mediadatei herunterladen",
 "action.archive": "Aufgabe archivieren",
 "action.delete": "Löschen",

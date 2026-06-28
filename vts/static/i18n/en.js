@@ -86,6 +86,8 @@ window.__VTS_I18N.en = {
 "action.restart_summary_final": "Restart final summary only",
 "restart_final.title": "Restart final with prompts",
 "restart_final.submit": "Restart",
+"restart_final.preset": "Preset",
+"restart_final.preset_none": "—",
 "action.download_media": "Download media",
 "action.archive": "Archive task",
 "action.delete": "Delete",

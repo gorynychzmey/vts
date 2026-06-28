@@ -3273,11 +3273,33 @@ const restartFinalDialog = document.getElementById("restart-final-dialog");
 const restartFinalSelect = document.getElementById("restart-final-select");
 const restartFinalCloseBtn = document.getElementById("restart-final-close-btn");
 const restartFinalSubmitBtn = document.getElementById("restart-final-submit-btn");
+const restartFinalPreset = document.getElementById("restart-final-preset");
 let restartFinalTaskId = null;
 
 function updateRestartFinalSubmitState() {
   if (!restartFinalSubmitBtn) return;
   restartFinalSubmitBtn.disabled = getSelectedFrom(restartFinalSelect).length === 0;
+}
+
+async function populateRestartFinalPresets() {
+  if (!restartFinalPreset) {
+    return;
+  }
+  if (!presetsCache.length) {
+    await loadPresets();
+  }
+  restartFinalPreset.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = t("restart_final.preset_none");
+  restartFinalPreset.appendChild(none);
+  for (const preset of presetsCache) {
+    const opt = document.createElement("option");
+    opt.value = `${preset.source}:${preset.id}`;
+    opt.textContent = presetLabel(preset);
+    restartFinalPreset.appendChild(opt);
+  }
+  restartFinalPreset.value = ""; // reset to the neutral item on each open
 }
 
 async function openRestartFinalDialog(task) {
@@ -3297,6 +3319,7 @@ async function openRestartFinalDialog(task) {
       ? task.options.prompts
       : [{ source: "system", id: "summary" }];
   renderPromptMultiselect(restartFinalSelect, prompts, selected, { flat: true });
+  await populateRestartFinalPresets();
   updateRestartFinalSubmitState();
   if (typeof restartFinalDialog.showModal === "function") {
     restartFinalDialog.showModal();
@@ -3306,6 +3329,24 @@ async function openRestartFinalDialog(task) {
 }
 
 restartFinalSelect?.addEventListener("change", updateRestartFinalSubmitState);
+
+restartFinalPreset?.addEventListener("change", () => {
+  const value = restartFinalPreset.value;
+  if (!value) {
+    return; // "—" selected: leave the current multiselect as-is
+  }
+  const idx = value.indexOf(":");
+  const source = value.slice(0, idx);
+  const id = value.slice(idx + 1);
+  const preset = presetsCache.find((p) => p.source === source && p.id === id);
+  if (!preset) {
+    return;
+  }
+  const promptRefs = (preset.options && preset.options.prompts) || [];
+  const { filtered } = filterDanglingPrompts(promptRefs);
+  renderPromptMultiselect(restartFinalSelect, promptsCache, filtered, { flat: true });
+  updateRestartFinalSubmitState();
+});
 
 restartFinalCloseBtn?.addEventListener("click", () => {
   restartFinalDialog?.close();
