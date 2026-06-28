@@ -2951,6 +2951,7 @@ function renderPromptsList(prompts) {
       editBtn.className = "icon-btn ghost";
       editBtn.title = t("prompts.manage.edit");
       editBtn.setAttribute("aria-label", t("prompts.manage.edit"));
+      editBtn.setAttribute("data-tooltip", t("prompts.manage.edit"));
       editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", async () => {
         const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
@@ -2967,6 +2968,7 @@ function renderPromptsList(prompts) {
       delBtn.className = "icon-btn ghost danger";
       delBtn.title = t("prompts.manage.delete");
       delBtn.setAttribute("aria-label", t("prompts.manage.delete"));
+      delBtn.setAttribute("data-tooltip", t("prompts.manage.delete"));
       delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", async () => {
         const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(prompt.id)}`), { method: "DELETE" });
@@ -2989,6 +2991,7 @@ function renderPromptsList(prompts) {
     dupBtn.className = "icon-btn ghost";
     dupBtn.title = t("prompts.manage.duplicate");
     dupBtn.setAttribute("aria-label", t("prompts.manage.duplicate"));
+    dupBtn.setAttribute("data-tooltip", t("prompts.manage.duplicate"));
     dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePrompt(prompt));
     actions.appendChild(dupBtn);
@@ -3203,6 +3206,7 @@ function renderPresetsList(presets, defaultRef) {
       editBtn.className = "icon-btn ghost";
       editBtn.title = t("preset.manage.edit");
       editBtn.setAttribute("aria-label", t("preset.manage.edit"));
+      editBtn.setAttribute("data-tooltip", t("preset.manage.edit"));
       editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", () => fillPresetForm(preset));
       actions.appendChild(editBtn);
@@ -3212,6 +3216,7 @@ function renderPresetsList(presets, defaultRef) {
       delBtn.className = "icon-btn ghost danger";
       delBtn.title = t("preset.manage.delete");
       delBtn.setAttribute("aria-label", t("preset.manage.delete"));
+      delBtn.setAttribute("data-tooltip", t("preset.manage.delete"));
       delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", () => deletePreset(preset));
       actions.appendChild(delBtn);
@@ -3222,6 +3227,7 @@ function renderPresetsList(presets, defaultRef) {
     dupBtn.className = "icon-btn ghost";
     dupBtn.title = t("preset.manage.duplicate");
     dupBtn.setAttribute("aria-label", t("preset.manage.duplicate"));
+    dupBtn.setAttribute("data-tooltip", t("preset.manage.duplicate"));
     dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePreset(preset));
     actions.appendChild(dupBtn);
@@ -3231,6 +3237,7 @@ function renderPresetsList(presets, defaultRef) {
     defBtn.className = "icon-btn ghost";
     defBtn.title = t("preset.manage.make_default");
     defBtn.setAttribute("aria-label", t("preset.manage.make_default"));
+    defBtn.setAttribute("data-tooltip", t("preset.manage.make_default"));
     defBtn.innerHTML = ICON_MAKE_DEFAULT;
     defBtn.addEventListener("click", () => makePresetDefault(preset));
     actions.appendChild(defBtn);
