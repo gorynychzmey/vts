@@ -219,6 +219,45 @@ input[type="file"] {
   font-size: 0.84rem;
 }
 
+.preset-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.preset-label {
+  font-size: 0.85rem;
+  color: var(--muted, #555);
+}
+
+#preset-select {
+  min-width: 8rem;
+  max-width: 12rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.84rem;
+}
+
+#preset-save-btn {
+  font-size: 0.82rem;
+}
+
+.preset-dangling-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--muted, #555);
+}
+
+.preset-dangling-hint[hidden] {
+  display: none;
+}
+
 .prompt-select-field {
   display: inline-flex;
   align-items: center;
