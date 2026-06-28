@@ -965,10 +965,19 @@ input[type="file"] {
 
 #restart-final-dialog {
   min-width: min(22rem, calc(100% - 2rem));
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
 }
 
+/* Flat, always-visible scrollable prompt list (no dropdown in the dialog). */
 #restart-final-select {
   display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
   margin-bottom: 1rem;
 }
 

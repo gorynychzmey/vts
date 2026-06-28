@@ -38,6 +38,7 @@ from vts.api.schemas import (
     ApiTokenOut,
     BatchResultOut,
     MeOut,
+    MessageOut,
     PromptCreateRequest,
     PromptDetailOut,
     PromptOut,
@@ -1115,7 +1116,7 @@ def create_app() -> FastAPI:
     ) -> list[PromptOut]:
         from vts.services.prompt_registry import list_system_prompts
         out: list[PromptOut] = [
-            PromptOut(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+            PromptOut(source="system", id=p.key, name=p.display_name, editable=False)
             for p in list_system_prompts()
         ]
         repo = Repo(session)
@@ -1483,61 +1484,58 @@ def create_app() -> FastAPI:
         summary_progress = {task.id: summary_progress_for_task(task)}
         return serialize_task(task, queue_positions, asr_progress, summary_progress)
 
-    @app.post("/api/tasks/restart_summary", response_model=BatchResultOut)
-    async def restart_summary_tasks(
+    @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
+    async def restart_summary_task(
+        task_id: uuid.UUID,
         request: RestartSummaryRequest,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
-    ) -> BatchResultOut:
+    ) -> MessageOut:
         repo = Repo(session)
-        tasks = await repo.get_tasks_for_user(uuid.UUID(user.id), request.task_ids, load_steps=True)
-        task_map = {task.id: task for task in tasks}
-        results: dict[str, str] = {}
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
         bus = RedisBus(redis, settings)
         artifact_resets: list[asyncio.Task[None]] = []
-        for task_id in request.task_ids:
-            tid = str(task_id)
-            task = task_map.get(task_id)
-            if task is None:
-                results[tid] = "not_found"
-                continue
-            if request.mode == "final_only":
-                if not can_restart_final_summary_task(task):
-                    results[tid] = f"cannot_restart_final:{task.status.value}"
-                    continue
-                if request.prompts is not None:
-                    # New-set restart: swap options.prompts, clear all finalize
-                    # results, rebuild the finalize tail, re-queue.
-                    from vts.services.prompt_results import clear_all_finalize_results
+        if request.mode == "final_only":
+            if not can_restart_final_summary_task(task):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"cannot_restart_final:{task.status.value}",
+                )
+            if request.prompts is not None:
+                # New-set restart: swap options.prompts, clear all finalize
+                # results, rebuild the finalize tail, re-queue.
+                from vts.services.prompt_results import clear_all_finalize_results
 
-                    new_refs = [
-                        {"source": p.source, "id": p.id} for p in request.prompts
-                    ]
-                    clear_all_finalize_results(task)  # files, prompt_results, summary_path
-                    new_options = dict(task.options or {})
-                    new_options["prompts"] = new_refs
-                    task.options = new_options
-                    await _rebuild_finalize_tail(repo, task, new_options)
-                else:
-                    _reset_final_summary_step(task)
-                    artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
+                new_refs = [
+                    {"source": p.source, "id": p.id} for p in request.prompts
+                ]
+                clear_all_finalize_results(task)  # files, prompt_results, summary_path
+                new_options = dict(task.options or {})
+                new_options["prompts"] = new_refs
+                task.options = new_options
+                await _rebuild_finalize_tail(repo, task, new_options)
             else:
-                if not can_restart_summary_task(task):
-                    results[tid] = f"cannot_restart:{task.status.value}"
-                    continue
-                _reset_summary_steps(task)
-                artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
-            task.summary_path = None
-            await repo.set_task_summary_progress(task, 0, 0)
-            await repo.set_task_status(task, TaskStatus.queued)
-            results[tid] = "queued"
+                _reset_final_summary_step(task)
+                artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
+        else:
+            if not can_restart_summary_task(task):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"cannot_restart:{task.status.value}",
+                )
+            _reset_summary_steps(task)
+            artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
+        task.summary_path = None
+        await repo.set_task_summary_progress(task, 0, 0)
+        await repo.set_task_status(task, TaskStatus.queued)
         await asyncio.gather(*artifact_resets)
         await session.commit()
-        if any(v == "queued" for v in results.values()):
-            await bus.notify_queued()
-        return BatchResultOut(results=results)
+        await bus.notify_queued()
+        return MessageOut(status="queued")
 
     @app.post("/api/tasks/pause", response_model=BatchResultOut)
     async def pause_tasks(

@@ -43,6 +43,7 @@ async def test_prompts_list_includes_system_summary(client):
     assert any(p["source"] == "system" and p["id"] == "summary" for p in body)
     summary = next(p for p in body if p["id"] == "summary")
     assert summary["editable"] is False
+    assert summary["name"] == "Summary"
 
 
 @pytest.mark.asyncio

@@ -191,7 +191,7 @@ def _progress_for_stage(
     if stage == _ASR_STAGE:
         current, total = asr_map.get(task.id, (0, 0))
         return ProgressCounts(current=current, total=total)
-    if stage in _SUMMARY_STAGES:
+    if stage in _SUMMARY_STAGES or stage.startswith("finalize:"):
         current, total = summary_progress_for_task(task)
         return ProgressCounts(current=current, total=total)
     return None
@@ -270,7 +270,7 @@ async def list_prompts(
     """List prompts available to the caller: built-in system prompts first,
     then the user's own prompts (mirrors web GET /api/prompts)."""
     out: list[PromptInfo] = [
-        PromptInfo(source="system", id=p.key, name=p.i18n_name_key, editable=False)
+        PromptInfo(source="system", id=p.key, name=p.display_name, editable=False)
         for p in list_system_prompts()
     ]
     for row in await repo.list_prompts(uuid.UUID(user.id)):

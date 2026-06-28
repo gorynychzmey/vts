@@ -119,6 +119,7 @@ async def test_list_prompts_combines_system_and_user() -> None:
     assert ("user", True) in sources
     system = next(p for p in out if p.source == "system")
     assert system.id == "summary"
+    assert system.name == "Summary"
     user_p = next(p for p in out if p.source == "user")
     assert user_p.name == "My prompt"
 

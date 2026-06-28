@@ -11,6 +11,7 @@ def test_summary_is_registered():
     summary = next(p for p in list_system_prompts() if p.key == "summary")
     assert summary.file == "global_prompt.md"
     assert summary.i18n_name_key == "prompt.system.summary"
+    assert summary.display_name == "Summary"
 
 
 def test_parse_ref_from_dict():
