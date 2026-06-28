@@ -28,3 +28,18 @@ def test_parse_preset_ref_rejects_bad():
 
 def test_ref_to_dict():
     assert preset_ref_to_dict("system", "default") == {"source": "system", "id": "default"}
+
+
+from vts.services.preset_expand import filter_prompt_refs, expand_preset_options
+
+def test_filter_keeps_system_drops_unknown_user():
+    refs = [{"source":"system","id":"summary"},
+            {"source":"user","id":"keep"},
+            {"source":"user","id":"gone"}]
+    assert filter_prompt_refs(refs, {"keep"}) == [
+        {"source":"system","id":"summary"}, {"source":"user","id":"keep"}]
+
+def test_expand_defaults_missing_and_filters():
+    opts = {"audio_only": True, "prompts": [{"source":"user","id":"gone"}]}
+    out = expand_preset_options(opts, set())
+    assert out == {"language": None, "audio_only": True, "transcript": True, "prompts": []}
