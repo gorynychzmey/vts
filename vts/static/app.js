@@ -82,6 +82,7 @@ const FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS = 514.4;
 
 let serverStepWeights = null;
 let serverFinalFallback = null;
+let uploadConfig = null;
 
 window.__VTS_I18N = window.__VTS_I18N || {};
 const I18N = window.__VTS_I18N || {};
@@ -1707,6 +1708,76 @@ function uploadFileWithProgress(fd) {
   });
 }
 
+async function uploadFileChunked(file, fields) {
+  const btn = document.getElementById("submit-btn");
+  const icon = btn && btn.querySelector(".submit-icon");
+  const ring = btn && btn.querySelector(".submit-progress");
+  const fill = ring && ring.querySelector(".submit-progress-fill");
+  const circumference = 56.55;
+  const setProgress = (r) => { if (fill) fill.style.strokeDashoffset = circumference * (1 - r); };
+
+  if (btn) btn.disabled = true;
+  if (icon) icon.classList.add("hidden");
+  if (ring) ring.classList.remove("hidden");
+  setProgress(0); // determinate from the start
+
+  try {
+    const init = await api("/api/uploads/init", {
+      method: "POST",
+      body: JSON.stringify({
+        filename: file.name,
+        total_size: file.size,
+        language: fields.language || null,
+        audio_only: fields.audio_only,
+        transcript: fields.transcript,
+        prompts: fields.prompts,
+        display_name: fields.display_name || null,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-User": state.authUser,
+      },
+    });
+    const uploadId = init.upload_id;
+    const chunkSize = init.chunk_size || 8388608;
+    let offset = 0;
+    while (offset < file.size) {
+      const slice = file.slice(offset, Math.min(offset + chunkSize, file.size));
+      const buf = await slice.arrayBuffer();
+      let resp;
+      try {
+        resp = await api(`/api/uploads/${uploadId}?offset=${offset}`, {
+          method: "PATCH",
+          body: buf,
+          headers: {
+            "Content-Type": "application/offset+octet-stream",
+            "X-Forwarded-User": state.authUser,
+          },
+        });
+      } catch (err) {
+        // On offset conflict or transient error, re-sync from the server.
+        const off = await api(`/api/uploads/${uploadId}/offset`, {
+          headers: { "X-Forwarded-User": state.authUser },
+        });
+        offset = off.received;
+        setProgress(offset / file.size);
+        continue;
+      }
+      offset = resp.received;
+      setProgress(offset / file.size);
+    }
+    await api(`/api/uploads/${uploadId}/finalize`, {
+      method: "POST",
+      headers: { "X-Forwarded-User": state.authUser },
+    });
+    setProgress(1);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.classList.remove("hidden");
+    if (ring) ring.classList.add("hidden");
+  }
+}
+
 let promptsCache = [];
 
 function promptDisplayName(prompt) {
@@ -2159,13 +2230,28 @@ async function createTask(event) {
   const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
   if (isFile && fileInput) {
-    const fd = new FormData();
-    fd.append("file", fileInput.files[0]);
-    if (form.language.value) fd.append("language", form.language.value);
-    fd.append("audio_only", form.audio_only.checked ? "true" : "false");
-    fd.append("transcript", form.transcript.checked ? "true" : "false");
-    fd.append("prompts", JSON.stringify(getSelectedPrompts()));
-    await uploadFileWithProgress(fd);
+    const file = fileInput.files[0];
+    const fields = {
+      language: form.language.value || "",
+      audio_only: form.audio_only.checked,
+      transcript: form.transcript.checked,
+      prompts: JSON.stringify(getSelectedPrompts()),
+      display_name: "",
+    };
+    const threshold = uploadConfig && Number.isFinite(uploadConfig.chunked_threshold_bytes)
+      ? uploadConfig.chunked_threshold_bytes
+      : Infinity; // no config -> always single-shot (unchanged behavior)
+    if (file.size > threshold) {
+      await uploadFileChunked(file, fields);
+    } else {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (fields.language) fd.append("language", fields.language);
+      fd.append("audio_only", fields.audio_only ? "true" : "false");
+      fd.append("transcript", fields.transcript ? "true" : "false");
+      fd.append("prompts", fields.prompts);
+      await uploadFileWithProgress(fd);
+    }
   } else {
     const payload = {
       url: form.url.value,
@@ -3487,6 +3573,14 @@ async function loadProgressWeights() {
   }
 }
 
+async function loadUploadConfig() {
+  try {
+    uploadConfig = await api("/api/uploads/config");
+  } catch {
+    uploadConfig = null; // fall back to single-shot for all sizes
+  }
+}
+
 async function subscribeToPush() {
   if (!pushConfig || !pushConfig.public_key) {
     window.alert("Push is not configured on the server.");
@@ -3654,6 +3748,7 @@ async function bootstrap() {
   await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();
+  await loadUploadConfig();
 }
 
 void bootstrap();
