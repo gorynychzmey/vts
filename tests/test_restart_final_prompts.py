@@ -3,9 +3,6 @@ from pydantic import ValidationError
 from vts.api.schemas import RestartSummaryRequest, PromptRef
 import uuid
 
-TID = [uuid.uuid4()]
-
-
 class _FakeRedis:
     """Minimal async Redis stub for RedisBus.notify_queued (publish) and the
     queue-position cache (get/setex)."""
@@ -26,22 +23,22 @@ class _FakeRedis:
 
 
 def test_prompts_allowed_with_final_only():
-    req = RestartSummaryRequest(task_ids=TID, mode="final_only",
+    req = RestartSummaryRequest(mode="final_only",
                                 prompts=[PromptRef(source="system", id="summary")])
     assert req.prompts == [PromptRef(source="system", id="summary")]
 
 def test_prompts_rejected_with_full():
     with pytest.raises(ValidationError):
-        RestartSummaryRequest(task_ids=TID, mode="full",
+        RestartSummaryRequest(mode="full",
                               prompts=[PromptRef(source="system", id="summary")])
 
 def test_empty_prompts_rejected():
     with pytest.raises(ValidationError):
-        RestartSummaryRequest(task_ids=TID, mode="final_only", prompts=[])
+        RestartSummaryRequest(mode="final_only", prompts=[])
 
 def test_none_prompts_ok_any_mode():
-    assert RestartSummaryRequest(task_ids=TID, mode="full").prompts is None
-    assert RestartSummaryRequest(task_ids=TID, mode="final_only").prompts is None
+    assert RestartSummaryRequest(mode="full").prompts is None
+    assert RestartSummaryRequest(mode="final_only").prompts is None
 
 
 @pytest.mark.asyncio
@@ -78,12 +75,12 @@ async def test_restart_final_with_new_prompts_rebuilds_tail(client, authed_app, 
         await s.commit()
         task_id = str(task.id); pb_id = str(pb.id)
 
-    resp = await client.post("/api/tasks/restart_summary", json={
-        "task_ids": [task_id], "mode": "final_only",
+    resp = await client.post(f"/api/tasks/{task_id}/restart_summary", json={
+        "mode": "final_only",
         "prompts": [{"source":"system","id":"summary"}, {"source":"user","id":pb_id}],
     })
     assert resp.status_code == 200
-    assert resp.json()["results"][task_id] == "queued"
+    assert resp.json()["status"] == "queued"
 
     async with factory() as s:
         from vts.db.repo import Repo
@@ -104,8 +101,8 @@ async def test_restart_final_with_new_prompts_rebuilds_tail(client, authed_app, 
 async def test_restart_final_empty_prompts_422(authed_app, client):
     app, _factory = authed_app
     app.state.redis = _FakeRedis()
-    resp = await client.post("/api/tasks/restart_summary",
-        json={"task_ids":[str(uuid.uuid4())],"mode":"final_only","prompts":[]})
+    resp = await client.post(f"/api/tasks/{uuid.uuid4()}/restart_summary",
+        json={"mode":"final_only","prompts":[]})
     assert resp.status_code == 422
 
 
@@ -113,7 +110,7 @@ async def test_restart_final_empty_prompts_422(authed_app, client):
 async def test_restart_final_prompts_with_full_422(authed_app, client):
     app, _factory = authed_app
     app.state.redis = _FakeRedis()
-    resp = await client.post("/api/tasks/restart_summary",
-        json={"task_ids":[str(uuid.uuid4())],"mode":"full",
+    resp = await client.post(f"/api/tasks/{uuid.uuid4()}/restart_summary",
+        json={"mode":"full",
               "prompts":[{"source":"system","id":"summary"}]})
     assert resp.status_code == 422

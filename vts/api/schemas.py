@@ -146,7 +146,6 @@ class TaskIdsRequest(BaseModel):
 
 
 class RestartSummaryRequest(BaseModel):
-    task_ids: list[UUID] = Field(min_length=1, max_length=100)
     mode: Literal["full", "final_only"] = "full"
     prompts: list[PromptRef] | None = None
 

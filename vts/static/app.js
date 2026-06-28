@@ -2002,7 +2002,7 @@ async function restartSummary(taskId, mode = "full") {
   if (!confirmed) {
     return;
   }
-  await apiBatchPost("/api/tasks/restart_summary", { task_ids: [taskId], mode });
+  await apiBatchPost("/api/tasks/" + encodeURIComponent(taskId) + "/restart_summary", { mode });
   await loadTasks();
 }
 
@@ -2818,8 +2818,7 @@ restartFinalCloseBtn?.addEventListener("click", () => {
 restartFinalSubmitBtn?.addEventListener("click", async () => {
   const prompts = getSelectedFrom(restartFinalSelect);
   if (!prompts.length || restartFinalTaskId == null) return;
-  await apiBatchPost("/api/tasks/restart_summary", {
-    task_ids: [restartFinalTaskId],
+  await apiBatchPost("/api/tasks/" + encodeURIComponent(restartFinalTaskId) + "/restart_summary", {
     mode: "final_only",
     prompts,
   });
