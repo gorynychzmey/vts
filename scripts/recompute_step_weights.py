@@ -91,8 +91,10 @@ def main() -> None:
 
     fallback = _final_summary_fallback(rows)
 
-    print("// --- paste into vts/static/app.js (STEP_WEIGHT_SECONDS) ---")
-    print("const STEP_WEIGHT_SECONDS = {")
+    # Collect entries first so we know which is the actual last printed value.
+    # NO-DATA steps emit a comment line but must not affect comma placement.
+    no_data_comments: dict[str, str] = {}
+    data_entries: list[tuple[str, float, int]] = []
     for name in _PRINT_ORDER:
         if name == "summarize_windows":
             val = summarize_windows_per_step
@@ -100,10 +102,21 @@ def main() -> None:
             val = weights.get(name)
         n = _count(rows, name)
         if val is None:
-            print(f"  // {name}: NO DATA (n=0) — keep existing value")
-            continue
-        comma = "," if name != _PRINT_ORDER[-1] else ""
-        print(f"  {name}: {val}{comma}  // n={n}")
+            no_data_comments[name] = f"  // {name}: NO DATA (n=0) — keep existing value"
+        else:
+            data_entries.append((name, val, n))
+
+    print("// --- paste into vts/static/app.js (STEP_WEIGHT_SECONDS) ---")
+    print("const STEP_WEIGHT_SECONDS = {")
+    last_data_name = data_entries[-1][0] if data_entries else None
+    for name in _PRINT_ORDER:
+        if name in no_data_comments:
+            print(no_data_comments[name])
+        else:
+            entry = next(e for e in data_entries if e[0] == name)
+            _name, val, n = entry
+            comma = "" if name == last_data_name else ","
+            print(f"  {name}: {val}{comma}  // n={n}")
     print("};")
     if summarize_windows_per_step is not None:
         print(
