@@ -52,6 +52,43 @@ class PromptUpdateRequest(BaseModel):
         return self
 
 
+class PresetRef(BaseModel):
+    source: Literal["system", "user"]
+    id: str = Field(min_length=1)
+
+
+class PresetOptions(BaseModel):
+    language: str | None = None
+    audio_only: bool = False
+    transcript: bool = True
+    prompts: list[PromptRef] = Field(default_factory=list)
+
+
+class PresetOut(BaseModel):
+    source: str
+    id: str
+    name: str
+    options: PresetOptions
+    editable: bool
+
+
+class PresetCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    options: PresetOptions
+
+
+class PresetUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    options: PresetOptions | None = None
+
+    @model_validator(mode="after")
+    def _validate_name(self) -> "PresetUpdateRequest":
+        if self.name is not None and not self.name.strip():
+            raise ValueError("name must not be blank")
+        self.name = self.name.strip() if self.name is not None else None
+        return self
+
+
 def _default_prompts() -> list["PromptRef"]:
     return [PromptRef(source="system", id="summary")]
 
