@@ -1,0 +1,6 @@
+{
+  "name": "vts-ui-verifier",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "playwright": "^1.40.0" }
+}

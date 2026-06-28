@@ -229,3 +229,6 @@ __marimo__/
 metrics.jsonl
 TODO.md
 gh-cli-cache/
+
+# UI verifier (Playwright)
+tests/ui/node_modules/
