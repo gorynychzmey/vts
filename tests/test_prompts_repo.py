@@ -7,7 +7,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.db.base import Base
-from vts.db.models import Prompt, Task, TaskStatus, User
+from vts.db.models import Prompt, Step, StepStatus, Task, TaskStatus, User
 from vts.db.repo import Repo
 
 from _db import make_test_engine
@@ -140,3 +140,62 @@ async def test_set_task_prompt_results_roundtrip(session):
     # Re-read from DB to confirm flush round-trips
     await session.refresh(task)
     assert task.options["prompt_results"] == prompt_results
+
+
+# ---------------------------------------------------------------------------
+# delete_steps_by_name test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_steps_by_name(session):
+    repo = Repo(session)
+    uid = uuid.uuid4()
+    session.add(User(id=uid, username=f"u-{uid.hex[:8]}"))
+    task = Task(id=uuid.uuid4(), user_id=uid, source_url="x", options={}, artifact_dir="/tmp/a")
+    session.add(task)
+    await session.flush()
+    for name in ("summarize_final", "finalize:user:a", "summarize_windows"):
+        session.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
+    await session.flush()
+
+    deleted = await repo.delete_steps_by_name(task.id, ["finalize:user:a", "summarize_final"])
+    assert deleted == 2
+    remaining = {s.name for s in (await repo.get_task_by_id(task.id)).steps}
+    assert remaining == {"summarize_windows"}
+    # empty names -> no-op
+    assert await repo.delete_steps_by_name(task.id, []) == 0
+
+
+# ---------------------------------------------------------------------------
+# clear_all_finalize_results test (pure-function, no DB)
+# ---------------------------------------------------------------------------
+
+
+from pathlib import Path
+from types import SimpleNamespace
+from vts.services.prompt_results import clear_all_finalize_results
+
+
+def test_clear_all_finalize_results(tmp_path):
+    summary = tmp_path / "summary"; (summary / "results").mkdir(parents=True)
+    outputs = tmp_path / "outputs"; outputs.mkdir()
+    (summary / "final.md").write_text("s")
+    (summary / "results" / "user__a.md").write_text("a")
+    (outputs / "summary.md").write_text("s")
+    task = SimpleNamespace(
+        artifact_dir=str(tmp_path),
+        summary_path=str(summary / "final.md"),
+        options={"prompts": [{"source": "user", "id": "a"}],
+                 "prompt_results": [{"source": "user", "id": "a", "name": "A",
+                                     "path": str(summary / "results" / "user__a.md"),
+                                     "status": "completed"}]},
+    )
+    clear_all_finalize_results(task)
+    assert not (summary / "final.md").exists()
+    assert not (summary / "results" / "user__a.md").exists()
+    assert not (outputs / "summary.md").exists()
+    assert task.options["prompt_results"] == []
+    assert task.summary_path is None
+    # options.prompts is left untouched here (endpoint owns it)
+    assert task.options["prompts"] == [{"source": "user", "id": "a"}]

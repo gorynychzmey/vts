@@ -148,6 +148,16 @@ class TaskIdsRequest(BaseModel):
 class RestartSummaryRequest(BaseModel):
     task_ids: list[UUID] = Field(min_length=1, max_length=100)
     mode: Literal["full", "final_only"] = "full"
+    prompts: list[PromptRef] | None = None
+
+    @model_validator(mode="after")
+    def _validate_prompts(self) -> "RestartSummaryRequest":
+        if self.prompts is not None:
+            if self.mode != "final_only":
+                raise ValueError("prompts is only allowed with mode=final_only")
+            if len(self.prompts) == 0:
+                raise ValueError("prompts must not be empty")
+        return self
 
 
 class BatchResultOut(BaseModel):

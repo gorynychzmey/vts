@@ -223,6 +223,16 @@ class Repo:
         await self.session.flush()
         return step
 
+    async def delete_steps_by_name(self, task_id: uuid.UUID, names: list[str]) -> int:
+        if not names:
+            return 0
+        stmt = select(Step).where(Step.task_id == task_id, Step.name.in_(names))
+        rows = list(await self.session.scalars(stmt))
+        for row in rows:
+            await self.session.delete(row)
+        await self.session.flush()
+        return len(rows)
+
     async def set_step_status(
         self,
         step: Step,

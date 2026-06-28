@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.5 — Restart final stage with a different prompt set (vts-2or)
+
+The task-card "Restart final summary only" action now opens a dialog with a
+prompt multiselect, prefilled with the task's current set. Restarting reuses
+the already-processed transcript (windows + pack) and regenerates the whole
+finalize stage for the chosen set. Prompts removed from the set have their
+results discarded; the task's set and its results stay consistent.
+
+- HTTP: `POST /api/tasks/restart_summary` accepts an optional `prompts` list
+  (only with `mode="final_only"`, non-empty); it swaps the task's prompt set,
+  clears old finalize results, rebuilds the finalize step tail, and re-queues.
+- The final-restart gate no longer requires the built-in summary to be in the
+  set — any task with a completed processed transcript can restart its final
+  stage.
+
 ## 1.1.0 — Custom prompts (VOS-63)
 
 Users can now create custom prompts and choose, per task, which prompts to
