@@ -57,6 +57,15 @@ class PromptInfo(BaseModel):
     editable: bool
 
 
+class PresetInfo(BaseModel):
+    """One preset available to the calling user (system or user-defined)."""
+    source: Literal["system", "user"]
+    id: str
+    name: str
+    editable: bool
+    options: dict
+
+
 class PromptResult(BaseModel):
     task_id: uuid.UUID
     source: str

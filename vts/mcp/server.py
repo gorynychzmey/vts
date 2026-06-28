@@ -10,6 +10,7 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
 from vts.mcp.schemas import (
+    PresetInfo,
     PromptInfo,
     PromptResult,
     SubmitVideoResult,
@@ -19,14 +20,20 @@ from vts.mcp.schemas import (
     WaitResult,
 )
 from vts.mcp.tools import (
+    create_preset,
     create_prompt,
+    delete_preset,
     delete_prompt,
+    get_default_preset,
     get_prompt_result,
     get_status,
     get_transcript,
+    list_presets,
     list_prompts,
     list_tasks,
+    set_default_preset,
     submit_video,
+    update_preset,
     update_prompt,
     wait_for_task,
 )
@@ -35,7 +42,7 @@ from vts.services.redis_bus import RedisBus
 
 
 def build_mcp_server() -> FastMCP:
-    """Construct the FastMCP server with all ten MCP tools registered."""
+    """Construct the FastMCP server with all MCP tools registered."""
     settings = get_settings()
     auth_provider = None
     if settings.oauth_enabled:
@@ -80,6 +87,7 @@ def build_mcp_server() -> FastMCP:
         audio_only: bool = False,
         transcript: bool = True,
         prompts: list[dict] | None = None,
+        preset: dict | None = None,
     ) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately.
 
@@ -95,6 +103,10 @@ def build_mcp_server() -> FastMCP:
                 {"source": "user", "id": "<prompt-uuid>"}. Defaults to the
                 single system "summary" prompt. Non-empty prompts require
                 transcript=True (rejected with 422 otherwise).
+            preset: Optional preset ref like {"source": "system", "id": "default"}
+                or {"source": "user", "id": "<preset-uuid>"} supplying default
+                pipeline options. The preset fills any field you leave at its
+                default; explicit params above override the preset.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -110,6 +122,7 @@ def build_mcp_server() -> FastMCP:
                     audio_only=audio_only,
                     transcript=transcript,
                     prompts=prompts,
+                    preset=preset,
                 )
                 await session.commit()
                 return result
@@ -206,6 +219,67 @@ def build_mcp_server() -> FastMCP:
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
             result = await delete_prompt(prompt_id=prompt_id, user=user, repo=Repo(session))
+            await session.commit()
+            return result
+
+    @mcp.tool(name="list_presets")
+    async def _list_presets() -> list[PresetInfo]:
+        """List presets available to the caller (system + user-defined)."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            return await list_presets(user=user, repo=Repo(session))
+
+    @mcp.tool(name="create_preset")
+    async def _create_preset(name: str, options: dict) -> PresetInfo:
+        """Create a user-defined preset. options is a pipeline-options dict
+        (language, audio_only, transcript, prompts). Returns the new preset's info."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await create_preset(name=name, options=options, user=user, repo=Repo(session))
+            await session.commit()
+            return result
+
+    @mcp.tool(name="update_preset")
+    async def _update_preset(
+        preset_id: uuid.UUID, name: str | None = None, options: dict | None = None
+    ) -> PresetInfo:
+        """Update a user-defined preset's name and/or options."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await update_preset(
+                preset_id=preset_id, name=name, options=options, user=user, repo=Repo(session),
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="delete_preset")
+    async def _delete_preset(preset_id: uuid.UUID) -> dict[str, Any]:
+        """Delete a user-defined preset."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await delete_preset(preset_id=preset_id, user=user, repo=Repo(session))
+            await session.commit()
+            return result
+
+    @mcp.tool(name="get_default_preset")
+    async def _get_default_preset() -> dict[str, Any]:
+        """Return the caller's default preset ref (system default if unset)."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            return await get_default_preset(user=user, repo=Repo(session))
+
+    @mcp.tool(name="set_default_preset")
+    async def _set_default_preset(source: str, id: str) -> dict[str, Any]:
+        """Set the caller's default preset to a system or user preset ref."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await set_default_preset(source=source, id=id, user=user, repo=Repo(session))
             await session.commit()
             return result
 

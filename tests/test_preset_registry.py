@@ -30,7 +30,19 @@ def test_ref_to_dict():
     assert preset_ref_to_dict("system", "default") == {"source": "system", "id": "default"}
 
 
-from vts.services.preset_expand import filter_prompt_refs, expand_preset_options
+from vts.services.preset_expand import filter_prompt_refs, expand_preset_options, resolve_preset
+
+def test_resolve_preset_system_default_returns_registry_options():
+    out = resolve_preset("system", "default", list_system_presets(), None)
+    assert out == default_system_preset().options
+
+def test_resolve_preset_unknown_system_returns_none():
+    assert resolve_preset("system", "nope", list_system_presets(), None) is None
+
+def test_resolve_preset_user_returns_passed_options():
+    opts = {"language": "ru", "prompts": []}
+    assert resolve_preset("user", "abc", list_system_presets(), opts) == opts
+    assert resolve_preset("user", "abc", list_system_presets(), None) is None
 
 def test_filter_keeps_system_drops_unknown_user():
     refs = [{"source":"system","id":"summary"},
