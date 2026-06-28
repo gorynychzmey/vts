@@ -191,7 +191,7 @@ def _progress_for_stage(
     if stage == _ASR_STAGE:
         current, total = asr_map.get(task.id, (0, 0))
         return ProgressCounts(current=current, total=total)
-    if stage in _SUMMARY_STAGES:
+    if stage in _SUMMARY_STAGES or stage.startswith("finalize:"):
         current, total = summary_progress_for_task(task)
         return ProgressCounts(current=current, total=total)
     return None

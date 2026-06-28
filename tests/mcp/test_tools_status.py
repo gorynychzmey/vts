@@ -139,6 +139,34 @@ async def test_get_status_uses_summary_progress_during_summarize_step() -> None:
     assert result.progress.total == 12
 
 
+async def test_get_status_uses_summary_progress_during_finalize_step() -> None:
+    """finalize:<source>:<id> steps are treated as summary stages and return summary progress."""
+    from types import SimpleNamespace
+    from vts.db.models import TaskStatus
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    task_id = uuid.uuid4()
+    t = FakeTask(
+        id=task_id,
+        user_id=uuid.UUID(user.id),
+        source_url="x",
+        status=TaskStatus.running,
+        summary_progress={"current": 3, "total": 5},
+        steps=[
+            SimpleNamespace(name="summarize_final", status="completed"),
+            SimpleNamespace(name="finalize:user:abc", status="running"),
+        ],
+    )
+    repo.tasks[task_id] = t
+
+    result = await get_status(task_id=task_id, user=user, repo=repo)
+    assert result.stage == "finalize:user:abc"
+    assert result.progress is not None
+    assert result.progress.current == 3
+    assert result.progress.total == 5
+
+
 async def test_get_status_progress_none_for_non_progress_stage() -> None:
     """Stages like download/extract_audio don't have a numeric counter."""
     from types import SimpleNamespace
