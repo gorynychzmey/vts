@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     night_mode_start_hour: int = 22
     night_mode_end_hour: int = 7
 
+    progress_weights_enabled: bool = True
+    progress_weights_recompute_interval_seconds: int = 604800
+    progress_weights_min_samples: int = 5
+
     timezone: str | None = None
     mcp_enabled: bool = True
     mcp_path: str = "/mcp"

@@ -13,6 +13,7 @@ from vts.db.repo import Repo
 from vts.db.session import SessionLocal
 from vts.pipeline.processor import TaskProcessor
 from vts.services.redis_bus import RedisBus
+from vts.services.step_weights_recompute import recompute_all_users
 
 
 async def recover_pending_tasks(log: logging.Logger) -> None:
@@ -22,6 +23,24 @@ async def recover_pending_tasks(log: logging.Logger) -> None:
         await session.commit()
     if recovered_running:
         log.info("recovered running tasks: %s", len(recovered_running))
+
+
+async def _step_weights_tick(*, min_samples: int) -> None:
+    await recompute_all_users(SessionLocal, min_samples=min_samples)
+
+
+async def _step_weights_loop() -> None:
+    settings = get_settings()
+    log = logging.getLogger("vts.worker")
+    # Small startup jitter so a fresh deploy doesn't recompute before the
+    # queue has drained; then recompute on the configured interval.
+    await asyncio.sleep(5)
+    while True:
+        try:
+            await _step_weights_tick(min_samples=settings.progress_weights_min_samples)
+        except Exception:
+            log.exception("step-weights loop iteration failed")
+        await asyncio.sleep(settings.progress_weights_recompute_interval_seconds)
 
 
 async def worker_loop() -> None:
@@ -47,6 +66,11 @@ async def worker_loop() -> None:
                 wakeup.set()
 
         pump_task = asyncio.create_task(_pump())
+
+        settings_for_weights = get_settings()
+        weights_task: asyncio.Task[None] | None = None
+        if settings_for_weights.progress_weights_enabled:
+            weights_task = asyncio.create_task(_step_weights_loop())
 
         running_task_id = None
         running_task: asyncio.Task[None] | None = None
@@ -114,6 +138,10 @@ async def worker_loop() -> None:
         pump_task.cancel()
         with suppress(BaseException):
             await pump_task
+        if weights_task is not None:
+            weights_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await weights_task
         with suppress(Exception):
             await pubsub.unsubscribe(notify_channel)
             await pubsub.aclose()
