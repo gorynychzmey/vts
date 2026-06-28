@@ -279,7 +279,7 @@ input[type="file"] {
   max-width: 22rem;
   max-height: 18rem;
   overflow-y: auto;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 0.2rem;
   padding: 0.4rem;
@@ -287,6 +287,10 @@ input[type="file"] {
   border-radius: 0.6rem;
   background: #fff;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.prompt-select.open .prompt-select-popover {
+  display: flex;
 }
 
 .prompt-row {

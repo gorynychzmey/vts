@@ -35,6 +35,7 @@ window.__VTS_I18N.en = {
 "prompts.manage.body": "Prompt text",
 "prompts.manage.system_readonly": "read-only",
 "prompts.manage.copy_suffix": " (copy)",
+"prompts.manage.reset": "Reset",
 "new_task.language": "Language",
 "new_task.language_auto": "auto",
 "new_task.language_en": "English",

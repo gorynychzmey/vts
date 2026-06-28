@@ -35,6 +35,7 @@ window.__VTS_I18N.de = {
 "prompts.manage.body": "Prompt-Text",
 "prompts.manage.system_readonly": "schreibgeschützt",
 "prompts.manage.copy_suffix": " (Kopie)",
+"prompts.manage.reset": "Zurücksetzen",
 "new_task.language": "Sprache",
 "new_task.language_auto": "auto",
 "new_task.language_en": "Englisch",
