@@ -963,17 +963,35 @@ input[type="file"] {
   background: rgba(0, 0, 0, 0.45);
 }
 
-#restart-final-dialog {
-  min-width: min(22rem, calc(100% - 2rem));
+/* Layout only when open — a closed <dialog> must keep the UA `display:none`,
+   otherwise `display:flex` leaks the dialog onto the page and breaks closing. */
+#restart-final-dialog[open] {
+  /* Size to content: at least ~28rem, growing with the longest row up to 80vw. */
+  width: max-content;
+  min-width: min(28rem, calc(100vw - 2rem));
+  max-width: min(80vw, calc(100vw - 2rem));
   max-height: 70vh;
   display: flex;
   flex-direction: column;
+}
+
+/* Left-align the prompt rows and the action button in the restart dialog;
+   keep the badge next to the name rather than pushed to the far edge. */
+#restart-final-select .prompt-row {
+  justify-content: flex-start;
+}
+
+#restart-final-select .prompt-name {
+  flex: 0 0 auto;
 }
 
 /* Flat, always-visible scrollable prompt list (no dropdown in the dialog). */
 #restart-final-select {
   display: flex;
   flex-direction: column;
+  /* Override the inline-flex `align-items: center` inherited from the base
+     .prompt-select rule so rows pin to the left instead of centering. */
+  align-items: flex-start;
   gap: 0.2rem;
   overflow-y: auto;
   flex: 1 1 auto;
