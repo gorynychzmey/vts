@@ -35,6 +35,7 @@ window.__VTS_I18N.ru = {
 "prompts.manage.body": "Текст промпта",
 "prompts.manage.system_readonly": "только чтение",
 "prompts.manage.copy_suffix": " (копия)",
+"prompts.manage.reset": "Сбросить",
 "new_task.language": "Язык",
 "new_task.language_auto": "авто",
 "new_task.language_en": "Английский",
