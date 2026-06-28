@@ -1,5 +1,3 @@
-import uuid
-import pytest
 from vts.db.models import UserStepWeights, User
 
 

@@ -67,9 +67,8 @@ async def worker_loop() -> None:
 
         pump_task = asyncio.create_task(_pump())
 
-        settings_for_weights = get_settings()
         weights_task: asyncio.Task[None] | None = None
-        if settings_for_weights.progress_weights_enabled:
+        if settings.progress_weights_enabled:
             weights_task = asyncio.create_task(_step_weights_loop())
 
         running_task_id = None

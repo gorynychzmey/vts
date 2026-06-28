@@ -52,7 +52,6 @@ async def test_step_durations_for_user_only_completed(session):
     user = await repo.get_or_create_user("durations@example.com")
     await session.flush()
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    from datetime import timedelta
     await _make_completed_task(repo, user.id, 6, [
         ("download", t0, t0 + timedelta(seconds=10), StepStatus.completed),
         ("summarize_windows", t0, t0 + timedelta(seconds=60), StepStatus.completed),
