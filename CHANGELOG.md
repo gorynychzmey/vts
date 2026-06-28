@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.8 — Task option presets (vts-hp7)
+
+Save a named bundle of task-creation options (language, audio-only,
+transcript, prompt selection) as a preset and apply it when creating a task.
+
+- A system read-only "Default" preset reproduces the form's out-of-the-box
+  options; users create/edit/delete their own presets.
+- The create form has a preset dropdown that fills the options on selection,
+  with a single save button (Save as preset / Save changes) and a re-save
+  hint when a preset references deleted prompts.
+- A manager dialog supports create, edit, delete, duplicate (including
+  duplicating system presets into editable user copies), and "make default".
+- Each user has one active default preset (`users.default_preset`), which may
+  be a system or a user preset; deleting the active default falls back to the
+  system "Default".
+- HTTP: `GET/POST/PATCH/DELETE /api/presets`, `GET/PUT /api/me/default_preset`.
+  MCP: preset CRUD tools plus a `preset` parameter on `submit_video` that the
+  server expands (preset options as the base; explicit fields override;
+  deleted-prompt refs filtered).
+
+(1.1.6 / 1.1.7 were UI fixes for the restart dialog and prompt selector,
+plus MCP/HTTP cleanups — see git history.)
+
 ## 1.1.5 — Restart final stage with a different prompt set (vts-2or)
 
 The task-card "Restart final summary only" action now opens a dialog with a

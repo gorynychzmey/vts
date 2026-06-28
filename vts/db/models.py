@@ -51,6 +51,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     preferred_ytdlp_client: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    default_preset: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="user")
@@ -170,6 +171,25 @@ class Prompt(Base):
 
     __table_args__ = (
         Index("ix_prompts_user_created", "user_id", "created_at"),
+    )
+
+
+class Preset(Base):
+    __tablename__ = "presets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    options: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_presets_user_created", "user_id", "created_at"),
     )
 
 

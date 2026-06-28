@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 from fastapi import HTTPException
 
 from vts.mcp.schemas import (
+    PresetInfo,
     ProgressCounts,
     PromptInfo,
     PromptResult,
@@ -17,6 +18,13 @@ from vts.mcp.schemas import (
     TaskSummary,
     TranscriptResult,
     WaitResult,
+)
+from vts.services.preset_expand import expand_preset_options, resolve_preset
+from vts.services.preset_registry import (
+    default_system_preset,
+    list_system_presets,
+    parse_preset_ref,
+    system_preset_keys,
 )
 from vts.services.prompt_registry import list_system_prompts, parse_ref, ref_to_dict
 from vts.services.prompt_results import resolve_result_path
@@ -41,6 +49,9 @@ class _RepoLike(Protocol):
         artifact_dir: str,
         task_id: uuid.UUID | None = None,
     ) -> Any: ...
+
+    async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
+    async def list_prompts(self, user_id: uuid.UUID) -> list[Any]: ...
 
 
 class _BusLike(Protocol):
@@ -68,6 +79,7 @@ async def submit_video(
     audio_only: bool = False,
     transcript: bool = True,
     prompts: list[dict] | None = None,
+    preset: dict | None = None,
 ) -> SubmitVideoResult:
     """Create a new task in the queued state and notify the worker.
 
@@ -76,19 +88,67 @@ async def submit_video(
     to the single system "summary" prompt; non-empty prompts require
     `transcript=True` — the worker would otherwise have nothing to run
     prompts against.
+
+    `preset` (a ref like {"source": "system", "id": "default"} or
+    {"source": "user", "id": "<uuid>"}) supplies default pipeline options.
+    When given, the preset's options form the base; explicit caller params
+    override the base ONLY for fields the caller left at their default —
+    i.e. the preset fills the fields you didn't set:
+      - language: caller wins if `language is not None`, else preset's.
+      - audio_only: caller wins if `audio_only is True` (non-default),
+        else preset's.
+      - transcript: caller wins if `transcript is False` (non-default),
+        else preset's.
+      - prompts: caller wins if `prompts is not None`, else preset's.
+    With no preset, behaviour is unchanged.
     """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
-    if prompts is None:
-        norm: list[dict] = [ref_to_dict("system", "summary")]
+    if preset is None:
+        if prompts is None:
+            norm: list[dict] = [ref_to_dict("system", "summary")]
+        else:
+            norm = []
+            for entry in prompts:
+                try:
+                    source, ref_id = parse_ref(entry)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                norm.append(ref_to_dict(source, ref_id))
     else:
-        norm = []
-        for entry in prompts:
-            try:
-                source, ref_id = parse_ref(entry)
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            norm.append(ref_to_dict(source, ref_id))
+        try:
+            p_source, p_id = parse_preset_ref(preset)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        user_preset_options: dict | None = None
+        if p_source == "user":
+            row = await repo.get_preset(uuid.UUID(user.id), uuid.UUID(p_id))
+            if row is None:
+                raise HTTPException(status_code=404, detail="Preset not found")
+            user_preset_options = row.options
+        resolved = resolve_preset(p_source, p_id, list_system_presets(), user_preset_options)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Unknown system preset")
+        valid_user_prompt_ids = {str(p.id) for p in await repo.list_prompts(uuid.UUID(user.id))}
+        base = expand_preset_options(resolved, valid_user_prompt_ids)
+        # Preset fills fields the caller left at default; explicit non-default
+        # caller params override.
+        if language is None:
+            language = base["language"]
+        if audio_only is False:
+            audio_only = bool(base["audio_only"])
+        if transcript is True:
+            transcript = bool(base["transcript"])
+        if prompts is None:
+            norm = list(base["prompts"])
+        else:
+            norm = []
+            for entry in prompts:
+                try:
+                    source, ref_id = parse_ref(entry)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                norm.append(ref_to_dict(source, ref_id))
     if norm and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     task_id = uuid.uuid4()
@@ -332,6 +392,126 @@ async def delete_prompt(
     if not ok:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"deleted": True, "id": str(prompt_id)}
+
+
+class _RepoPresetLike(Protocol):
+    async def create_preset(self, user_id: uuid.UUID, name: str, options: dict) -> Any: ...
+    async def list_presets(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
+    async def update_preset(
+        self,
+        user_id: uuid.UUID,
+        preset_id: uuid.UUID,
+        *,
+        name: str | None,
+        options: dict | None,
+    ) -> Any | None: ...
+    async def delete_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> bool: ...
+    async def get_user_default_preset(self, user_id: uuid.UUID) -> dict | None: ...
+    async def set_user_default_preset(self, user_id: uuid.UUID, ref: dict | None) -> None: ...
+
+
+async def list_presets(
+    *,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+) -> list[PresetInfo]:
+    """List presets available to the caller: built-in system presets first,
+    then the user's own presets (mirrors web GET /api/presets)."""
+    out: list[PresetInfo] = [
+        PresetInfo(source="system", id=p.key, name=p.display_name, editable=False, options=dict(p.options))
+        for p in list_system_presets()
+    ]
+    for row in await repo.list_presets(uuid.UUID(user.id)):
+        out.append(
+            PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+        )
+    return out
+
+
+async def create_preset(
+    *,
+    name: str,
+    options: dict,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+) -> PresetInfo:
+    """Create a user-defined preset. Returns the new preset's info."""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    row = await repo.create_preset(uuid.UUID(user.id), name, dict(options or {}))
+    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+
+
+async def update_preset(
+    *,
+    preset_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+    name: str | None = None,
+    options: dict | None = None,
+) -> PresetInfo:
+    """Update a user-defined preset's name and/or options. 404 if not found."""
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name must not be blank")
+    row = await repo.update_preset(
+        uuid.UUID(user.id),
+        preset_id,
+        name=name,
+        options=dict(options) if options is not None else None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+
+
+async def delete_preset(
+    *,
+    preset_id: uuid.UUID,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+) -> dict[str, Any]:
+    """Delete a user-defined preset. 404 if not found."""
+    ok = await repo.delete_preset(uuid.UUID(user.id), preset_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"deleted": True, "id": str(preset_id)}
+
+
+async def get_default_preset(
+    *,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+) -> dict[str, Any]:
+    """Return the caller's default preset ref, falling back to the system default."""
+    ref = await repo.get_user_default_preset(uuid.UUID(user.id))
+    return ref or {"source": "system", "id": default_system_preset().key}
+
+
+async def set_default_preset(
+    *,
+    source: str,
+    id: str,
+    user: _UserLike,
+    repo: _RepoPresetLike,
+) -> dict[str, Any]:
+    """Set the caller's default preset. 404 if the referenced preset is unknown."""
+    try:
+        source, ref_id = parse_preset_ref({"source": source, "id": id})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if source == "system":
+        if ref_id not in system_preset_keys():
+            raise HTTPException(status_code=404, detail="Unknown system preset")
+    else:
+        if await repo.get_preset(uuid.UUID(user.id), uuid.UUID(ref_id)) is None:
+            raise HTTPException(status_code=404, detail="Preset not found")
+    ref = {"source": source, "id": ref_id}
+    await repo.set_user_default_preset(uuid.UUID(user.id), ref)
+    return ref
 
 
 async def get_transcript(

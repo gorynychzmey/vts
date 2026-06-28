@@ -39,6 +39,11 @@ from vts.api.schemas import (
     BatchResultOut,
     MeOut,
     MessageOut,
+    PresetCreateRequest,
+    PresetOptions,
+    PresetOut,
+    PresetRef,
+    PresetUpdateRequest,
     PromptCreateRequest,
     PromptDetailOut,
     PromptOut,
@@ -1196,6 +1201,77 @@ def create_app() -> FastAPI:
         ok = await repo.delete_prompt(uuid.UUID(user.id), prompt_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Prompt not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/presets", response_model=list[PresetOut])
+    async def list_presets_endpoint(user: AuthenticatedUser = Depends(get_current_user),
+                                    session: AsyncSession = Depends(get_session_dep)) -> list[PresetOut]:
+        from vts.services.preset_registry import list_system_presets
+        out = [PresetOut(source="system", id=p.key, name=p.display_name,
+                         options=PresetOptions(**p.options), editable=False)
+               for p in list_system_presets()]
+        repo = Repo(session)
+        for row in await repo.list_presets(uuid.UUID(user.id)):
+            out.append(PresetOut(source="user", id=str(row.id), name=row.name,
+                                 options=PresetOptions(**row.options), editable=True))
+        return out
+
+    @app.post("/api/presets", response_model=PresetOut)
+    async def create_preset_endpoint(payload: PresetCreateRequest,
+                                     user: AuthenticatedUser = Depends(get_current_user),
+                                     session: AsyncSession = Depends(get_session_dep)) -> PresetOut:
+        repo = Repo(session)
+        row = await repo.create_preset(uuid.UUID(user.id), payload.name.strip(), payload.options.model_dump())
+        await session.commit()
+        return PresetOut(source="user", id=str(row.id), name=row.name,
+                         options=PresetOptions(**row.options), editable=True)
+
+    @app.patch("/api/presets/{preset_id}", response_model=PresetOut)
+    async def update_preset_endpoint(preset_id: uuid.UUID, payload: PresetUpdateRequest,
+                                     user: AuthenticatedUser = Depends(get_current_user),
+                                     session: AsyncSession = Depends(get_session_dep)) -> PresetOut:
+        repo = Repo(session)
+        row = await repo.update_preset(uuid.UUID(user.id), preset_id,
+                                       name=payload.name,
+                                       options=payload.options.model_dump() if payload.options else None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        await session.commit()
+        return PresetOut(source="user", id=str(row.id), name=row.name,
+                         options=PresetOptions(**row.options), editable=True)
+
+    @app.delete("/api/presets/{preset_id}", status_code=204)
+    async def delete_preset_endpoint(preset_id: uuid.UUID,
+                                     user: AuthenticatedUser = Depends(get_current_user),
+                                     session: AsyncSession = Depends(get_session_dep)) -> Response:
+        repo = Repo(session)
+        if not await repo.delete_preset(uuid.UUID(user.id), preset_id):
+            raise HTTPException(status_code=404, detail="Preset not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/me/default_preset")
+    async def get_default_preset_endpoint(user: AuthenticatedUser = Depends(get_current_user),
+                                          session: AsyncSession = Depends(get_session_dep)) -> dict:
+        from vts.services.preset_registry import default_system_preset
+        repo = Repo(session)
+        ref = await repo.get_user_default_preset(uuid.UUID(user.id))
+        return ref or {"source": "system", "id": default_system_preset().key}
+
+    @app.put("/api/me/default_preset", status_code=204)
+    async def set_default_preset_endpoint(payload: PresetRef,
+                                          user: AuthenticatedUser = Depends(get_current_user),
+                                          session: AsyncSession = Depends(get_session_dep)) -> Response:
+        from vts.services.preset_registry import system_preset_keys
+        repo = Repo(session)
+        if payload.source == "system":
+            if payload.id not in system_preset_keys():
+                raise HTTPException(status_code=404, detail="Unknown system preset")
+        else:
+            if await repo.get_preset(uuid.UUID(user.id), uuid.UUID(payload.id)) is None:
+                raise HTTPException(status_code=404, detail="Preset not found")
+        await repo.set_user_default_preset(uuid.UUID(user.id), {"source": payload.source, "id": payload.id})
         await session.commit()
         return Response(status_code=204)
 

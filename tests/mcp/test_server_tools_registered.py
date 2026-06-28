@@ -17,6 +17,12 @@ async def test_server_registers_expected_tools() -> None:
         "create_prompt",
         "update_prompt",
         "delete_prompt",
+        "list_presets",
+        "create_preset",
+        "update_preset",
+        "delete_preset",
+        "get_default_preset",
+        "set_default_preset",
         "wait_for_task",
     }
     assert expected.issubset(names), f"missing tools: {expected - names}"

@@ -57,6 +57,24 @@
           </button>
           <button
             type="button"
+            id="presets-btn"
+            class="icon-btn ghost"
+            data-i18n-title="preset.manage.open"
+            data-i18n-aria-label="preset.manage.open"
+            title="Manage presets"
+            aria-label="Manage presets"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16" />
+              <path d="M4 12h16" />
+              <path d="M4 18h16" />
+              <circle cx="8" cy="6" r="2" />
+              <circle cx="16" cy="12" r="2" />
+              <circle cx="8" cy="18" r="2" />
+            </svg>
+          </button>
+          <button
+            type="button"
             id="tokens-btn"
             class="icon-btn ghost"
             data-i18n-title="tokens.open"
@@ -186,6 +204,11 @@
           </div>
 
           <div class="row options-row">
+            <div class="preset-field">
+              <span class="preset-label" data-i18n="new_task.preset">Preset</span>
+              <select id="preset-select"></select>
+              <button type="button" id="preset-save-btn" class="btn-text" data-i18n="preset.save_as">Save as preset</button>
+            </div>
             <label class="option-pill">
               <input id="audio_only" name="audio_only" type="checkbox" />
               <span data-i18n="new_task.audio_only">Audio only</span>
@@ -209,6 +232,10 @@
                 <option value="es" data-i18n="new_task.language_es">Spanish</option>
               </select>
             </label>
+          </div>
+          <div class="row preset-dangling-hint" id="preset-dangling-hint" hidden>
+            <span data-i18n="preset.dangling_prompts">This preset has deleted prompts</span>
+            <button type="button" id="preset-resave-btn" class="btn-text" data-i18n="preset.resave">Re-save</button>
           </div>
         </form>
       </section>
@@ -517,6 +544,61 @@
           <button type="submit" id="prompt-submit-btn" class="btn-text primary"
                   data-i18n="prompts.manage.create">Create prompt</button>
           <button type="button" id="prompt-cancel-btn" class="btn-text ghost hidden"
+                  data-i18n="prompts.manage.reset">Reset</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="presets-dialog" class="tokens-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="preset.manage.title">Manage presets</h2>
+        <button type="button" id="presets-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <div id="presets-list" class="tokens-list prompts-list"></div>
+
+      <form id="preset-form" class="tokens-create-form prompt-form hidden">
+        <input type="hidden" id="preset-edit-id" value="" />
+        <input type="text" id="preset-name-input" name="name" required
+               maxlength="255" autocomplete="off"
+               data-i18n-placeholder="preset.manage.name"
+               placeholder="Name" />
+        <div class="row options-row preset-edit-options">
+          <label class="option-pill">
+            <input id="preset-edit-audio_only" type="checkbox" />
+            <span data-i18n="new_task.audio_only">Audio only</span>
+          </label>
+          <label class="option-pill">
+            <input id="preset-edit-transcript" type="checkbox" checked />
+            <span data-i18n="new_task.transcript">Transcript</span>
+          </label>
+          <label class="language-control">
+            <span data-i18n="new_task.language">Language</span>
+            <select id="preset-edit-language">
+              <option value="" data-i18n="new_task.language_auto">auto</option>
+              <option value="en" data-i18n="new_task.language_en">English</option>
+              <option value="ru" data-i18n="new_task.language_ru">Russian</option>
+              <option value="de" data-i18n="new_task.language_de">German</option>
+              <option value="fr" data-i18n="new_task.language_fr">French</option>
+              <option value="es" data-i18n="new_task.language_es">Spanish</option>
+            </select>
+          </label>
+        </div>
+        <div class="prompt-select-field">
+          <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
+          <div class="prompt-select" id="preset-edit-prompts"></div>
+        </div>
+        <div class="prompt-form-actions">
+          <button type="submit" id="preset-submit-btn" class="btn-text primary"
+                  data-i18n="preset.manage.edit">Edit</button>
+          <button type="button" id="preset-cancel-btn" class="btn-text ghost"
                   data-i18n="prompts.manage.reset">Reset</button>
         </div>
       </form>

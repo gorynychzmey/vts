@@ -37,6 +37,15 @@ class FakePrompt:
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
+@dataclass
+class FakePreset:
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    options: dict[str, Any]
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
 class FakeRepo:
     """Mirrors the subset of vts.db.repo.Repo that the MCP tools call."""
 
@@ -44,6 +53,8 @@ class FakeRepo:
         self.tasks: dict[uuid.UUID, FakeTask] = {}
         self._asr_progress: dict[uuid.UUID, tuple[int, int]] = {}
         self.prompts: dict[uuid.UUID, FakePrompt] = {}
+        self.presets: dict[uuid.UUID, FakePreset] = {}
+        self.default_presets: dict[uuid.UUID, dict | None] = {}
         self.last_options: dict[str, Any] | None = None
 
     async def create_task(
@@ -106,6 +117,54 @@ class FakeRepo:
             return False
         del self.prompts[prompt_id]
         return True
+
+    # ---- Preset CRUD + default (mirrors vts.db.repo.Repo preset methods) ----
+
+    async def create_preset(self, user_id: uuid.UUID, name: str, options: dict) -> "FakePreset":
+        preset = FakePreset(id=uuid.uuid4(), user_id=user_id, name=name, options=dict(options))
+        self.presets[preset.id] = preset
+        return preset
+
+    async def list_presets(self, user_id: uuid.UUID) -> list["FakePreset"]:
+        return [p for p in self.presets.values() if p.user_id == user_id]
+
+    async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> "FakePreset | None":
+        p = self.presets.get(preset_id)
+        if p is None or p.user_id != user_id:
+            return None
+        return p
+
+    async def update_preset(
+        self,
+        user_id: uuid.UUID,
+        preset_id: uuid.UUID,
+        *,
+        name: str | None,
+        options: dict | None,
+    ) -> "FakePreset | None":
+        p = await self.get_preset(user_id, preset_id)
+        if p is None:
+            return None
+        if name is not None:
+            p.name = name
+        if options is not None:
+            p.options = dict(options)
+        return p
+
+    async def delete_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> bool:
+        p = await self.get_preset(user_id, preset_id)
+        if p is None:
+            return False
+        del self.presets[preset_id]
+        if self.default_presets.get(user_id) == {"source": "user", "id": str(preset_id)}:
+            self.default_presets[user_id] = None
+        return True
+
+    async def get_user_default_preset(self, user_id: uuid.UUID) -> dict | None:
+        return self.default_presets.get(user_id)
+
+    async def set_user_default_preset(self, user_id: uuid.UUID, ref: dict | None) -> None:
+        self.default_presets[user_id] = ref
 
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> FakeTask | None:
         t = self.tasks.get(task_id)
