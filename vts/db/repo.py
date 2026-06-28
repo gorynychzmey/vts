@@ -7,7 +7,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vts.db.models import ApiToken, AsrSegment, Prompt, Step, StepStatus, Task, TaskStatus, User
+from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User
 
 
 def utcnow() -> datetime:
@@ -480,3 +480,53 @@ class Repo:
         task.options = new_options  # reassign so SQLAlchemy flushes the JSON column
         task.updated_at = utcnow()
         await self.session.flush()
+
+    # ------------------------------------------------------------------
+    # Preset CRUD
+    # ------------------------------------------------------------------
+
+    async def create_preset(self, user_id: uuid.UUID, name: str, options: dict) -> Preset:
+        preset = Preset(user_id=user_id, name=name, options=options)
+        self.session.add(preset)
+        await self.session.flush()
+        return preset
+
+    async def list_presets(self, user_id: uuid.UUID) -> list[Preset]:
+        stmt = select(Preset).where(Preset.user_id == user_id).order_by(Preset.created_at.desc())
+        return list(await self.session.scalars(stmt))
+
+    async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Preset | None:
+        return await self.session.scalar(
+            select(Preset).where(Preset.id == preset_id, Preset.user_id == user_id))
+
+    async def update_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID, *, name: str | None, options: dict | None) -> Preset | None:
+        preset = await self.get_preset(user_id, preset_id)
+        if preset is None:
+            return None
+        if name is not None:
+            preset.name = name
+        if options is not None:
+            preset.options = options
+        await self.session.flush()
+        return preset
+
+    async def get_user_default_preset(self, user_id: uuid.UUID) -> dict | None:
+        u = await self.session.scalar(select(User).where(User.id == user_id))
+        return u.default_preset if u else None
+
+    async def set_user_default_preset(self, user_id: uuid.UUID, ref: dict | None) -> None:
+        u = await self.session.scalar(select(User).where(User.id == user_id))
+        if u is not None:
+            u.default_preset = ref
+            await self.session.flush()
+
+    async def delete_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> bool:
+        preset = await self.get_preset(user_id, preset_id)
+        if preset is None:
+            return False
+        u = await self.session.scalar(select(User).where(User.id == user_id))
+        if u is not None and u.default_preset == {"source": "user", "id": str(preset_id)}:
+            u.default_preset = None
+        await self.session.delete(preset)
+        await self.session.flush()
+        return True
