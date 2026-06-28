@@ -116,6 +116,13 @@ worker lifespan. Endpoint — в `vts/api/main.py`. Клиент — `app.js`.
   обновлённых, логирует итог. Каждый пользователь — в своей попытке try/except,
   чтобы один сбой не ронял весь проход.
 
+**Имперсонация на стороне пересчёта:** background-пересчёт идёт в воркере БЕЗ
+request-контекста — имперсонации там нет вообще. Он итерирует реальных
+пользователей по `tasks.user_id`. Когда админ запускает задачу в режиме «as user
+X», задача уже создаётся с `user_id = X` ([main.py:1347](../../../vts/api/main.py#L1347)),
+поэтому её длительности атрибутируются X, а не админу. Это корректно: веса
+отражают того, ПОД КЕМ задача была запущена. Дополнительной логики не требуется.
+
 ### 4. Планировщик — worker lifespan
 
 В `vts/worker/main.py` (рядом с `_pump`):
@@ -133,6 +140,15 @@ worker lifespan. Endpoint — в `vts/api/main.py`. Клиент — `app.js`.
 ### 5. Endpoint + клиент
 
 **Endpoint `GET /api/progress-weights` (`vts/api/main.py`):**
+- **Имперсонация:** scoping по `uuid.UUID(user.id)`, где `user: AuthenticatedUser =
+  Depends(get_current_user)` — ровно как `/api/prompts` и `/api/presets`. `user.id`
+  УЖЕ является id эффективного (acting_as) пользователя: при админском
+  `?as_user=…` auth-слой ([vts/services/auth.py](../../../vts/services/auth.py),
+  resolve) подставляет id имперсонируемого пользователя. Никакой отдельной
+  обработки имперсонации в endpoint писать НЕ нужно — НЕ использовать
+  `requested_by`. Так клиент в режиме «as user X» видит веса X, что согласовано с
+  тем, что задачи, запущенные в этом режиме, тоже принадлежат X
+  ([vts/api/main.py:1347](../../../vts/api/main.py#L1347), `effective_user_id`).
 - Для текущего пользователя: `get_user_step_weights(user_id)`. Если строка есть —
   отдаём её `weights` + `final_summary_fallback` (они уже полные, merge сделан при
   пересчёте). Если нет — отдаём чистый seed (`SEED_STEP_WEIGHTS`,
@@ -160,7 +176,9 @@ worker lifespan. Endpoint — в `vts/api/main.py`. Клиент — `app.js`.
   пишет строку с правильными весами/счётчиками; пользователь без данных → не пишет;
   per-step порог: шаг с <min_samples остаётся seed.
 - `tests/test_progress_weights_api.py`: строка есть → её веса; строки нет → seed;
-  изоляция per-user (юзер A не видит веса B).
+  изоляция per-user (юзер A не видит веса B); **имперсонация**: админ с
+  `?as_user=X` получает веса X (не свои), не-админ с `?as_user=X` → 403 (как
+  существующий admin-switch контракт).
 - UI verifier: стаб `/api/progress-weights`; прогресс-сценарий зелёный; при 500 —
   клиент падает на хардкод-фолбэк (прогресс всё равно считается).
 
