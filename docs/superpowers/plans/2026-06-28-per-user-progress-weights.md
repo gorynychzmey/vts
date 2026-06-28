@@ -328,18 +328,42 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
   - `Repo.get_user_step_weights(user_id) -> UserStepWeights | None`
   - `Repo.users_with_completed_tasks() -> list[uuid.UUID]`
 
-- [ ] **Step 1: Write the failing test** (mirror the Postgres-fixture style of `tests/test_presets_api.py` / existing repo tests — use the same session fixture they use)
+- [ ] **Step 1: Write the failing test** — use the EXACT repo-test fixture pattern of `tests/test_presets_repo.py`: a local `session` fixture built from `make_test_engine` imported from `_db`, with `Base.metadata.drop_all/create_all` around each test. There is NO shared `db_session` fixture; do not use one.
 
 ```python
 # tests/test_user_step_weights_repo.py
+from __future__ import annotations
+
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
 import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from _db import make_test_engine
+from vts.db.base import Base
 from vts.db.repo import Repo
 from vts.db.models import Task, Step, TaskStatus, StepStatus
 from vts.metrics.step_weights import StepDuration
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture
+async def session() -> AsyncSession:
+    engine = make_test_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as sess:
+            yield sess
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
 
 
 async def _make_completed_task(repo, user_id, total_windows, step_specs):
@@ -357,10 +381,10 @@ async def _make_completed_task(repo, user_id, total_windows, step_specs):
     return task
 
 
-async def test_step_durations_for_user_only_completed(db_session):
-    repo = Repo(db_session)
+async def test_step_durations_for_user_only_completed(session):
+    repo = Repo(session)
     user = await repo.get_or_create_user("durations@example.com")
-    await db_session.flush()
+    await session.flush()
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     from datetime import timedelta
     await _make_completed_task(repo, user.id, 6, [
@@ -368,7 +392,7 @@ async def test_step_durations_for_user_only_completed(db_session):
         ("summarize_windows", t0, t0 + timedelta(seconds=60), StepStatus.completed),
         ("merge_transcript", t0, t0 + timedelta(seconds=5), StepStatus.failed),  # excluded
     ])
-    await db_session.commit()
+    await session.commit()
     rows = await repo.step_durations_for_user(user.id)
     names = sorted(r.name for r in rows)
     assert names == ["download", "summarize_windows"]
@@ -377,39 +401,38 @@ async def test_step_durations_for_user_only_completed(db_session):
     assert abs(sw.duration_sec - 60.0) < 0.01
 
 
-async def test_upsert_and_get_user_step_weights(db_session):
-    repo = Repo(db_session)
+async def test_upsert_and_get_user_step_weights(session):
+    repo = Repo(session)
     user = await repo.get_or_create_user("upsert@example.com")
-    await db_session.flush()
+    await session.flush()
     now = datetime(2026, 1, 2, tzinfo=timezone.utc)
     await repo.upsert_user_step_weights(user.id, {"download": 9.0}, 500.0, now, {"download": 7})
-    await db_session.commit()
+    await session.commit()
     row = await repo.get_user_step_weights(user.id)
     assert row.weights == {"download": 9.0}
     assert row.final_summary_fallback == 500.0
     # upsert again -> single row, updated
     await repo.upsert_user_step_weights(user.id, {"download": 1.0}, 1.0, now, {"download": 1})
-    await db_session.commit()
+    await session.commit()
     row2 = await repo.get_user_step_weights(user.id)
     assert row2.weights == {"download": 1.0}
 
 
-async def test_users_with_completed_tasks(db_session):
-    repo = Repo(db_session)
+async def test_users_with_completed_tasks(session):
+    repo = Repo(session)
     u1 = await repo.get_or_create_user("has-completed@example.com")
     u2 = await repo.get_or_create_user("no-completed@example.com")
-    await db_session.flush()
+    await session.flush()
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     await _make_completed_task(repo, u1.id, 3, [])
-    db_session.add(Task(user_id=u2.id, source_url="u", status=TaskStatus.queued,
+    session.add(Task(user_id=u2.id, source_url="u", status=TaskStatus.queued,
                         options={}, artifact_dir="/tmp/y"))
-    await db_session.commit()
+    await session.commit()
     ids = await repo.users_with_completed_tasks()
     assert u1.id in ids
     assert u2.id not in ids
 ```
 
-(If the repo-test session fixture has a different name than `db_session`, use whatever the existing repo/API tests use — check `tests/conftest.py`.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -544,41 +567,41 @@ async def _completed_task(session, user_id, total, steps):
     await session.flush()
 
 
-async def test_recompute_below_threshold_keeps_seed(db_session):
-    repo = Repo(db_session)
+async def test_recompute_below_threshold_keeps_seed(session):
+    repo = Repo(session)
     user = await repo.get_or_create_user("recompute1@example.com")
-    await db_session.flush()
+    await session.flush()
     # Only 2 download samples (< default 5) -> seed kept for download
-    await _completed_task(db_session, user.id, 6, [("download", 99.0)])
-    await _completed_task(db_session, user.id, 6, [("download", 99.0)])
-    await db_session.commit()
-    wrote = await recompute_for_user(db_session, user.id, min_samples=5)
-    await db_session.commit()
+    await _completed_task(session, user.id, 6, [("download", 99.0)])
+    await _completed_task(session, user.id, 6, [("download", 99.0)])
+    await session.commit()
+    wrote = await recompute_for_user(session, user.id, min_samples=5)
+    await session.commit()
     assert wrote is True
     row = await repo.get_user_step_weights(user.id)
     assert row.weights["download"] == SEED_STEP_WEIGHTS["download"]  # seed, not 99.0
 
 
-async def test_recompute_above_threshold_uses_computed(db_session):
-    repo = Repo(db_session)
+async def test_recompute_above_threshold_uses_computed(session):
+    repo = Repo(session)
     user = await repo.get_or_create_user("recompute2@example.com")
-    await db_session.flush()
+    await session.flush()
     for _ in range(5):
-        await _completed_task(db_session, user.id, 6, [("download", 42.0)])
-    await db_session.commit()
-    await recompute_for_user(db_session, user.id, min_samples=5)
-    await db_session.commit()
+        await _completed_task(session, user.id, 6, [("download", 42.0)])
+    await session.commit()
+    await recompute_for_user(session, user.id, min_samples=5)
+    await session.commit()
     row = await repo.get_user_step_weights(user.id)
     assert row.weights["download"] == 42.0
     assert row.sample_counts["download"] == 5
 
 
-async def test_recompute_no_data_returns_false(db_session):
-    repo = Repo(db_session)
+async def test_recompute_no_data_returns_false(session):
+    repo = Repo(session)
     user = await repo.get_or_create_user("recompute3@example.com")
-    await db_session.flush()
-    await db_session.commit()
-    wrote = await recompute_for_user(db_session, user.id, min_samples=5)
+    await session.flush()
+    await session.commit()
+    wrote = await recompute_for_user(session, user.id, min_samples=5)
     assert wrote is False
     assert await repo.get_user_step_weights(user.id) is None
 ```
@@ -815,16 +838,35 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ```python
 # tests/test_progress_weights_api.py
-import pytest
+from __future__ import annotations
+
+import uuid
 from datetime import datetime, timezone
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from _db import make_test_engine
+from vts.db.base import Base
+from vts.db.models import User
 from vts.db.repo import Repo
 from vts.metrics.step_weights import SEED_STEP_WEIGHTS, SEED_FINAL_SUMMARY_FALLBACK
 
 pytestmark = pytest.mark.asyncio
 
+# The conftest `client` fixture authenticates as a fixed seeded user "tester"
+# (id below, is_admin=False) and does NOT honor ?as_user=. That covers the two
+# non-impersonation cases. For impersonation we build a dedicated app whose
+# require_user override returns an ADMIN acting_as a seeded target user — this
+# is the only way to exercise the endpoint's effective-user scoping via HTTP.
+_TEST_USER_ID = "00000000-0000-0000-0000-0000000000a1"  # matches tests/conftest.py
+_TARGET_USER_ID = "00000000-0000-0000-0000-0000000000b2"
 
-async def test_no_row_returns_seed(client, db_session):
-    # default authed user has no user_step_weights row
+
+async def test_no_row_returns_seed(client):
+    # default authed user ("tester") has no user_step_weights row -> seed
     resp = await client.get("/api/progress-weights")
     assert resp.status_code == 200
     body = resp.json()
@@ -832,32 +874,86 @@ async def test_no_row_returns_seed(client, db_session):
     assert body["final_summary_fallback"] == SEED_FINAL_SUMMARY_FALLBACK
 
 
-async def test_existing_row_returned(client, db_session, current_user_id):
-    repo = Repo(db_session)
-    await repo.upsert_user_step_weights(
-        current_user_id, {"download": 12.3}, 321.0,
-        datetime.now(tz=timezone.utc), {"download": 9},
-    )
-    await db_session.commit()
-    resp = await client.get("/api/progress-weights")
-    body = resp.json()
+async def test_existing_row_returned(authed_app, client):
+    # authed_app yields (app, sessionmaker); seed a row for the "tester" user
+    _app, factory = authed_app
+    async with factory() as session:
+        repo = Repo(session)
+        await repo.upsert_user_step_weights(
+            uuid.UUID(_TEST_USER_ID), {"download": 12.3}, 321.0,
+            datetime.now(tz=timezone.utc), {"download": 9},
+        )
+        await session.commit()
+    body = (await client.get("/api/progress-weights")).json()
     assert body["weights"]["download"] == 12.3
     assert body["final_summary_fallback"] == 321.0
 
 
-async def test_impersonation_returns_target_user_weights(admin_client, db_session, make_user):
-    # admin acting as user X sees X's weights, not their own
-    target = await make_user("target@example.com")
-    repo = Repo(db_session)
-    await repo.upsert_user_step_weights(
-        target.id, {"download": 7.7}, 200.0, datetime.now(tz=timezone.utc), {"download": 9})
-    await db_session.commit()
-    resp = await admin_client.get("/api/progress-weights?as_user=target@example.com")
-    assert resp.status_code == 200
-    assert resp.json()["weights"]["download"] == 7.7
+@pytest_asyncio.fixture
+async def impersonation_client():
+    """App+client where require_user returns an ADMIN acting_as a seeded target.
+
+    Mirrors tests/conftest.py:authed_app but overrides the auth identity to an
+    admin impersonating _TARGET_USER_ID, and seeds that target user + a weights
+    row, so GET /api/progress-weights must return the TARGET's weights.
+    """
+    from vts.db.session import get_db_session
+    from vts.services.auth import AuthenticatedUser, require_user
+    from vts.api.main import create_app
+
+    engine = make_test_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with factory() as seed:
+        seed.add(User(id=uuid.UUID(_TARGET_USER_ID), username="target@example.com"))
+        await seed.flush()
+        repo = Repo(seed)
+        await repo.upsert_user_step_weights(
+            uuid.UUID(_TARGET_USER_ID), {"download": 7.7}, 200.0,
+            datetime.now(tz=timezone.utc), {"download": 9},
+        )
+        await seed.commit()
+
+    async def _override_get_db_session():
+        async with factory() as session:
+            yield session
+
+    async def _override_require_user() -> AuthenticatedUser:
+        # auth layer would resolve ?as_user= to the target's id; emulate the
+        # resolved result: effective user.id IS the target's id.
+        return AuthenticatedUser(
+            id=_TARGET_USER_ID,
+            username="target@example.com",
+            requested_by="admin@example.com",
+            is_admin=True,
+            acting_as="target@example.com",
+        )
+
+    app = create_app()
+    app.dependency_overrides[get_db_session] = _override_get_db_session
+    app.dependency_overrides[require_user] = _override_require_user
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+async def test_impersonation_returns_target_user_weights(impersonation_client):
+    # admin acting_as target -> endpoint scopes by user.id (= target's id)
+    body = (await impersonation_client.get("/api/progress-weights")).json()
+    assert body["weights"]["download"] == 7.7
+    assert body["final_summary_fallback"] == 200.0
 ```
 
-(Use whatever fixtures the existing API tests expose for authed `client`, `admin_client`, `current_user_id`, `make_user`. If names differ, adapt to `tests/conftest.py`. The three behaviors — seed when no row, stored row when present, impersonation target — are the contract; keep them.)
+The three behaviors — seed when no row, stored row when present, impersonation returns the acting_as target's weights — are the contract. The impersonation fixture emulates the auth layer's *resolved* result (effective `user.id` = target id); the resolution itself from `?as_user=` is already covered by `tests/test_auth_api_token_resolver.py`. This test proves the endpoint scopes by `user.id`, not `requested_by`.
 
 - [ ] **Step 2: Run to verify failure**
 
