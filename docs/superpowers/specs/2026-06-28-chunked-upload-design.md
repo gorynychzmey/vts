@@ -46,7 +46,18 @@ finalize (через `normalize_display_name`).
 - Создаёт `task_dir(artifacts_root, user.username, upload_id)` + `media/`.
 - Пишет `<task_dir>/upload.json`: `{upload_id, user_id, username, suffix,
   total_size, received: 0, options, created_at}`.
-- Создаёт пустой `<task_dir>/media/audio.original<suffix>.part`.
+- Создаёт пустой staging-файл `<task_dir>/media/audio.original<suffix>.part`.
+
+  > **Naming.** `audio.original` — существующая внутренняя конвенция для исходного
+  > медиа-файла, НЕ означает «только аудио»: видео грузится так же (расширение
+  > сохраняется). `upload_task` сегодня пишет `"audio.original" + suffix`, downloader
+  > — `audio.original.<codec>`, а пайплайн находит файл глобом `audio.original.*`
+  > ([processor.py:433](../../../vts/pipeline/processor.py#L433)). `suffix` ВКЛЮЧАЕТ
+  > ведущую точку (`Path(name).suffix.lower()` → `.mp4`), поэтому финальное имя =
+  > `audio.original` + `.mp4` = `audio.original.mp4` — с точкой, иначе глоб
+  > `audio.original.*` его не найдёт. Staging — то же имя + `.part`:
+  > `audio.original.mp4.part`. Видео (.mp4/.mkv/.webm/…) и аудио обрабатываются
+  > одинаково — расширение из исходного файла, не хардкод «audio».
 - Ответ: `{upload_id, chunk_size}` где `chunk_size` — рекомендованный размер
   чанка (конфиг `upload_chunk_bytes`, дефолт 8 МБ).
 
@@ -69,7 +80,9 @@ finalize (через `normalize_display_name`).
 ### `POST /api/uploads/{upload_id}/finalize`
 - Проверяет владельца (404).
 - `.part` size `!= total_size` → 409 (незавершён).
-- Атомарный `os.rename(.part → audio.original<suffix>)` (тот же том).
+- Атомарный `os.rename(audio.original<suffix>.part → audio.original<suffix>)` (тот
+  же том; `<suffix>` с ведущей точкой → `audio.original.mp4`, найдётся глобом
+  `audio.original.*`).
 - Создаёт Task в БД ровно как `upload_task`: `source_url=f"file://{name}"`,
   `options` из `upload.json`, `artifact_dir=task_dir`, `task_id=upload_id`,
   `source_title=normalize_display_name(display_name)`.
@@ -187,7 +200,9 @@ single-shot POST.
 - **Без** новой таблицы БД, без object store, без новых пакетов.
 
 ## Out of scope
-- Фоновый сборщик брошенных upload-сессий (TTL-чистка) — отдельная задача.
+- Фоновый сборщик брошенных upload-сессий (TTL-чистка) — **vts-ee3** (followup,
+  зависит от этой задачи). Конфиг `upload_session_ttl_seconds` задаётся уже здесь,
+  чтобы сборщику не пришлось менять конфиг; сам проход — в vts-ee3.
 - Параллельная загрузка нескольких чанков одновременно (последовательно
   достаточно; резюм покрывает обрывы).
 - Presigned/object-store путь.
