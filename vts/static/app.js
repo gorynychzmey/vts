@@ -1037,6 +1037,13 @@ function createRuntime(task) {
 }
 
 function resolveActiveStep(runtime) {
+  // A completed task is terminal: the last enabled step is the active one,
+  // regardless of any leftover download flags from live SSE events watched
+  // during the run (hasVideo/hasAudio persist on runtime and would otherwise
+  // resolve back to "download" -> "step 1 of N" on the post-completion render).
+  if (runtime.baseStatus === "completed" && runtime.enabledSteps.length > 0) {
+    return runtime.enabledSteps[runtime.enabledSteps.length - 1];
+  }
   if (runtime.currentStepName && runtime.enabledSteps.includes(runtime.currentStepName)) {
     return runtime.currentStepName;
   }
@@ -1064,9 +1071,6 @@ function resolveActiveStep(runtime) {
   }
   if (runtime.baseStatus === "queued" && runtime.enabledSteps.length > 0) {
     return runtime.enabledSteps[0];
-  }
-  if (runtime.baseStatus === "completed" && runtime.enabledSteps.length > 0) {
-    return runtime.enabledSteps[runtime.enabledSteps.length - 1];
   }
   return "";
 }
