@@ -162,7 +162,31 @@ def test_upsert_result_entry_inserts_then_updates() -> None:
     assert len(entries) == 1
     assert entries[0]["name"] == "Renamed"
     assert entries[0]["path"] == "/p/b.md"
-    assert options["prompt_results"] is entries
+
+
+def test_upsert_result_entry_does_not_alias_input_list() -> None:
+    """The returned list must NOT be the same object as options['prompt_results'],
+    and the input's existing list must not be mutated in place.
+
+    Regression (vts-jal): _persist_prompt_result passes a SHALLOW dict(task.options),
+    so options['prompt_results'] is the same list SQLAlchemy loaded for the JSON
+    column. If upsert mutates that list in place, the change is not tracked and the
+    second finalize step's write is silently dropped on commit -> only one
+    prompt_result survives -> results dropdown stays hidden.
+    """
+    original_list = [
+        {"source": "system", "id": "summary", "name": "S", "path": "/p/s.md", "status": "completed"}
+    ]
+    options = {"prompt_results": original_list}
+    entries = upsert_result_entry(options, "user", "abc", "U", "/p/u.md", "completed")
+    # New entry is present in the returned list...
+    assert len(entries) == 2
+    assert {(e["source"], e["id"]) for e in entries} == {("system", "summary"), ("user", "abc")}
+    # ...but the caller's original list object was NOT mutated in place.
+    assert original_list == [
+        {"source": "system", "id": "summary", "name": "S", "path": "/p/s.md", "status": "completed"}
+    ]
+    assert entries is not original_list
 
 
 def test_resolve_prompt_text_system_uses_registry(tmp_path: Path, monkeypatch) -> None:

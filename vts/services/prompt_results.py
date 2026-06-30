@@ -12,13 +12,19 @@ def upsert_result_entry(
 ) -> list[dict[str, Any]]:
     """Insert or update a prompt-result entry inside ``options['prompt_results']``.
 
-    Returns the (possibly newly created) ``prompt_results`` list so the caller can
-    hand it to ``Repo.set_task_prompt_results`` for a JSON-column-safe write-back.
+    Returns a FRESH ``prompt_results`` list (with copied entry dicts) so the
+    caller can hand it to ``Repo.set_task_prompt_results`` for a JSON-column-safe
+    write-back. The input ``options`` and any existing list/entries are left
+    unmutated: callers pass a shallow ``dict(task.options)`` whose
+    ``prompt_results`` list is the same object SQLAlchemy loaded for the JSON
+    column. Mutating it in place is not change-tracked, so a subsequent commit
+    silently drops the write (e.g. the second of two finalize steps). Building a
+    new list guarantees the reassignment is detected and persisted.
     """
-    entries = options.setdefault("prompt_results", [])
-    if not isinstance(entries, list):
-        entries = []
-        options["prompt_results"] = entries
+    existing = options.get("prompt_results")
+    entries: list[dict[str, Any]] = (
+        [dict(e) for e in existing] if isinstance(existing, list) else []
+    )
     target = ref_key(source, id)
     for entry in entries:
         if ref_key(str(entry.get("source")), str(entry.get("id"))) == target:

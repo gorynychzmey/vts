@@ -114,3 +114,50 @@ async def test_restart_final_prompts_with_full_422(authed_app, client):
         json={"mode":"full",
               "prompts":[{"source":"system","id":"summary"}]})
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_two_finalize_results_both_persist(authed_app, tmp_path):
+    """Regression (vts-jal): a task that finalizes two prompts (system summary +
+    one user prompt) must end with BOTH entries in options.prompt_results.
+
+    Mirrors the worker: each finalize step persists its result via its own
+    session (upsert_result_entry over a shallow dict(task.options) +
+    set_task_prompt_results). The earlier in-place list mutation caused the
+    second write to be silently dropped on commit, leaving one result and a
+    hidden results dropdown.
+    """
+    from vts.db.models import Task, TaskStatus
+    from vts.db.repo import Repo
+    from vts.services.prompt_results import upsert_result_entry
+
+    _app, factory = authed_app
+    uid = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    async with factory() as s:
+        task = Task(id=uuid.uuid4(), user_id=uid, source_url="x",
+                    artifact_dir=str(tmp_path), status=TaskStatus.running,
+                    options={"prompts": [{"source": "system", "id": "summary"},
+                                         {"source": "user", "id": "u1"}]})
+        s.add(task)
+        await s.commit()
+        tid = task.id
+
+    async def persist(source, ref_id, name):
+        # Exactly what TaskProcessor._persist_prompt_result does.
+        async with factory() as s:
+            repo = Repo(s)
+            t = await repo.get_task_by_id(tid)
+            options = dict(t.options or {})
+            entries = upsert_result_entry(options, source, ref_id, name, "/p", "completed")
+            await repo.set_task_prompt_results(t, entries)
+            await s.commit()
+
+    await persist("system", "summary", "Summary")
+    await persist("user", "u1", "My prompt")
+
+    async with factory() as s:
+        t = await Repo(s).get_task_by_id(tid)
+        results = t.options.get("prompt_results", [])
+        assert {(e["source"], e["id"]) for e in results} == {
+            ("system", "summary"), ("user", "u1")
+        }, f"both finalize results must persist, got {results}"
