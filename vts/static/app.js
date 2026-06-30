@@ -970,13 +970,35 @@ function resolveTaskMessage(runtime) {
 
 const taskAboutDialog = document.getElementById("task-about-dialog");
 
-function aboutPromptNames(options) {
+// Resolve a {source,id} prompt ref to a display-name-bearing object. Prefers a
+// name carried in prompt_results, else looks the user prompt up in promptsCache
+// (so a still-running task whose prompt_results aren't populated yet shows the
+// human name, not a GUID), else falls back to the id.
+function aboutResolvePromptName(source, id) {
+  const cached = promptsCache.find((p) => p.source === source && p.id === id);
+  const name = cached ? cached.name : id;
+  return promptDisplayName({ source, id, name });
+}
+
+function aboutPromptRefs(options) {
   // Prefer prompt_results (carries names); fall back to selected refs.
   const results = Array.isArray(options.prompt_results) ? options.prompt_results : null;
-  const refs = results && results.length
-    ? results.map((r) => ({ source: r.source, id: r.id, name: r.name }))
-    : selectedPromptRefs(options).map((r) => ({ source: r.source, id: r.id, name: r.id }));
-  return refs.map((r) => promptDisplayName(r));
+  if (results && results.length) {
+    return results.map((r) => ({
+      source: r.source,
+      id: r.id,
+      name: r.name || aboutResolvePromptName(r.source, r.id),
+    }));
+  }
+  return selectedPromptRefs(options).map((r) => ({
+    source: r.source,
+    id: r.id,
+    name: aboutResolvePromptName(r.source, r.id),
+  }));
+}
+
+function aboutPromptNames(options) {
+  return aboutPromptRefs(options).map((r) => promptDisplayName(r));
 }
 
 function aboutPromptTimings(task) {
@@ -984,9 +1006,7 @@ function aboutPromptTimings(task) {
   const options = task.options || {};
   const stepByName = {};
   (task.steps || []).forEach((s) => { if (s && s.name) stepByName[s.name] = s; });
-  const refs = (Array.isArray(options.prompt_results) && options.prompt_results.length)
-    ? options.prompt_results.map((r) => ({ source: r.source, id: r.id, name: r.name }))
-    : selectedPromptRefs(options).map((r) => ({ source: r.source, id: r.id, name: r.id }));
+  const refs = aboutPromptRefs(options);
   return refs.map((ref) => {
     const step = stepByName[finalizeStepName(ref.source, ref.id)];
     const start = step ? parseIsoMs(step.started_at) : null;
@@ -998,6 +1018,23 @@ function aboutPromptTimings(task) {
   });
 }
 
+// Render a boolean value as an icon (✓ for yes, — for no) into `el`, with an
+// accessible label so screen readers still hear yes/no.
+const ABOUT_ICON_YES = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>';
+const ABOUT_ICON_NO = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 12h12"/></svg>';
+
+function setAboutBool(el, value) {
+  if (!el) {
+    return;
+  }
+  el.classList.add("about-bool");
+  el.classList.toggle("is-yes", value);
+  el.classList.toggle("is-no", !value);
+  el.innerHTML = value ? ABOUT_ICON_YES : ABOUT_ICON_NO;
+  el.setAttribute("aria-label", value ? t("about.yes") : t("about.no"));
+  el.setAttribute("title", value ? t("about.yes") : t("about.no"));
+}
+
 function renderTaskAboutDialog(task) {
   if (!taskAboutDialog) {
     return;
@@ -1006,15 +1043,38 @@ function renderTaskAboutDialog(task) {
   const runtime = { stats: parseTaskStats(task), baseStatus: String(task.status || "") };
   const q = (sel) => taskAboutDialog.querySelector(sel);
 
-  q(".about-source-title").textContent = task.source_title || task.source_url || "";
-  q(".about-source-url").textContent = task.source_url || "";
+  // Title as a clickable link, mirroring the card's .task-link behavior:
+  // uploads link to the local player (or are unlinked when media expired),
+  // everything else links to its source URL.
+  const sourceUrl = task.source_url || "";
+  const isUpload = sourceUrl.startsWith("file://");
+  const uploadName = isUpload ? sourceUrl.slice("file://".length) : "";
+  const titleEl = q(".about-source-title");
+  titleEl.textContent = task.source_title || (isUpload ? uploadName : sourceUrl);
+  const mediaReady = Boolean(task.media_path);
+  const titleHref = isUpload
+    ? (mediaReady ? buildPath(`/player/${encodeURIComponent(task.id)}`) : "")
+    : sourceUrl;
+  if (titleHref) {
+    titleEl.href = titleHref;
+    if (isUpload) {
+      titleEl.target = "_blank";
+      titleEl.rel = "noopener";
+    } else {
+      titleEl.target = "_blank";
+      titleEl.rel = "noopener noreferrer";
+    }
+  } else {
+    titleEl.removeAttribute("href");
+  }
+  q(".about-source-url").textContent = sourceUrl;
   q(".about-created").textContent = task.created_at
     ? new Date(task.created_at).toLocaleString()
     : "";
 
   q(".about-language").textContent = options.language || t("about.language_auto");
-  q(".about-audio-only").textContent = options.audio_only ? t("about.yes") : t("about.no");
-  q(".about-transcript").textContent = options.transcript === false ? t("about.no") : t("about.yes");
+  setAboutBool(q(".about-audio-only"), Boolean(options.audio_only));
+  setAboutBool(q(".about-transcript"), options.transcript !== false);
   q(".about-prompts").textContent = aboutPromptNames(options).join(", ") || "—";
 
   const completed = String(task.status || "") === "completed";
@@ -1041,10 +1101,25 @@ function renderTaskAboutDialog(task) {
   }
 }
 
-function openTaskAboutDialog(task) {
+// Populate promptsCache if it hasn't been loaded yet, so user-prompt names
+// resolve in the About dialog even when the create form was never opened.
+async function ensurePromptsCache() {
+  if (promptsCache.length) {
+    return;
+  }
+  try {
+    const prompts = await api("/api/prompts");
+    promptsCache = Array.isArray(prompts) ? prompts : [];
+  } catch (err) {
+    console.error("Failed to load prompts for About dialog", err);
+  }
+}
+
+async function openTaskAboutDialog(task) {
   if (!taskAboutDialog) {
     return;
   }
+  await ensurePromptsCache();
   renderTaskAboutDialog(task);
   if (typeof taskAboutDialog.showModal === "function") {
     taskAboutDialog.showModal();
