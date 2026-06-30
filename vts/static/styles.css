@@ -1451,13 +1451,19 @@ dialog:not([open]) {
   font-size: 0.8rem;
 }
 
-/* Label/value rows: two-column grid so values line up; muted labels so they
-   read as captions, not content. */
-#task-about-dialog .about-row {
+/* Label/value pairs share ONE grid per section so the value column lines up
+   across all rows (the first column sizes to the widest label, e.g. the long
+   "Verarbeitetes Transkript"). Rows use display:contents so their cells land
+   directly in the shared tracks. */
+#task-about-dialog .about-grid {
   display: grid;
-  grid-template-columns: minmax(8rem, max-content) 1fr;
+  grid-template-columns: max-content 1fr;
   gap: 0.25rem 1rem;
   align-items: baseline;
+}
+
+#task-about-dialog .about-row {
+  display: contents;
 }
 
 #task-about-dialog .about-label {

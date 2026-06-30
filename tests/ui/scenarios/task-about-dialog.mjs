@@ -124,6 +124,12 @@ export async function run() {
         timingRows: [...document.querySelectorAll(".about-prompt-timings tr")].map(
           (tr) => [...tr.children].map((td) => td.textContent)
         ),
+        // Left edge of each result value cell — must be identical (shared grid
+        // column) so a long label like "Processed transcript" doesn't shift its
+        // value out of alignment with the others.
+        resultValueXs: [...document.querySelectorAll(".about-results-section .about-value")].map(
+          (v) => Math.round(v.getBoundingClientRect().left)
+        ),
       };
     });
     if (info.language !== "russian") failures.push(`language wrong: ${JSON.stringify(info.language)}`);
@@ -139,6 +145,9 @@ export async function run() {
     if (!info.transIsYes) failures.push("transcript not rendered as is-yes boolean icon");
     if (!info.transHasSvg) failures.push("transcript boolean has no svg icon");
     if (info.resultsHidden) failures.push("results section hidden for a completed task");
+    if (info.resultValueXs.length >= 2 && !info.resultValueXs.every((x) => Math.abs(x - info.resultValueXs[0]) <= 1)) {
+      failures.push(`result value cells not column-aligned: ${JSON.stringify(info.resultValueXs)}`);
+    }
     if (info.timingRows.length !== 2) {
       failures.push(`expected 2 timing rows, got ${info.timingRows.length}: ${JSON.stringify(info.timingRows)}`);
     } else {
