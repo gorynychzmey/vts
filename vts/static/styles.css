@@ -1088,6 +1088,41 @@ input[type="file"] {
   flex-direction: column;
 }
 
+/* Anti-flicker safety net: a closed <dialog> must never render. Without this,
+   any non-`none` display on a dialog (or a rule targeting it) leaks the dialog
+   onto the page for a frame before JS/UA hides it. Belt-and-suspenders for the
+   UA default. */
+dialog:not([open]) {
+  display: none;
+}
+
+/* Clickable stats chip (duration · size) that opens the About-task dialog. */
+.task-stats-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.task-stats-chip:hover {
+  background: var(--bg, #fff);
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.task-stats-chip svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 auto;
+}
+
 /* Left-align the prompt rows and the action button in the restart dialog;
    keep the badge next to the name rather than pushed to the far edge. */
 #restart-final-select .prompt-row,
