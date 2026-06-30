@@ -146,6 +146,7 @@ window.__VTS_I18N.ru = {
 "status.queued_pos": "очередь #{position}",
 "step.line": "Шаг {index} из {total}: {step}",
 "step.waiting": "Шаг - из {total}: ожидание",
+"step.finalize_prompt": "Финальная сводка: {name}",
 "progress.working": "идет работа",
 "progress.queued": "в очереди",
 "progress.queue_pos": "очередь #{position}",

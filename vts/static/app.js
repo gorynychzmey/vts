@@ -188,9 +188,22 @@ function statusText(status) {
 }
 
 function stepText(stepName) {
-  const key = `steps.${stepName}`;
+  const name = String(stepName || "");
+  // Dynamic per-prompt finalize steps ("finalize:<source>:<id>") have no static
+  // i18n key. Render a human label with the resolved prompt name instead of the
+  // raw "finalize:user:<uuid>".
+  if (name.startsWith("finalize:")) {
+    const rest = name.slice("finalize:".length);
+    const idx = rest.indexOf(":");
+    const source = idx >= 0 ? rest.slice(0, idx) : rest;
+    const id = idx >= 0 ? rest.slice(idx + 1) : "";
+    if (source && id) {
+      return t("step.finalize_prompt", { name: aboutResolvePromptName(source, id) });
+    }
+  }
+  const key = `steps.${name}`;
   const translated = t(key);
-  return translated === key ? String(stepName || "") : translated;
+  return translated === key ? name : translated;
 }
 
 function localizeLogText(text) {
@@ -3915,8 +3928,10 @@ async function bootstrap() {
   syncSourceType();
   applySharedUrlIfAny();
   await applyPendingSharedFileIfAny();
-  await refreshAll();
+  // Load prompts before the first task render so per-prompt finalize step
+  // labels resolve to names (not the raw "finalize:user:<uuid>") on first paint.
   await loadPrompts();
+  await refreshAll();
   await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();

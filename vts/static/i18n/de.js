@@ -146,6 +146,7 @@ window.__VTS_I18N.de = {
 "status.queued_pos": "warteschlange #{position}",
 "step.line": "Schritt {index} von {total}: {step}",
 "step.waiting": "Schritt - von {total}: warten",
+"step.finalize_prompt": "Finale Zusammenfassung: {name}",
 "progress.working": "in bearbeitung",
 "progress.queued": "in warteschlange",
 "progress.queue_pos": "warteschlange #{position}",

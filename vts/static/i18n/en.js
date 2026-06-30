@@ -146,6 +146,7 @@ window.__VTS_I18N.en = {
 "status.queued_pos": "queued #{position}",
 "step.line": "Step {index} of {total}: {step}",
 "step.waiting": "Step - of {total}: waiting",
+"step.finalize_prompt": "Final summary: {name}",
 "progress.working": "in progress",
 "progress.queued": "queued",
 "progress.queue_pos": "queue #{position}",

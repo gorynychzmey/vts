@@ -76,6 +76,18 @@ export async function run() {
       failures.push(`expected 2 stats chips, got ${chipCount}`);
       return failures;
     }
+    // Step label for the completed task: the last step is finalize:user:u1.
+    // It must render the resolved prompt name, NOT the raw "finalize:user:<uuid>".
+    const stepLabel = await page.evaluate(() =>
+      document.querySelector(".task:nth-of-type(1) .step-label")?.textContent || ""
+    );
+    if (stepLabel.includes("finalize:user:")) {
+      failures.push(`step label shows raw finalize name: ${JSON.stringify(stepLabel)}`);
+    }
+    if (!stepLabel.includes("My memo")) {
+      failures.push(`step label missing resolved prompt name: ${JSON.stringify(stepLabel)}`);
+    }
+
     // The chip must not stretch the full card width (it sits in a grid column).
     const chipStretched = await page.evaluate(() => {
       const chip = document.querySelector(".task-stats-chip");
