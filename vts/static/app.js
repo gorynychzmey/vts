@@ -950,24 +950,107 @@ function renderTaskStats(taskEl) {
   elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }
 
-function resolveCompletedMessage(runtime) {
-  if (runtime.baseStatus !== "completed") {
-    return "";
-  }
-  return t("success.completed_stats", {
-    time: formatMetricDuration(runtime.stats.processingSeconds),
-    transcript: formatMetricChars(runtime.stats.transcriptChars),
-    redacted: formatMetricChars(runtime.stats.redactedChars),
-    summary: formatMetricChars(runtime.stats.summaryChars)
-  });
+// Shared formatter for the completed-run numbers (total time + char counts).
+// Used by the About-task dialog. Returns localized display strings.
+function formatResultStats(runtime) {
+  const stats = runtime.stats || {};
+  return {
+    time: formatMetricDuration(stats.processingSeconds),
+    raw: formatMetricChars(stats.transcriptChars),
+    processed: formatMetricChars(stats.redactedChars),
+    summary: formatMetricChars(stats.summaryChars)
+  };
 }
 
 function resolveTaskMessage(runtime) {
-  const failureMessage = resolveFailureMessage(runtime);
-  if (failureMessage) {
-    return failureMessage;
+  // Card message line now carries ONLY the failure text. The success stats
+  // moved into the About-task dialog (formatResultStats).
+  return resolveFailureMessage(runtime);
+}
+
+const taskAboutDialog = document.getElementById("task-about-dialog");
+
+function aboutPromptNames(options) {
+  // Prefer prompt_results (carries names); fall back to selected refs.
+  const results = Array.isArray(options.prompt_results) ? options.prompt_results : null;
+  const refs = results && results.length
+    ? results.map((r) => ({ source: r.source, id: r.id, name: r.name }))
+    : selectedPromptRefs(options).map((r) => ({ source: r.source, id: r.id, name: r.id }));
+  return refs.map((r) => promptDisplayName(r));
+}
+
+function aboutPromptTimings(task) {
+  // One row per selected prompt: display name + finalize-step duration.
+  const options = task.options || {};
+  const stepByName = {};
+  (task.steps || []).forEach((s) => { if (s && s.name) stepByName[s.name] = s; });
+  const refs = (Array.isArray(options.prompt_results) && options.prompt_results.length)
+    ? options.prompt_results.map((r) => ({ source: r.source, id: r.id, name: r.name }))
+    : selectedPromptRefs(options).map((r) => ({ source: r.source, id: r.id, name: r.id }));
+  return refs.map((ref) => {
+    const step = stepByName[finalizeStepName(ref.source, ref.id)];
+    const start = step ? parseIsoMs(step.started_at) : null;
+    const end = step ? parseIsoMs(step.finished_at) : null;
+    const duration = (start !== null && end !== null && end >= start)
+      ? formatDuration((end - start) / 1000)
+      : "—";
+    return { name: promptDisplayName(ref), duration };
+  });
+}
+
+function renderTaskAboutDialog(task) {
+  if (!taskAboutDialog) {
+    return;
   }
-  return resolveCompletedMessage(runtime);
+  const options = task.options || {};
+  const runtime = { stats: parseTaskStats(task), baseStatus: String(task.status || "") };
+  const q = (sel) => taskAboutDialog.querySelector(sel);
+
+  q(".about-source-title").textContent = task.source_title || task.source_url || "";
+  q(".about-source-url").textContent = task.source_url || "";
+  q(".about-created").textContent = task.created_at
+    ? new Date(task.created_at).toLocaleString()
+    : "";
+
+  q(".about-language").textContent = options.language || t("about.language_auto");
+  q(".about-audio-only").textContent = options.audio_only ? t("about.yes") : t("about.no");
+  q(".about-transcript").textContent = options.transcript === false ? t("about.no") : t("about.yes");
+  q(".about-prompts").textContent = aboutPromptNames(options).join(", ") || "—";
+
+  const completed = String(task.status || "") === "completed";
+  const resultsSection = q(".about-results-section");
+  resultsSection.classList.toggle("hidden", !completed);
+  if (completed) {
+    const fmt = formatResultStats(runtime);
+    q(".about-total-time").textContent = fmt.time;
+    q(".about-raw-chars").textContent = fmt.raw;
+    q(".about-processed-chars").textContent = fmt.processed;
+    q(".about-summary-chars").textContent = fmt.summary;
+    const tbody = q(".about-prompt-timings");
+    tbody.innerHTML = "";
+    aboutPromptTimings(task).forEach((row) => {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = row.name;
+      const durTd = document.createElement("td");
+      durTd.textContent = row.duration;
+      tr.appendChild(nameTd);
+      tr.appendChild(durTd);
+      tbody.appendChild(tr);
+    });
+  }
+}
+
+function openTaskAboutDialog(task) {
+  if (!taskAboutDialog) {
+    return;
+  }
+  renderTaskAboutDialog(task);
+  if (typeof taskAboutDialog.showModal === "function") {
+    taskAboutDialog.showModal();
+  } else {
+    taskAboutDialog.setAttribute("open", "");
+  }
 }
 
 function readStageProgress(task, stageName) {
@@ -1628,6 +1711,9 @@ function renderTasks(tasks) {
       localProgressText: root.querySelector(".local-progress .step-progress-text"),
       messageEl: root.querySelector(".task-message")
     };
+    if (root._elements && root._elements.statsEl) {
+      root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
+    }
     root._runtime = createRuntime(task);
     const _els = root._elements;
     _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
@@ -3375,6 +3461,10 @@ document.getElementById("presets-btn")?.addEventListener("click", async () => {
 
 document.getElementById("presets-close-btn")?.addEventListener("click", () => {
   presetsDialog?.close();
+});
+
+document.getElementById("task-about-close-btn")?.addEventListener("click", () => {
+  taskAboutDialog?.close();
 });
 
 presetCancelBtn?.addEventListener("click", () => {
