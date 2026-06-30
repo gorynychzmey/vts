@@ -944,7 +944,9 @@ function renderTaskStats(taskEl) {
   if (Number.isInteger(stats.mediaBytes) && stats.mediaBytes > 0) {
     parts.push(t("stats.media_size", { size: formatMegabytes(stats.mediaBytes) }));
   }
-  elements.statsEl.textContent = parts.join(" · ");
+  if (elements.statsTextEl) {
+    elements.statsTextEl.textContent = parts.join(" · ");
+  }
   elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }
 
@@ -1590,6 +1592,7 @@ function renderTasks(tasks) {
       expiredEl: root.querySelector(".task-expired"),
       sourceEl: root.querySelector(".task-source"),
       statsEl: root.querySelector(".task-stats"),
+      statsTextEl: root.querySelector(".task-stats-text"),
       editNameBtn: root.querySelector(".task-edit-name-btn"),
       nameEditWrap: root.querySelector(".task-name-edit"),
       nameInput: root.querySelector(".task-name-input"),
