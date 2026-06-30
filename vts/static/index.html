@@ -634,6 +634,48 @@
       </div>
     </dialog>
 
+    <dialog id="task-about-dialog" class="tokens-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="about.title">About task</h2>
+        <button id="task-about-close-btn" class="icon-btn ghost" type="button"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+
+      <section class="about-source">
+        <h3 data-i18n="about.section_source">Source</h3>
+        <div class="about-source-title"></div>
+        <div class="about-source-url mono"></div>
+        <div><span data-i18n="about.created">Created</span>: <span class="about-created"></span></div>
+      </section>
+
+      <section class="about-params">
+        <h3 data-i18n="about.section_params">Run parameters</h3>
+        <div><span data-i18n="about.language">Language</span>: <span class="about-language"></span></div>
+        <div><span data-i18n="about.audio_only">Audio only</span>: <span class="about-audio-only"></span></div>
+        <div><span data-i18n="about.transcript">Transcript</span>: <span class="about-transcript"></span></div>
+        <div><span data-i18n="about.prompts">Prompts</span>: <span class="about-prompts"></span></div>
+      </section>
+
+      <section class="about-results-section">
+        <h3 data-i18n="about.section_results">Results</h3>
+        <div><span data-i18n="about.total_time">Total time</span>: <span class="about-total-time"></span></div>
+        <div><span data-i18n="about.raw_chars">Raw transcript</span>: <span class="about-raw-chars"></span></div>
+        <div><span data-i18n="about.processed_chars">Processed transcript</span>: <span class="about-processed-chars"></span></div>
+        <div><span data-i18n="about.summary_chars">Summary</span>: <span class="about-summary-chars"></span></div>
+        <table class="about-timings">
+          <thead>
+            <tr>
+              <th data-i18n="about.timing_prompt">Prompt</th>
+              <th data-i18n="about.timing_duration">Duration</th>
+            </tr>
+          </thead>
+          <tbody class="about-prompt-timings"></tbody>
+        </table>
+      </section>
+    </dialog>
+
     <script src="/static/app.js?v=__VTS_VERSION__"></script>
   </body>
 </html>
