@@ -73,7 +73,7 @@ export async function run() {
     // User row exposes Edit + Delete; system row does not. Buttons are now
     // ICON buttons: identify Edit by its aria-label/title, not text content.
     const editBtns = await page.$$eval("#presets-list button", (els) =>
-      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit").length
+      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit preset").length
     );
     if (editBtns !== 1) failures.push(`expected 1 Edit button (user only), got ${editBtns}`);
 
@@ -111,15 +111,15 @@ export async function run() {
     if (summaryChecked !== 1) failures.push(`expected exactly 1 checked prompt (summary) in create mode, got ${summaryChecked}`);
 
     // EDIT MODE: click the user preset's Edit -> submit label switches to
-    // "Edit" and the multiselect reflects that preset's prompts (u1).
+    // "Edit preset" and the multiselect reflects that preset's prompts (u1).
     await page.$$eval("#presets-list button", (els) => {
-      const b = els.find((x) => (x.getAttribute("aria-label") || "") === "Edit");
+      const b = els.find((x) => (x.getAttribute("aria-label") || "") === "Edit preset");
       if (b) b.click();
     });
     await page.waitForTimeout(150);
     const editLabel = (await page.$eval("#preset-submit-btn", (b) => b.textContent.trim()));
-    if (editLabel !== "Edit") {
-      failures.push(`expected submit label "Edit" in edit mode, got "${editLabel}"`);
+    if (editLabel !== "Edit preset") {
+      failures.push(`expected submit label "Edit preset" in edit mode, got "${editLabel}"`);
     }
     const editIdVal = await page.$eval("#preset-edit-id", (i) => i.value);
     if (editIdVal !== "p1") failures.push(`expected preset-edit-id "p1" in edit mode, got "${editIdVal}"`);
