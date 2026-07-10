@@ -8,8 +8,14 @@ STATIC = Path(__file__).resolve().parents[1] / "vts" / "static"
 
 # Keys assigned to element.title via an intermediate variable in app.js,
 # which the line-based extractor below cannot see (e.g. app.js ~1678:
-# `const label = expanded ? t("action.collapse") : t("action.expand")`).
-EXTRA_TITLE_KEYS = {"action.collapse"}
+# `const label = expanded ? t("action.collapse") : t("action.expand")`,
+# and the push-toggle label near app.js ~3725).
+EXTRA_TITLE_KEYS = {"action.collapse", "action.disable_notifications"}
+
+# Static aria-label= fallbacks in index.html are deliberately NOT locked to
+# en.js here: data-i18n-aria-label overwrites them at runtime, and short
+# accessible names are preferable for screen readers even where the visual
+# tooltip is a longer result-explaining sentence.
 
 
 def _load_locale(name: str) -> dict[str, str]:
