@@ -44,7 +44,7 @@ export async function run() {
 
     // Edit/Delete/Duplicate carry localized tooltips via aria-label.
     const editBtns = await page.$$eval("#prompts-list button", (els) =>
-      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit").length
+      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit prompt").length
     );
     if (editBtns !== 1) failures.push(`expected 1 Edit icon button (user only), got ${editBtns}`);
 

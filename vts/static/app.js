@@ -1648,9 +1648,11 @@ function renderTasks(tasks) {
     }
     if (restartSummaryFullBtn) {
       restartSummaryFullBtn.textContent = t("action.restart_summary_full");
+      restartSummaryFullBtn.title = t("action.restart_summary_full_tooltip");
     }
     if (restartSummaryFinalBtn) {
       restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
+      restartSummaryFinalBtn.title = t("action.restart_summary_final_tooltip");
     }
     if (downloadMediaBtn) {
       downloadMediaBtn.title = t("action.download_media");
