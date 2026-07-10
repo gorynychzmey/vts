@@ -207,7 +207,9 @@
             <div class="preset-field">
               <span class="preset-label" data-i18n="new_task.preset">Preset</span>
               <select id="preset-select"></select>
-              <button type="button" id="preset-save-btn" class="btn-text" data-i18n="preset.save_as">Save as preset</button>
+              <button type="button" id="preset-save-btn" class="btn-text" data-i18n="preset.save_as"
+                      title="Save the current task settings as a new preset"
+                      data-i18n-title="preset.save_as_tooltip">Save as preset</button>
             </div>
             <label class="option-pill">
               <input id="audio_only" name="audio_only" type="checkbox" />
@@ -235,7 +237,9 @@
           </div>
           <div class="row preset-dangling-hint" id="preset-dangling-hint" hidden>
             <span data-i18n="preset.dangling_prompts">This preset has deleted prompts</span>
-            <button type="button" id="preset-resave-btn" class="btn-text" data-i18n="preset.resave">Re-save</button>
+            <button type="button" id="preset-resave-btn" class="btn-text" data-i18n="preset.resave"
+                    title="Overwrite the selected preset with the current settings"
+                    data-i18n-title="preset.resave_tooltip">Re-save</button>
           </div>
         </form>
       </section>
