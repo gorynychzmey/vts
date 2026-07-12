@@ -161,6 +161,8 @@ window.__VTS_I18N.ru = {
 "failure.download_live_not_started":
   "YouTube-трансляция пока недоступна. Нажмите Resume позже, когда трансляция уже начнется.",
 "failure.with_error": "{message} Техническая деталь: {error}",
+"upload.file_unreadable": "Не удалось прочитать выбранный файл. Возможно, он был изменён, перемещён или удалён после выбора (так бывает и с несинхронизированными облачными файлами). Выберите файл заново.",
+"upload.failed": "Загрузка не удалась: {message}",
 "success.completed_stats": "Готово. Время: {time}. Сырой транскрипт: {transcript}. Обработанный: {redacted}. Саммари: {summary}.",
 "stats.chars": "{count} симв.",
 "stats.unknown": "н/д",

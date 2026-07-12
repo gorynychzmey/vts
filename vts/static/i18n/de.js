@@ -162,6 +162,8 @@ window.__VTS_I18N.de = {
 "failure.download_live_not_started":
   "Der YouTube-Livestream ist noch nicht verfuegbar. Nutzen Sie Resume spaeter, sobald der Stream gestartet ist.",
 "failure.with_error": "{message} Technisches Detail: {error}",
+"upload.file_unreadable": "Die ausgewählte Datei konnte nicht gelesen werden. Sie wurde möglicherweise nach der Auswahl geändert, verschoben oder gelöscht (das passiert auch bei nicht synchronisierten Cloud-Dateien). Bitte wählen Sie die Datei erneut aus.",
+"upload.failed": "Upload fehlgeschlagen: {message}",
 "success.completed_stats": "Fertig. Gesamtdauer: {time}. Rohtranskript: {transcript}. Verarbeitetes Transkript: {redacted}. Zusammenfassung: {summary}.",
 "stats.chars": "{count} Zeichen",
 "stats.unknown": "k.A.",

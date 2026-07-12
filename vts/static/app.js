@@ -2408,46 +2408,84 @@ if (promptSelect) {
   promptSelect.addEventListener("change", recomputePresetDirty);
 }
 
+const taskFormError = document.getElementById("task-form-error");
+
+function showTaskFormError(message) {
+  if (!taskFormError) return;
+  taskFormError.textContent = message;
+  taskFormError.classList.remove("hidden");
+}
+
+function clearTaskFormError() {
+  if (!taskFormError) return;
+  taskFormError.textContent = "";
+  taskFormError.classList.add("hidden");
+}
+
+// Chrome throws these DOMExceptions when a File selected earlier can no longer
+// be read: the file was modified/moved/deleted after selection, or it is an
+// unsynced cloud placeholder (OneDrive/Google Drive "files on demand").
+function isFileReadError(err) {
+  return err instanceof DOMException
+    && ["NotReadableError", "NotFoundError", "SecurityError"].includes(err.name);
+}
+
 async function createTask(event) {
   event.preventDefault();
+  clearTaskFormError();
   const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
-  if (isFile && fileInput) {
-    const file = fileInput.files[0];
-    const fields = {
-      language: form.language.value || "",
-      audio_only: form.audio_only.checked,
-      transcript: form.transcript.checked,
-      prompts: JSON.stringify(getSelectedPrompts()),
-      display_name: "",
-    };
-    const threshold = uploadConfig && Number.isFinite(uploadConfig.chunked_threshold_bytes)
-      ? uploadConfig.chunked_threshold_bytes
-      : Infinity; // no config -> always single-shot (unchanged behavior)
-    if (file.size > threshold) {
-      await uploadFileChunked(file, fields);
+  try {
+    if (isFile && fileInput) {
+      const file = fileInput.files[0];
+      // Probe one byte before starting: a stale file reference fails here with
+      // a clear message instead of mid-upload (covers the single-shot XHR path,
+      // which reads the file natively and only reports a generic network error).
+      await file.slice(0, 1).arrayBuffer();
+      const fields = {
+        language: form.language.value || "",
+        audio_only: form.audio_only.checked,
+        transcript: form.transcript.checked,
+        prompts: JSON.stringify(getSelectedPrompts()),
+        display_name: "",
+      };
+      const threshold = uploadConfig && Number.isFinite(uploadConfig.chunked_threshold_bytes)
+        ? uploadConfig.chunked_threshold_bytes
+        : Infinity; // no config -> always single-shot (unchanged behavior)
+      if (file.size > threshold) {
+        await uploadFileChunked(file, fields);
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        if (fields.language) fd.append("language", fields.language);
+        fd.append("audio_only", fields.audio_only ? "true" : "false");
+        fd.append("transcript", fields.transcript ? "true" : "false");
+        fd.append("prompts", fields.prompts);
+        await uploadFileWithProgress(fd);
+      }
     } else {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (fields.language) fd.append("language", fields.language);
-      fd.append("audio_only", fields.audio_only ? "true" : "false");
-      fd.append("transcript", fields.transcript ? "true" : "false");
-      fd.append("prompts", fields.prompts);
-      await uploadFileWithProgress(fd);
+      const payload = {
+        url: form.url.value,
+        language: form.language.value || null,
+        audio_only: form.audio_only.checked,
+        transcript: form.transcript.checked,
+        prompts: getSelectedPrompts()
+      };
+      await api("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
     }
-  } else {
-    const payload = {
-      url: form.url.value,
-      language: form.language.value || null,
-      audio_only: form.audio_only.checked,
-      transcript: form.transcript.checked,
-      prompts: getSelectedPrompts()
-    };
-    await api("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+  } catch (err) {
+    if (isFileReadError(err)) {
+      if (fileInput) fileInput.value = "";
+      showTaskFormError(t("upload.file_unreadable"));
+    } else {
+      const message = err && err.message ? err.message : String(err);
+      showTaskFormError(t("upload.failed", { message }));
+    }
+    return;
   }
   form.reset();
   form.transcript.checked = true;
@@ -3009,6 +3047,8 @@ document.addEventListener("keydown", (event) => {
 
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
+document.getElementById("file-input")?.addEventListener("change", clearTaskFormError);
+form.url.addEventListener("input", clearTaskFormError);
 form.transcript.addEventListener("change", syncSummaryToggle);
 document.querySelectorAll('input[name="source-type"]').forEach((el) => {
   el.addEventListener("change", syncSourceType);

@@ -178,6 +178,12 @@ input[type="file"] {
   align-items: stretch;
 }
 
+.form-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+}
+
 .options-row {
   display: flex;
   gap: 0.55rem;

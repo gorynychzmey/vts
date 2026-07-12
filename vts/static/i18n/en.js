@@ -161,6 +161,8 @@ window.__VTS_I18N.en = {
 "failure.download_live_not_started":
   "The YouTube live stream is not available yet. Use Resume later, once the stream has started.",
 "failure.with_error": "{message} Technical detail: {error}",
+"upload.file_unreadable": "The selected file could not be read. It may have been modified, moved, or deleted after you picked it (this also happens with unsynced cloud files). Please select the file again.",
+"upload.failed": "Upload failed: {message}",
 "success.completed_stats": "Done. Total time: {time}. Raw transcript: {transcript}. Processed transcript: {redacted}. Summary: {summary}.",
 "stats.chars": "{count} chars",
 "stats.unknown": "n/a",
