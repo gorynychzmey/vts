@@ -1165,7 +1165,9 @@ class TaskProcessor:
             load_prompt(
                 self.settings.prompts_dir,
                 "segment_prompt.md",
-                "Return JSON with keys: topic, bullets, action_items.",
+                "Rewrite the transcript segment as clean fluent text: remove fillers,"
+                " interjections, false starts and repetitions, but keep all content,"
+                " wording and order. Do not summarize.",
             ),
             output_language,
         )
