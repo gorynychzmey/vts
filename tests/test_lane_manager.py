@@ -115,6 +115,52 @@ async def test_night_mode_blocks_gpu_and_retries():
 
 
 @pytest.mark.asyncio
+async def test_exception_in_body_releases_slot():
+    mgr = LaneManager(_settings(lane_network_slots=1))
+    with pytest.raises(RuntimeError):
+        async with mgr.slot("network", uuid.uuid4()):
+            raise RuntimeError("boom")
+    # slot must have been released despite the exception: a second acquire
+    # succeeds immediately rather than blocking forever.
+    async def acquire():
+        async with mgr.slot("network", uuid.uuid4()):
+            pass
+    await asyncio.wait_for(acquire(), 1)
+
+
+@pytest.mark.asyncio
+async def test_streak_resets_after_forced_llm_grant():
+    # Two burst cycles with an intervening forced llm grant. With burst=2,
+    # after the forced llm resets the streak, a fresh set of asr grants must
+    # again get a full burst of 2 before the SECOND forced llm. A stale
+    # (non-reset) streak of >=2 would force the second llm too early and
+    # change the grant order.
+    mgr = LaneManager(_settings(gpu_asr_burst=2))
+    order = []
+    async def use(cls, tag, delay=0.005):
+        async with mgr.slot("gpu", uuid.uuid4(), cls):
+            order.append(tag)
+            await asyncio.sleep(delay)
+    # holder occupies the single gpu slot while we stage the queues.
+    holder = asyncio.create_task(use("llm", "h"))
+    await asyncio.sleep(0.001)
+    # Two llm waiters and four asr waiters, asr enqueued after the first llm.
+    llm1 = asyncio.create_task(use("llm", "llm1"))
+    await asyncio.sleep(0.001)
+    asr = []
+    for i in range(4):
+        asr.append(asyncio.create_task(use("asr", f"a{i}")))
+        await asyncio.sleep(0.001)
+    llm2 = asyncio.create_task(use("llm", "llm2"))
+    await asyncio.gather(holder, llm1, llm2, *asr)
+    # h releases -> a0, a1 (streak hits burst=2) -> llm1 forced (streak reset
+    # to 0) -> a2, a3 (streak hits 2 again) -> llm2 forced.
+    # If the reset were removed, streak would stay >=2 and llm2 would be
+    # forced right after a2, yielding [..., "a2", "llm2", "a3"].
+    assert order == ["h", "a0", "a1", "llm1", "a2", "a3", "llm2"]
+
+
+@pytest.mark.asyncio
 async def test_on_change_snapshots():
     snaps = []
     async def on_change(s): snaps.append(s)
