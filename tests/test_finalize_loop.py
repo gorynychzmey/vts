@@ -41,9 +41,6 @@ class _FakeLLM:
         self.output = output
         self.calls: list[dict[str, object]] = []
 
-    async def get_n_ctx(self) -> int:
-        return 32768
-
     async def count_tokens(self, **kwargs: object) -> int:
         return 100
 
@@ -108,6 +105,11 @@ def _make_processor(tmp_path: Path, monkeypatch, *, llm_output: str, task, promp
     proc._render_prompt_with_language = lambda prompt, language: prompt
     proc._llm = _FakeLLM(llm_output)
     monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *a, **k: "SYSTEM PROMPT")
+
+    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
+        return ("llama-server", 32768)
+
+    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
 
     proc.session_factory = lambda: _StubSession()
 

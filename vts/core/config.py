@@ -228,6 +228,9 @@ class Settings(BaseSettings):
     )
 
     # Token budgeting for the summarization pipeline
+    # Context-window fallback when no LLM backend can be detected/answers
+    # (see vts/services/llm_backends.py). YAML: summary.n_ctx.
+    summary_n_ctx: int = 32768
     summary_safety_margin: int = 768
 
     summary_segment_ratio: float = 0.40

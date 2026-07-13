@@ -94,12 +94,14 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
 
     monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "segment prompt")
 
+    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
+        return ("llama-server", 32768)
+
+    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
+
     calls: list[dict[str, object]] = []
 
     class _FakeLLM:
-        async def get_n_ctx(self) -> int:
-            return 32768
-
         async def count_tokens(self, **kwargs: object) -> int:
             return 500
 
@@ -421,10 +423,12 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
     processor._render_prompt_with_language = lambda prompt, language: prompt
     monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "prompt")
 
-    class _FakeLLM:
-        async def get_n_ctx(self) -> int:
-            return 32768
+    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
+        return ("llama-server", 32768)
 
+    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
+
+    class _FakeLLM:
         async def count_tokens(self, **kwargs: object) -> int:
             return 100
 

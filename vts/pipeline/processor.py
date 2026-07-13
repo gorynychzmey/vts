@@ -22,6 +22,7 @@ from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.types import build_dag_steps
+from vts.services.llm_backends import discover_n_ctx
 from vts.services.prompt_registry import list_system_prompts, parse_ref
 from vts.services.prompt_results import upsert_result_entry
 from vts.services.task_progress import selected_prompt_refs
@@ -93,19 +94,29 @@ class TaskProcessor:
         return getattr(self, "_task_metrics", {}).get(str(task_id))
 
     async def _get_n_ctx(self, task_id: uuid.UUID, logger: logging.Logger) -> int:
-        """Fetch n_ctx from llama /props once per task run, caching the result."""
+        """Discover the model's context window once per task run, caching it.
+
+        Backend detection (LiteLLM / Ollama / llama-server) lives in
+        vts.services.llm_backends; when nothing matches, the configured
+        summary_n_ctx constant applies."""
         if not hasattr(self, "_task_n_ctx"):
             self._task_n_ctx = {}
         key = str(task_id)
         if key in self._task_n_ctx:
             return self._task_n_ctx[key]
-        fetched = await self._llm.get_n_ctx()
-        _defaults = TokenBudgetConfig()
-        n_ctx = fetched if fetched is not None else _defaults.n_ctx
-        if fetched is not None:
-            logger.info("token budget: n_ctx=%d (from /props)", n_ctx)
+        fallback = int(getattr(self.settings, "summary_n_ctx", TokenBudgetConfig().n_ctx))
+        backend, n_ctx = await discover_n_ctx(
+            url=self.settings.llm_url,
+            api_key=getattr(self.settings, "llm_api_key", None),
+            model=self.settings.llm_model,
+            fallback_n_ctx=fallback,
+        )
+        if backend == "generic":
+            logger.warning(
+                "token budget: no LLM backend detected, using fallback n_ctx=%d", n_ctx
+            )
         else:
-            logger.warning("token budget: /props unavailable, using fallback n_ctx=%d", n_ctx)
+            logger.info("token budget: n_ctx=%d (backend=%s)", n_ctx, backend)
         self._task_n_ctx[key] = n_ctx
         return n_ctx
 

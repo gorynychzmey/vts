@@ -224,23 +224,6 @@ class LLMClient:
     def _client(self, timeout_seconds: int) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout_seconds, headers=self._headers)
 
-    async def get_n_ctx(self, *, timeout_seconds: int = 30) -> int | None:
-        """Return the loaded model's context size from GET /props, or None on failure."""
-        endpoint = _llama_server_base(self.url) + "/props"
-        try:
-            async with self._client(timeout_seconds) as client:
-                response = await client.get(endpoint)
-        except httpx.HTTPError:
-            return None
-        if not response.is_success:
-            return None
-        try:
-            payload = response.json()
-        except (json.JSONDecodeError, ValueError):
-            return None
-        n_ctx = payload.get("n_ctx") if isinstance(payload, dict) else None
-        return int(n_ctx) if isinstance(n_ctx, int) and n_ctx > 0 else None
-
     async def _list_models(self, *, client: httpx.AsyncClient) -> list[str]:
         endpoint = self.url.rstrip("/") + "/models"
         try:
