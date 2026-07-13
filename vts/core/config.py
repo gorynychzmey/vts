@@ -118,6 +118,11 @@ class Settings(BaseSettings):
 
     transcribe_parallel_per_task: int = 2
     heavy_slot_limit: int = 1
+    worker_max_active_tasks: int = 4
+    lane_network_slots: int = 1
+    lane_ffmpeg_slots: int = 2
+    lane_gpu_slots: int = 1
+    gpu_asr_burst: int = 3
     event_throttle_hz: int = 4
     services_database_write_throttle_ms: int = 150
     task_cancel_ttl_seconds: int = 3600

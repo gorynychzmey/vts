@@ -190,3 +190,89 @@ def test_settings_ignores_legacy_flat_yaml_keys() -> None:
 
     assert settings.database_url == "postgresql+asyncpg://vts:vts@postgres:5432/vts"
     assert settings.summary_segment_ratio == 0.78  # default, legacy flat key ignored
+
+
+def test_lane_settings_defaults():
+    from vts.core.config import Settings
+    s = Settings()
+    assert s.worker_max_active_tasks == 4
+    assert s.lane_network_slots == 1
+    assert s.lane_ffmpeg_slots == 2
+    assert s.lane_gpu_slots == 1
+    assert s.gpu_asr_burst == 3
+
+
+def test_lane_settings_yaml_override() -> None:
+    raw = {
+        "environment": {
+            "productive": False,
+            "host": "127.0.0.1",
+            "port": 18080,
+        },
+        "dirs": {
+            "artifacts": "/tmp/vts-artifacts",
+            "prompts": "/tmp/vts-prompts",
+            "config": "/tmp/vts-config",
+        },
+        "services": {
+            "database": {
+                "url": "postgresql+asyncpg://u:p@db:5432/vts",
+                "write_throttle": {"ms": 200},
+            },
+            "redis": {"url": "redis://cache:6379/1", "prefix": "custom:"},
+            "whisper": {"url": "http://whisper-internal:9000"},
+            "llm": {
+                "url": "http://llama-internal:8000/v1",
+                "model": "Qwen2.5-14B-Instruct-Q4",
+            },
+        },
+        "segment": {
+            "target_seconds": 240,
+            "search_window_seconds": 20,
+            "overlap_seconds": 2,
+        },
+        "trim_silence": {
+            "threshold_db": -32.0,
+            "min_duration_sec": 0.5,
+            "max_seconds": 25.0,
+        },
+        "language_detection": {"confidence_threshold": 0.7},
+        "transcribe": {"parallel_per_task": 3},
+        "heavy_slot": {"limit": 2},
+        "worker": {"max_active_tasks": 2},
+        "lane": {"gpu_slots": 2},
+        "gpu": {"asr_burst": 5},
+        "event_throttle": {"hz": 5},
+        "task_cancel_ttl": {"seconds": 7200},
+        "night_mode": {"enabled": True, "start_hour": 23, "end_hour": 6},
+        "media_ttl": {"hours": 96},
+        "ytdlp": {
+            "cookies_file": "/tmp/cookies.txt",
+            "cookies_from_browser": ["firefox"],
+            "youtube": {
+                "player_client": "android",
+                "po_token": "token-value",
+            },
+            "verbose": True,
+        },
+        "metrics": {
+            "enabled": False,
+            "jsonl_path": "/tmp/metrics.jsonl",
+            "redundancy": {
+                "shingle_n": 4,
+                "simhash_bits": 128,
+                "max_hamming": 5,
+            },
+        },
+        "summary": {
+            "segment": {"ratio": 0.44},
+            "pack": {"batch_max_input_tokens": 10000},
+        }
+    }
+
+    settings = Settings(**_normalize_yaml_overrides(raw))
+
+    assert settings.heavy_slot_limit == 2
+    assert settings.worker_max_active_tasks == 2
+    assert settings.lane_gpu_slots == 2
+    assert settings.gpu_asr_burst == 5

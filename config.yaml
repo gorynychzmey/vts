@@ -77,6 +77,14 @@ transcribe:
   parallel_per_task: 2
 heavy_slot:
   limit: 1
+worker:
+  max_active_tasks: 4   # tasks in flight; 1 ≈ legacy sequential behaviour
+lane:
+  network_slots: 1      # concurrent downloads
+  ffmpeg_slots: 2       # concurrent ffmpeg jobs
+  gpu_slots: 1          # concurrent GPU calls (Whisper+LLM share)
+gpu:
+  asr_burst: 3          # max consecutive ASR grants while LLM waits
 event_throttle:
   hz: 4
 task_cancel_ttl:
