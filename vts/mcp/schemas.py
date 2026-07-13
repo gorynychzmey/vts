@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 
 TaskStatusLiteral = Literal[
-    "queued", "running", "paused", "completed", "archived", "failed", "canceled"
+    "queued", "running", "waiting", "paused", "completed", "archived", "failed", "canceled"
 ]
 
 

@@ -21,6 +21,12 @@ def test_submit_video_result_shape() -> None:
     assert set(d) == {"task_id", "status", "created_at"}
 
 
+def test_task_status_literal_includes_waiting() -> None:
+    r = SubmitVideoResult(task_id=uuid.uuid4(), status="waiting", created_at=datetime.now(tz=timezone.utc))
+    d = r.model_dump(mode="json")
+    assert d["status"] == "waiting"
+
+
 def test_task_summary_shape() -> None:
     r = TaskSummary(
         task_id=uuid.uuid4(),

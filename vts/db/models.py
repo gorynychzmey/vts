@@ -30,6 +30,7 @@ def utcnow() -> datetime:
 class TaskStatus(StrEnum):
     queued = "queued"
     running = "running"
+    waiting = "waiting"
     paused = "paused"
     completed = "completed"
     archived = "archived"

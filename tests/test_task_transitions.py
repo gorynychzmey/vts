@@ -1,7 +1,14 @@
 from types import SimpleNamespace
 
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from _db import make_test_engine
 from vts.api.main import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task
-from vts.db.models import StepStatus, TaskStatus
+from vts.db.base import Base
+from vts.db.models import StepStatus, Task, TaskStatus
+from vts.db.repo import Repo
 
 
 def test_can_pause_task_allows_only_queued_or_running() -> None:
@@ -116,3 +123,59 @@ def test_can_restart_final_summary_task() -> None:
     assert not can_restart_final_summary_task(windows_not_done)
     assert not can_restart_final_summary_task(no_summary)
     assert can_restart_final_summary_task(custom_only)  # NEW: gate no longer requires summary
+
+
+def test_waiting_status_exists():
+    from vts.db.models import TaskStatus
+
+    assert TaskStatus.waiting.value == "waiting"
+
+
+@pytest_asyncio.fixture
+async def session() -> AsyncSession:
+    engine = make_test_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as sess:
+            yield sess
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_requeue_running_tasks_includes_waiting(session):
+    repo = Repo(session)
+    user = await repo.get_or_create_user("requeue@example.com")
+    await session.flush()
+
+    waiting_task = Task(
+        user_id=user.id, source_url="u1", status=TaskStatus.waiting,
+        options={}, artifact_dir="/tmp/waiting",
+    )
+    running_task = Task(
+        user_id=user.id, source_url="u2", status=TaskStatus.running,
+        options={}, artifact_dir="/tmp/running",
+    )
+    queued_task = Task(
+        user_id=user.id, source_url="u3", status=TaskStatus.queued,
+        options={}, artifact_dir="/tmp/queued",
+    )
+    session.add_all([waiting_task, running_task, queued_task])
+    await session.commit()
+
+    requeued_ids = await repo.requeue_running_tasks()
+    await session.commit()
+
+    assert set(requeued_ids) == {waiting_task.id, running_task.id}
+
+    await session.refresh(waiting_task)
+    await session.refresh(running_task)
+    await session.refresh(queued_task)
+    assert waiting_task.status == TaskStatus.queued
+    assert running_task.status == TaskStatus.queued
+    assert queued_task.status == TaskStatus.queued

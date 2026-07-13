@@ -166,7 +166,7 @@ class Repo:
         await self.session.flush()
 
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
-        stmt = select(Task).where(Task.status == TaskStatus.running)
+        stmt = select(Task).where(Task.status.in_([TaskStatus.running, TaskStatus.waiting]))
         result = await self.session.scalars(stmt)
         tasks = list(result.all())
         for task in tasks:
