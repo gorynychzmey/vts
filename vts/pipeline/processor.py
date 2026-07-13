@@ -2096,6 +2096,10 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 return
+            if task.source_title:
+                # The user already named the task (e.g. renamed it while it
+                # was queued) — the discovered media title must not clobber it.
+                return
             task.source_title = title
             await session.commit()
 
@@ -2316,7 +2320,8 @@ class TaskProcessor:
             except ValueError:
                 return path_str
 
-        task.source_title = donor.source_title
+        # Keep a user-assigned name (rename while queued); only fill a blank one.
+        task.source_title = task.source_title or donor.source_title
         task.transcript_path = _remap(donor.transcript_path)
         task.summary_path = _remap(donor.summary_path)
 
