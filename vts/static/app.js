@@ -2714,10 +2714,10 @@ function patchTaskProgress(taskId, phase, payload) {
   }
   const mediaTitle = typeof payload.media_title === "string" ? payload.media_title.trim() : "";
   const mediaFilename = typeof payload.media_filename === "string" ? payload.media_filename.trim() : "";
-  if (mediaTitle) {
-    runtime.displayName = mediaTitle;
-  } else if (mediaFilename && !runtime.displayName) {
-    runtime.displayName = mediaFilename;
+  // Discovered media metadata only fills an empty name — a user rename
+  // (e.g. while the task was queued) must survive, same rule as the backend.
+  if (!runtime.displayName) {
+    runtime.displayName = mediaTitle || mediaFilename;
   }
   renderTaskRuntime(taskEl);
 }
