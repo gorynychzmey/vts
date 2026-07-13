@@ -1724,6 +1724,8 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         bus = RedisBus(redis, settings)
+        from vts.services.prompt_results import downgrade_system_summary_entry
+
         artifact_resets: list[asyncio.Task[None]] = []
         if request.mode == "final_only":
             if not can_restart_final_summary_task(task):
@@ -1746,6 +1748,7 @@ def create_app() -> FastAPI:
                 await _rebuild_finalize_tail(repo, task, new_options)
             else:
                 _reset_final_summary_step(task)
+                downgrade_system_summary_entry(task)
                 artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
         else:
             if not can_restart_summary_task(task):
@@ -1754,6 +1757,7 @@ def create_app() -> FastAPI:
                     detail=f"cannot_restart:{task.status.value}",
                 )
             _reset_summary_steps(task)
+            downgrade_system_summary_entry(task)
             artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
         task.summary_path = None
         await repo.set_task_summary_progress(task, 0, 0)

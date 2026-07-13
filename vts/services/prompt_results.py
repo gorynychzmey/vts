@@ -53,6 +53,35 @@ def resolve_result_path(task: Task, source: str, ref: str) -> str | None:
     return None
 
 
+def downgrade_system_summary_entry(task) -> None:
+    """Mark the system:summary entry in ``prompt_results`` as pending.
+
+    Summary restarts delete the final.md/summary.md files but keep the other
+    finalize results; a completed system:summary entry would then point at a
+    deleted file and the UI would select it and hit 404 (vts-b6l). Reassigns
+    task.options so the JSON column persists on commit. No-op when the entry
+    is absent or not completed.
+    """
+    existing = result_entries(task)
+    wanted = ref_key("system", "summary")
+    changed = False
+    entries: list[dict[str, Any]] = []
+    for e in existing:
+        e = dict(e)
+        if (
+            ref_key(str(e.get("source")), str(e.get("id"))) == wanted
+            and e.get("status") == "completed"
+        ):
+            e["status"] = "pending"
+            changed = True
+        entries.append(e)
+    if not changed:
+        return
+    new_options = dict(task.options or {})
+    new_options["prompt_results"] = entries
+    task.options = new_options
+
+
 def clear_all_finalize_results(task) -> None:
     """Delete every finalize result file and reset the prompt_results index.
 

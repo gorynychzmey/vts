@@ -117,6 +117,57 @@ async def test_restart_final_prompts_with_full_422(authed_app, client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["final_only", "full"])
+async def test_restart_downgrades_stale_summary_result_entry(
+    mode, client, authed_app, tmp_path
+):
+    """Regression (vts-b6l): restart_summary without a new prompt set deletes
+    the summary files but used to leave the system:summary prompt_results
+    entry as completed with a path to the deleted file. The frontend then
+    selected it and got 404 Result not found. The entry must be downgraded to
+    pending; user-prompt entries keep their (still existing) results."""
+    app, factory = authed_app
+    app.state.redis = _FakeRedis()
+    from vts.db.models import Task, TaskStatus, Step, StepStatus
+
+    async with factory() as s:
+        uid = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+        art = tmp_path / f"task-{mode}"; (art / "summary").mkdir(parents=True)
+        (art / "summary" / "final.md").write_text("old")
+        task = Task(id=uuid.uuid4(), user_id=uid, source_url="x",
+                    artifact_dir=str(art), status=TaskStatus.completed,
+                    summary_path=str(art / "summary" / "final.md"),
+                    options={"prompts": [{"source": "system", "id": "summary"},
+                                         {"source": "user", "id": "a"}],
+                             "prompt_results": [
+                                {"source": "system", "id": "summary", "name": "S",
+                                 "path": str(art / "summary" / "final.md"),
+                                 "status": "completed"},
+                                {"source": "user", "id": "a", "name": "A",
+                                 "path": str(art / "summary" / "results" / "user__a.md"),
+                                 "status": "completed"}]})
+        s.add(task)
+        for name in ["download", "merge_transcript", "summarize_windows",
+                     "summarize_final", "finalize:user:a"]:
+            s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
+        await s.commit()
+        task_id = str(task.id)
+
+    resp = await client.post(f"/api/tasks/{task_id}/restart_summary",
+                             json={"mode": mode})
+    assert resp.status_code == 200
+
+    async with factory() as s:
+        from vts.db.repo import Repo
+        t = await Repo(s).get_task_by_id(uuid.UUID(task_id))
+        by_ref = {(e["source"], e["id"]): e for e in t.options["prompt_results"]}
+        assert by_ref[("system", "summary")]["status"] == "pending", \
+            f"stale system:summary entry must be downgraded, got {by_ref}"
+        assert by_ref[("user", "a")]["status"] == "completed"
+        assert t.summary_path is None
+
+
+@pytest.mark.asyncio
 async def test_two_finalize_results_both_persist(authed_app, tmp_path):
     """Regression (vts-jal): a task that finalizes two prompts (system summary +
     one user prompt) must end with BOTH entries in options.prompt_results.
