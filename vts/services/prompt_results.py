@@ -53,25 +53,16 @@ def resolve_result_path(task: Task, source: str, ref: str) -> str | None:
     return None
 
 
-def downgrade_system_summary_entry(task) -> None:
-    """Mark the system:summary entry in ``prompt_results`` as pending.
+def _downgrade_entries(task, should_downgrade) -> None:
+    """Set matching completed ``prompt_results`` entries to pending.
 
-    Summary restarts delete the final.md/summary.md files but keep the other
-    finalize results; a completed system:summary entry would then point at a
-    deleted file and the UI would select it and hit 404 (vts-b6l). Reassigns
-    task.options so the JSON column persists on commit. No-op when the entry
-    is absent or not completed.
-    """
-    existing = result_entries(task)
-    wanted = ref_key("system", "summary")
+    Reassigns task.options so the JSON column persists on commit. No-op when
+    nothing matches."""
     changed = False
     entries: list[dict[str, Any]] = []
-    for e in existing:
+    for e in result_entries(task):
         e = dict(e)
-        if (
-            ref_key(str(e.get("source")), str(e.get("id"))) == wanted
-            and e.get("status") == "completed"
-        ):
+        if e.get("status") == "completed" and should_downgrade(e):
             e["status"] = "pending"
             changed = True
         entries.append(e)
@@ -80,6 +71,30 @@ def downgrade_system_summary_entry(task) -> None:
     new_options = dict(task.options or {})
     new_options["prompt_results"] = entries
     task.options = new_options
+
+
+def downgrade_system_summary_entry(task) -> None:
+    """Mark the system:summary entry in ``prompt_results`` as pending.
+
+    Final-only summary restarts delete the final.md/summary.md files but keep
+    the other finalize results; a completed system:summary entry would then
+    point at a deleted file and the UI would select it and hit 404 (vts-b6l).
+    """
+    wanted = ref_key("system", "summary")
+    _downgrade_entries(
+        task,
+        lambda e: ref_key(str(e.get("source")), str(e.get("id"))) == wanted,
+    )
+
+
+def downgrade_all_result_entries(task) -> None:
+    """Mark every completed ``prompt_results`` entry as pending.
+
+    Full summary restarts regenerate the processed transcript, so every
+    finalize result — the system summary and user prompts alike — is stale
+    and about to be re-run (vts-5eg).
+    """
+    _downgrade_entries(task, lambda e: True)
 
 
 def clear_all_finalize_results(task) -> None:

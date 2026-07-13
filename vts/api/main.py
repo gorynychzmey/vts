@@ -222,10 +222,20 @@ def _reset_summary_artifacts(task: Task) -> None:
     ):
         path.unlink(missing_ok=True)
 
+    # User-prompt results: without deleting these, step_finalize_prompt
+    # short-circuits on the existing files and never regenerates (vts-5eg).
+    results_dir = summary_dir / "results"
+    if results_dir.exists():
+        for path in results_dir.glob("*"):
+            path.unlink(missing_ok=True)
+
 
 def _reset_summary_steps(task: Task) -> None:
+    # finalize:* (user-prompt) steps are part of the summary pipeline too:
+    # a full restart regenerates their input (the processed transcript), so
+    # they must re-run (vts-5eg).
     for step in task.steps:
-        if step.name not in SUMMARY_STEP_NAMES:
+        if step.name not in SUMMARY_STEP_NAMES and not step.name.startswith("finalize:"):
             continue
         step.status = StepStatus.pending
         step.attempt = 0
@@ -1724,7 +1734,10 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         bus = RedisBus(redis, settings)
-        from vts.services.prompt_results import downgrade_system_summary_entry
+        from vts.services.prompt_results import (
+            downgrade_all_result_entries,
+            downgrade_system_summary_entry,
+        )
 
         artifact_resets: list[asyncio.Task[None]] = []
         if request.mode == "final_only":
@@ -1757,7 +1770,7 @@ def create_app() -> FastAPI:
                     detail=f"cannot_restart:{task.status.value}",
                 )
             _reset_summary_steps(task)
-            downgrade_system_summary_entry(task)
+            downgrade_all_result_entries(task)
             artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
         task.summary_path = None
         await repo.set_task_summary_progress(task, 0, 0)

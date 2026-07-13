@@ -121,11 +121,17 @@ async def test_restart_final_prompts_with_full_422(authed_app, client):
 async def test_restart_downgrades_stale_summary_result_entry(
     mode, client, authed_app, tmp_path
 ):
-    """Regression (vts-b6l): restart_summary without a new prompt set deletes
-    the summary files but used to leave the system:summary prompt_results
-    entry as completed with a path to the deleted file. The frontend then
-    selected it and got 404 Result not found. The entry must be downgraded to
-    pending; user-prompt entries keep their (still existing) results."""
+    """Regressions vts-b6l + vts-5eg.
+
+    vts-b6l: restart_summary deletes the summary files but used to leave the
+    system:summary prompt_results entry completed with a path to the deleted
+    file — the frontend selected it and got 404. It must go pending.
+
+    vts-5eg: mode=full regenerates the processed transcript, so user-prompt
+    results are stale too: their entries go pending, their finalize steps
+    reset, their result files are deleted (else step_finalize_prompt
+    short-circuits on existing files and never regenerates). mode=final_only
+    keeps them — their input did not change."""
     app, factory = authed_app
     app.state.redis = _FakeRedis()
     from vts.db.models import Task, TaskStatus, Step, StepStatus
@@ -134,6 +140,9 @@ async def test_restart_downgrades_stale_summary_result_entry(
         uid = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
         art = tmp_path / f"task-{mode}"; (art / "summary").mkdir(parents=True)
         (art / "summary" / "final.md").write_text("old")
+        results_dir = art / "summary" / "results"; results_dir.mkdir()
+        (results_dir / "user__a.md").write_text("old memo")
+        (results_dir / "user__a.json").write_text('{"raw": "old memo"}')
         task = Task(id=uuid.uuid4(), user_id=uid, source_url="x",
                     artifact_dir=str(art), status=TaskStatus.completed,
                     summary_path=str(art / "summary" / "final.md"),
@@ -144,7 +153,7 @@ async def test_restart_downgrades_stale_summary_result_entry(
                                  "path": str(art / "summary" / "final.md"),
                                  "status": "completed"},
                                 {"source": "user", "id": "a", "name": "A",
-                                 "path": str(art / "summary" / "results" / "user__a.md"),
+                                 "path": str(results_dir / "user__a.md"),
                                  "status": "completed"}]})
         s.add(task)
         for name in ["download", "merge_transcript", "summarize_windows",
@@ -163,8 +172,19 @@ async def test_restart_downgrades_stale_summary_result_entry(
         by_ref = {(e["source"], e["id"]): e for e in t.options["prompt_results"]}
         assert by_ref[("system", "summary")]["status"] == "pending", \
             f"stale system:summary entry must be downgraded, got {by_ref}"
-        assert by_ref[("user", "a")]["status"] == "completed"
         assert t.summary_path is None
+        step_status = {st.name: st.status for st in t.steps}
+        if mode == "full":
+            # processed transcript is regenerated -> user results are stale
+            assert by_ref[("user", "a")]["status"] == "pending"
+            assert step_status["finalize:user:a"] == StepStatus.pending
+            assert not (results_dir / "user__a.md").exists()
+            assert not (results_dir / "user__a.json").exists()
+        else:
+            # final_only: the user prompt's input did not change
+            assert by_ref[("user", "a")]["status"] == "completed"
+            assert step_status["finalize:user:a"] == StepStatus.completed
+            assert (results_dir / "user__a.md").exists()
 
 
 @pytest.mark.asyncio
