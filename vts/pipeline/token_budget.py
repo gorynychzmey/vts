@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass
@@ -104,6 +104,92 @@ def compute_final_budget(
     max_out = math.floor(input_tokens * cfg.final_max_ratio)
     target_tokens = clamp(raw_target, min_out, max_out)
     return target_tokens, min_out, max_out
+
+
+# Legacy fixed window size; also the lower bound for the derived one.
+SEGMENT_WINDOW_FLOOR = 2000
+
+
+def fits_whole_transcript(
+    cfg: TokenBudgetConfig, prompt_tokens: int, transcript_tokens: int
+) -> bool:
+    """Conservative whole-transcript check for segmentation mode ``auto``.
+
+    A verbatim-smooth rewrite outputs roughly as much as it reads, so the
+    transcript counts twice (input + output)."""
+    return prompt_tokens + 2 * transcript_tokens + cfg.safety_margin <= cfg.n_ctx
+
+
+def whole_transcript_possible(
+    cfg: TokenBudgetConfig, prompt_tokens: int, transcript_tokens: int
+) -> bool:
+    """Hard feasibility check for segmentation mode ``never``.
+
+    Uses the minimal expected output (segment_min_ratio) instead of the
+    conservative 1:1 estimate. Below this bound the request cannot succeed —
+    and Ollama would silently truncate the prompt instead of erroring, so the
+    caller must fail explicitly before sending."""
+    estimated_out = math.ceil(transcript_tokens * cfg.segment_min_ratio)
+    return (
+        prompt_tokens + transcript_tokens + estimated_out + cfg.safety_margin
+        <= cfg.n_ctx
+    )
+
+
+def derive_window_tokens(
+    cfg: TokenBudgetConfig,
+    prompt_tokens: int,
+    *,
+    cap: int,
+    floor: int = SEGMENT_WINDOW_FLOOR,
+) -> int:
+    """Segment window size derived from the context window (when splitting).
+
+    Half of the free context (input plus an equally sized output), clamped
+    to [floor, cap]."""
+    available = (cfg.n_ctx - prompt_tokens - cfg.safety_margin) // 2
+    return clamp(available, floor, max(floor, cap))
+
+
+def uncap_segment_for_input(
+    cfg: TokenBudgetConfig, input_tokens: int
+) -> TokenBudgetConfig:
+    """Raise segment_max_cap when it would squeeze a big window's rewrite.
+
+    The fixed cap (default 1800) predates derived/whole windows: a verbatim
+    rewrite of a 8k+ token input must not be budgeted down to 1800 tokens.
+    Returns cfg unchanged while the cap does not bind."""
+    needed = math.ceil(input_tokens * cfg.segment_max_ratio)
+    if needed <= cfg.segment_max_cap:
+        return cfg
+    return replace(cfg, segment_max_cap=needed)
+
+
+# Substrings that unambiguously indicate a context-window overflow in error
+# text from llama-server / Ollama / LiteLLM / OpenAI-compatible backends.
+_CTX_OVERFLOW_HINTS = (
+    "exceeds the available context",
+    "exceeds context",
+    "exceed the context",
+    "context length exceeded",
+    "maximum context length",
+    "exceeds context window",
+    "input length exceeds",
+    "context window",
+    "prompt is too long",
+    "too many tokens",
+    "greater than the context",
+)
+
+
+def is_context_overflow_error(message: object) -> bool:
+    """Heuristic: does this backend error text mean 'prompt did not fit'?"""
+    text = str(message or "").lower()
+    if not text:
+        return False
+    if any(hint in text for hint in _CTX_OVERFLOW_HINTS):
+        return True
+    return "n_ctx" in text and ("exceed" in text or "too long" in text or "too large" in text)
 
 
 def fits_in_context(

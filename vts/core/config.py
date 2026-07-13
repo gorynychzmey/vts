@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -232,6 +232,16 @@ class Settings(BaseSettings):
     # (see vts/services/llm_backends.py). YAML: summary.n_ctx.
     summary_n_ctx: int = 32768
     summary_safety_margin: int = 768
+
+    # Transcript segmentation for the segment (rewrite) stage. YAML:
+    # summary.segmentation. auto: send the whole transcript when it clearly
+    # fits the context window, else split (with overflow fallback to split);
+    # never: always whole (explicit task error when it cannot fit);
+    # always: always split (legacy behavior).
+    summary_segmentation: Literal["always", "never", "auto"] = "auto"
+    # Upper bound for the context-derived segment window when splitting.
+    # YAML: summary.segment.window_cap.
+    summary_segment_window_cap: int = 8192
 
     summary_segment_ratio: float = 0.40
     summary_segment_min_ratio: float = 0.30

@@ -46,7 +46,12 @@ from vts.pipeline.token_budget import (
     compute_final_budget,
     compute_pack_budget,
     compute_segment_budget,
+    derive_window_tokens,
     fits_in_context,
+    fits_whole_transcript,
+    is_context_overflow_error,
+    uncap_segment_for_input,
+    whole_transcript_possible,
 )
 from vts.services.summarizer import (
     LLMClient,
@@ -64,6 +69,17 @@ def utcnow() -> datetime:
 
 class TaskPaused(Exception):
     """Raised when the processor detects a pause request mid-step."""
+
+
+class _WholeTranscriptOverflow(Exception):
+    """Whole-transcript rewrite hit a context overflow; carries the cause."""
+
+
+_SEGMENT_PROMPT_FALLBACK = (
+    "Rewrite the transcript segment as clean fluent text: remove fillers,"
+    " interjections, false starts and repetitions, but keep all content,"
+    " wording and order. Do not summarize."
+)
 
 
 class TaskProcessor:
@@ -1131,21 +1147,70 @@ class TaskProcessor:
         transcript = json.loads(transcript_json.read_text(encoding="utf-8")).get("text", "")
         if not isinstance(transcript, str) or not transcript.strip():
             logger.info("summary chunks skipped: empty transcript")
-            write_json(chunks_file, {"chunks": []})
-            write_json(dirs["outputs"] / "summary_chunks.json", {"chunks": []})
+            write_json(chunks_file, {"chunks": [], "segmentation": "split"})
+            write_json(dirs["outputs"] / "summary_chunks.json", {"chunks": [], "segmentation": "split"})
             return True
 
         logger.info("summary chunk preparation started")
-        chunks = await self._llm.chunk_text(
-            text=transcript,
+        mode = str(getattr(self.settings, "summary_segmentation", "auto") or "auto")
+        budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
+        timeout_seconds = int(getattr(self.settings, "llm_chat_timeout_seconds", 600))
+        segment_prompt = self._render_prompt_with_language(
+            load_prompt(self.settings.prompts_dir, "segment_prompt.md", _SEGMENT_PROMPT_FALLBACK),
+            self._effective_language(task_options, dirs),
+        )
+        prompt_tokens = await self._llm.count_tokens(
+            text=segment_prompt,
             model=self.settings.llm_model,
-            window_tokens=2000,
-            overlap_ratio=0.15,
+            timeout_seconds=timeout_seconds,
             tokenizer_path=self._tokenizer_path,
         )
+        transcript_tokens = await self._llm.count_tokens(
+            text=transcript,
+            model=self.settings.llm_model,
+            timeout_seconds=timeout_seconds,
+            tokenizer_path=self._tokenizer_path,
+        )
+
+        send_whole = False
+        if mode == "never":
+            if not whole_transcript_possible(budget_cfg, prompt_tokens, transcript_tokens):
+                raise RuntimeError(
+                    f"summary segmentation=never: transcript (~{transcript_tokens} tokens)"
+                    f" cannot fit the model context window (n_ctx={budget_cfg.n_ctx})"
+                    " in one piece"
+                )
+            send_whole = True
+        elif mode == "auto":
+            send_whole = fits_whole_transcript(budget_cfg, prompt_tokens, transcript_tokens)
+
+        if send_whole:
+            chunks = [transcript]
+            logger.info(
+                "summary segmentation: whole transcript (mode=%s tokens=%d prompt=%d n_ctx=%d)",
+                mode, transcript_tokens, prompt_tokens, budget_cfg.n_ctx,
+            )
+        else:
+            window_tokens = derive_window_tokens(
+                budget_cfg,
+                prompt_tokens,
+                cap=int(getattr(self.settings, "summary_segment_window_cap", 8192)),
+            )
+            logger.info(
+                "summary segmentation: split (mode=%s tokens=%d window=%d n_ctx=%d)",
+                mode, transcript_tokens, window_tokens, budget_cfg.n_ctx,
+            )
+            chunks = await self._llm.chunk_text(
+                text=transcript,
+                model=self.settings.llm_model,
+                window_tokens=window_tokens,
+                overlap_ratio=0.15,
+                tokenizer_path=self._tokenizer_path,
+            )
+        payload = {"chunks": chunks, "segmentation": "whole" if send_whole else "split"}
         logger.info("summary chunk preparation finished: %s windows", len(chunks))
-        write_json(chunks_file, {"chunks": chunks})
-        write_json(dirs["outputs"] / "summary_chunks.json", {"chunks": chunks})
+        write_json(chunks_file, payload)
+        write_json(dirs["outputs"] / "summary_chunks.json", payload)
         return True
 
     async def step_summarize_windows(
@@ -1173,13 +1238,7 @@ class TaskProcessor:
 
         output_language = self._effective_language(task_options, dirs)
         segment_prompt = self._render_prompt_with_language(
-            load_prompt(
-                self.settings.prompts_dir,
-                "segment_prompt.md",
-                "Rewrite the transcript segment as clean fluent text: remove fillers,"
-                " interjections, false starts and repetitions, but keep all content,"
-                " wording and order. Do not summarize.",
-            ),
+            load_prompt(self.settings.prompts_dir, "segment_prompt.md", _SEGMENT_PROMPT_FALLBACK),
             output_language,
         )
         chunks_file = summary_dir / "chunks.json"
@@ -1187,9 +1246,11 @@ class TaskProcessor:
             chunks_file = dirs["outputs"] / "summary_chunks.json"
         if not chunks_file.exists():
             raise RuntimeError("Missing summary chunks")
-        chunks = json.loads(chunks_file.read_text(encoding="utf-8")).get("chunks", [])
+        chunks_payload = json.loads(chunks_file.read_text(encoding="utf-8"))
+        chunks = chunks_payload.get("chunks") if isinstance(chunks_payload, dict) else None
         if not isinstance(chunks, list):
             raise RuntimeError("Invalid summary chunks payload")
+        whole_mode = chunks_payload.get("segmentation") == "whole"
         total_windows = len(chunks)
 
         windows_by_index: dict[int, dict[str, Any]] = {}
@@ -1262,7 +1323,13 @@ class TaskProcessor:
         logger.info("window summarization started: %s windows", len(chunks))
         budget_cfg = self._token_budget_config(await self._get_n_ctx(task_id, logger))
         total_parts = len(chunks) + 1
-        timeout_seconds = int(getattr(self.settings, "llm_chat_timeout_seconds", 600))
+        # A whole-transcript rewrite generates output comparable to the input
+        # size — that is final-stage territory, not a 2k-window call.
+        timeout_seconds = int(
+            getattr(self.settings, "llm_final_timeout_seconds", 1800)
+            if whole_mode
+            else getattr(self.settings, "llm_chat_timeout_seconds", 600)
+        )
         redacted_path = dirs["outputs"] / "redacted_transcript.txt"
         redacted_path.write_text(
             "".join(
@@ -1271,123 +1338,181 @@ class TaskProcessor:
             ),
             encoding="utf-8",
         )
-        for idx, chunk in enumerate(chunks, start=1):
-            await self._check_paused(task_id)
-            if idx in windows_by_index:
-                logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
+        while True:
+            try:
+                for idx, chunk in enumerate(chunks, start=1):
+                    await self._check_paused(task_id)
+                    if idx in windows_by_index:
+                        logger.info("window %s/%s already summarized, skipping", idx, len(chunks))
+                        await self.bus.publish_event(
+                            user_id=user_id,
+                            task_id=str(task_id),
+                            event="summary_progress",
+                            data={"current": idx, "total": total_parts},
+                            throttle_key="summary_progress",
+                        )
+                        await self._persist_summary_progress(task_id, idx, total_parts)
+                        continue
+                    logger.info("summarizing window %s/%s", idx, len(chunks))
+
+                    # Stage A: adaptive token budget
+                    user_prompt = f"Window {idx}/{len(chunks)}\n\n{chunk}"
+                    input_tokens = await self._llm.count_tokens(
+                        text=user_prompt,
+                        model=self.settings.llm_model,
+                        timeout_seconds=timeout_seconds,
+                        tokenizer_path=self._tokenizer_path,
+                    )
+                    window_cfg = uncap_segment_for_input(budget_cfg, input_tokens)
+                    target_tokens, min_out, max_out = compute_segment_budget(input_tokens, window_cfg)
+                    budgeted_prompt = self._render_prompt_budget_vars(
+                        segment_prompt,
+                        input_tokens=input_tokens,
+                        target_tokens=target_tokens,
+                        target_ratio=window_cfg.segment_ratio,
+                    )
+                    logger.info(
+                        "window %s/%s token_budget input=%d target=%d min=%d max=%d",
+                        idx, len(chunks), input_tokens, target_tokens, min_out, max_out,
+                    )
+                    logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
+                    _win_t_q0 = time.monotonic()
+                    async with self.heavy_slot:
+                        _win_t_q_ms = round((time.monotonic() - _win_t_q0) * 1000)
+                        logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
+                        _win_t0 = time.monotonic()
+                        try:
+                            raw = await self._llm.chat_completion(
+                                model=self.settings.llm_model,
+                                system_prompt=budgeted_prompt,
+                                user_prompt=user_prompt,
+                                timeout_seconds=timeout_seconds,
+                                temperature=self.settings.llm_temperature,
+                                top_p=self.settings.llm_top_p,
+                                min_p=self.settings.llm_min_p,
+                                repeat_penalty=self.settings.llm_repeat_penalty,
+                                cache_prompt=True,
+                                use_json_format=False,
+                                thinking=self.settings.llm_thinking,
+                                num_ctx=budget_cfg.n_ctx,
+                            )
+                        except RuntimeError as exc:
+                            if whole_mode and is_context_overflow_error(str(exc)):
+                                mode = str(getattr(self.settings, "summary_segmentation", "auto") or "auto")
+                                if mode == "never":
+                                    raise RuntimeError(
+                                        "summary segmentation=never: the model cannot process"
+                                        f" the transcript in one piece (n_ctx={budget_cfg.n_ctx}): {exc}"
+                                    ) from exc
+                                raise _WholeTranscriptOverflow() from exc
+                            raise
+                        _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
+                    actual_output_tokens = await self._llm.count_tokens(
+                        text=raw,
+                        model=self.settings.llm_model,
+                        timeout_seconds=timeout_seconds,
+                        tokenizer_path=self._tokenizer_path,
+                    )
+                    self._log_metrics(logger, SummarizationMetrics(
+                        stage_name="segment",
+                        input_tokens=input_tokens,
+                        target_tokens=target_tokens,
+                        actual_output_tokens=actual_output_tokens,
+                    ))
+                    self._log_payload(logger, f"llm window response index={idx}", raw, max_chars=200)
+                    _win_em = self._get_emitter(task_id)
+                    if _win_em:
+                        _n_ctx = budget_cfg.n_ctx
+                        _win_em.emit({
+                            "stage": "summarize.segment",
+                            "status": "ok",
+                            "segment_id": idx,
+                            "t_wall_ms": _win_t_ms,
+                            "t_queue_ms": _win_t_q_ms,
+                            "llm_prompt_tokens": input_tokens,
+                            "llm_completion_tokens": actual_output_tokens,
+                            "llm_total_tokens": input_tokens + actual_output_tokens,
+                            "llm_tok_per_s": round(actual_output_tokens / (_win_t_ms / 1000), 2) if _win_t_ms > 0 else None,
+                            "llm_ctx_utilization": round(input_tokens / _n_ctx, 4) if _n_ctx > 0 else None,
+                            "retries": 0,
+                            **QualityAnalyzer(
+                                shingle_n=self.settings.metrics_redundancy_shingle_n,
+                                simhash_bits=self.settings.metrics_redundancy_simhash_bits,
+                                max_hamming=self.settings.metrics_redundancy_max_hamming,
+                            ).analyze(
+                                summary_text=raw,
+                                transcript_text=chunk,
+                                prompt_tokens=input_tokens,
+                                completion_tokens=actual_output_tokens,
+                            ),
+                        })
+                    window_path = summary_dir / f"window_{idx:02d}.txt"
+                    window_path.write_text(raw, encoding="utf-8")
+                    windows_by_index[idx] = {"window_index": idx, "summary": raw, "path": str(window_path)}
+                    ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
+                    write_json(output, {"windows": ordered})
+                    write_json(output_mirror, {"windows": ordered})
+                    redacted_path = dirs["outputs"] / "redacted_transcript.txt"
+                    with redacted_path.open("a", encoding="utf-8") as rf:
+                        rf.write(raw.rstrip("\n") + "\n\n")
+                    await self.bus.publish_event(
+                        user_id=user_id,
+                        task_id=str(task_id),
+                        event="segment_summary_text",
+                        data={"index": idx, "total": total_windows, "text": raw},
+                    )
+                    await self.bus.publish_event(
+                        user_id=user_id,
+                        task_id=str(task_id),
+                        event="summary_progress",
+                        data={"current": idx, "total": total_parts},
+                        throttle_key="summary_progress",
+                    )
+                    await self._persist_summary_progress(task_id, idx, total_parts)
+            except _WholeTranscriptOverflow as overflow:
+                logger.warning(
+                    "whole-transcript rewrite exceeded the context window; "
+                    "falling back to segmentation: %s",
+                    overflow.__cause__,
+                )
+                prompt_tokens = await self._llm.count_tokens(
+                    text=segment_prompt,
+                    model=self.settings.llm_model,
+                    timeout_seconds=int(getattr(self.settings, "llm_chat_timeout_seconds", 600)),
+                    tokenizer_path=self._tokenizer_path,
+                )
+                window_tokens = derive_window_tokens(
+                    budget_cfg,
+                    prompt_tokens,
+                    cap=int(getattr(self.settings, "summary_segment_window_cap", 8192)),
+                )
+                chunks = await self._llm.chunk_text(
+                    text=chunks[0],
+                    model=self.settings.llm_model,
+                    window_tokens=window_tokens,
+                    overlap_ratio=0.15,
+                    tokenizer_path=self._tokenizer_path,
+                )
+                split_payload = {"chunks": chunks, "segmentation": "split"}
+                write_json(summary_dir / "chunks.json", split_payload)
+                write_json(dirs["outputs"] / "summary_chunks.json", split_payload)
+                whole_mode = False
+                windows_by_index = {}
+                total_windows = len(chunks)
+                total_parts = len(chunks) + 1
+                timeout_seconds = int(getattr(self.settings, "llm_chat_timeout_seconds", 600))
+                redacted_path.write_text("", encoding="utf-8")
                 await self.bus.publish_event(
                     user_id=user_id,
                     task_id=str(task_id),
                     event="summary_progress",
-                    data={"current": idx, "total": total_parts},
+                    data={"current": 0, "total": total_parts},
                     throttle_key="summary_progress",
                 )
-                await self._persist_summary_progress(task_id, idx, total_parts)
+                await self._persist_summary_progress(task_id, 0, total_parts)
+                logger.info("fallback segmentation: %s windows", len(chunks))
                 continue
-            logger.info("summarizing window %s/%s", idx, len(chunks))
-
-            # Stage A: adaptive token budget
-            user_prompt = f"Window {idx}/{len(chunks)}\n\n{chunk}"
-            input_tokens = await self._llm.count_tokens(
-                text=user_prompt,
-                model=self.settings.llm_model,
-                timeout_seconds=timeout_seconds,
-                tokenizer_path=self._tokenizer_path,
-            )
-            target_tokens, min_out, max_out = compute_segment_budget(input_tokens, budget_cfg)
-            budgeted_prompt = self._render_prompt_budget_vars(
-                segment_prompt,
-                input_tokens=input_tokens,
-                target_tokens=target_tokens,
-                target_ratio=budget_cfg.segment_ratio,
-            )
-            logger.info(
-                "window %s/%s token_budget input=%d target=%d min=%d max=%d",
-                idx, len(chunks), input_tokens, target_tokens, min_out, max_out,
-            )
-            logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
-            _win_t_q0 = time.monotonic()
-            async with self.heavy_slot:
-                _win_t_q_ms = round((time.monotonic() - _win_t_q0) * 1000)
-                logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
-                _win_t0 = time.monotonic()
-                raw = await self._llm.chat_completion(
-                    model=self.settings.llm_model,
-                    system_prompt=budgeted_prompt,
-                    user_prompt=user_prompt,
-                    timeout_seconds=timeout_seconds,
-                    temperature=self.settings.llm_temperature,
-                    top_p=self.settings.llm_top_p,
-                    min_p=self.settings.llm_min_p,
-                    repeat_penalty=self.settings.llm_repeat_penalty,
-                    cache_prompt=True,
-                    use_json_format=False,
-                    thinking=self.settings.llm_thinking,
-                    num_ctx=budget_cfg.n_ctx,
-                )
-                _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
-            actual_output_tokens = await self._llm.count_tokens(
-                text=raw,
-                model=self.settings.llm_model,
-                timeout_seconds=timeout_seconds,
-                tokenizer_path=self._tokenizer_path,
-            )
-            self._log_metrics(logger, SummarizationMetrics(
-                stage_name="segment",
-                input_tokens=input_tokens,
-                target_tokens=target_tokens,
-                actual_output_tokens=actual_output_tokens,
-            ))
-            self._log_payload(logger, f"llm window response index={idx}", raw, max_chars=200)
-            _win_em = self._get_emitter(task_id)
-            if _win_em:
-                _n_ctx = budget_cfg.n_ctx
-                _win_em.emit({
-                    "stage": "summarize.segment",
-                    "status": "ok",
-                    "segment_id": idx,
-                    "t_wall_ms": _win_t_ms,
-                    "t_queue_ms": _win_t_q_ms,
-                    "llm_prompt_tokens": input_tokens,
-                    "llm_completion_tokens": actual_output_tokens,
-                    "llm_total_tokens": input_tokens + actual_output_tokens,
-                    "llm_tok_per_s": round(actual_output_tokens / (_win_t_ms / 1000), 2) if _win_t_ms > 0 else None,
-                    "llm_ctx_utilization": round(input_tokens / _n_ctx, 4) if _n_ctx > 0 else None,
-                    "retries": 0,
-                    **QualityAnalyzer(
-                        shingle_n=self.settings.metrics_redundancy_shingle_n,
-                        simhash_bits=self.settings.metrics_redundancy_simhash_bits,
-                        max_hamming=self.settings.metrics_redundancy_max_hamming,
-                    ).analyze(
-                        summary_text=raw,
-                        transcript_text=chunk,
-                        prompt_tokens=input_tokens,
-                        completion_tokens=actual_output_tokens,
-                    ),
-                })
-            window_path = summary_dir / f"window_{idx:02d}.txt"
-            window_path.write_text(raw, encoding="utf-8")
-            windows_by_index[idx] = {"window_index": idx, "summary": raw, "path": str(window_path)}
-            ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
-            write_json(output, {"windows": ordered})
-            write_json(output_mirror, {"windows": ordered})
-            redacted_path = dirs["outputs"] / "redacted_transcript.txt"
-            with redacted_path.open("a", encoding="utf-8") as rf:
-                rf.write(raw.rstrip("\n") + "\n\n")
-            await self.bus.publish_event(
-                user_id=user_id,
-                task_id=str(task_id),
-                event="segment_summary_text",
-                data={"index": idx, "total": total_windows, "text": raw},
-            )
-            await self.bus.publish_event(
-                user_id=user_id,
-                task_id=str(task_id),
-                event="summary_progress",
-                data={"current": idx, "total": total_parts},
-                throttle_key="summary_progress",
-            )
-            await self._persist_summary_progress(task_id, idx, total_parts)
+            break
         ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
         write_json(output, {"windows": ordered})
         write_json(output_mirror, {"windows": ordered})

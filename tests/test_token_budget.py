@@ -251,3 +251,76 @@ def test_token_budget_config_defaults() -> None:
     assert cfg.final_ratio == pytest.approx(0.70)
     assert cfg.final_min_ratio == pytest.approx(0.60)
     assert cfg.final_max_ratio == pytest.approx(0.80)
+
+
+# ---------------------------------------------------------------------------
+# Whole-transcript mode helpers (vts-o51)
+# ---------------------------------------------------------------------------
+
+
+def test_fits_whole_transcript_conservative_formula() -> None:
+    from vts.pipeline.token_budget import fits_whole_transcript
+
+    cfg = TokenBudgetConfig(n_ctx=10000, safety_margin=768)
+    # prompt + 2*transcript + margin <= n_ctx
+    assert fits_whole_transcript(cfg, prompt_tokens=200, transcript_tokens=4516)
+    assert not fits_whole_transcript(cfg, prompt_tokens=200, transcript_tokens=4517)
+
+
+def test_whole_transcript_possible_hard_check_uses_min_ratio() -> None:
+    from vts.pipeline.token_budget import whole_transcript_possible
+
+    cfg = TokenBudgetConfig(n_ctx=10000, safety_margin=768, segment_min_ratio=0.5)
+    # prompt + transcript*(1+0.5) + margin <= n_ctx -> transcript <= 6021
+    assert whole_transcript_possible(cfg, prompt_tokens=200, transcript_tokens=6021)
+    assert not whole_transcript_possible(cfg, prompt_tokens=200, transcript_tokens=6100)
+
+
+def test_derive_window_tokens_floor_cap_and_middle() -> None:
+    from vts.pipeline.token_budget import derive_window_tokens
+
+    # Tiny window -> floor 2000 (legacy behavior)
+    small = TokenBudgetConfig(n_ctx=4096, safety_margin=768)
+    assert derive_window_tokens(small, prompt_tokens=300, cap=8192) == 2000
+    # Big window -> capped
+    big = TokenBudgetConfig(n_ctx=114688, safety_margin=768)
+    assert derive_window_tokens(big, prompt_tokens=300, cap=8192) == 8192
+    # Middle -> (n_ctx - prompt - margin) // 2
+    mid = TokenBudgetConfig(n_ctx=12000, safety_margin=768)
+    assert derive_window_tokens(mid, prompt_tokens=232, cap=8192) == 5500
+
+
+def test_uncap_segment_for_input_scales_max_cap() -> None:
+    from vts.pipeline.token_budget import uncap_segment_for_input
+
+    cfg = TokenBudgetConfig(segment_max_ratio=0.70, segment_max_cap=1800)
+    # Small input: cap untouched, same object semantics preserved
+    assert uncap_segment_for_input(cfg, 2000).segment_max_cap == 1800
+    # Verbatim rewrite of a big window must not be squeezed to 1800 tokens
+    big = uncap_segment_for_input(cfg, 60000)
+    assert big.segment_max_cap == 42000
+    assert cfg.segment_max_cap == 1800  # original not mutated
+
+
+def test_is_context_overflow_error_positives_and_negatives() -> None:
+    from vts.pipeline.token_budget import is_context_overflow_error
+
+    positives = [
+        "llama chat completion failed with HTTP 400 for http://x: the request "
+        "exceeds the available context size. try increasing the context size",
+        "This model's maximum context length is 8192 tokens",
+        "input length exceeds context window",
+        "HTTP 500: n_ctx exceeded, prompt too long",
+        "prompt is too long: 130000 tokens > 114688 maximum",
+    ]
+    negatives = [
+        "connection refused",
+        "model not found",
+        "llama chat completion failed after retries: ReadTimeout",
+        "invalid JSON in response",
+        "",
+    ]
+    for text in positives:
+        assert is_context_overflow_error(text), text
+    for text in negatives:
+        assert not is_context_overflow_error(text), text
