@@ -27,3 +27,14 @@ def test_build_dag_no_prompts_has_no_finalize():
     steps = build_dag_steps({"prompts": []})
     assert not any(s.startswith("finalize:") for s in steps)
     assert "summarize_final" not in steps
+
+
+def test_lane_for_step_mapping():
+    from vts.pipeline.types import lane_for_step
+    assert lane_for_step("download") == "network"
+    for s in ("extract_audio", "trim_initial_silence", "segment_audio"):
+        assert lane_for_step(s) == "ffmpeg"
+    for s in ("detect_language", "transcribe_segments", "prepare_llama_model",
+              "summarize_windows", "pack_window_notes", "summarize_final",
+              "merge_transcript", "prepare_summary_chunks", "finalize:user:abc"):
+        assert lane_for_step(s) is None
