@@ -52,8 +52,11 @@ def test_clamp_degenerate_min_greater_than_max_returns_min() -> None:
 # ---------------------------------------------------------------------------
 
 
+LEGACY_SEGMENT = dict(segment_ratio=0.40, segment_min_ratio=0.30, segment_max_ratio=0.55)
+
+
 def test_segment_budget_typical() -> None:
-    cfg = TokenBudgetConfig()
+    cfg = TokenBudgetConfig(**LEGACY_SEGMENT)
     # 1000 tokens * 0.40 = 400
     # min = max(ceil(1000 * 0.30), 200) = max(300, 200) = 300
     # max = min(floor(1000 * 0.55), 1800) = min(550, 1800) = 550
@@ -65,7 +68,7 @@ def test_segment_budget_typical() -> None:
 
 
 def test_segment_budget_min_floor_applied() -> None:
-    cfg = TokenBudgetConfig()
+    cfg = TokenBudgetConfig(**LEGACY_SEGMENT)
     # Very small input: 100 tokens
     # raw = 40, min = max(ceil(30), 200) = 200, max = min(55, 1800) = 55
     # clamp(40, 200, 55) → degenerate: returns 200
@@ -76,7 +79,7 @@ def test_segment_budget_min_floor_applied() -> None:
 
 
 def test_segment_budget_max_cap_applied() -> None:
-    cfg = TokenBudgetConfig()
+    cfg = TokenBudgetConfig(**LEGACY_SEGMENT)
     # Large input: 5000 tokens
     # raw = 5000 * 0.40 = 2000
     # min = max(ceil(5000 * 0.30), 200) = 1500
@@ -88,7 +91,7 @@ def test_segment_budget_max_cap_applied() -> None:
 
 
 def test_segment_budget_min_ratio_boundary() -> None:
-    cfg = TokenBudgetConfig()
+    cfg = TokenBudgetConfig(**LEGACY_SEGMENT)
     # 500 tokens: raw=200, min=max(150, 200)=200, max=min(275, 1800)=275
     # target = clamp(200, 200, 275) = 200
     target, min_out, max_out = compute_segment_budget(500, cfg)
@@ -238,9 +241,9 @@ def test_token_budget_config_defaults() -> None:
     cfg = TokenBudgetConfig()
     assert cfg.n_ctx == 32768
     assert cfg.safety_margin == 768
-    assert cfg.segment_ratio == pytest.approx(0.40)
-    assert cfg.segment_min_ratio == pytest.approx(0.30)
-    assert cfg.segment_max_ratio == pytest.approx(0.55)
+    assert cfg.segment_ratio == pytest.approx(0.78)
+    assert cfg.segment_min_ratio == pytest.approx(0.65)
+    assert cfg.segment_max_ratio == pytest.approx(0.90)
     assert cfg.segment_min_floor == 200
     assert cfg.segment_max_cap == 1800
     assert cfg.pack_ratio == pytest.approx(0.90)

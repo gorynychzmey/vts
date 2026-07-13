@@ -14,10 +14,12 @@ class TokenBudgetConfig:
     n_ctx: int = 32768
     safety_margin: int = 768
 
-    # Stage A — segment summarization
-    segment_ratio: float = 0.40
-    segment_min_ratio: float = 0.30
-    segment_max_ratio: float = 0.55
+    # Stage A — segment rewrite (verbatim-smooth since vts-3sj: the target is
+    # the input minus fillers/repetitions, not a synopsis — hence high ratios;
+    # ${TARGET_WORDS} in segment_prompt.md anchors the model to this length)
+    segment_ratio: float = 0.78
+    segment_min_ratio: float = 0.65
+    segment_max_ratio: float = 0.90
     segment_min_floor: int = 200
     segment_max_cap: int = 1800
 

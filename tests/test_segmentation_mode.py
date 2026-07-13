@@ -212,7 +212,7 @@ def test_prepare_always_splits_even_when_fitting(tmp_path, monkeypatch):
 
 def test_prepare_never_impossible_transcript_fails_before_llm(tmp_path, monkeypatch):
     dirs = _make_dirs(tmp_path)
-    # hard check (min_ratio 0.30 default): 100 + 1300*1.3 + 768 = 2558 > 2000
+    # hard check (min_ratio 0.65 default): 100 + 1300*1.65 + 768 = 3013 > 2000
     _write_transcript(dirs, words=1300)
     processor, llm = _make_processor(tmp_path, monkeypatch, n_ctx=2000, segmentation="never")
 
@@ -225,10 +225,10 @@ def test_prepare_never_impossible_transcript_fails_before_llm(tmp_path, monkeypa
 
 def test_prepare_never_goes_whole_even_when_conservative_check_fails(tmp_path, monkeypatch):
     dirs = _make_dirs(tmp_path)
-    # conservative: 100 + 2000 + 768 = 2868 > 2500 -> auto would split;
-    # hard: 100 + 1000*1.3 + 768 = 2168 <= 2500 -> never sends whole
+    # conservative: 100 + 2000 + 768 = 2868 > 2600 -> auto would split;
+    # hard (min_ratio 0.65): 100 + 1000*1.65 + 768 = 2518 <= 2600 -> never sends whole
     text = _write_transcript(dirs, words=1000)
-    processor, llm = _make_processor(tmp_path, monkeypatch, n_ctx=2500, segmentation="never")
+    processor, llm = _make_processor(tmp_path, monkeypatch, n_ctx=2600, segmentation="never")
 
     assert _run_prepare(processor, dirs) is True
     payload = _chunks_payload(dirs)

@@ -189,4 +189,4 @@ def test_settings_ignores_legacy_flat_yaml_keys() -> None:
     settings = Settings(**_normalize_yaml_overrides(raw))
 
     assert settings.database_url == "postgresql+asyncpg://vts:vts@postgres:5432/vts"
-    assert settings.summary_segment_ratio == 0.40
+    assert settings.summary_segment_ratio == 0.78  # default, legacy flat key ignored

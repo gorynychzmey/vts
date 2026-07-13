@@ -243,9 +243,11 @@ class Settings(BaseSettings):
     # YAML: summary.segment.window_cap.
     summary_segment_window_cap: int = 8192
 
-    summary_segment_ratio: float = 0.40
-    summary_segment_min_ratio: float = 0.30
-    summary_segment_max_ratio: float = 0.55
+    # Verbatim-smooth rewrite targets (see TokenBudgetConfig): input minus
+    # fillers/repetitions, not a synopsis.
+    summary_segment_ratio: float = 0.78
+    summary_segment_min_ratio: float = 0.65
+    summary_segment_max_ratio: float = 0.90
     summary_segment_min_floor: int = 200
     summary_segment_max_cap: int = 1800
 
