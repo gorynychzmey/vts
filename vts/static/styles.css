@@ -739,6 +739,12 @@ input[type="file"] {
   color: #7a6331;
 }
 
+.task-status.status-waiting {
+  border-color: #d5caaf;
+  background: #f5efe4;
+  color: #7a6331;
+}
+
 .task-status.status-paused {
   border-color: #c7c7c7;
   background: #f3f3f3;

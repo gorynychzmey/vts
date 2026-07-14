@@ -1167,6 +1167,7 @@ function createRuntime(task) {
     failureCode: parseFailureCode(task.failure_code),
     failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
+    queue: task.queue || null,
     enabledSteps,
     stepStatusByName,
     transcriptReady: Boolean(task.transcript_path),
@@ -1321,7 +1322,7 @@ function computeLocalStepProgress(runtime) {
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
-  if (runtime.baseStatus === "queued") {
+  if (runtime.baseStatus === "queued" || runtime.baseStatus === "waiting") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
     }
@@ -1351,7 +1352,7 @@ function computeOverallProgress(runtime) {
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
-  if (runtime.baseStatus === "queued") {
+  if (runtime.baseStatus === "queued" || runtime.baseStatus === "waiting") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
     }
@@ -1384,8 +1385,12 @@ function computeOverallProgress(runtime) {
   return { value: overall, indeterminate: false, text: `${Math.round(overall * 100)}%` };
 }
 
-function setTaskStatusAppearance(statusEl, status, queuePosition = null) {
-  if (status === "queued" && queuePosition) {
+function setTaskStatusAppearance(statusEl, status, queuePosition = null, queue = null) {
+  if (status === "waiting") {
+    statusEl.textContent = queue && queuePosition
+      ? t("status.waiting_pos", { queue: t(`queue.${queue}`), position: queuePosition })
+      : t("status.waiting");
+  } else if (status === "queued" && queuePosition) {
     statusEl.textContent = t("status.queued_pos", { position: queuePosition });
   } else {
     statusEl.textContent = statusText(status);
@@ -1495,7 +1500,7 @@ function renderTaskRuntime(taskEl) {
 
   renderTaskTitle(taskEl);
   renderTaskStats(taskEl);
-  setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition);
+  setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition, runtime.queue);
   const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
   const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
   const failedSummaryStep = runtime.enabledSteps.find(
@@ -2597,13 +2602,16 @@ function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
 
-function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "") {
+function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", queue = undefined) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
     return;
   }
   const runtime = taskEl._runtime;
   runtime.baseStatus = String(status || "");
+  if (queue !== undefined) {
+    runtime.queue = queue || null;
+  }
   if (runtime.baseStatus === "failed") {
     runtime.failureError = parseErrorMessage(errorMessage);
     runtime.failureCode = parseFailureCode(failureCode) || detectFailureCode(runtime.failureError);
@@ -2898,7 +2906,7 @@ function connectEvents() {
   });
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
-    patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code);
+    patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code, payload.data.queue);
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);
