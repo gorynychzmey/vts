@@ -97,6 +97,34 @@ class Step(ABC):
 lane-acquire, статусы/события шага) сохраняется; `lane = step.lane` вместо
 `lane_for_step(step_name)`.
 
+### Finalize: один шаг + PromptSource-стратегия
+
+`FinalizePromptStep` — ОДИН класс (не иерархия). Различие system/user
+сводится к двум коротким веткам (`resolve_prompt_text`, `prompt_display_name`);
+остальные ~230 строк шага идентичны. Иерархия
+`SystemFinalizeStep`/`UserFinalizeStep` не оправдана (~15 строк разницы) и
+заставила бы фабрику ветвиться по `source`.
+
+Вместо этого различие изолируется в маленькую стратегию `PromptSource`
+(в `summarization.py`):
+
+```python
+class PromptSource(Protocol):
+    async def load_text(self, ctx, id, output_language, user_id) -> str: ...
+    async def display_name(self, ctx, id, user_id) -> str: ...
+
+# SystemPromptSource: load registered prompt file, i18n name key.
+# UserPromptSource: validate UUID id, load system_prompt column, Prompt.name.
+def prompt_source_for(source: str) -> PromptSource: ...
+```
+
+`FinalizePromptStep(source, id)` внутри `run()` вызывает
+`prompt_source_for(self.source)`; фабрика `resolve_step()` НЕ ветвится по
+`source` — она только создаёт `FinalizePromptStep(source=..., id=...)`.
+UUID-валидация user-id (защита от path-traversal, текущее поведение)
+переезжает в `UserPromptSource`. Если появится третий источник — новый
+`PromptSource`, без правки шага и фабрики.
+
 ## Раскладка по файлам (`vts/pipeline/steps/`)
 
 | Файл | Step-классы | Доменные хелперы рядом |
@@ -105,7 +133,7 @@ lane-acquire, статусы/события шага) сохраняется; `l
 | `registry.py` | `STEP_REGISTRY`, `resolve_step()` | finalize-фабрика |
 | `media.py` | `DownloadStep`, `ExtractAudioStep`, `TrimInitialSilenceStep`, `SegmentAudioStep` | — |
 | `transcription.py` | `DetectLanguageStep`, `TranscribeSegmentsStep`, `MergeTranscriptStep` | `is_probable_asr_hallucination`, `transcript_quality_score`, `trim_repetitive_edges`, `normalize_token`, `tail_prompt`, `transcribe_audio_path`, `effective_language`, `normalize_language` |
-| `summarization.py` | `PrepareLlamaModelStep`, `PrepareSummaryChunksStep`, `SummarizeWindowsStep`, `PackWindowNotesStep`, `FinalizePromptStep` | `token_budget_config`, `render_prompt_budget_vars`, `render_prompt_with_language`, `language_display_name`, `extract_window_text`, `log_metrics`, `resolve_prompt_text`, `prompt_display_name`, `persist_prompt_result` |
+| `summarization.py` | `PrepareLlamaModelStep`, `PrepareSummaryChunksStep`, `SummarizeWindowsStep`, `PackWindowNotesStep`, `FinalizePromptStep` + `PromptSource` (System/User) | `token_budget_config`, `render_prompt_budget_vars`, `render_prompt_with_language`, `language_display_name`, `extract_window_text`, `log_metrics`, `persist_prompt_result` (`resolve_prompt_text`/`prompt_display_name` поглощены `PromptSource`) |
 
 Доменный хелпер — **функция модуля**, если это чистое преобразование
 (`is_probable_asr_hallucination`, `token_budget_config`, `language_display_name`,
