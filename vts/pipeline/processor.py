@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from redis.asyncio import Redis
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import Settings
@@ -72,6 +73,14 @@ class TaskPaused(Exception):
     """Raised when the processor detects a pause request mid-step."""
 
 
+class _TaskGone(Exception):
+    """The task row vanished mid-flight (deleted/canceled by the API).
+
+    Distinct from a pipeline failure: the user already discarded the task, so
+    the processor must exit quietly without publishing a `failed` event/push.
+    """
+
+
 class _WholeTranscriptOverflow(Exception):
     """Whole-transcript rewrite hit a context overflow; carries the cause."""
 
@@ -106,6 +115,18 @@ class TaskProcessor:
         """Raise TaskPaused if a pause has been requested for this task."""
         if await self.bus.is_pause_requested(task_id):
             raise TaskPaused()
+
+    async def _refresh_task(self, session: AsyncSession, task: Any) -> None:
+        """Refresh the task row, translating a mid-flight delete into _TaskGone.
+
+        The API delete endpoint removes the row in its own session; a concurrent
+        refresh here then raises InvalidRequestError ("Could not refresh
+        instance"). That is not a pipeline failure — the user discarded the
+        task — so surface it as _TaskGone for a quiet exit (vts-d64)."""
+        try:
+            await session.refresh(task)
+        except InvalidRequestError as exc:
+            raise _TaskGone() from exc
 
     async def _mark_waiting(self, task_id: uuid.UUID, user_id: str, queue: str) -> None:
         """Flip running→waiting when a gpu slot is contended (race-guarded)."""
@@ -311,7 +332,7 @@ class TaskProcessor:
             try:
                 for step_name in build_dag_steps(task_options):
                     await self._check_paused(task.id)
-                    await session.refresh(task)
+                    await self._refresh_task(session, task)
                     if task.status == TaskStatus.canceled:
                         return
                     await self._run_step(
@@ -324,7 +345,7 @@ class TaskProcessor:
                         logger,
                         task_options,
                     )
-                    await session.refresh(task)
+                    await self._refresh_task(session, task)
                     await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
                 await self._cleanup_media(dirs["media"])
                 await repo.set_task_status(task, TaskStatus.completed)
@@ -354,7 +375,7 @@ class TaskProcessor:
             except TaskPaused:
                 logger.info("task paused: %s", task.id)
                 await self.bus.clear_pause_request(task.id)
-                await session.refresh(task)
+                await self._refresh_task(session, task)
                 if task.status != TaskStatus.paused:
                     await repo.set_task_status(task, TaskStatus.paused)
                     await session.commit()
@@ -364,6 +385,13 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": "paused"},
                 )
+            except _TaskGone:
+                # Row deleted/canceled mid-flight by the API. The user already
+                # discarded the task, so exit quietly — no failed event/push
+                # (vts-d64). The session's aborted transaction is rolled back by
+                # the `async with self.session_factory()` context on exit.
+                logger.info("task %s deleted mid-flight; exiting quietly", task_id)
+                await self.bus.clear_pause_request(task_id)
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
                 raw_error = str(exc)
@@ -394,8 +422,11 @@ class TaskProcessor:
                     "t_wall_ms": _task_wall_ms,
                 })
             finally:
-                self._task_metrics.pop(str(task.id), None)
-                self._task_n_ctx.pop(str(task.id), None)
+                # Use the local task_id, not task.id: after a mid-flight delete
+                # the ORM object is expired and attribute access would trigger a
+                # lazy DB load off the event loop (MissingGreenlet) — vts-d64.
+                self._task_metrics.pop(str(task_id), None)
+                self._task_n_ctx.pop(str(task_id), None)
 
     async def _run_step(
         self,
