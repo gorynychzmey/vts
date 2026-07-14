@@ -79,9 +79,10 @@ Deployment must be reproducible and idempotent.
 ## 4. Parallel Execution Constraints
 
 - Max 2 transcription segments per task  
-- Heavy slot limit = 1 (`VTS_HEAVY_SLOT_LIMIT`)  
-- Light steps: unlimited  
-- No background processes bypassing slot limits  
+- Resource lanes bound concurrency by step type: `network` (`VTS_LANE_NETWORK_SLOTS`, default 1), `ffmpeg` (`VTS_LANE_FFMPEG_SLOTS`, default 2), `gpu` (`VTS_LANE_GPU_SLOTS`, default 1). GPU lane runs Whisper (asr) and LLM together, asr prioritised (`VTS_GPU_ASR_BURST`, default 3)  
+- Worker processes up to `VTS_WORKER_MAX_ACTIVE_TASKS` (default 4) tasks concurrently; set to 1 for legacy sequential behaviour  
+- Light steps (merge, chunk prep): unlimited  
+- No background processes bypassing lane slots  
 - Resource limits must be enforced at runtime level (not only UI level)  
 
 ---
