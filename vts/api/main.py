@@ -222,7 +222,7 @@ def _reset_summary_artifacts(task: Task) -> None:
     ):
         path.unlink(missing_ok=True)
 
-    # User-prompt results: without deleting these, step_finalize_prompt
+    # User-prompt results: without deleting these, FinalizePromptStep
     # short-circuits on the existing files and never regenerates (vts-5eg).
     results_dir = summary_dir / "results"
     if results_dir.exists():

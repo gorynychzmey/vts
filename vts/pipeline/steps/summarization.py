@@ -935,7 +935,7 @@ class FinalizePromptStep(Step):
             summary_md = results_dir / f"{self.source}__{self.id}.md"
         return is_summary, summary_dir, summary_json, summary_md
 
-    async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
+    def _validate_id(self) -> None:
         # Defense-in-depth: validate the id BEFORE it is used to build any result
         # path. A user-source id must be a UUID; this rejects path-traversal ids
         # (e.g. "../../etc/passwd") regardless of downstream call ordering.
@@ -944,52 +944,43 @@ class FinalizePromptStep(Step):
                 uuid.UUID(self.id)
             except (ValueError, TypeError):
                 raise RuntimeError(f"invalid user prompt id: {self.id!r}")
+
+    async def _restore_if_present(self, ctx: "PipelineContext", st: StepState) -> bool:
+        """Validate the id, and if the result files already exist, re-index them
+        (summary_path for the system summary, prompt_results otherwise) and report
+        completion. Shared by already_done (resume probe) and run (re-entry guard)
+        so the pre-flight stays single-sourced."""
+        self._validate_id()
         is_summary, _summary_dir, summary_json, summary_md = self._paths(st)
-        if summary_json.exists() and summary_md.exists():
-            if is_summary:
-                async with ctx.session_factory() as session:
-                    repo = Repo(session)
-                    task = await repo.get_task_by_id(st.task_id)
-                    if task is None:
-                        raise RuntimeError("task not found during final summary restore")
-                    summary_path = str(summary_md)
-                    if task.summary_path != summary_path:
-                        task.summary_path = summary_path
-                        await session.commit()
-            else:
-                name = await prompt_source_for(self.source).display_name(ctx, self.id, st.user_id)
-                await ctx.persist_prompt_result(st.task_id, self.source, self.id, name, str(summary_md))
-            return True
-        return False
+        if not (summary_json.exists() and summary_md.exists()):
+            return False
+        if is_summary:
+            async with ctx.session_factory() as session:
+                repo = Repo(session)
+                task = await repo.get_task_by_id(st.task_id)
+                if task is None:
+                    raise RuntimeError("task not found during final summary restore")
+                summary_path = str(summary_md)
+                if task.summary_path != summary_path:
+                    task.summary_path = summary_path
+                    await session.commit()
+        else:
+            name = await prompt_source_for(self.source).display_name(ctx, self.id, st.user_id)
+            await ctx.persist_prompt_result(st.task_id, self.source, self.id, name, str(summary_md))
+        return True
+
+    async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
+        return await self._restore_if_present(ctx, st)
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
         source = self.source
         id = self.id
-        # Defense-in-depth: validate the id BEFORE it is used to build any result
-        # path. A user-source id must be a UUID; this rejects path-traversal ids
-        # (e.g. "../../etc/passwd") regardless of downstream call ordering.
-        if source == "user":
-            try:
-                uuid.UUID(id)
-            except (ValueError, TypeError):
-                raise RuntimeError(f"invalid user prompt id: {id!r}")
-        is_summary, summary_dir, summary_json, summary_md = self._paths(st)
-        if summary_json.exists() and summary_md.exists():
-            if is_summary:
-                async with ctx.session_factory() as session:
-                    repo = Repo(session)
-                    task = await repo.get_task_by_id(st.task_id)
-                    if task is None:
-                        raise RuntimeError("task not found during final summary restore")
-                    summary_path = str(summary_md)
-                    if task.summary_path != summary_path:
-                        task.summary_path = summary_path
-                        await session.commit()
-            else:
-                name = await prompt_source_for(source).display_name(ctx, id, st.user_id)
-                await ctx.persist_prompt_result(st.task_id, source, id, name, str(summary_md))
+        if await self._restore_if_present(ctx, st):
             return True
 
+        # id already validated in _restore_if_present; reuse the same path layout
+        # for the fresh summarization below.
+        is_summary, summary_dir, summary_json, summary_md = self._paths(st)
         output_language = effective_language(st.task_options, st.dirs)
         timeout_seconds = int(getattr(ctx.settings, "llm_final_timeout_seconds", 1800))
         budget_cfg = token_budget_config(ctx.settings, await ctx.get_n_ctx(st.task_id, st.logger))

@@ -101,8 +101,6 @@ class PipelineContext:
         Backend detection (LiteLLM / Ollama / llama-server) lives in
         vts.services.llm_backends; when nothing matches, the configured
         summary_n_ctx constant applies."""
-        if not hasattr(self, "_task_n_ctx"):
-            self._task_n_ctx = {}
         key = str(task_id)
         if key in self._task_n_ctx:
             return self._task_n_ctx[key]
