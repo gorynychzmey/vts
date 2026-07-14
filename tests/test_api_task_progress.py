@@ -248,10 +248,10 @@ class _FakeLaneRedis:
     """Minimal async Redis stub exposing only `get`, backed by a fixed JSON
     payload — enough to exercise `_get_lane_positions` parsing."""
 
-    def __init__(self, payload: dict[str, list[str]]) -> None:
-        self._payload = json.dumps(payload)
+    def __init__(self, payload: dict[str, list[str]] | None = None, *, raw: bytes | str | None = None) -> None:
+        self._payload = raw if raw is not None else json.dumps(payload or {})
 
-    async def get(self, key: str) -> str:
+    async def get(self, key: str) -> str | bytes:
         return self._payload
 
 
@@ -263,6 +263,28 @@ async def test_get_lane_positions_parses_and_dedupes() -> None:
         {
             "network": [str(task_a)],
             "ffmpeg": [],
+            "gpu_asr": [str(task_b)],
+            "gpu_llm": [str(task_c)],
+        }
+    )
+
+    positions = await _get_lane_positions(redis, "vts:")
+
+    # gpu_asr and gpu_llm share a single "gpu" counter, with asr numbered
+    # first (scheduling priority in LaneManager) — so task_b (asr) gets
+    # position 1 and task_c (llm) gets position 2, not two separate 1s.
+    assert positions == {
+        task_a: ("network", 1),
+        task_b: ("gpu", 1),
+        task_c: ("gpu", 2),
+    }
+
+
+async def test_get_lane_positions_dedupes_across_asr_and_llm() -> None:
+    task_b = uuid.uuid4()
+    task_c = uuid.uuid4()
+    redis = _FakeLaneRedis(
+        {
             "gpu_asr": [str(task_b), str(task_b)],
             "gpu_llm": [str(task_c)],
         }
@@ -271,7 +293,28 @@ async def test_get_lane_positions_parses_and_dedupes() -> None:
     positions = await _get_lane_positions(redis, "vts:")
 
     assert positions == {
-        task_a: ("network", 1),
         task_b: ("gpu", 1),
-        task_c: ("gpu", 1),
+        task_c: ("gpu", 2),
     }
+
+
+async def test_get_lane_positions_malformed_json_returns_empty() -> None:
+    redis = _FakeLaneRedis(raw=b"not json")
+
+    positions = await _get_lane_positions(redis, "vts:")
+
+    assert positions == {}
+
+
+async def test_get_lane_positions_skips_non_uuid_entries() -> None:
+    task_a = uuid.uuid4()
+    redis = _FakeLaneRedis(
+        {
+            "gpu_asr": ["not-a-uuid"],
+            "gpu_llm": [str(task_a)],
+        }
+    )
+
+    positions = await _get_lane_positions(redis, "vts:")
+
+    assert positions == {task_a: ("gpu", 1)}

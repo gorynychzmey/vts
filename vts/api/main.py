@@ -399,17 +399,38 @@ async def _get_lane_positions(redis: Redis, prefix: str) -> dict[uuid.UUID, tupl
     raw = await redis.get(f"{prefix}queue:lanes")
     if not raw:
         return {}
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
     out: dict[uuid.UUID, tuple[str, int]] = {}
-    for public, key in (("network", "network"), ("ffmpeg", "ffmpeg"),
-                        ("gpu", "gpu_asr"), ("gpu", "gpu_llm")):
+    # network and ffmpeg map to their own distinct public queue names, each
+    # with an independent counter. gpu_asr and gpu_llm both map to the
+    # public "gpu" queue and share ONE counter — asr is numbered first since
+    # it has scheduling priority in LaneManager, so an asr-waiting task
+    # always gets a lower position than an llm-waiting task.
+    groups: list[tuple[str, list[str]]] = [
+        ("network", ["network"]),
+        ("ffmpeg", ["ffmpeg"]),
+        ("gpu", ["gpu_asr", "gpu_llm"]),
+    ]
+    for public, keys in groups:
         position = 0
-        for raw_id in data.get(key, []):
-            tid = uuid.UUID(raw_id)
-            if tid in out:
+        for key in keys:
+            entries = data.get(key, [])
+            if not isinstance(entries, list):
                 continue
-            position += 1
-            out[tid] = (public, position)
+            for raw_id in entries:
+                try:
+                    tid = uuid.UUID(raw_id)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if tid in out:
+                    continue
+                position += 1
+                out[tid] = (public, position)
     return out
 
 
