@@ -1,9 +1,10 @@
 import asyncio
+import logging
 import uuid
 
 import pytest
 
-from vts.db.models import TaskStatus
+from vts.db.models import StepStatus, TaskStatus
 from vts.pipeline.processor import TaskProcessor
 from vts.worker.lanes import LaneManager
 
@@ -120,3 +121,67 @@ async def test_gpu_slot_immediate_grant_emits_no_transition(monkeypatch) -> None
 
     # No contention -> neither on_wait nor on_grant fires -> no status events.
     assert bus.events == []
+
+
+class _StubStep:
+    def __init__(self) -> None:
+        self.status = StepStatus.pending
+
+
+class _RunStepRepo(_StubRepo):
+    """Repo supporting the _run_step DB surface used by the lane path."""
+
+    async def upsert_step(self, task_id, step_name):
+        return _StubStep()
+
+    async def set_step_status(self, step, status, message=None):
+        step.status = status
+
+
+@pytest.mark.asyncio
+async def test_run_step_serializes_download_lane_and_marks_waiting(monkeypatch) -> None:
+    lanes = LaneManager(_SettingsStub())  # lane_network_slots == 1
+    bus = _CapturingBus()
+    proc = _make_processor(lanes, bus, monkeypatch)
+    monkeypatch.setattr("vts.pipeline.processor.Repo", _RunStepRepo)
+
+    repo = _RunStepRepo(None)
+    session = _StubSession()
+    logger = logging.getLogger("test.run_step")
+    dirs: dict = {}
+
+    intervals: dict[str, tuple[float, float]] = {}
+
+    task_a = uuid.uuid4()
+    task_b = uuid.uuid4()
+
+    async def _step(task_id, user_id, dirs, logger, task_options, dry_run):
+        tag = "a" if task_id == task_a else "b"
+        enter = asyncio.get_event_loop().time()
+        await asyncio.sleep(0.02)
+        exit_ = asyncio.get_event_loop().time()
+        intervals[tag] = (enter, exit_)
+        return True
+
+    proc.step_download = _step
+
+    t_a = asyncio.create_task(
+        proc._run_step(session, repo, task_a, "user-a", "download", dirs, logger, {})
+    )
+    await asyncio.sleep(0)  # let A acquire the single network slot first
+    t_b = asyncio.create_task(
+        proc._run_step(session, repo, task_b, "user-b", "download", dirs, logger, {})
+    )
+
+    await asyncio.wait_for(asyncio.gather(t_a, t_b), timeout=2.0)
+
+    # Both step bodies ran, and never overlapped (single network slot).
+    assert set(intervals) == {"a", "b"}
+    (a_in, a_out), (b_in, b_out) = intervals["a"], intervals["b"]
+    assert a_out <= b_in or b_out <= a_in, "download bodies overlapped under a 1-slot lane"
+
+    # The second task went waiting on the network queue.
+    waiting = [e for e in bus.events if e["data"].get("status") == TaskStatus.waiting.value]
+    assert waiting, "expected a waiting transition for the queued download task"
+    assert waiting[0]["data"]["queue"] == "network"
+    assert waiting[0]["user_id"] == "user-b"

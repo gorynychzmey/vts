@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+import contextlib
 import functools
 import json
 import logging
@@ -21,7 +22,7 @@ from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
-from vts.pipeline.types import build_dag_steps
+from vts.pipeline.types import build_dag_steps, lane_for_step
 from vts.worker.lanes import LaneManager
 from vts.services.llm_backends import discover_n_ctx
 from vts.services.prompt_registry import list_system_prompts, parse_ref
@@ -445,43 +446,59 @@ class TaskProcessor:
         ):
             return
 
-        await repo.set_step_status(step, StepStatus.running)
-        await session.commit()
-        await self.bus.publish_event(
-            user_id=user_id,
-            task_id=str(task_id),
-            event="step",
-            data={"name": step_name, "status": StepStatus.running.value},
-        )
-        _step_t0 = time.monotonic()
-        try:
-            await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
-            _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
-            await repo.set_step_status(step, StepStatus.completed)
+        # Download and ffmpeg steps run under a shared concurrency lane so the
+        # same phase of different tasks does not saturate the network / CPU. The
+        # step stays `pending` while queued (task-level `waiting` covers the UI);
+        # it only turns `running` once the lane slot is granted.
+        lane = lane_for_step(step_name)
+        if lane is not None:
+            lane_cm = self.lanes.slot(
+                lane,
+                task_id,
+                on_wait=lambda: self._mark_waiting(task_id, user_id, lane),
+                on_grant=lambda: self._mark_running(task_id, user_id),
+            )
+        else:
+            lane_cm = contextlib.nullcontext()
+
+        async with lane_cm:
+            await repo.set_step_status(step, StepStatus.running)
             await session.commit()
             await self.bus.publish_event(
                 user_id=user_id,
                 task_id=str(task_id),
                 event="step",
-                data={"name": step_name, "status": StepStatus.completed.value},
+                data={"name": step_name, "status": StepStatus.running.value},
             )
-            _em = self._get_emitter(task_id)
-            if _em:
-                _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
-        except Exception as exc:
-            _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
-            await repo.set_step_status(step, StepStatus.failed, message=str(exc))
-            await session.commit()
-            await self.bus.publish_event(
-                user_id=user_id,
-                task_id=str(task_id),
-                event="step",
-                data={"name": step_name, "status": StepStatus.failed.value, "error": str(exc)},
-            )
-            _em = self._get_emitter(task_id)
-            if _em:
-                _em.emit({"stage": step_name, "status": "error", "t_wall_ms": _step_wall_ms})
-            raise
+            _step_t0 = time.monotonic()
+            try:
+                await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
+                _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
+                await repo.set_step_status(step, StepStatus.completed)
+                await session.commit()
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="step",
+                    data={"name": step_name, "status": StepStatus.completed.value},
+                )
+                _em = self._get_emitter(task_id)
+                if _em:
+                    _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
+            except Exception as exc:
+                _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
+                await repo.set_step_status(step, StepStatus.failed, message=str(exc))
+                await session.commit()
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="step",
+                    data={"name": step_name, "status": StepStatus.failed.value, "error": str(exc)},
+                )
+                _em = self._get_emitter(task_id)
+                if _em:
+                    _em.emit({"stage": step_name, "status": "error", "t_wall_ms": _step_wall_ms})
+                raise
 
     async def step_download(
         self,
