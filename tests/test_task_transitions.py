@@ -11,9 +11,10 @@ from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
 
 
-def test_can_pause_task_allows_only_queued_or_running() -> None:
+def test_can_pause_task_allows_queued_running_or_waiting() -> None:
     assert can_pause_task(TaskStatus.queued)
     assert can_pause_task(TaskStatus.running)
+    assert can_pause_task(TaskStatus.waiting)
     assert not can_pause_task(TaskStatus.paused)
     assert not can_pause_task(TaskStatus.completed)
     assert not can_pause_task(TaskStatus.archived)
@@ -179,3 +180,47 @@ async def test_requeue_running_tasks_includes_waiting(session):
     assert waiting_task.status == TaskStatus.queued
     assert running_task.status == TaskStatus.queued
     assert queued_task.status == TaskStatus.queued
+
+
+@pytest.mark.asyncio
+async def test_transition_task_status_running_to_waiting(session):
+    repo = Repo(session)
+    user = await repo.get_or_create_user("trans@example.com")
+    await session.flush()
+    task = Task(
+        user_id=user.id, source_url="u1", status=TaskStatus.running,
+        options={}, artifact_dir="/tmp/t1",
+    )
+    session.add(task)
+    await session.commit()
+
+    changed = await repo.transition_task_status(
+        task.id, [TaskStatus.running], TaskStatus.waiting
+    )
+    await session.commit()
+
+    assert changed is True
+    await session.refresh(task)
+    assert task.status == TaskStatus.waiting
+
+
+@pytest.mark.asyncio
+async def test_transition_task_status_noop_on_canceled(session):
+    repo = Repo(session)
+    user = await repo.get_or_create_user("trans2@example.com")
+    await session.flush()
+    task = Task(
+        user_id=user.id, source_url="u2", status=TaskStatus.canceled,
+        options={}, artifact_dir="/tmp/t2",
+    )
+    session.add(task)
+    await session.commit()
+
+    changed = await repo.transition_task_status(
+        task.id, [TaskStatus.running], TaskStatus.waiting
+    )
+    await session.commit()
+
+    assert changed is False
+    await session.refresh(task)
+    assert task.status == TaskStatus.canceled

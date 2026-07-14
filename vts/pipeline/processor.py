@@ -22,12 +22,12 @@ from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.types import build_dag_steps
+from vts.worker.lanes import LaneManager
 from vts.services.llm_backends import discover_n_ctx
 from vts.services.prompt_registry import list_system_prompts, parse_ref
 from vts.services.prompt_results import upsert_result_entry
 from vts.services.task_progress import selected_prompt_refs
 from vts.services.downloader import download_video_and_audio
-from vts.services.heavy_slot import HeavySlot
 from vts.services.media import (
     build_segments,
     detect_silence_points,
@@ -89,12 +89,13 @@ class TaskProcessor:
         session_factory: async_sessionmaker[AsyncSession],
         redis: Redis,
         settings: Settings,
+        lanes: LaneManager | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.redis = redis
         self.settings = settings
         self.bus = RedisBus(redis, settings)
-        self.heavy_slot = HeavySlot(redis, settings)
+        self.lanes = lanes or LaneManager(settings)
         self.whisper: WhisperBackend = create_whisper_backend(settings.whisper_url, settings.whisper_backend)
         self._task_metrics: dict[str, MetricsEmitter] = {}
         self._task_n_ctx: dict[str, int] = {}
@@ -104,6 +105,42 @@ class TaskProcessor:
         """Raise TaskPaused if a pause has been requested for this task."""
         if await self.bus.is_pause_requested(task_id):
             raise TaskPaused()
+
+    async def _mark_waiting(self, task_id: uuid.UUID, user_id: str, queue: str) -> None:
+        """Flip running→waiting when a gpu slot is contended (race-guarded)."""
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            changed = await repo.transition_task_status(
+                task_id, [TaskStatus.running], TaskStatus.waiting
+            )
+            await session.commit()
+        if changed:
+            await self.bus.publish_event(
+                user_id=user_id, task_id=str(task_id),
+                event="task_status", data={"status": TaskStatus.waiting.value, "queue": queue},
+            )
+
+    async def _mark_running(self, task_id: uuid.UUID, user_id: str) -> None:
+        """Flip waiting→running when a gpu slot is granted (race-guarded)."""
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            changed = await repo.transition_task_status(
+                task_id, [TaskStatus.waiting], TaskStatus.running
+            )
+            await session.commit()
+        if changed:
+            await self.bus.publish_event(
+                user_id=user_id, task_id=str(task_id),
+                event="task_status", data={"status": TaskStatus.running.value},
+            )
+
+    def _gpu_slot(self, task_id: uuid.UUID, user_id: str, cls: str):
+        """Acquire the gpu lane for one GPU call, flipping waiting/running as needed."""
+        return self.lanes.slot(
+            "gpu", task_id, cls,
+            on_wait=lambda: self._mark_waiting(task_id, user_id, "gpu"),
+            on_grant=lambda: self._mark_running(task_id, user_id),
+        )
 
     def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
         """Return the active MetricsEmitter for a task, or None if absent."""
@@ -762,9 +799,9 @@ class TaskProcessor:
         if not segment_path.exists():
             raise RuntimeError("Missing first segment for language detection")
 
-        logger.info("waiting for heavy slot: detect language")
-        async with self.heavy_slot:
-            logger.info("heavy slot acquired: detect language")
+        logger.info("waiting for gpu slot: detect language")
+        async with self._gpu_slot(task_id, user_id, "asr"):
+            logger.info("gpu slot acquired: detect language")
             raw = await self.whisper.detect_language(audio_path=segment_path)
         self._log_payload(logger, "detect_language response", raw)
         language = self._normalize_language(raw.get("language"))
@@ -868,12 +905,12 @@ class TaskProcessor:
             initial_prompt = None
             if not suspicious_by_index.get(idx - 1, False):
                 initial_prompt = self._tail_prompt(text_by_index.get(idx - 1, ""))
-            logger.info("waiting for heavy slot: transcribe segment %s", idx)
+            logger.info("waiting for gpu slot: transcribe segment %s", idx)
             _asr_retries = 0
             _t_asr_q0 = time.monotonic()
-            async with self.heavy_slot:
+            async with self._gpu_slot(task_id, user_id, "asr"):
                 _t_asr_q_ms = round((time.monotonic() - _t_asr_q0) * 1000)
-                logger.info("heavy slot acquired: transcribe segment %s", idx)
+                logger.info("gpu slot acquired: transcribe segment %s", idx)
                 _t_asr0 = time.monotonic()
                 raw = await self.whisper.transcribe(
                     audio_path=segment_path,
@@ -887,9 +924,9 @@ class TaskProcessor:
             if suspicious:
                 _asr_retries = 1
                 logger.warning("asr segment %s appears repetitive/noisy; retrying without tail prompt", idx)
-                logger.info("waiting for heavy slot: transcribe segment %s retry", idx)
-                async with self.heavy_slot:
-                    logger.info("heavy slot acquired: transcribe segment %s retry", idx)
+                logger.info("waiting for gpu slot: transcribe segment %s retry", idx)
+                async with self._gpu_slot(task_id, user_id, "asr"):
+                    logger.info("gpu slot acquired: transcribe segment %s retry", idx)
                     retry_raw = await self.whisper.transcribe(
                         audio_path=segment_path,
                         language=language,
@@ -1081,9 +1118,9 @@ class TaskProcessor:
         )
         logger.info("warming llama model: %s", target_model)
         try:
-            logger.info("waiting for heavy slot: llama warmup")
-            async with self.heavy_slot:
-                logger.info("heavy slot acquired: llama warmup")
+            logger.info("waiting for gpu slot: llama warmup")
+            async with self._gpu_slot(task_id, user_id, "llm"):
+                logger.info("gpu slot acquired: llama warmup")
                 raw = await self._llm.chat_completion(
                     model=target_model,
                     system_prompt='Return compact JSON: {"status":"ready"}.',
@@ -1375,11 +1412,11 @@ class TaskProcessor:
                         "window %s/%s token_budget input=%d target=%d min=%d max=%d",
                         idx, len(chunks), input_tokens, target_tokens, min_out, max_out,
                     )
-                    logger.info("waiting for heavy slot: summarize window %s/%s", idx, len(chunks))
+                    logger.info("waiting for gpu slot: summarize window %s/%s", idx, len(chunks))
                     _win_t_q0 = time.monotonic()
-                    async with self.heavy_slot:
+                    async with self._gpu_slot(task_id, user_id, "llm"):
                         _win_t_q_ms = round((time.monotonic() - _win_t_q0) * 1000)
-                        logger.info("heavy slot acquired: summarize window %s/%s", idx, len(chunks))
+                        logger.info("gpu slot acquired: summarize window %s/%s", idx, len(chunks))
                         _win_t0 = time.monotonic()
                         try:
                             raw = await self._llm.chat_completion(
@@ -1665,7 +1702,7 @@ class TaskProcessor:
                         "pack batch %d/%d: input=%d target=%d min=%d max=%d",
                         b_idx, len(batches), batch_input_tokens, target_tokens, min_out, max_out,
                     )
-                    async with self.heavy_slot:
+                    async with self._gpu_slot(task_id, user_id, "llm"):
                         packed_text = await self._llm.chat_completion(
                             model=self.settings.llm_model,
                             system_prompt=pack_system_prompt,
@@ -1918,14 +1955,14 @@ class TaskProcessor:
             input_tokens, target_tokens, min_out, max_out,
         )
         logger.info(
-            "waiting for heavy slot: final summary (notes=%s payload_bytes=%s)",
+            "waiting for gpu slot: final summary (notes=%s payload_bytes=%s)",
             total_windows,
             len(merged.encode("utf-8")),
         )
         _fin_t_q0 = time.monotonic()
-        async with self.heavy_slot:
+        async with self._gpu_slot(task_id, user_id, "llm"):
             _fin_t_q_ms = round((time.monotonic() - _fin_t_q0) * 1000)
-            logger.info("heavy slot acquired: final summary")
+            logger.info("gpu slot acquired: final summary")
             _fin_t0 = time.monotonic()
             raw = await self._llm.chat_completion(
                 model=self.settings.llm_model,

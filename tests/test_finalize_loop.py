@@ -28,12 +28,16 @@ class _DummyBus:
         self.events.append(kwargs)
 
 
-class _DummyHeavySlot:
-    async def __aenter__(self) -> "_DummyHeavySlot":
-        return self
+class _DummyLanes:
+    def slot(self, lane, task_id, cls="main", *, on_wait=None, on_grant=None):
+        class _CM:
+            async def __aenter__(self_inner):
+                return self_inner
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        return False
+            async def __aexit__(self_inner, *a):
+                return False
+
+        return _CM()
 
 
 class _FakeLLM:
@@ -97,7 +101,7 @@ def _make_processor(tmp_path: Path, monkeypatch, *, llm_output: str, task, promp
         llm_final_timeout_seconds=120,
     )
     proc.bus = _DummyBus()
-    proc.heavy_slot = _DummyHeavySlot()
+    proc.lanes = _DummyLanes()
     proc.logger = logging.getLogger("test_finalize_loop")
     proc._task_metrics = {}  # so _get_emitter returns None (skip metrics block)
     proc._log_payload = lambda *a, **k: None

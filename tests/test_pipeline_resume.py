@@ -21,12 +21,16 @@ class _DummyBus:
         return False
 
 
-class _DummyHeavySlot:
-    async def __aenter__(self) -> "_DummyHeavySlot":
-        return self
+class _DummyLanes:
+    def slot(self, lane, task_id, cls="main", *, on_wait=None, on_grant=None):
+        class _CM:
+            async def __aenter__(self_inner):
+                return self_inner
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        return False
+            async def __aexit__(self_inner, *a):
+                return False
+
+        return _CM()
 
 
 def _make_dirs(tmp_path: Path) -> dict[str, Path]:
@@ -59,7 +63,7 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
         llm_tokenizer_path=None,
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._log_payload = lambda *args, **kwargs: None
 
     async def _noop_persist_summary_progress(*args: object, **kwargs: object) -> None:
@@ -160,7 +164,7 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
         llm_tokenizer_path=None,
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._log_payload = lambda *args, **kwargs: None
 
     dirs = _make_dirs(tmp_path)
@@ -219,7 +223,7 @@ def test_step_detect_language_raises_when_first_segment_missing(
         whisper_backend="asr",
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._log_payload = lambda *args, **kwargs: None
 
     root = tmp_path / "task"
@@ -258,7 +262,7 @@ def test_step_detect_language_raises_when_confidence_missing(
         whisper_backend="asr",
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._log_payload = lambda *args, **kwargs: None
 
     class _FakeWhisper:
@@ -417,7 +421,7 @@ def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.Monkey
         llm_final_timeout_seconds=120,
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._log_payload = lambda *args, **kwargs: None
     processor._effective_language = lambda *args, **kwargs: "en"
     processor._render_prompt_with_language = lambda prompt, language: prompt

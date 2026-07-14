@@ -165,6 +165,23 @@ class Repo:
         )
         await self.session.flush()
 
+    async def transition_task_status(
+        self, task_id: uuid.UUID, from_statuses: list[TaskStatus], to_status: TaskStatus
+    ) -> bool:
+        """Conditional status UPDATE; returns True iff a row changed.
+
+        Used as a race guard: only flips status when the task is still in one
+        of `from_statuses`, so a task the API just canceled/paused is never
+        overwritten to waiting/running.
+        """
+        result = await self.session.execute(
+            update(Task)
+            .where(Task.id == task_id, Task.status.in_(from_statuses))
+            .values(status=to_status, updated_at=utcnow())
+        )
+        await self.session.flush()
+        return bool(result.rowcount)
+
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
         stmt = select(Task).where(Task.status.in_([TaskStatus.running, TaskStatus.waiting]))
         result = await self.session.scalars(stmt)

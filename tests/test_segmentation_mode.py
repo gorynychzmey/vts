@@ -32,12 +32,16 @@ class _DummyBus:
         return False
 
 
-class _DummyHeavySlot:
-    async def __aenter__(self) -> "_DummyHeavySlot":
-        return self
+class _DummyLanes:
+    def slot(self, lane, task_id, cls="main", *, on_wait=None, on_grant=None):
+        class _CM:
+            async def __aenter__(self_inner):
+                return self_inner
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        return False
+            async def __aexit__(self_inner, *a):
+                return False
+
+        return _CM()
 
 
 class _FakeLLM:
@@ -104,7 +108,7 @@ def _make_processor(
         summary_n_ctx=n_ctx,
     )
     processor.bus = _DummyBus()
-    processor.heavy_slot = _DummyHeavySlot()
+    processor.lanes = _DummyLanes()
     processor._task_metrics = {}
     processor._task_n_ctx = {}
     processor._log_payload = lambda *a, **k: None

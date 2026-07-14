@@ -90,7 +90,7 @@ from vts.services.upload_session import UploadSession
 
 
 def can_pause_task(status: TaskStatus) -> bool:
-    return status in {TaskStatus.queued, TaskStatus.running}
+    return status in {TaskStatus.queued, TaskStatus.running, TaskStatus.waiting}
 
 
 def can_resume_task(status: TaskStatus) -> bool:
