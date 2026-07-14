@@ -23,6 +23,8 @@ from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
+from vts.pipeline.steps.base import StepState
+from vts.pipeline.steps.registry import resolve_step
 from vts.pipeline.types import build_dag_steps, lane_for_step
 from vts.worker.lanes import LaneManager
 from vts.services.llm_backends import discover_n_ctx
@@ -454,36 +456,61 @@ class TaskProcessor:
             )
             return
 
-        # Finalize steps are generated per selected prompt and dispatched by a
-        # dynamic name that cannot map to a real method (colons are illegal in
-        # identifiers, and the handler needs extra source/id args). Bind a
-        # functools.partial so the fixed call sites below stay unchanged.
-        if step_name == "summarize_final":
-            method = functools.partial(
-                self.step_finalize_prompt, source="system", id="summary"
-            )
-        elif step_name.startswith("finalize:"):
-            f_source, f_id = parse_ref(step_name.split(":", 1)[1])
-            method = functools.partial(
-                self.step_finalize_prompt, source=f_source, id=f_id
-            )
+        # Registry-aware dispatch. Migrated steps (Tasks 3-5) resolve to a Step
+        # object and run via `step_obj.run`; everything not yet migrated raises
+        # KeyError from resolve_step and falls through to the legacy method path
+        # below. The registry is still empty in this task, so every step takes
+        # the legacy branch — behavior is identical.
+        st = StepState(
+            task_id=task_id,
+            user_id=user_id,
+            dirs=dirs,
+            logger=logger,
+            task_options=task_options,
+        )
+        try:
+            step_obj = resolve_step(step_name)
+        except KeyError:
+            step_obj = None
+
+        if step_obj is not None:
+            if step.status == StepStatus.completed and await step_obj.already_done(
+                self._ctx, st
+            ):
+                return
+            lane = step_obj.lane
         else:
-            method = getattr(self, f"step_{step_name}")
-        if step.status == StepStatus.completed and await method(
-            task_id,
-            user_id,
-            dirs,
-            logger,
-            task_options,
-            dry_run=True,
-        ):
-            return
+            # Legacy path for not-yet-migrated steps (removed in Task 6).
+            # Finalize steps are generated per selected prompt and dispatched by
+            # a dynamic name that cannot map to a real method (colons are illegal
+            # in identifiers, and the handler needs extra source/id args). Bind a
+            # functools.partial so the fixed call sites below stay unchanged.
+            if step_name == "summarize_final":
+                method = functools.partial(
+                    self.step_finalize_prompt, source="system", id="summary"
+                )
+            elif step_name.startswith("finalize:"):
+                f_source, f_id = parse_ref(step_name.split(":", 1)[1])
+                method = functools.partial(
+                    self.step_finalize_prompt, source=f_source, id=f_id
+                )
+            else:
+                method = getattr(self, f"step_{step_name}")
+            if step.status == StepStatus.completed and await method(
+                task_id,
+                user_id,
+                dirs,
+                logger,
+                task_options,
+                dry_run=True,
+            ):
+                return
+            lane = lane_for_step(step_name)
 
         # Download and ffmpeg steps run under a shared concurrency lane so the
         # same phase of different tasks does not saturate the network / CPU. The
         # step stays `pending` while queued (task-level `waiting` covers the UI);
         # it only turns `running` once the lane slot is granted.
-        lane = lane_for_step(step_name)
         if lane is not None:
             lane_cm = self.lanes.slot(
                 lane,
@@ -505,7 +532,10 @@ class TaskProcessor:
             )
             _step_t0 = time.monotonic()
             try:
-                await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
+                if step_obj is not None:
+                    await step_obj.run(self._ctx, st)
+                else:
+                    await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
                 _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
                 await repo.set_step_status(step, StepStatus.completed)
                 await session.commit()
