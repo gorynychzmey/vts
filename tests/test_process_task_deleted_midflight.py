@@ -21,8 +21,9 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from _db import make_test_engine
 from vts.db.base import Base
 from vts.db.models import Task, TaskStatus, User
 from vts.pipeline.context import PipelineContext
@@ -55,8 +56,12 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
 
 
 async def _make_engine_and_task(tmp_path: Path):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    # Real Postgres per project convention (tests/_db.py); SQLite was only ever a
+    # test shortcut and aiosqlite isn't installed in CI. Postgres has no per-test
+    # isolation, so drop+recreate the schema around the test.
+    engine = make_test_engine()
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     uid = uuid.uuid4()
@@ -134,6 +139,8 @@ async def test_task_deleted_midflight_does_not_emit_failed(tmp_path, monkeypatch
     failed_pushes = [p for p in _noop_push.calls if p.get("status") == "failed"]
     assert failed_pushes == [], f"spurious failed push(es): {failed_pushes}"
 
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
 
 
@@ -168,4 +175,6 @@ async def test_real_step_failure_still_emits_failed(tmp_path, monkeypatch) -> No
     assert len(failed_events) == 1, f"expected exactly one failed event, got {failed_events}"
     assert failed_events[0]["data"]["error"] == "boom"
 
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
