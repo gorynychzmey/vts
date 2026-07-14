@@ -1,14 +1,19 @@
 import asyncio
-import functools
 import json
-import logging
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from vts.pipeline.processor import TaskProcessor
+from vts.pipeline.steps.base import StepState
+from vts.pipeline.steps.registry import resolve_step
+from vts.pipeline.steps.summarization import (
+    FinalizePromptStep,
+    SystemPromptSource,
+    UserPromptSource,
+    prompt_source_for,
+)
 from vts.services.prompt_registry import list_system_prompts
 from vts.services.prompt_results import (
     result_entries,
@@ -85,37 +90,9 @@ class _StubSession:
         return None
 
 
-def _make_processor(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None):
-    proc = TaskProcessor.__new__(TaskProcessor)
-    proc.settings = SimpleNamespace(
-        prompts_dir=tmp_path / "prompts",
-        llm_url="http://llama.local/v1",
-        llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
-        llm_temperature=0.2,
-        llm_top_p=None,
-        llm_min_p=None,
-        llm_repeat_penalty=None,
-        llm_thinking=None,
-        llm_api_key=None,
-        llm_tokenizer_path=None,
-        llm_final_timeout_seconds=120,
-    )
-    proc.bus = _DummyBus()
-    proc.lanes = _DummyLanes()
-    proc.logger = logging.getLogger("test_finalize_loop")
-    proc._task_metrics = {}  # so _get_emitter returns None (skip metrics block)
-    proc._log_payload = lambda *a, **k: None
-    proc._effective_language = lambda *a, **k: "en"
-    proc._render_prompt_with_language = lambda prompt, language: prompt
-    proc._llm = _FakeLLM(llm_output)
-    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *a, **k: "SYSTEM PROMPT")
-
-    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
-        return ("llama-server", 32768)
-
-    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
-
-    proc.session_factory = lambda: _StubSession()
+def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None):
+    """Build a minimal PipelineContext stand-in for the finalize step."""
+    llm = _FakeLLM(llm_output)
 
     class _StubRepo:
         def __init__(self, session: object) -> None:
@@ -137,8 +114,56 @@ def _make_processor(tmp_path: Path, monkeypatch, *, llm_output: str, task, promp
             new_options["prompt_results"] = prompt_results
             t.options = new_options
 
-    monkeypatch.setattr("vts.pipeline.processor.Repo", _StubRepo)
-    return proc
+    monkeypatch.setattr("vts.pipeline.steps.summarization.Repo", _StubRepo)
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.load_prompt", lambda *a, **k: "SYSTEM PROMPT"
+    )
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.render_prompt_with_language",
+        lambda prompt, language: prompt,
+    )
+
+    settings = SimpleNamespace(
+        prompts_dir=tmp_path / "prompts",
+        llm_url="http://llama.local/v1",
+        llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
+        llm_temperature=0.2,
+        llm_top_p=None,
+        llm_min_p=None,
+        llm_repeat_penalty=None,
+        llm_thinking=None,
+        llm_api_key=None,
+        llm_tokenizer_path=None,
+        llm_final_timeout_seconds=120,
+    )
+
+    session_factory = lambda: _StubSession()
+
+    async def _persist_summary_progress(task_id, current, total):
+        task.summary_progress = {"current": current, "total": total}
+
+    async def _persist_prompt_result(task_id, source, id, name, path):
+        options = dict(task.options or {})
+        entries = upsert_result_entry(options, source, id, name, path, status="completed")
+        new_options = dict(task.options or {})
+        new_options["prompt_results"] = entries
+        task.options = new_options
+
+    async def _get_n_ctx(task_id, logger):
+        return 32768
+
+    return SimpleNamespace(
+        settings=settings,
+        bus=_DummyBus(),
+        lanes=_DummyLanes(),
+        llm=llm,
+        session_factory=session_factory,
+        gpu_slot=lambda task_id, user_id, cls: _DummyLanes().slot("gpu", task_id, cls),
+        get_emitter=lambda task_id: None,
+        get_n_ctx=_get_n_ctx,
+        persist_summary_progress=_persist_summary_progress,
+        persist_prompt_result=_persist_prompt_result,
+    )
 
 
 def _write_packed_notes(tmp_path: Path) -> dict[str, Path]:
@@ -152,6 +177,18 @@ def _write_packed_notes(tmp_path: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
     return {"root": root, "outputs": outputs}
+
+
+def _st(dirs: dict[str, Path], user_id: str, options: dict) -> StepState:
+    import logging
+
+    return StepState(
+        task_id=uuid.uuid4(),
+        user_id=user_id,
+        dirs=dirs,
+        logger=logging.getLogger("test_finalize_loop"),
+        task_options=options,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -174,7 +211,7 @@ def test_upsert_result_entry_does_not_alias_input_list() -> None:
     """The returned list must NOT be the same object as options['prompt_results'],
     and the input's existing list must not be mutated in place.
 
-    Regression (vts-jal): _persist_prompt_result passes a SHALLOW dict(task.options),
+    Regression (vts-jal): persist_prompt_result passes a SHALLOW dict(task.options),
     so options['prompt_results'] is the same list SQLAlchemy loaded for the JSON
     column. If upsert mutates that list in place, the change is not tracked and the
     second finalize step's write is silently dropped on commit -> only one
@@ -195,30 +232,72 @@ def test_upsert_result_entry_does_not_alias_input_list() -> None:
     assert entries is not original_list
 
 
-def test_resolve_prompt_text_system_uses_registry(tmp_path: Path, monkeypatch) -> None:
+# --------------------------------------------------------------------------- #
+# PromptSource strategy
+# --------------------------------------------------------------------------- #
+def test_prompt_source_for_returns_expected_impl() -> None:
+    assert isinstance(prompt_source_for("system"), SystemPromptSource)
+    assert isinstance(prompt_source_for("user"), UserPromptSource)
+
+
+def test_system_prompt_source_load_text_uses_registry(tmp_path: Path, monkeypatch) -> None:
     task = _StubTask({})
-    proc = _make_processor(tmp_path, monkeypatch, llm_output="x", task=task)
-    text = asyncio.run(proc.resolve_prompt_text("system", "summary", "en", str(uuid.uuid4())))
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task)
+    text = asyncio.run(
+        SystemPromptSource().load_text(ctx, "summary", "en", str(uuid.uuid4()))
+    )
     assert text == "SYSTEM PROMPT"
 
 
-def test_resolve_prompt_text_user_loads_from_db(tmp_path: Path, monkeypatch) -> None:
+def test_user_prompt_source_load_text_loads_from_db(tmp_path: Path, monkeypatch) -> None:
     uid = uuid.uuid4()
     pid = uuid.uuid4()
     prompt = _StubPrompt(pid, uid, "Custom", "DO THE THING ${LANG}")
     task = _StubTask({})
-    proc = _make_processor(tmp_path, monkeypatch, llm_output="x", task=task, prompt=prompt)
-    text = asyncio.run(proc.resolve_prompt_text("user", str(pid), "en", str(uid)))
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task, prompt=prompt)
+    text = asyncio.run(UserPromptSource().load_text(ctx, str(pid), "en", str(uid)))
+    # render_prompt_with_language is stubbed to identity in _make_ctx.
     assert text == "DO THE THING ${LANG}"
 
 
-def test_resolve_prompt_text_user_missing_raises(tmp_path: Path, monkeypatch) -> None:
+def test_user_prompt_source_load_text_missing_raises(tmp_path: Path, monkeypatch) -> None:
     task = _StubTask({})
-    proc = _make_processor(tmp_path, monkeypatch, llm_output="x", task=task, prompt=None)
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task, prompt=None)
     with pytest.raises(RuntimeError, match="user prompt not found"):
         asyncio.run(
-            proc.resolve_prompt_text("user", str(uuid.uuid4()), "en", str(uuid.uuid4()))
+            UserPromptSource().load_text(ctx, str(uuid.uuid4()), "en", str(uuid.uuid4()))
         )
+
+
+def test_user_prompt_source_rejects_non_uuid_id(tmp_path: Path, monkeypatch) -> None:
+    task = _StubTask({})
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task)
+    with pytest.raises(RuntimeError, match="invalid user prompt id"):
+        asyncio.run(
+            UserPromptSource().load_text(ctx, "../../etc/passwd", "en", str(uuid.uuid4()))
+        )
+
+
+# --------------------------------------------------------------------------- #
+# resolve_step wiring for finalize
+# --------------------------------------------------------------------------- #
+def test_resolve_step_summarize_final_builds_system_summary() -> None:
+    step = resolve_step("summarize_final")
+    assert isinstance(step, FinalizePromptStep)
+    assert (step.source, step.id) == ("system", "summary")
+
+
+def test_resolve_step_finalize_ref_builds_user_prompt() -> None:
+    pid = str(uuid.uuid4())
+    step = resolve_step(f"finalize:user:{pid}")
+    assert isinstance(step, FinalizePromptStep)
+    assert (step.source, step.id) == ("user", pid)
+
+
+def test_resolve_step_finalize_system_ref() -> None:
+    step = resolve_step("finalize:system:summary")
+    assert isinstance(step, FinalizePromptStep)
+    assert (step.source, step.id) == ("system", "summary")
 
 
 # --------------------------------------------------------------------------- #
@@ -230,23 +309,13 @@ def test_finalize_writes_result_index_for_custom_prompt(tmp_path: Path, monkeypa
     prompt = _StubPrompt(pid, uid, "My Custom Prompt", "Summarise differently.")
     options = {"prompts": [{"source": "user", "id": str(pid)}]}
     task = _StubTask(options)
-    proc = _make_processor(
+    ctx = _make_ctx(
         tmp_path, monkeypatch, llm_output="CUSTOM RESULT", task=task, prompt=prompt
     )
     dirs = _write_packed_notes(tmp_path)
-    task_id = uuid.uuid4()
 
     ok = asyncio.run(
-        proc.step_finalize_prompt(
-            task_id,
-            str(uid),
-            dirs,
-            proc.logger,
-            options,
-            dry_run=False,
-            source="user",
-            id=str(pid),
-        )
+        FinalizePromptStep(source="user", id=str(pid)).run(ctx, _st(dirs, str(uid), options))
     )
     assert ok is True
 
@@ -272,20 +341,12 @@ def test_finalize_writes_result_index_for_custom_prompt(tmp_path: Path, monkeypa
 
 def test_finalize_system_summary_keeps_backcompat(tmp_path: Path, monkeypatch) -> None:
     task = _StubTask({})
-    proc = _make_processor(tmp_path, monkeypatch, llm_output="THE SUMMARY", task=task)
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="THE SUMMARY", task=task)
     dirs = _write_packed_notes(tmp_path)
-    task_id = uuid.uuid4()
 
     ok = asyncio.run(
-        proc.step_finalize_prompt(
-            task_id,
-            str(uuid.uuid4()),
-            dirs,
-            proc.logger,
-            {},
-            dry_run=False,
-            source="system",
-            id="summary",
+        FinalizePromptStep(source="system", id="summary").run(
+            ctx, _st(dirs, str(uuid.uuid4()), {})
         )
     )
     assert ok is True
@@ -309,21 +370,14 @@ def test_finalize_rejects_traversal_user_id(tmp_path: Path, monkeypatch) -> None
     """A user-source id that is not a UUID is rejected before any path is built,
     and no file is written outside the results dir."""
     task = _StubTask({"prompts": [{"source": "user", "id": "../../etc/passwd"}]})
-    proc = _make_processor(tmp_path, monkeypatch, llm_output="X", task=task)
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="X", task=task)
     dirs = _write_packed_notes(tmp_path)
 
     before = {p for p in tmp_path.rglob("*") if p.is_file()}
     with pytest.raises((RuntimeError, ValueError)):
         asyncio.run(
-            proc.step_finalize_prompt(
-                uuid.uuid4(),
-                str(uuid.uuid4()),
-                dirs,
-                proc.logger,
-                task.options,
-                dry_run=False,
-                source="user",
-                id="../../etc/passwd",
+            FinalizePromptStep(source="user", id="../../etc/passwd").run(
+                ctx, _st(dirs, str(uuid.uuid4()), task.options)
             )
         )
     after = {p for p in tmp_path.rglob("*") if p.is_file()}
@@ -331,30 +385,3 @@ def test_finalize_rejects_traversal_user_id(tmp_path: Path, monkeypatch) -> None
     assert after == before
     # And nothing escaped above the task tree.
     assert not (tmp_path.parent / "passwd").exists()
-
-
-def test_dispatch_routes_summarize_final_and_custom(monkeypatch) -> None:
-    """summarize_final and finalize:<src>:<id> both bind step_finalize_prompt
-    with the right source/id (mirrors _run_step dispatch logic)."""
-    from vts.services.prompt_registry import parse_ref
-
-    captured: list[tuple[str, str]] = []
-
-    class _P:
-        async def step_finalize_prompt(self, *a, source, id, **k):
-            captured.append((source, id))
-            return True
-
-    proc = _P()
-
-    def _bind(step_name: str):
-        if step_name == "summarize_final":
-            return functools.partial(proc.step_finalize_prompt, source="system", id="summary")
-        if step_name.startswith("finalize:"):
-            s, i = parse_ref(step_name.split(":", 1)[1])
-            return functools.partial(proc.step_finalize_prompt, source=s, id=i)
-        raise AssertionError("not a finalize step")
-
-    asyncio.run(_bind("summarize_final")(uuid.uuid4(), "u", {}, None, {}, dry_run=False))
-    asyncio.run(_bind("finalize:user:abc")(uuid.uuid4(), "u", {}, None, {}, dry_run=False))
-    assert captured == [("system", "summary"), ("user", "abc")]

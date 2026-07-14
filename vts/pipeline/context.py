@@ -14,6 +14,7 @@ from vts.metrics import MetricsEmitter
 from vts.pipeline.processor import TaskPaused, _TaskGone
 from vts.pipeline.token_budget import TokenBudgetConfig
 from vts.services.llm_backends import discover_n_ctx
+from vts.services.prompt_results import upsert_result_entry
 from vts.services.push import notify_user as push_notify_user
 
 
@@ -150,6 +151,21 @@ class PipelineContext:
         async with self.session_factory() as session:
             repo = Repo(session)
             await repo.set_user_preferred_ytdlp_client(user_id, player_client)
+            await session.commit()
+
+    async def persist_prompt_result(
+        self, task_id: uuid.UUID, source: str, id: str, name: str, path: str
+    ) -> None:
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            options = dict(task.options or {})
+            entries = upsert_result_entry(
+                options, source, id, name, path, status="completed"
+            )
+            await repo.set_task_prompt_results(task, entries)
             await session.commit()
 
     async def persist_summary_progress(self, task_id: uuid.UUID, current: int, total: int) -> None:

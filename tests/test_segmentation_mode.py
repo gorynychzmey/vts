@@ -18,7 +18,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from vts.pipeline.processor import TaskProcessor
+from vts.pipeline.steps.base import StepState
+from vts.pipeline.steps.summarization import (
+    PrepareSummaryChunksStep,
+    SummarizeWindowsStep,
+)
 
 
 class _DummyBus:
@@ -88,49 +92,52 @@ def _make_processor(
     n_ctx: int,
     segmentation: str = "auto",
     fake_llm: _FakeLLM | None = None,
-) -> tuple[TaskProcessor, _FakeLLM]:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        prompts_dir=tmp_path / "prompts",
-        llm_url="http://llm.local/v1",
-        llm_model="test-model",
-        llm_api_key=None,
-        llm_temperature=0.2,
-        llm_top_p=None,
-        llm_min_p=None,
-        llm_repeat_penalty=None,
-        llm_thinking=None,
-        llm_tokenizer_path=None,
-        llm_chat_timeout_seconds=600,
-        llm_final_timeout_seconds=1800,
-        summary_segmentation=segmentation,
-        summary_segment_window_cap=8192,
-        summary_n_ctx=n_ctx,
-    )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._task_metrics = {}
-    processor._task_n_ctx = {}
-    processor._log_payload = lambda *a, **k: None
-    processor._effective_language = lambda *a, **k: "en"
-    processor._render_prompt_with_language = lambda prompt, language: prompt
+) -> tuple[SimpleNamespace, _FakeLLM]:
+    lanes = _DummyLanes()
+    llm = fake_llm or _FakeLLM()
 
     async def _noop_progress(*a: object, **k: object) -> None:
         return None
 
-    processor._persist_summary_progress = _noop_progress
-    llm = fake_llm or _FakeLLM()
-    processor._llm = llm
+    async def _noop_check_paused(task_id: object) -> None:
+        return None
 
-    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
-        return ("llama-server", n_ctx)
+    async def _stub_get_n_ctx(task_id: object, logger: object) -> int:
+        return n_ctx
 
-    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(
+            prompts_dir=tmp_path / "prompts",
+            llm_url="http://llm.local/v1",
+            llm_model="test-model",
+            llm_api_key=None,
+            llm_temperature=0.2,
+            llm_top_p=None,
+            llm_min_p=None,
+            llm_repeat_penalty=None,
+            llm_thinking=None,
+            llm_tokenizer_path=None,
+            llm_chat_timeout_seconds=600,
+            llm_final_timeout_seconds=1800,
+            summary_segmentation=segmentation,
+            summary_segment_window_cap=8192,
+            summary_n_ctx=n_ctx,
+        ),
+        bus=_DummyBus(),
+        lanes=lanes,
+        llm=llm,
+        gpu_slot=lambda task_id, user_id, cls: lanes.slot("gpu", task_id, cls),
+        get_emitter=lambda task_id: None,
+        check_paused=_noop_check_paused,
+        persist_summary_progress=_noop_progress,
+        get_n_ctx=_stub_get_n_ctx,
+    )
+
     monkeypatch.setattr(
-        "vts.pipeline.processor.load_prompt",
+        "vts.pipeline.steps.summarization.load_prompt",
         lambda *a, **k: "SEGMENT PROMPT " + " ".join(["p"] * 98),  # 100 tokens
     )
-    return processor, llm
+    return ctx, llm
 
 
 def _write_transcript(dirs: dict[str, Path], words: int) -> str:
@@ -141,32 +148,22 @@ def _write_transcript(dirs: dict[str, Path], words: int) -> str:
     return text
 
 
-def _run_prepare(processor: TaskProcessor, dirs: dict[str, Path]) -> bool:
-    return asyncio.run(
-        TaskProcessor.step_prepare_summary_chunks(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="u1",
-            dirs=dirs,
-            logger=logging.getLogger("test_segmentation"),
-            task_options={},
-            dry_run=False,
-        )
+def _st(dirs: dict[str, Path]) -> StepState:
+    return StepState(
+        task_id=uuid.uuid4(),
+        user_id="u1",
+        dirs=dirs,
+        logger=logging.getLogger("test_segmentation"),
+        task_options={},
     )
 
 
-def _run_windows(processor: TaskProcessor, dirs: dict[str, Path]) -> bool:
-    return asyncio.run(
-        TaskProcessor.step_summarize_windows(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="u1",
-            dirs=dirs,
-            logger=logging.getLogger("test_segmentation"),
-            task_options={},
-            dry_run=False,
-        )
-    )
+def _run_prepare(ctx: SimpleNamespace, dirs: dict[str, Path]) -> bool:
+    return asyncio.run(PrepareSummaryChunksStep().run(ctx, _st(dirs)))
+
+
+def _run_windows(ctx: SimpleNamespace, dirs: dict[str, Path]) -> bool:
+    return asyncio.run(SummarizeWindowsStep().run(ctx, _st(dirs)))
 
 
 def _chunks_payload(dirs: dict[str, Path]) -> dict:

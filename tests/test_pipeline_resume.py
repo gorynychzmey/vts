@@ -7,8 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from vts.pipeline.processor import TaskProcessor
-
 
 class _DummyBus:
     def __init__(self) -> None:
@@ -45,31 +43,50 @@ def _make_dirs(tmp_path: Path) -> dict[str, Path]:
     }
 
 
-def test_step_summarize_windows_resumes_from_partial_windows_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        prompts_dir=tmp_path / "prompts",
-        llm_url="http://llama.local/v1",
-        llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
-        llm_temperature=0.2,
-        llm_top_p=None,
-        llm_min_p=None,
-        llm_repeat_penalty=None,
-        llm_thinking=None,
-        llm_api_key=None,
-        llm_tokenizer_path=None,
-    )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._log_payload = lambda *args, **kwargs: None
+def _summary_ctx(bus, lanes, llm) -> SimpleNamespace:
+    """Minimal PipelineContext stand-in for the summarization steps."""
 
     async def _noop_persist_summary_progress(*args: object, **kwargs: object) -> None:
         return None
 
-    processor._persist_summary_progress = _noop_persist_summary_progress
+    return SimpleNamespace(
+        settings=SimpleNamespace(
+            prompts_dir=None,
+            llm_url="http://llama.local/v1",
+            llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
+            llm_temperature=0.2,
+            llm_top_p=None,
+            llm_min_p=None,
+            llm_repeat_penalty=None,
+            llm_thinking=None,
+            llm_api_key=None,
+            llm_tokenizer_path=None,
+        ),
+        bus=bus,
+        lanes=lanes,
+        llm=llm,
+        gpu_slot=lambda task_id, user_id, cls: lanes.slot("gpu", task_id, cls),
+        get_emitter=lambda task_id: None,
+        check_paused=_noop_check_paused,
+        persist_summary_progress=_noop_persist_summary_progress,
+        get_n_ctx=_stub_get_n_ctx,
+    )
+
+
+async def _noop_check_paused(task_id: object) -> None:
+    return None
+
+
+async def _stub_get_n_ctx(task_id: object, logger: object) -> int:
+    return 32768
+
+
+def test_step_summarize_windows_resumes_from_partial_windows_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.summarization import SummarizeWindowsStep
 
     dirs = _make_dirs(tmp_path)
     summary_dir = dirs["root"] / "summary"
@@ -96,12 +113,9 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "segment prompt")
-
-    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
-        return ("llama-server", 32768)
-
-    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.load_prompt", lambda *args, **kwargs: "segment prompt"
+    )
 
     calls: list[dict[str, object]] = []
 
@@ -119,19 +133,17 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
                 return "## Topics\n- third\n\n## Facts and Examples\n- c"
             raise AssertionError(f"unexpected prompt: {user_prompt}")
 
-    processor._llm = _FakeLLM()
-
-    success = asyncio.run(
-        TaskProcessor.step_summarize_windows(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs=dirs,
-            logger=logging.getLogger("test_step_summarize_windows_resume"),
-            task_options={},
-            dry_run=False,
-        )
+    bus = _DummyBus()
+    ctx = _summary_ctx(bus, _DummyLanes(), _FakeLLM())
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs=dirs,
+        logger=logging.getLogger("test_step_summarize_windows_resume"),
+        task_options={},
     )
+
+    success = asyncio.run(SummarizeWindowsStep().run(ctx, st))
 
     assert success is True
     assert len(calls) == 2
@@ -146,44 +158,30 @@ def test_step_summarize_windows_resumes_from_partial_windows_json(
     assert (dirs["outputs"] / "window_summaries.json").exists()
     # 1 summary_progress for already-skipped window 1
     # + 2 × (segment_summary_text + summary_progress) for windows 2 and 3 = 5
-    assert len(processor.bus.events) == 5
+    assert len(bus.events) == 5
 
 
 def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        prompts_dir=tmp_path / "prompts",
-        llm_url="http://llama.local/v1",
-        llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
-        llm_temperature=0.2,
-        llm_top_p=None,
-        llm_min_p=None,
-        llm_repeat_penalty=None,
-        llm_thinking=None,
-        llm_api_key=None,
-        llm_tokenizer_path=None,
-    )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._log_payload = lambda *args, **kwargs: None
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.summarization import SummarizeWindowsStep
 
     dirs = _make_dirs(tmp_path)
     summary_dir = dirs["root"] / "summary"
     (summary_dir / "windows.json").write_text(json.dumps({"windows": []}), encoding="utf-8")
 
-    success = asyncio.run(
-        TaskProcessor.step_summarize_windows(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs=dirs,
-            logger=logging.getLogger("test_step_summarize_windows_dry_run_empty"),
-            task_options={},
-            dry_run=True,
-        )
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs=dirs,
+        logger=logging.getLogger("test_step_summarize_windows_dry_run_empty"),
+        task_options={},
     )
 
-    assert success is True
+    # The legacy dry_run=True probe is now already_done(): an empty-but-valid
+    # windows list counts as complete.
+    done = asyncio.run(SummarizeWindowsStep().already_done(ctx=None, st=st))
+
+    assert done is True
 
 
 def test_step_extract_audio_dry_run_accepts_trimmed_output(tmp_path: Path) -> None:
@@ -421,71 +419,3 @@ def test_step_segment_audio_publishes_progress_events(
     assert phase_events[-1]["data"] == {"phase": "segment_audio", "segments": 3}
     manifest = json.loads((outputs / "segments_manifest.json").read_text(encoding="utf-8"))
     assert len(manifest.get("segments", [])) == 3
-
-
-def _make_processor_for_final_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[object, object]:
-    """Return (processor, dummy_task) wired up for step_summarize_final tests."""
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        prompts_dir=tmp_path / "prompts",
-        llm_url="http://llama.local/v1",
-        llm_model="Qwen2.5-7B-Instruct-Q4_K_M",
-        llm_temperature=0.2,
-        llm_top_p=None,
-        llm_min_p=None,
-        llm_repeat_penalty=None,
-        llm_thinking=None,
-        llm_api_key=None,
-        llm_tokenizer_path=None,
-        llm_final_timeout_seconds=120,
-    )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._log_payload = lambda *args, **kwargs: None
-    processor._effective_language = lambda *args, **kwargs: "en"
-    processor._render_prompt_with_language = lambda prompt, language: prompt
-    monkeypatch.setattr("vts.pipeline.processor.load_prompt", lambda *args, **kwargs: "prompt")
-
-    async def _stub_discover_n_ctx(**kwargs: object) -> tuple[str, int]:
-        return ("llama-server", 32768)
-
-    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", _stub_discover_n_ctx)
-
-    class _FakeLLM:
-        async def count_tokens(self, **kwargs: object) -> int:
-            return 100
-
-        async def chat_completion(self, **kwargs: object) -> str:
-            raise AssertionError("chat_completion not expected in this test")
-
-    processor._llm = _FakeLLM()
-
-    class _DummySession:
-        async def __aenter__(self) -> "_DummySession":
-            return self
-
-        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        async def commit(self) -> None:
-            return None
-
-    class _DummyTask:
-        def __init__(self) -> None:
-            self.summary_path: str | None = None
-
-    dummy_task = _DummyTask()
-    processor.session_factory = lambda: _DummySession()
-
-    class _DummyRepo:
-        def __init__(self, session: object) -> None:
-            self.session = session
-
-        async def get_task_by_id(self, task_id: uuid.UUID) -> _DummyTask:
-            return dummy_task
-
-        async def set_task_summary_progress(self, task: object, current: int, total: int) -> None:
-            return None
-
-    monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
-    return processor, dummy_task
