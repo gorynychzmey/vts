@@ -187,30 +187,29 @@ def test_step_summarize_windows_dry_run_accepts_empty_windows(tmp_path: Path) ->
 
 
 def test_step_extract_audio_dry_run_accepts_trimmed_output(tmp_path: Path) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace()
-    processor.bus = _DummyBus()
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.media import ExtractAudioStep
 
     root = tmp_path / "task"
     media = root / "media"
     logs = root / "logs"
+    outputs = root / "outputs"
+    segments = root / "segments"
     media.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
     (media / "audio_16k_trimmed.wav").write_bytes(b"wav")
 
-    success = asyncio.run(
-        TaskProcessor.step_extract_audio(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs={"media": media, "logs": logs},
-            logger=logging.getLogger("test_step_extract_audio_trimmed_resume"),
-            task_options={},
-            dry_run=True,
-        )
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs={"media": media, "logs": logs, "outputs": outputs, "segments": segments},
+        logger=logging.getLogger("test_step_extract_audio_trimmed_resume"),
+        task_options={},
     )
 
-    assert success is True
+    done = asyncio.run(ExtractAudioStep().already_done(ctx=None, st=st))
+
+    assert done is True
 
 
 def test_step_detect_language_raises_when_first_segment_missing(
@@ -300,14 +299,8 @@ def test_step_segment_audio_publishes_progress_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        segment_search_window_seconds=30,
-        segment_target_seconds=60,
-        segment_overlap_seconds=5,
-        services_database_write_throttle_ms=0,
-    )
-    processor.bus = _DummyBus()
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.media import SegmentAudioStep
 
     class _DummySession:
         async def __aenter__(self) -> "_DummySession":
@@ -319,7 +312,23 @@ def test_step_segment_audio_publishes_progress_events(
         async def commit(self) -> None:
             return None
 
-    processor.session_factory = lambda: _DummySession()
+    def _transcribe_audio_path(dirs: dict[str, Path]) -> Path:
+        trimmed = dirs["media"] / "audio_16k_trimmed.wav"
+        if trimmed.exists():
+            return trimmed
+        return dirs["media"] / "audio_16k.wav"
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(
+            segment_search_window_seconds=30,
+            segment_target_seconds=60,
+            segment_overlap_seconds=5,
+            services_database_write_throttle_ms=0,
+        ),
+        bus=_DummyBus(),
+        session_factory=lambda: _DummySession(),
+        transcribe_audio_path=_transcribe_audio_path,
+    )
 
     class _DummyRepo:
         def __init__(self, session: object) -> None:
@@ -339,9 +348,9 @@ def test_step_segment_audio_publishes_progress_events(
         ) -> object:
             return object()
 
-    monkeypatch.setattr("vts.pipeline.processor.Repo", _DummyRepo)
-    monkeypatch.setattr("vts.pipeline.processor.probe_duration", lambda *args, **kwargs: 130.0)
-    monkeypatch.setattr("vts.pipeline.processor.detect_silence_points", lambda *args, **kwargs: [60.0, 120.0])
+    monkeypatch.setattr("vts.pipeline.steps.media.Repo", _DummyRepo)
+    monkeypatch.setattr("vts.pipeline.steps.media.probe_duration", lambda *args, **kwargs: 130.0)
+    monkeypatch.setattr("vts.pipeline.steps.media.detect_silence_points", lambda *args, **kwargs: [60.0, 120.0])
 
     def _fake_export_segments(
         audio_wav: Path,
@@ -368,7 +377,7 @@ def test_step_segment_audio_publishes_progress_events(
                 progress_cb(idx, total)
         return specs
 
-    monkeypatch.setattr("vts.pipeline.processor.export_segments", _fake_export_segments)
+    monkeypatch.setattr("vts.pipeline.steps.media.export_segments", _fake_export_segments)
 
     root = tmp_path / "task"
     outputs = root / "outputs"
@@ -381,24 +390,22 @@ def test_step_segment_audio_publishes_progress_events(
     media.mkdir(parents=True, exist_ok=True)
     (media / "audio_16k.wav").write_bytes(b"wav")
 
-    success = asyncio.run(
-        TaskProcessor.step_segment_audio(
-            processor,
-            task_id=uuid.uuid4(),
-            user_id="user-1",
-            dirs={"root": root, "outputs": outputs, "segments": segments, "logs": logs, "media": media},
-            logger=logging.getLogger("test_step_segment_audio_progress"),
-            task_options={},
-            dry_run=False,
-        )
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs={"root": root, "outputs": outputs, "segments": segments, "logs": logs, "media": media},
+        logger=logging.getLogger("test_step_segment_audio_progress"),
+        task_options={},
     )
 
+    success = asyncio.run(SegmentAudioStep().run(ctx, st))
+
     assert success is True
-    progress_events = [event for event in processor.bus.events if event.get("event") == "segment_progress"]
+    progress_events = [event for event in ctx.bus.events if event.get("event") == "segment_progress"]
     assert progress_events
     assert progress_events[0]["data"] == {"current": 0, "total": 3}
     assert progress_events[-1]["data"] == {"current": 3, "total": 3}
-    phase_events = [event for event in processor.bus.events if event.get("event") == "phase"]
+    phase_events = [event for event in ctx.bus.events if event.get("event") == "phase"]
     assert phase_events[-1]["data"] == {"phase": "segment_audio", "segments": 3}
     manifest = json.loads((outputs / "segments_manifest.json").read_text(encoding="utf-8"))
     assert len(manifest.get("segments", [])) == 3

@@ -6,6 +6,8 @@ import pytest
 
 from vts.db.models import StepStatus, TaskStatus
 from vts.pipeline.processor import TaskProcessor
+from vts.pipeline.steps.base import Step
+from vts.pipeline.steps.registry import STEP_REGISTRY
 from vts.worker.lanes import LaneManager
 
 
@@ -143,6 +145,7 @@ async def test_run_step_serializes_download_lane_and_marks_waiting(monkeypatch) 
     lanes = LaneManager(_SettingsStub())  # lane_network_slots == 1
     bus = _CapturingBus()
     proc = _make_processor(lanes, bus, monkeypatch)
+    proc._ctx = None  # the fake DownloadStep.run ignores ctx
     monkeypatch.setattr("vts.pipeline.processor.Repo", _RunStepRepo)
 
     repo = _RunStepRepo(None)
@@ -155,15 +158,22 @@ async def test_run_step_serializes_download_lane_and_marks_waiting(monkeypatch) 
     task_a = uuid.uuid4()
     task_b = uuid.uuid4()
 
-    async def _step(task_id, user_id, dirs, logger, task_options, dry_run):
-        tag = "a" if task_id == task_a else "b"
-        enter = asyncio.get_event_loop().time()
-        await asyncio.sleep(0.02)
-        exit_ = asyncio.get_event_loop().time()
-        intervals[tag] = (enter, exit_)
-        return True
+    # Register a fake download Step so dispatch flows through the registry
+    # branch of _run_step (the branch under test). Its run() records the
+    # enter/exit window of each task's body to prove non-overlap.
+    class _FakeDownloadStep(Step):
+        name = "download"
+        lane = "network"
 
-    proc.step_download = _step
+        async def run(self, ctx, st):
+            tag = "a" if st.task_id == task_a else "b"
+            enter = asyncio.get_event_loop().time()
+            await asyncio.sleep(0.02)
+            exit_ = asyncio.get_event_loop().time()
+            intervals[tag] = (enter, exit_)
+            return True
+
+    monkeypatch.setitem(STEP_REGISTRY, "download", _FakeDownloadStep())
 
     t_a = asyncio.create_task(
         proc._run_step(session, repo, task_a, "user-a", "download", dirs, logger, {})

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.exc import InvalidRequestError
@@ -172,6 +173,20 @@ class PipelineContext:
                 return
             task.source_title = title
             await session.commit()
+
+    def task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:
+        value = options.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def transcribe_audio_path(self, dirs: dict[str, Path]) -> Path:
+        trimmed = dirs["media"] / "audio_16k_trimmed.wav"
+        if trimmed.exists():
+            return trimmed
+        return dirs["media"] / "audio_16k.wav"
 
     async def persist_detected_language(self, task_id: uuid.UUID, language: str, confidence: float) -> None:
         async with self.session_factory() as session:
