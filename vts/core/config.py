@@ -117,7 +117,6 @@ class Settings(BaseSettings):
     language_detection_confidence_threshold: float = 0.60
 
     transcribe_parallel_per_task: int = 2
-    heavy_slot_limit: int = 1
     worker_max_active_tasks: int = 4
     lane_network_slots: int = 1
     lane_ffmpeg_slots: int = 2

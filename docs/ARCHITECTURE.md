@@ -93,7 +93,7 @@ The DAG is defined in [`vts/pipeline/types.py`](../vts/pipeline/types.py) as a f
 | 7 | `merge_transcript` | `asr_segments` rows | `outputs/transcript.txt`, `outputs/transcript.json` | Files exist |
 | 8 | `prepare_llama_model` | LLM URL | warm `/props` cache, validated tokenizer | Cached props match |
 | 9 | `prepare_summary_chunks` | `outputs/transcript.json` | `summary/chunks.json` (token-counted windows) | File exists |
-| 10 | `summarize_windows` | chunks (parallel via heavy-slot semaphore) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
+| 10 | `summarize_windows` | chunks (parallel via gpu lane, llm priority) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
 | 11 | `pack_window_notes` | `summary/windows.json` | `summary/packed_notes.json` (only when packing triggered) | File exists or skip-flag in step row |
 | 12 | `summarize_final` | window notes (packed if applicable) | `summary/final.md`, `tasks.summary_path` | File exists |
 
@@ -105,7 +105,21 @@ These are the non-obvious choices baked into the pipeline. Each links back to th
 
 **Silence-aware segmentation with overlap.** `segment_audio` (in [`vts/services/media.py`](../vts/services/media.py)) runs ffmpeg `silencedetect` over the input, then for each target boundary at `k * segment_target_seconds` searches a `±segment_search_window_seconds` window for the closest silence and cuts there. Adjacent segments share `segment_overlap_seconds` of audio. Fixed-size chunks would cut mid-word and hurt ASR; pure silence-based segmentation would produce wildly variable lengths and complicate parallelism. The hybrid keeps segments within a predictable range while landing cuts on silence.
 
-**Single heavy slot.** Transcription and LLM calls share a Redis-backed semaphore in [`vts/services/heavy_slot.py`](../vts/services/heavy_slot.py) with default `heavy_slot_limit = 1`. The slot is acquired around any GPU- or VRAM-heavy operation, so even with multiple workers and `transcribe_parallel_per_task > 1`, only one heavy operation runs at a time on the model server. Unbounded parallelism on a single-GPU host thrashes VRAM and slows everything down; this is the explicit backpressure point. The same slot also gates on night-mode (`night_mode_enabled`) — acquisitions block until an allowed hour.
+**Resource lanes.** The worker pool runs up to `worker_max_active_tasks` `process_task` coroutines concurrently in one process (default `4`; set `VTS_WORKER_MAX_ACTIVE_TASKS=1` for legacy sequential behaviour). A single in-process `LaneManager` (in [`vts/worker/lanes.py`](../vts/worker/lanes.py)) is shared across all active tasks and arbitrates three named lanes, each a simple slot scheduler:
+
+- `network` — 1 slot by default (downloads).
+- `ffmpeg` — 2 slots by default (segmentation/media processing).
+- `gpu` — 1 slot by default (Whisper transcription and LLM calls, which share the same GPU/VRAM).
+
+`network` and `ffmpeg` slots are acquired once per pipeline step in `_run_step`. The `gpu` lane is acquired at per-GPU-call granularity — around each individual GPU/VRAM-heavy operation inside a step method (the former `HeavySlot` call sites: `detect_language`, `transcribe` segment, LLM warmup, summarize window, pack batch, finalize) — rather than for the whole step, so a single step with several GPU calls yields the slot between them instead of holding it the entire time.
+
+The `gpu` lane has two priority classes: `asr` (transcription-related calls) is served ahead of `llm` (summarization-related calls) whenever both have waiters, so transcription throughput doesn't stall behind long LLM generations. To prevent LLM starvation under sustained ASR load, an anti-starvation burst limit `gpu_asr_burst` (default `3`) caps how many consecutive `asr` grants can be made before an `llm` waiter is served.
+
+Night mode (`night_mode_enabled`) gates only `gpu` lane grants — acquisitions on `network` and `ffmpeg` are unaffected, but a `gpu` acquire blocks until an allowed hour if night mode is on and the current hour falls outside `night_mode_start_hour`–`night_mode_end_hour`.
+
+Unbounded GPU parallelism on a single-GPU host thrashes VRAM and slows everything down; the `gpu` lane's slot count is the explicit backpressure point, now decoupled from network/ffmpeg concurrency so downloads and segmentation for other tasks are never blocked behind a GPU-bound task.
+
+A task that is partially processed and queued waiting on a lane for its next step is marked with task status `waiting` (distinct from `running`), so the API/UI can distinguish "actively executing a step" from "queued behind a lane slot."
 
 **llama.cpp HTTP server as baseline API.** The LLM client in [`vts/services/summarizer.py`](../vts/services/summarizer.py) talks to four endpoints — `GET /props`, `POST /tokenize`, `POST /detokenize`, `POST /chat/completions`. Only the last is in the OpenAI standard. The other three are needed because token budgeting (Stage A/B/C adaptive ratios) requires an authoritative token count on the *server's* tokenizer, not a guess from a local tiktoken-style heuristic. OpenAI-compatible servers that lack `/tokenize` must supply a local tokenizer file via `llm_tokenizer_path` (see [LLM_BACKENDS.md](LLM_BACKENDS.md)).
 
@@ -294,7 +308,11 @@ canonical `oauth_*` keys (deprecated; scheduled removal in 1.2.x).
 | `trim_silence.max_seconds` | `VTS_TRIM_SILENCE_MAX_SECONDS` | `30.0` |
 | `language_detection.confidence_threshold` | `VTS_LANGUAGE_DETECTION_CONFIDENCE_THRESHOLD` | `0.60` |
 | `transcribe.parallel_per_task` | `VTS_TRANSCRIBE_PARALLEL_PER_TASK` | `2` |
-| `heavy_slot.limit` | `VTS_HEAVY_SLOT_LIMIT` | `1` |
+| `worker.max_active_tasks` | `VTS_WORKER_MAX_ACTIVE_TASKS` | `4` |
+| `lane.network_slots` | `VTS_LANE_NETWORK_SLOTS` | `1` |
+| `lane.ffmpeg_slots` | `VTS_LANE_FFMPEG_SLOTS` | `2` |
+| `lane.gpu_slots` | `VTS_LANE_GPU_SLOTS` | `1` |
+| `gpu.asr_burst` | `VTS_GPU_ASR_BURST` | `3` |
 | `event_throttle.hz` | `VTS_EVENT_THROTTLE_HZ` | `4` |
 | `task_cancel_ttl.seconds` | `VTS_TASK_CANCEL_TTL_SECONDS` | `3600` |
 | `night_mode.enabled` | `VTS_NIGHT_MODE_ENABLED` | `false` |

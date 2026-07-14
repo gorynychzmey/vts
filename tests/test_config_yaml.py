@@ -108,7 +108,6 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
         },
         "language_detection": {"confidence_threshold": 0.7},
         "transcribe": {"parallel_per_task": 3},
-        "heavy_slot": {"limit": 2},
         "event_throttle": {"hz": 5},
         "task_cancel_ttl": {"seconds": 7200},
         "night_mode": {"enabled": True, "start_hour": 23, "end_hour": 6},
@@ -158,7 +157,6 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
     assert settings.trim_silence_max_seconds == 25.0
     assert settings.language_detection_confidence_threshold == 0.7
     assert settings.transcribe_parallel_per_task == 3
-    assert settings.heavy_slot_limit == 2
     assert settings.event_throttle_hz == 5
     assert settings.services_database_write_throttle_ms == 200
     assert settings.task_cancel_ttl_seconds == 7200
@@ -238,7 +236,6 @@ def test_lane_settings_yaml_override() -> None:
         },
         "language_detection": {"confidence_threshold": 0.7},
         "transcribe": {"parallel_per_task": 3},
-        "heavy_slot": {"limit": 2},
         "worker": {"max_active_tasks": 2},
         "lane": {"gpu_slots": 2},
         "gpu": {"asr_burst": 5},
@@ -272,7 +269,6 @@ def test_lane_settings_yaml_override() -> None:
 
     settings = Settings(**_normalize_yaml_overrides(raw))
 
-    assert settings.heavy_slot_limit == 2
     assert settings.worker_max_active_tasks == 2
     assert settings.lane_gpu_slots == 2
     assert settings.gpu_asr_burst == 5

@@ -75,8 +75,6 @@ language_detection:
 
 transcribe:
   parallel_per_task: 2
-heavy_slot:
-  limit: 1
 worker:
   max_active_tasks: 4   # tasks in flight; 1 ≈ legacy sequential behaviour
 lane:

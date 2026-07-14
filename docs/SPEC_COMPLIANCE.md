@@ -32,7 +32,7 @@ Status legend:
 | Transcription (Whisper call, raw + normalized segments + words, limits) | PASS | Implements language + initial_prompt, DB persistence, and raw artifact `asr/segments_raw.json`. |
 | Merge overlap removal by timestamps | PASS | Strict cutoff: words with `t_start < previous_segment_end` are dropped. |
 | Summary via llama.cpp endpoint, prompts from files, structured output, 2000/15% windows | PASS | Token-window strategy with window artifacts `summary/window_XX.txt` and final markdown `summary/final.md`. |
-| Limits (global heavy semaphore, optional night mode window) | PASS | `vts/services/heavy_slot.py`, config keys in `vts/core/config.py`. |
+| Limits (resource lanes, optional night mode window) | PASS | `vts/worker/lanes.py`, config keys in `vts/core/config.py`. |
 | Required API endpoints | PASS | All required endpoints are present in `vts/api/main.py`. |
 | Task launch options (`audio only`, `transcript`, `summary`) | PASS | API and UI support stage control: audio-only download, transcript-only flow, and optional summary stage. |
 | Minimal SPA requirements (URL input, checkboxes, language, task list, tabs, dual progress bars) | PASS | Implemented in `vts/static/index.html` + `vts/static/app.js`. |
@@ -46,7 +46,7 @@ Status legend:
 | API surface, SSE, auth wiring | `vts/api/main.py`, `vts/api/deps.py` | Defines all client-facing behavior, user isolation, and streaming events. |
 | Auth and trusted proxy policy | `vts/services/auth.py`, `vts/core/config.py` | Security boundary for `X-Forwarded-User`; admin impersonation policy. |
 | Pipeline orchestration (idempotency + retries/resume semantics) | `vts/pipeline/processor.py`, `vts/pipeline/types.py` | Core business flow from download to final summary with DB/SSE/log integration. |
-| Concurrency controls | `vts/services/heavy_slot.py`, pipeline transcription step | Enforces per-task and global heavy limits, plus optional night-window throttling. |
+| Concurrency controls | `vts/worker/lanes.py`, pipeline transcription step | Enforces per-lane slot limits (network/ffmpeg/gpu) with gpu asr/llm priority, plus optional night-window throttling on the gpu lane. |
 | Media/ASR processing | `vts/services/media.py`, `vts/services/transcription.py`, `vts/db/repo.py` | Segment generation, Whisper integration, and normalized persistence model. |
 | Data model and migrations | `vts/db/models.py`, `alembic/versions/0001_initial.py` | Contract for task state, DAG step state, and transcript data model. |
 | Deployment and release automation | `scripts/bump_version.py`, `scripts/prepare_commit.sh`, `build.sh`, `deploy.sh`, `systemd/*.service` | Implements project workflow contract and production rollout sequence. |
