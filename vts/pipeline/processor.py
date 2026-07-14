@@ -110,6 +110,8 @@ class TaskProcessor:
         self._task_metrics: dict[str, MetricsEmitter] = {}
         self._task_n_ctx: dict[str, int] = {}
         self._llm = LLMClient(url=settings.llm_url, api_key=settings.llm_api_key)
+        from vts.pipeline.context import PipelineContext
+        self._ctx = PipelineContext(self)
 
     async def _check_paused(self, task_id: uuid.UUID) -> None:
         """Raise TaskPaused if a pause has been requested for this task."""

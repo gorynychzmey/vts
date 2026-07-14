@@ -143,21 +143,21 @@ def test_summary_n_ctx_setting_exists_and_yaml_maps():
     assert normalized["summary_n_ctx"] == 40960
 
 
-def test_processor_get_n_ctx_uses_discovery(monkeypatch):
+def test_context_get_n_ctx_uses_discovery(monkeypatch):
     import logging
     import uuid
     from types import SimpleNamespace
 
-    from vts.pipeline.processor import TaskProcessor
+    from vts.pipeline.context import PipelineContext
 
-    proc = TaskProcessor.__new__(TaskProcessor)
-    proc.settings = SimpleNamespace(
+    ctx = PipelineContext.__new__(PipelineContext)
+    ctx.settings = SimpleNamespace(
         llm_url="http://llm.local:4000/v1",
         llm_model="qwen3.6:35b",
         llm_api_key="sk-test",
         summary_n_ctx=32768,
     )
-    proc._task_n_ctx = {}
+    ctx._task_n_ctx = {}
 
     async def fake_discover(**kwargs):
         assert kwargs["url"] == "http://llm.local:4000/v1"
@@ -165,9 +165,9 @@ def test_processor_get_n_ctx_uses_discovery(monkeypatch):
         assert kwargs["fallback_n_ctx"] == 32768
         return ("litellm", 114688)
 
-    monkeypatch.setattr("vts.pipeline.processor.discover_n_ctx", fake_discover)
+    monkeypatch.setattr("vts.pipeline.context.discover_n_ctx", fake_discover)
     task_id = uuid.uuid4()
     logger = logging.getLogger("test_llm_backends")
-    n_ctx = asyncio.run(proc._get_n_ctx(task_id, logger))
+    n_ctx = asyncio.run(ctx.get_n_ctx(task_id, logger))
     assert n_ctx == 114688
-    assert proc._task_n_ctx[str(task_id)] == 114688
+    assert ctx._task_n_ctx[str(task_id)] == 114688
