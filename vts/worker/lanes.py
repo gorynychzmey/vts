@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -8,6 +9,8 @@ from datetime import datetime
 from typing import Any
 
 _LANES = ("network", "ffmpeg", "gpu")
+
+_log = logging.getLogger("vts.worker")
 
 
 def _default_night_allowed(settings: Any) -> Callable[[], bool]:
@@ -96,8 +99,16 @@ class LaneManager:
     # -- internals ---------------------------------------------------------
 
     async def _notify(self) -> None:
-        if self._on_change is not None:
+        if self._on_change is None:
+            return
+        try:
             await self._on_change(self.snapshot())
+        except Exception:
+            # The snapshot publish is a best-effort cache (10s TTL); its
+            # failure must never undo slot bookkeeping already committed by
+            # the caller, nor propagate out of __aenter__/__aexit__ (which
+            # would leak a slot forever, e.g. the 1-slot gpu lane).
+            _log.warning("lane snapshot on_change callback failed", exc_info=True)
 
     def _has_waiters(self, lane: str) -> bool:
         if lane == "gpu":

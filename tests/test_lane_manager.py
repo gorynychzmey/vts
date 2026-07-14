@@ -169,3 +169,37 @@ async def test_on_change_snapshots():
         pass
     assert snaps  # at least grant + release
     assert set(snaps[-1].keys()) == {"network", "ffmpeg", "gpu_asr", "gpu_llm"}
+
+
+@pytest.mark.asyncio
+async def test_on_change_failure_does_not_wedge_gpu_lane():
+    # Regression: a raising on_change must not leak the gpu slot. gpu has a
+    # single slot, so the very first acquire takes the immediate-grant path
+    # in _SlotContext.__aenter__, where _active[lane] is incremented BEFORE
+    # _notify() is awaited. If the exception from on_change escaped _notify,
+    # it would propagate out of __aenter__, the `async with` body would never
+    # run, __aexit__ would never run (so the slot is never released), and the
+    # gpu lane would be wedged until worker restart.
+    async def on_change(snapshot):
+        raise RuntimeError("redis blip")
+
+    mgr = LaneManager(_settings(), on_change=on_change)
+
+    entered = False
+    exc_escaped = None
+    try:
+        async with mgr.slot("gpu", uuid.uuid4(), "llm"):
+            entered = True
+    except Exception as exc:  # pragma: no cover - only hit if the bug regresses
+        exc_escaped = exc
+
+    assert exc_escaped is None  # (b) no exception escapes to the caller
+    assert entered  # the immediate-grant path did run the body
+
+    # (a) slot was released, not leaked: a second acquire on the same
+    # 1-slot gpu lane must succeed promptly rather than hang forever.
+    async def acquire_again():
+        async with mgr.slot("gpu", uuid.uuid4(), "asr"):
+            pass
+
+    await asyncio.wait_for(acquire_again(), 1)

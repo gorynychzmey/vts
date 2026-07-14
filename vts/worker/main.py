@@ -49,7 +49,14 @@ async def _step_weights_loop() -> None:
 
 
 async def _publish_lane_snapshot(redis: Redis, prefix: str, snapshot: dict[str, list[str]]) -> None:
-    await redis.setex(f"{prefix}queue:lanes", 10, json.dumps(snapshot))
+    # Best-effort cache (10s TTL): a transient Redis failure here must never
+    # propagate into LaneManager's slot bookkeeping, so swallow and log.
+    try:
+        await redis.setex(f"{prefix}queue:lanes", 10, json.dumps(snapshot))
+    except Exception:
+        logging.getLogger("vts.worker").warning(
+            "failed to publish lane snapshot", exc_info=True
+        )
 
 
 class WorkerPool:
