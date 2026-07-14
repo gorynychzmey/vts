@@ -1,0 +1,555 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from vts.db.repo import Repo
+from vts.services.storage import write_json
+from vts.pipeline.steps.base import Step, StepState, log_payload
+
+if TYPE_CHECKING:
+    from vts.pipeline.context import PipelineContext
+
+
+def utcnow() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+# --- ASR domain helpers (pure module functions) -----------------------------
+
+
+def normalize_language(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def effective_language(task_options: dict[str, Any], dirs: dict[str, Path]) -> str | None:
+    explicit = normalize_language(task_options.get("language"))
+    if explicit:
+        return explicit
+    detected = normalize_language(task_options.get("detected_language"))
+    if detected:
+        return detected
+    marker = dirs["outputs"] / "language_detection.json"
+    if not marker.exists():
+        return None
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return normalize_language(payload.get("language"))
+
+
+def normalize_token(value: str) -> str:
+    return re.sub(r"[^\wа-яА-ЯёЁ]+", "", value, flags=re.UNICODE).strip().lower()
+
+
+def is_probable_asr_hallucination(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if not normalized:
+        return False
+    tokens = [normalize_token(token) for token in re.split(r"\s+", normalized)]
+    tokens = [token for token in tokens if token]
+    if len(tokens) < 10:
+        return False
+
+    token_counts = Counter(tokens)
+    unique_ratio = len(token_counts) / float(len(tokens))
+    top_token_ratio = token_counts.most_common(1)[0][1] / float(len(tokens))
+
+    sentences = [normalize_token(part) for part in re.split(r"[.!?…]+", normalized)]
+    sentences = [sentence for sentence in sentences if sentence]
+    repeated_edge = False
+    if len(sentences) >= 5:
+        head = sentences[0]
+        tail = sentences[-1]
+        head_repeats = 0
+        tail_repeats = 0
+        for sentence in sentences:
+            if sentence == head:
+                head_repeats += 1
+            else:
+                break
+        for sentence in reversed(sentences):
+            if sentence == tail:
+                tail_repeats += 1
+            else:
+                break
+        repeated_edge = max(head_repeats, tail_repeats) >= 5
+
+    signals = 0
+    if unique_ratio < 0.30:
+        signals += 1
+    if top_token_ratio > 0.35:
+        signals += 1
+    if repeated_edge:
+        signals += 1
+    return signals >= 2
+
+
+def transcript_quality_score(text: str) -> float:
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if not normalized:
+        return 0.0
+    tokens = [normalize_token(token) for token in re.split(r"\s+", normalized)]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return 0.0
+    unique_ratio = len(set(tokens)) / float(len(tokens))
+    return len(tokens) * unique_ratio
+
+
+def trim_repetitive_edges(text: str) -> tuple[str, dict[str, Any]]:
+    if not text.strip():
+        return "", {
+            "removed_head_sentences": 0,
+            "removed_tail_sentences": 0,
+            "head_phrase": None,
+            "tail_phrase": None,
+        }
+    raw_sentences = [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text) if item.strip()]
+    if not raw_sentences:
+        return text.strip(), {
+            "removed_head_sentences": 0,
+            "removed_tail_sentences": 0,
+            "head_phrase": None,
+            "tail_phrase": None,
+        }
+
+    sentences = list(raw_sentences)
+    removed_head = 0
+    removed_tail = 0
+    head_phrase: str | None = None
+    tail_phrase: str | None = None
+    min_repeats = 6
+
+    while len(sentences) >= min_repeats:
+        head = normalize_token(sentences[0])
+        if not head or len(head) > 64:
+            break
+        repeats = 0
+        for sentence in sentences:
+            if normalize_token(sentence) == head:
+                repeats += 1
+            else:
+                break
+        if repeats < min_repeats:
+            break
+        removed_head += repeats
+        head_phrase = sentences[0]
+        sentences = sentences[repeats:]
+
+    while len(sentences) >= min_repeats:
+        tail = normalize_token(sentences[-1])
+        if not tail or len(tail) > 64:
+            break
+        repeats = 0
+        for sentence in reversed(sentences):
+            if normalize_token(sentence) == tail:
+                repeats += 1
+            else:
+                break
+        if repeats < min_repeats:
+            break
+        removed_tail += repeats
+        tail_phrase = sentences[-1]
+        sentences = sentences[:-repeats]
+
+    cleaned = " ".join(sentences).strip()
+    if not cleaned:
+        cleaned = text.strip()
+    return cleaned, {
+        "removed_head_sentences": removed_head,
+        "removed_tail_sentences": removed_tail,
+        "head_phrase": head_phrase,
+        "tail_phrase": tail_phrase,
+    }
+
+
+def tail_prompt(text: str, max_chars: int = 800) -> str | None:
+    normalized = text.strip()
+    if not normalized:
+        return None
+    return normalized[-max_chars:]
+
+
+def transcribe_audio_path(dirs: dict[str, Path]) -> Path:
+    trimmed = dirs["media"] / "audio_16k_trimmed.wav"
+    if trimmed.exists():
+        return trimmed
+    return dirs["media"] / "audio_16k.wav"
+
+
+# --- Transcription steps ----------------------------------------------------
+
+
+class DetectLanguageStep(Step):
+    name = "detect_language"
+    lane = None
+
+    async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
+        # Mirrors the legacy dry_run=True path: reports whether the language is
+        # already known, and (as in the original) records an explicit
+        # task-option language into task_options as a side effect.
+        already = normalize_language(st.task_options.get("detected_language"))
+        if already:
+            return True
+        explicit = normalize_language(st.task_options.get("language"))
+        if explicit:
+            st.task_options["detected_language"] = explicit
+            return True
+        return False
+
+    async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        marker = st.dirs["outputs"] / "language_detection.json"
+
+        # Already determined (persisted to DB on a previous run, loaded into task_options at startup).
+        already = normalize_language(st.task_options.get("detected_language"))
+        if already:
+            return True
+
+        explicit = normalize_language(st.task_options.get("language"))
+        if explicit:
+            st.task_options["detected_language"] = explicit
+            write_json(
+                marker,
+                {
+                    "source": "task_option",
+                    "language": explicit,
+                    "confidence": 1.0,
+                    "detected_at": utcnow().isoformat(),
+                },
+            )
+            await ctx.persist_detected_language(st.task_id, explicit, 1.0)
+            return True
+
+        manifest_path = st.dirs["outputs"] / "segments_manifest.json"
+        if not manifest_path.exists():
+            raise RuntimeError("Missing segment manifest for language detection")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        specs = payload.get("segments", [])
+        if not isinstance(specs, list) or not specs:
+            raise RuntimeError("Missing segment files for language detection")
+        first = specs[0]
+        segment_path = st.dirs["segments"] / str(first.get("file", ""))
+        if not segment_path.exists():
+            raise RuntimeError("Missing first segment for language detection")
+
+        st.logger.info("waiting for gpu slot: detect language")
+        async with ctx.gpu_slot(st.task_id, st.user_id, "asr"):
+            st.logger.info("gpu slot acquired: detect language")
+            raw = await ctx.whisper.detect_language(audio_path=segment_path)
+        log_payload(st.logger, "detect_language response", raw)
+        language = normalize_language(raw.get("language"))
+        _conf_raw = raw.get("language_probability")
+        confidence: float | None = float(_conf_raw) if isinstance(_conf_raw, (int, float)) else None
+        threshold = ctx.settings.language_detection_confidence_threshold
+        if not language:
+            raise RuntimeError("Auto language detection failed: language not recognized")
+        if confidence is None:
+            raise RuntimeError(
+                f"Auto language detection failed: language_probability missing for language={language}"
+            )
+        if confidence < threshold:
+            raise RuntimeError(
+                f"Auto language detection confidence too low: language={language}, "
+                f"confidence={confidence}, threshold={threshold}"
+            )
+        st.task_options["detected_language"] = language
+        write_json(
+            marker,
+            {
+                "source": "whisper_first_segment",
+                "language": language,
+                "confidence": confidence,
+                "threshold": threshold,
+                "detected_at": utcnow().isoformat(),
+            },
+        )
+        await ctx.persist_detected_language(st.task_id, language, confidence)
+        st.logger.info("language detected: %s (confidence=%.3f)", language, confidence)
+        await ctx.bus.publish_event(
+            user_id=st.user_id,
+            task_id=str(st.task_id),
+            event="phase",
+            data={
+                "phase": "detect_language",
+                "status": "done",
+                "language": language,
+                "confidence": confidence,
+            },
+        )
+        return True
+
+
+class TranscribeSegmentsStep(Step):
+    name = "transcribe_segments"
+    lane = None
+
+    async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
+        manifest_path = st.dirs["outputs"] / "segments_manifest.json"
+        if not manifest_path.exists():
+            # Transcript exists means transcription was already merged.
+            transcript_json = st.dirs["outputs"] / "transcript.json"
+            return transcript_json.exists()
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        specs: list[dict[str, Any]] = payload.get("segments", [])
+        if not specs:
+            return True
+
+        async with ctx.session_factory() as session:
+            repo = Repo(session)
+            existing_segments = {seg.segment_index: seg for seg in await repo.get_task_segments(st.task_id)}
+        missing = []
+        for spec in specs:
+            idx = int(spec["segment_index"])
+            seg = existing_segments.get(idx)
+            if seg is None:
+                missing.append(spec)
+                continue
+            if isinstance(seg.raw_json, dict) and seg.raw_json:
+                continue
+            missing.append(spec)
+        if not missing:
+            return True
+        return False
+
+    async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        manifest_path = st.dirs["outputs"] / "segments_manifest.json"
+        if not manifest_path.exists():
+            raise RuntimeError("Missing segment manifest")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        specs: list[dict[str, Any]] = payload.get("segments", [])
+        if not specs:
+            return False
+
+        async with ctx.session_factory() as session:
+            repo = Repo(session)
+            existing_segments = {seg.segment_index: seg for seg in await repo.get_task_segments(st.task_id)}
+        missing = []
+        for spec in specs:
+            idx = int(spec["segment_index"])
+            seg = existing_segments.get(idx)
+            if seg is None:
+                missing.append(spec)
+                continue
+            if isinstance(seg.raw_json, dict) and seg.raw_json:
+                continue
+            missing.append(spec)
+        if not missing:
+            return True
+
+        language = effective_language(st.task_options, st.dirs)
+        if not language:
+            raise RuntimeError("Missing transcription language after detection")
+        missing.sort(key=lambda spec: int(spec["segment_index"]))
+        text_by_index = {seg.segment_index: seg.text for seg in existing_segments.values() if seg.text.strip()}
+        suspicious_by_index: dict[int, bool] = {
+            seg.segment_index: is_probable_asr_hallucination(seg.text)
+            for seg in existing_segments.values()
+            if seg.text.strip()
+        }
+        transcript_txt = st.dirs["outputs"] / "transcript.txt"
+        _need_set_transcript_path = not transcript_txt.exists()
+        for spec in missing:
+            await ctx.check_paused(st.task_id)
+            idx = int(spec["segment_index"])
+            segment_path = st.dirs["segments"] / str(spec["file"])
+            start = float(spec["start"])
+            end = float(spec["end"])
+            initial_prompt = None
+            if not suspicious_by_index.get(idx - 1, False):
+                initial_prompt = tail_prompt(text_by_index.get(idx - 1, ""))
+            st.logger.info("waiting for gpu slot: transcribe segment %s", idx)
+            _asr_retries = 0
+            _t_asr_q0 = time.monotonic()
+            async with ctx.gpu_slot(st.task_id, st.user_id, "asr"):
+                _t_asr_q_ms = round((time.monotonic() - _t_asr_q0) * 1000)
+                st.logger.info("gpu slot acquired: transcribe segment %s", idx)
+                _t_asr0 = time.monotonic()
+                raw = await ctx.whisper.transcribe(
+                    audio_path=segment_path,
+                    language=language,
+                    initial_prompt=initial_prompt,
+                )
+                _t_asr_ms = round((time.monotonic() - _t_asr0) * 1000)
+            log_payload(st.logger, f"asr response segment={idx}", raw, max_chars=200)
+            text = ctx.whisper.normalize_output(raw)
+            suspicious = is_probable_asr_hallucination(text)
+            if suspicious:
+                _asr_retries = 1
+                st.logger.warning("asr segment %s appears repetitive/noisy; retrying without tail prompt", idx)
+                st.logger.info("waiting for gpu slot: transcribe segment %s retry", idx)
+                async with ctx.gpu_slot(st.task_id, st.user_id, "asr"):
+                    st.logger.info("gpu slot acquired: transcribe segment %s retry", idx)
+                    retry_raw = await ctx.whisper.transcribe(
+                        audio_path=segment_path,
+                        language=language,
+                        initial_prompt=None,
+                    )
+                retry_text = ctx.whisper.normalize_output(retry_raw)
+                retry_suspicious = is_probable_asr_hallucination(retry_text)
+                old_score = transcript_quality_score(text)
+                new_score = transcript_quality_score(retry_text)
+                if (not retry_suspicious) or (new_score > old_score):
+                    raw = retry_raw
+                    text = retry_text
+                    suspicious = retry_suspicious
+                    st.logger.info(
+                        "asr retry accepted for segment %s (old_score=%.3f, new_score=%.3f)",
+                        idx,
+                        old_score,
+                        new_score,
+                    )
+                else:
+                    st.logger.info(
+                        "asr retry rejected for segment %s (old_score=%.3f, new_score=%.3f)",
+                        idx,
+                        old_score,
+                        new_score,
+                    )
+            suspicious_by_index[idx] = suspicious
+            _asr_dur_s = end - start
+            _asr_rtf = (_t_asr_ms / 1000.0) / _asr_dur_s if _asr_dur_s > 0 else None
+            _asr_em = ctx.get_emitter(st.task_id)
+            if _asr_em:
+                _asr_em.emit({
+                    "stage": "transcribe.segment",
+                    "status": "ok",
+                    "segment_id": idx,
+                    "audio_start_s": round(start, 3),
+                    "audio_end_s": round(end, 3),
+                    "audio_duration_s": round(_asr_dur_s, 3),
+                    "t_wall_ms": _t_asr_ms,
+                    "t_queue_ms": _t_asr_q_ms,
+                    "rtf": round(_asr_rtf, 4) if _asr_rtf is not None else None,
+                    "retries": _asr_retries,
+                    "whisper_backend": ctx.whisper.backend_name,
+                    "artifacts": {"segment_file": str(spec.get("file", ""))},
+                })
+            text_by_index[idx] = text
+            await ctx.bus.publish_event(
+                user_id=st.user_id,
+                task_id=str(st.task_id),
+                event="transcribe_progress",
+                data={"segment_index": idx, "total": len(specs)},
+                throttle_key="transcribe_progress",
+            )
+            with transcript_txt.open("a", encoding="utf-8") as tf:
+                tf.write(text.strip() + " ")
+            async with ctx.session_factory() as session:
+                repo = Repo(session)
+                seg = await repo.upsert_asr_segment_payload(
+                    task_id=st.task_id,
+                    segment_index=idx,
+                    start_sec=start,
+                    end_sec=end,
+                    text=text,
+                    raw_json=raw,
+                )
+                if _need_set_transcript_path:
+                    task_row = await repo.get_task_by_id(st.task_id)
+                    if task_row is not None:
+                        task_row.transcript_path = str(transcript_txt)
+                    _need_set_transcript_path = False
+                await session.commit()
+            await ctx.bus.publish_event(
+                user_id=st.user_id,
+                task_id=str(st.task_id),
+                event="transcript_segment_text",
+                data={"index": idx, "total": len(specs), "text": text.strip()},
+            )
+            await asyncio.sleep(ctx.settings.services_database_write_throttle_ms / 1000.0)
+
+        async with ctx.session_factory() as session:
+            repo = Repo(session)
+            all_segments = await repo.get_task_segments(st.task_id)
+        asr_dir = st.dirs["root"] / "asr"
+        asr_dir.mkdir(parents=True, exist_ok=True)
+        write_json(
+            asr_dir / "segments_raw.json",
+            {
+                "segments": [
+                    {
+                        "segment_index": int(seg.segment_index),
+                        "start": float(seg.start_sec),
+                        "end": float(seg.end_sec),
+                        "raw_json": seg.raw_json,
+                    }
+                    for seg in all_segments
+                    if isinstance(seg.raw_json, dict) and bool(seg.raw_json)
+                ]
+            },
+        )
+        return True
+
+
+class MergeTranscriptStep(Step):
+    name = "merge_transcript"
+    lane = None
+
+    async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
+        transcript_json = st.dirs["outputs"] / "transcript.json"
+        transcript_txt = st.dirs["outputs"] / "transcript.txt"
+        return transcript_json.exists() and transcript_txt.exists()
+
+    async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        transcript_json = st.dirs["outputs"] / "transcript.json"
+        transcript_txt = st.dirs["outputs"] / "transcript.txt"
+        if transcript_json.exists() and transcript_txt.exists():
+            return True
+
+        async with ctx.session_factory() as session:
+            repo = Repo(session)
+            segments = await repo.get_task_segments(st.task_id)
+            entries: list[dict[str, Any]] = []
+            merged_tokens: list[str] = []
+            for segment in segments:
+                text = segment.text.strip()
+                if text:
+                    merged_tokens.append(text)
+                    entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
+            merged_text = " ".join(merged_tokens).strip()
+            cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)
+            write_json(
+                transcript_json,
+                {
+                    "text": cleaned_text,
+                    "raw_text": merged_text,
+                    "entries": entries,
+                    "cleanup": cleanup_meta,
+                },
+            )
+            transcript_txt.write_text(cleaned_text, encoding="utf-8")
+            st.logger.info(
+                "transcript merge cleanup: start_removed=%s end_removed=%s",
+                cleanup_meta.get("removed_head_sentences", 0),
+                cleanup_meta.get("removed_tail_sentences", 0),
+            )
+
+            task = await repo.get_task_by_id(st.task_id)
+            if task is None:
+                raise RuntimeError("task not found during merge")
+            if not task.transcript_path:
+                task.transcript_path = str(transcript_txt)
+            await session.commit()
+
+        for path in st.dirs["segments"].glob("*.wav"):
+            path.unlink(missing_ok=True)
+        await ctx.bus.publish_event(
+            user_id=st.user_id,
+            task_id=str(st.task_id),
+            event="phase",
+            data={"phase": "merge_transcript", "status": "done"},
+        )
+        return True

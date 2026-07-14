@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -9,6 +10,15 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from vts.pipeline.context import PipelineContext
+
+
+def log_payload(logger: logging.Logger, prefix: str, payload: Any, max_chars: int = 4000) -> None:
+    try:
+        raw = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=True)
+    except Exception:
+        raw = str(payload)
+    truncated = raw if len(raw) <= max_chars else raw[:max_chars] + "...<truncated>"
+    logger.info("%s: %s", prefix, truncated)
 
 
 @dataclass

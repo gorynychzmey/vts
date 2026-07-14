@@ -7,12 +7,20 @@ from vts.pipeline.steps.media import (
     SegmentAudioStep,
     TrimInitialSilenceStep,
 )
+from vts.pipeline.steps.transcription import (
+    DetectLanguageStep,
+    MergeTranscriptStep,
+    TranscribeSegmentsStep,
+)
 
 STEP_REGISTRY: dict[str, Step] = {
     DownloadStep.name: DownloadStep(),
     ExtractAudioStep.name: ExtractAudioStep(),
     TrimInitialSilenceStep.name: TrimInitialSilenceStep(),
     SegmentAudioStep.name: SegmentAudioStep(),
+    DetectLanguageStep.name: DetectLanguageStep(),
+    TranscribeSegmentsStep.name: TranscribeSegmentsStep(),
+    MergeTranscriptStep.name: MergeTranscriptStep(),
 }
 
 

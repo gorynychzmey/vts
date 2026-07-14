@@ -212,18 +212,32 @@ def test_step_extract_audio_dry_run_accepts_trimmed_output(tmp_path: Path) -> No
     assert done is True
 
 
+def _gpu_slot_stub(task_id, user_id, cls):
+    class _CM:
+        async def __aenter__(self_inner):
+            return self_inner
+
+        async def __aexit__(self_inner, *a):
+            return False
+
+    return _CM()
+
+
 def test_step_detect_language_raises_when_first_segment_missing(
     tmp_path: Path,
 ) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        language_detection_confidence_threshold=0.6,
-        whisper_url="http://whisper.local",
-        whisper_backend="asr",
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.transcription import DetectLanguageStep
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(
+            language_detection_confidence_threshold=0.6,
+            whisper_url="http://whisper.local",
+            whisper_backend="asr",
+        ),
+        bus=_DummyBus(),
+        gpu_slot=_gpu_slot_stub,
     )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._log_payload = lambda *args, **kwargs: None
 
     root = tmp_path / "task"
     outputs = root / "outputs"
@@ -236,39 +250,39 @@ def test_step_detect_language_raises_when_first_segment_missing(
     )
     # segment file is missing — no fallback, should raise
 
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs={"root": root, "outputs": outputs, "segments": segments},
+        logger=logging.getLogger("test_step_detect_language_missing_segment"),
+        task_options={},
+    )
+
     with pytest.raises(RuntimeError, match="Missing first segment"):
-        asyncio.run(
-            TaskProcessor.step_detect_language(
-                processor,
-                task_id=uuid.uuid4(),
-                user_id="user-1",
-                dirs={"root": root, "outputs": outputs, "segments": segments},
-                logger=logging.getLogger("test_step_detect_language_missing_segment"),
-                task_options={},
-                dry_run=False,
-            )
-        )
+        asyncio.run(DetectLanguageStep().run(ctx=ctx, st=st))
 
 
 def test_step_detect_language_raises_when_confidence_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    processor = TaskProcessor.__new__(TaskProcessor)
-    processor.settings = SimpleNamespace(
-        language_detection_confidence_threshold=0.6,
-        whisper_url="http://whisper.local",
-        whisper_backend="asr",
-    )
-    processor.bus = _DummyBus()
-    processor.lanes = _DummyLanes()
-    processor._log_payload = lambda *args, **kwargs: None
+    from vts.pipeline.steps.base import StepState
+    from vts.pipeline.steps.transcription import DetectLanguageStep
 
     class _FakeWhisper:
         async def detect_language(self, **kwargs: object) -> dict[str, object]:
             return {"language": "ru"}  # no language_probability
 
-    processor.whisper = _FakeWhisper()  # type: ignore[assignment]
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(
+            language_detection_confidence_threshold=0.6,
+            whisper_url="http://whisper.local",
+            whisper_backend="asr",
+        ),
+        bus=_DummyBus(),
+        gpu_slot=_gpu_slot_stub,
+        whisper=_FakeWhisper(),
+    )
 
     root = tmp_path / "task"
     outputs = root / "outputs"
@@ -281,18 +295,16 @@ def test_step_detect_language_raises_when_confidence_missing(
     )
     (segments / "0001.wav").write_bytes(b"wav")
 
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id="user-1",
+        dirs={"root": root, "outputs": outputs, "segments": segments},
+        logger=logging.getLogger("test_step_detect_language_missing_confidence"),
+        task_options={},
+    )
+
     with pytest.raises(RuntimeError, match="language_probability missing"):
-        asyncio.run(
-            TaskProcessor.step_detect_language(
-                processor,
-                task_id=uuid.uuid4(),
-                user_id="user-1",
-                dirs={"root": root, "outputs": outputs, "segments": segments},
-                logger=logging.getLogger("test_step_detect_language_missing_confidence"),
-                task_options={},
-                dry_run=False,
-            )
-        )
+        asyncio.run(DetectLanguageStep().run(ctx=ctx, st=st))
 
 
 def test_step_segment_audio_publishes_progress_events(
