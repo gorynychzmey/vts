@@ -159,6 +159,7 @@ window.__VTS_I18N.en = {
 "progress.working": "in progress",
 "progress.queued": "queued",
 "progress.queue_pos": "queue #{position}",
+"progress.waiting_lane": "waiting: {queue}",
 "progress.failed": "failed",
 "progress.overall": "Overall progress",
 "progress.step": "Step progress",

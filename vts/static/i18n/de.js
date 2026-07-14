@@ -159,6 +159,7 @@ window.__VTS_I18N.de = {
 "progress.working": "in bearbeitung",
 "progress.queued": "in warteschlange",
 "progress.queue_pos": "warteschlange #{position}",
+"progress.waiting_lane": "wartet: {queue}",
 "progress.failed": "fehlgeschlagen",
 "progress.overall": "Gesamtfortschritt",
 "progress.step": "Schrittfortschritt",

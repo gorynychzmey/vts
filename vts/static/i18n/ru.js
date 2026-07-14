@@ -159,6 +159,7 @@ window.__VTS_I18N.ru = {
 "progress.working": "идет работа",
 "progress.queued": "в очереди",
 "progress.queue_pos": "очередь #{position}",
+"progress.waiting_lane": "ждёт: {queue}",
 "progress.failed": "ошибка",
 "progress.overall": "Общий прогресс",
 "progress.step": "Прогресс шага",

@@ -1322,7 +1322,7 @@ function computeLocalStepProgress(runtime) {
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
-  if (runtime.baseStatus === "queued" || runtime.baseStatus === "waiting") {
+  if (runtime.baseStatus === "queued") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
     }
@@ -1330,6 +1330,15 @@ function computeLocalStepProgress(runtime) {
   }
 
   const active = resolveActiveStep(runtime);
+  // `waiting` = partially processed, the active step is queued in a lane for a
+  // slot. Show real progress (completed steps count) with a "waiting: <lane>"
+  // label on the active step, NOT a queued 0% (regression from VOS-85).
+  if (runtime.baseStatus === "waiting") {
+    const laneText = runtime.queue
+      ? t("progress.waiting_lane", { queue: t(`queue.${runtime.queue}`) })
+      : t("status.waiting");
+    return { value: 0.05, indeterminate: true, text: laneText };
+  }
   if (!active) {
     return { value: 0.05, indeterminate: true, text: t("progress.working") };
   }
@@ -1352,13 +1361,15 @@ function computeOverallProgress(runtime) {
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
-  if (runtime.baseStatus === "queued" || runtime.baseStatus === "waiting") {
+  if (runtime.baseStatus === "queued") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
     }
     return { value: 0, indeterminate: false, text: t("progress.queued") };
   }
 
+  // `waiting` falls through to the normal per-step computation below so the
+  // overall bar reflects the steps already completed, not a queued 0%.
   const active = resolveActiveStep(runtime);
   const local = computeActiveStepLocalProgress(runtime, active);
   const totalWeight = getTotalEnabledWeight(runtime);
@@ -1387,9 +1398,15 @@ function computeOverallProgress(runtime) {
 
 function setTaskStatusAppearance(statusEl, status, queuePosition = null, queue = null) {
   if (status === "waiting") {
-    statusEl.textContent = queue && queuePosition
-      ? t("status.waiting_pos", { queue: t(`queue.${queue}`), position: queuePosition })
-      : t("status.waiting");
+    if (queue && queuePosition) {
+      statusEl.textContent = t("status.waiting_pos", { queue: t(`queue.${queue}`), position: queuePosition });
+    } else if (queue) {
+      // Lane known but position not yet fetched (SSE waiting event carries the
+      // lane, the per-lane position arrives on the next task-list refresh).
+      statusEl.textContent = t("progress.waiting_lane", { queue: t(`queue.${queue}`) });
+    } else {
+      statusEl.textContent = t("status.waiting");
+    }
   } else if (status === "queued" && queuePosition) {
     statusEl.textContent = t("status.queued_pos", { position: queuePosition });
   } else {
