@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from vts.db.base import Base
 from vts.db.models import Task, TaskStatus, User
+from vts.pipeline.context import PipelineContext
 from vts.pipeline.processor import TaskProcessor
 
 
@@ -85,6 +86,14 @@ def _make_processor(session_factory, bus, tmp_path) -> TaskProcessor:
     proc.settings = _settings(tmp_path)
     proc._task_metrics = {}
     proc._task_n_ctx = {}
+    # process_task drives its infra through the PipelineContext; give the bare
+    # processor a context bound to the same session_factory/bus/settings so
+    # check_paused / refresh_task / send_push_safe resolve.
+    ctx = PipelineContext.__new__(PipelineContext)
+    ctx.session_factory = session_factory
+    ctx.bus = bus
+    ctx.settings = proc.settings
+    proc._ctx = ctx
     return proc
 
 
@@ -109,11 +118,11 @@ async def test_task_deleted_midflight_does_not_emit_failed(tmp_path, monkeypatch
 
     monkeypatch.setattr(TaskProcessor, "_run_step", _fake_run_step)
 
-    async def _noop_push(self, session, user_id, payload) -> None:
+    async def _noop_push(session, user_id, payload) -> None:
         _noop_push.calls.append(payload)
 
     _noop_push.calls = []
-    monkeypatch.setattr(TaskProcessor, "_send_push_safe", _noop_push)
+    monkeypatch.setattr(proc._ctx, "send_push_safe", _noop_push)
 
     await proc.process_task(tid)
 
@@ -145,10 +154,10 @@ async def test_real_step_failure_still_emits_failed(tmp_path, monkeypatch) -> No
 
     monkeypatch.setattr(TaskProcessor, "_run_step", _boom_run_step)
 
-    async def _noop_push(self, session, user_id, payload) -> None:
+    async def _noop_push(session, user_id, payload) -> None:
         return None
 
-    monkeypatch.setattr(TaskProcessor, "_send_push_safe", _noop_push)
+    monkeypatch.setattr(proc._ctx, "send_push_safe", _noop_push)
 
     await proc.process_task(tid)
 

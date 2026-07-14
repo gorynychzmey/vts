@@ -23,21 +23,6 @@ DAG_HEAD: Final[list[str]] = [
 # consumer that imported DAG_STEPS expecting the legacy shape.
 DAG_STEPS: Final[list[str]] = DAG_HEAD + ["summarize_final"]
 
-# Steps whose whole body runs under a lane slot (acquired in _run_step).
-# GPU steps are NOT listed: they acquire the gpu lane per GPU call inside
-# their method bodies (former heavy-slot sites).
-STEP_LANES: Final[dict[str, str]] = {
-    "download": "network",
-    "extract_audio": "ffmpeg",
-    "trim_initial_silence": "ffmpeg",
-    "segment_audio": "ffmpeg",
-}
-
-
-def lane_for_step(name: str) -> str | None:
-    return STEP_LANES.get(name)
-
-
 def finalize_step_name(source: str, id: str) -> str:
     if source == "system" and id == "summary":
         return "summarize_final"

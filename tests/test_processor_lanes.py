@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 from vts.db.models import StepStatus, TaskStatus
+from vts.pipeline.context import PipelineContext
 from vts.pipeline.processor import TaskProcessor
 from vts.pipeline.steps.base import Step
 from vts.pipeline.steps.registry import STEP_REGISTRY
@@ -55,7 +56,15 @@ def _make_processor(lanes: LaneManager, bus: _CapturingBus, monkeypatch) -> Task
     proc.lanes = lanes
     proc.bus = bus
     proc.session_factory = lambda: _StubSession()
+    # The lane infra (gpu_slot / mark_waiting / mark_running) lives on the
+    # PipelineContext; bind one to the same lanes/bus/session_factory.
+    ctx = PipelineContext.__new__(PipelineContext)
+    ctx.lanes = lanes
+    ctx.bus = bus
+    ctx.session_factory = proc.session_factory
+    proc._ctx = ctx
     monkeypatch.setattr("vts.pipeline.processor.Repo", _StubRepo)
+    monkeypatch.setattr("vts.pipeline.context.Repo", _StubRepo)
     return proc
 
 
@@ -83,7 +92,7 @@ async def test_gpu_slot_emits_waiting_then_running_when_contended(monkeypatch) -
     contender_entered = asyncio.Event()
 
     async def _contender() -> None:
-        async with proc._gpu_slot(task_id, "user-1", "llm"):
+        async with proc._ctx.gpu_slot(task_id, "user-1", "llm"):
             contender_entered.set()
 
     contender_task = asyncio.create_task(_contender())
@@ -118,7 +127,7 @@ async def test_gpu_slot_immediate_grant_emits_no_transition(monkeypatch) -> None
     proc = _make_processor(lanes, bus, monkeypatch)
 
     task_id = uuid.uuid4()
-    async with proc._gpu_slot(task_id, "user-1", "asr"):
+    async with proc._ctx.gpu_slot(task_id, "user-1", "asr"):
         pass
 
     # No contention -> neither on_wait nor on_grant fires -> no status events.
@@ -145,8 +154,11 @@ async def test_run_step_serializes_download_lane_and_marks_waiting(monkeypatch) 
     lanes = LaneManager(_SettingsStub())  # lane_network_slots == 1
     bus = _CapturingBus()
     proc = _make_processor(lanes, bus, monkeypatch)
-    proc._ctx = None  # the fake DownloadStep.run ignores ctx
+    # The fake DownloadStep.run ignores ctx; the lane wait/grant callbacks go
+    # through proc._ctx (built by _make_processor), so its Repo must be the
+    # _run_step-aware stub too.
     monkeypatch.setattr("vts.pipeline.processor.Repo", _RunStepRepo)
+    monkeypatch.setattr("vts.pipeline.context.Repo", _RunStepRepo)
 
     repo = _RunStepRepo(None)
     session = _StubSession()

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
-import re
 import shutil
 import time
 import uuid
@@ -14,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from redis.asyncio import Redis
-from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import Settings
@@ -23,14 +20,11 @@ from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.steps.base import StepState
 from vts.pipeline.steps.registry import resolve_step
-from vts.pipeline.types import build_dag_steps, lane_for_step
+from vts.pipeline.types import build_dag_steps
 from vts.worker.lanes import LaneManager
-from vts.services.llm_backends import discover_n_ctx
 from vts.services.task_progress import selected_prompt_refs
-from vts.services.push import notify_user as push_notify_user
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import cow_copy_dir, ensure_task_dirs
-from vts.pipeline.token_budget import TokenBudgetConfig
 from vts.services.summarizer import LLMClient
 from vts.services.transcription import WhisperBackend, create_whisper_backend
 from vts.metrics import MetricsEmitter, aggregate_task_metrics
@@ -72,90 +66,6 @@ class TaskProcessor:
         self._llm = LLMClient(url=settings.llm_url, api_key=settings.llm_api_key)
         from vts.pipeline.context import PipelineContext
         self._ctx = PipelineContext(self)
-
-    async def _check_paused(self, task_id: uuid.UUID) -> None:
-        """Raise TaskPaused if a pause has been requested for this task."""
-        if await self.bus.is_pause_requested(task_id):
-            raise TaskPaused()
-
-    async def _refresh_task(self, session: AsyncSession, task: Any) -> None:
-        """Refresh the task row, translating a mid-flight delete into _TaskGone.
-
-        The API delete endpoint removes the row in its own session; a concurrent
-        refresh here then raises InvalidRequestError ("Could not refresh
-        instance"). That is not a pipeline failure — the user discarded the
-        task — so surface it as _TaskGone for a quiet exit (vts-d64)."""
-        try:
-            await session.refresh(task)
-        except InvalidRequestError as exc:
-            raise _TaskGone() from exc
-
-    async def _mark_waiting(self, task_id: uuid.UUID, user_id: str, queue: str) -> None:
-        """Flip running→waiting when a gpu slot is contended (race-guarded)."""
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            changed = await repo.transition_task_status(
-                task_id, [TaskStatus.running], TaskStatus.waiting
-            )
-            await session.commit()
-        if changed:
-            await self.bus.publish_event(
-                user_id=user_id, task_id=str(task_id),
-                event="task_status", data={"status": TaskStatus.waiting.value, "queue": queue},
-            )
-
-    async def _mark_running(self, task_id: uuid.UUID, user_id: str) -> None:
-        """Flip waiting→running when a gpu slot is granted (race-guarded)."""
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            changed = await repo.transition_task_status(
-                task_id, [TaskStatus.waiting], TaskStatus.running
-            )
-            await session.commit()
-        if changed:
-            await self.bus.publish_event(
-                user_id=user_id, task_id=str(task_id),
-                event="task_status", data={"status": TaskStatus.running.value},
-            )
-
-    def _gpu_slot(self, task_id: uuid.UUID, user_id: str, cls: str):
-        """Acquire the gpu lane for one GPU call, flipping waiting/running as needed."""
-        return self.lanes.slot(
-            "gpu", task_id, cls,
-            on_wait=lambda: self._mark_waiting(task_id, user_id, "gpu"),
-            on_grant=lambda: self._mark_running(task_id, user_id),
-        )
-
-    def _get_emitter(self, task_id: uuid.UUID) -> MetricsEmitter | None:
-        """Return the active MetricsEmitter for a task, or None if absent."""
-        return getattr(self, "_task_metrics", {}).get(str(task_id))
-
-    async def _get_n_ctx(self, task_id: uuid.UUID, logger: logging.Logger) -> int:
-        """Discover the model's context window once per task run, caching it.
-
-        Backend detection (LiteLLM / Ollama / llama-server) lives in
-        vts.services.llm_backends; when nothing matches, the configured
-        summary_n_ctx constant applies."""
-        if not hasattr(self, "_task_n_ctx"):
-            self._task_n_ctx = {}
-        key = str(task_id)
-        if key in self._task_n_ctx:
-            return self._task_n_ctx[key]
-        fallback = int(getattr(self.settings, "summary_n_ctx", TokenBudgetConfig().n_ctx))
-        backend, n_ctx = await discover_n_ctx(
-            url=self.settings.llm_url,
-            api_key=getattr(self.settings, "llm_api_key", None),
-            model=self.settings.llm_model,
-            fallback_n_ctx=fallback,
-        )
-        if backend == "generic":
-            logger.warning(
-                "token budget: no LLM backend detected, using fallback n_ctx=%d", n_ctx
-            )
-        else:
-            logger.info("token budget: n_ctx=%d (backend=%s)", n_ctx, backend)
-        self._task_n_ctx[key] = n_ctx
-        return n_ctx
 
     async def process_task(self, task_id: uuid.UUID) -> None:
         async with self.session_factory() as session:
@@ -233,8 +143,8 @@ class TaskProcessor:
 
             try:
                 for step_name in build_dag_steps(task_options):
-                    await self._check_paused(task.id)
-                    await self._refresh_task(session, task)
+                    await self._ctx.check_paused(task.id)
+                    await self._ctx.refresh_task(session, task)
                     if task.status == TaskStatus.canceled:
                         return
                     await self._run_step(
@@ -247,7 +157,7 @@ class TaskProcessor:
                         logger,
                         task_options,
                     )
-                    await self._refresh_task(session, task)
+                    await self._ctx.refresh_task(session, task)
                     await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
                 await self._cleanup_media(dirs["media"])
                 await repo.set_task_status(task, TaskStatus.completed)
@@ -258,7 +168,7 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": task.status.value},
                 )
-                await self._send_push_safe(
+                await self._ctx.send_push_safe(
                     session,
                     task.user_id,
                     {
@@ -277,7 +187,7 @@ class TaskProcessor:
             except TaskPaused:
                 logger.info("task paused: %s", task.id)
                 await self.bus.clear_pause_request(task.id)
-                await self._refresh_task(session, task)
+                await self._ctx.refresh_task(session, task)
                 if task.status != TaskStatus.paused:
                     await repo.set_task_status(task, TaskStatus.paused)
                     await session.commit()
@@ -306,7 +216,7 @@ class TaskProcessor:
                     event="task_status",
                     data={"status": TaskStatus.failed.value, "error": raw_error, "failure_code": failure_code},
                 )
-                await self._send_push_safe(
+                await self._ctx.send_push_safe(
                     session,
                     task.user_id,
                     {
@@ -354,11 +264,10 @@ class TaskProcessor:
             )
             return
 
-        # Registry-aware dispatch. Migrated steps (Tasks 3-5) resolve to a Step
-        # object and run via `step_obj.run`; everything not yet migrated raises
-        # KeyError from resolve_step and falls through to the legacy method path
-        # below. The registry is still empty in this task, so every step takes
-        # the legacy branch — behavior is identical.
+        # Registry dispatch. Every step resolves to a Step object (media /
+        # transcription / summarization registries + FinalizePromptStep). A
+        # KeyError from resolve_step now signals a real bug (an unknown step name
+        # reached the DAG) and is intentionally left to propagate.
         st = StepState(
             task_id=task_id,
             user_id=user_id,
@@ -366,32 +275,13 @@ class TaskProcessor:
             logger=logger,
             task_options=task_options,
         )
-        try:
-            step_obj = resolve_step(step_name)
-        except KeyError:
-            step_obj = None
+        step_obj = resolve_step(step_name)
 
-        if step_obj is not None:
-            if step.status == StepStatus.completed and await step_obj.already_done(
-                self._ctx, st
-            ):
-                return
-            lane = step_obj.lane
-        else:
-            # Legacy path for not-yet-migrated steps (removed in Task 6). Finalize
-            # steps (summarize_final + finalize:*) are now resolved by the registry
-            # to FinalizePromptStep, so they never reach this branch.
-            method = getattr(self, f"step_{step_name}")
-            if step.status == StepStatus.completed and await method(
-                task_id,
-                user_id,
-                dirs,
-                logger,
-                task_options,
-                dry_run=True,
-            ):
-                return
-            lane = lane_for_step(step_name)
+        if step.status == StepStatus.completed and await step_obj.already_done(
+            self._ctx, st
+        ):
+            return
+        lane = step_obj.lane
 
         # Download and ffmpeg steps run under a shared concurrency lane so the
         # same phase of different tasks does not saturate the network / CPU. The
@@ -401,8 +291,8 @@ class TaskProcessor:
             lane_cm = self.lanes.slot(
                 lane,
                 task_id,
-                on_wait=lambda: self._mark_waiting(task_id, user_id, lane),
-                on_grant=lambda: self._mark_running(task_id, user_id),
+                on_wait=lambda: self._ctx.mark_waiting(task_id, user_id, lane),
+                on_grant=lambda: self._ctx.mark_running(task_id, user_id),
             )
         else:
             lane_cm = contextlib.nullcontext()
@@ -418,10 +308,7 @@ class TaskProcessor:
             )
             _step_t0 = time.monotonic()
             try:
-                if step_obj is not None:
-                    await step_obj.run(self._ctx, st)
-                else:
-                    await method(task_id, user_id, dirs, logger, task_options, dry_run=False)
+                await step_obj.run(self._ctx, st)
                 _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
                 await repo.set_step_status(step, StepStatus.completed)
                 await session.commit()
@@ -431,7 +318,7 @@ class TaskProcessor:
                     event="step",
                     data={"name": step_name, "status": StepStatus.completed.value},
                 )
-                _em = self._get_emitter(task_id)
+                _em = self._ctx.get_emitter(task_id)
                 if _em:
                     _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
             except Exception as exc:
@@ -444,22 +331,10 @@ class TaskProcessor:
                     event="step",
                     data={"name": step_name, "status": StepStatus.failed.value, "error": str(exc)},
                 )
-                _em = self._get_emitter(task_id)
+                _em = self._ctx.get_emitter(task_id)
                 if _em:
                     _em.emit({"stage": step_name, "status": "error", "t_wall_ms": _step_wall_ms})
                 raise
-
-    async def _send_push_safe(
-        self,
-        session: AsyncSession,
-        user_id: uuid.UUID,
-        payload: dict[str, Any],
-    ) -> None:
-        # Push notifications must never block or break the pipeline.
-        try:
-            await push_notify_user(session, self.settings, user_id, payload)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("push: notify_user failed: %s", exc)
 
     async def _cleanup_media(self, media_dir: Path) -> None:
         cutoff = utcnow() - timedelta(hours=self.settings.media_ttl_hours)
@@ -469,59 +344,6 @@ class TaskProcessor:
             modified = datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
             if self.settings.media_ttl_hours <= 0 or modified <= cutoff:
                 file.unlink(missing_ok=True)
-
-    async def _task_url(self, task_id: uuid.UUID) -> str:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                raise RuntimeError("Task not found")
-            return task.source_url
-
-    async def _get_user_preferred_ytdlp_client(self, user_id: uuid.UUID) -> str | None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            return await repo.get_user_preferred_ytdlp_client(user_id)
-
-    async def _set_user_preferred_ytdlp_client(self, user_id: uuid.UUID, player_client: str) -> None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            await repo.set_user_preferred_ytdlp_client(user_id, player_client)
-            await session.commit()
-
-    async def _persist_summary_progress(self, task_id: uuid.UUID, current: int, total: int) -> None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                return
-            await repo.set_task_summary_progress(task, current, total)
-            await session.commit()
-
-    async def _save_task_source_title(self, task_id: uuid.UUID, title: str) -> None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                return
-            if task.source_title:
-                # The user already named the task (e.g. renamed it while it
-                # was queued) — the discovered media title must not clobber it.
-                return
-            task.source_title = title
-            await session.commit()
-
-    async def _persist_detected_language(self, task_id: uuid.UUID, language: str, confidence: float) -> None:
-        async with self.session_factory() as session:
-            repo = Repo(session)
-            task = await repo.get_task_by_id(task_id)
-            if task is None:
-                return
-            options = dict(task.options or {})
-            options["detected_language"] = language
-            options["detected_language_confidence"] = float(confidence)
-            task.options = options
-            await session.commit()
 
     def _task_options(self, raw_options: dict[str, Any] | None) -> dict[str, Any]:
         return dict(raw_options or {})

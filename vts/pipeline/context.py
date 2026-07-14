@@ -132,7 +132,7 @@ class PipelineContext:
         try:
             await push_notify_user(session, self.settings, user_id, payload)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("push: notify_user failed: %s", exc)
+            logging.getLogger(__name__).warning("push: notify_user failed: %s", exc)
 
     async def task_url(self, task_id: uuid.UUID) -> str:
         async with self.session_factory() as session:
