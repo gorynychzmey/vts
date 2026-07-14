@@ -232,3 +232,6 @@ gh-cli-cache/
 
 # UI verifier (Playwright)
 tests/ui/node_modules/
+
+# Local working notes / scratch (never track)
+.claude/_docs/
