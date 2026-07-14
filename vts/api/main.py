@@ -395,6 +395,24 @@ async def _get_cached_queue_positions(
     return positions
 
 
+async def _get_lane_positions(redis: Redis, prefix: str) -> dict[uuid.UUID, tuple[str, int]]:
+    raw = await redis.get(f"{prefix}queue:lanes")
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    out: dict[uuid.UUID, tuple[str, int]] = {}
+    for public, key in (("network", "network"), ("ffmpeg", "ffmpeg"),
+                        ("gpu", "gpu_asr"), ("gpu", "gpu_llm")):
+        position = 0
+        for raw_id in data.get(key, []):
+            tid = uuid.UUID(raw_id)
+            if tid in out:
+                continue
+            position += 1
+            out[tid] = (public, position)
+    return out
+
+
 _MAX_TEXT_SLICE_CHARS = 200_000  # safety cap for JSON-mode slice length
 
 
@@ -629,9 +647,13 @@ def serialize_task(
     queue_positions: dict[uuid.UUID, int] | None = None,
     asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+    lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
 ) -> TaskOut:
+    queue: str | None = None
     queue_position: int | None = None
-    if queue_positions is not None:
+    if task.status == TaskStatus.waiting and lane_positions is not None and task.id in lane_positions:
+        queue, queue_position = lane_positions[task.id]
+    elif queue_positions is not None:
         queue_position = queue_positions.get(task.id)
     transcribe_current, transcribe_total = (0, 0)
     if asr_progress is not None:
@@ -646,6 +668,7 @@ def serialize_task(
         source_title=task.source_title,
         status=task.status.value,
         queue_position=queue_position,
+        queue=queue,
         options=task.options,
         transcript_path=task.transcript_path,
         summary_path=task.summary_path,
@@ -682,12 +705,16 @@ def serialize_task_compact(
     queue_positions: dict[uuid.UUID, int] | None = None,
     asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
+    lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
 ) -> "TaskCompactOut":
     """Compact serializer for list views. Drops steps/options/paths/error
     message — see TaskCompactOut docstring for the rationale."""
     from vts.api.schemas import TaskCompactOut
+    queue: str | None = None
     queue_position: int | None = None
-    if queue_positions is not None:
+    if task.status == TaskStatus.waiting and lane_positions is not None and task.id in lane_positions:
+        queue, queue_position = lane_positions[task.id]
+    elif queue_positions is not None:
         queue_position = queue_positions.get(task.id)
     transcribe_current, transcribe_total = (0, 0)
     if asr_progress is not None:
@@ -701,6 +728,7 @@ def serialize_task_compact(
         source_title=task.source_title,
         status=task.status.value,
         queue_position=queue_position,
+        queue=queue,
         failure_code=classify_failure_code(task.error_message),
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -938,9 +966,10 @@ async def _enqueue_uploaded_task(task, repo, redis, settings) -> "TaskOut":
     )
     set_committed_value(task, "steps", [])
     queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return serialize_task(task, queue_positions, asr_progress, summary_progress)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
 
 def create_app() -> FastAPI:
@@ -1448,9 +1477,10 @@ def create_app() -> FastAPI:
         )
         set_committed_value(task, "steps", [])
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: summary_progress_for_task(task)}
-        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+        return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
     @app.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
     async def get_prompt_result(
@@ -1665,12 +1695,19 @@ def create_app() -> FastAPI:
             uuid.UUID(user.id), limit=limit, offset=offset,
         )
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         task_ids = [task.id for task in tasks]
         asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
         summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
         if compact:
-            return [serialize_task_compact(task, queue_positions, asr_progress, summary_progress) for task in tasks]
-        return [serialize_task(task, queue_positions, asr_progress, summary_progress) for task in tasks]
+            return [
+                serialize_task_compact(task, queue_positions, asr_progress, summary_progress, lane_positions)
+                for task in tasks
+            ]
+        return [
+            serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+            for task in tasks
+        ]
 
     @app.get("/api/tasks/queue-positions", include_in_schema=False)
     async def get_queue_positions(
@@ -1696,9 +1733,10 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: summary_progress_for_task(task)}
-        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+        return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
     @app.patch("/api/tasks/{task_id}", response_model=TaskOut)
     async def update_task(
@@ -1716,9 +1754,10 @@ def create_app() -> FastAPI:
         task.source_title = normalize_display_name(payload.display_name)
         await session.commit()
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await repo.get_asr_progress_for_tasks([task.id])
         summary_progress = {task.id: summary_progress_for_task(task)}
-        return serialize_task(task, queue_positions, asr_progress, summary_progress)
+        return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
     @app.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
     async def restart_summary_task(

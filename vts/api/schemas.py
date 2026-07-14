@@ -150,6 +150,7 @@ class TaskOut(BaseModel):
     source_title: str | None = None
     status: str
     queue_position: int | None = Field(default=None, ge=1)
+    queue: str | None = None
     options: dict[str, Any]
     transcript_path: str | None
     summary_path: str | None
@@ -176,6 +177,7 @@ class TaskCompactOut(BaseModel):
     source_title: str | None = None
     status: str
     queue_position: int | None = Field(default=None, ge=1)
+    queue: str | None = None
     failure_code: str | None = None
     created_at: datetime
     updated_at: datetime

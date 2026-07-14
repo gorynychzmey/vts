@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
-from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, serialize_task
+from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, _get_lane_positions, serialize_task
 from vts.services.task_progress import summary_progress_for_task as _summary_progress_for_task
 from vts.db.models import StepStatus, TaskStatus
 
@@ -222,3 +222,56 @@ def test_serialize_task_preserves_archived_status(tmp_path: Path) -> None:
     payload = serialize_task(task)
 
     assert payload.status == TaskStatus.archived.value
+
+
+def test_serialize_waiting_task_carries_lane_queue(tmp_path: Path) -> None:
+    task = _task(tmp_path, steps=[])
+    task.status = TaskStatus.waiting
+
+    payload = serialize_task(task, lane_positions={task.id: ("gpu", 2)})
+
+    assert payload.queue == "gpu"
+    assert payload.queue_position == 2
+
+
+def test_serialize_queued_task_keeps_global_position(tmp_path: Path) -> None:
+    task = _task(tmp_path, steps=[])
+    task.status = TaskStatus.queued
+
+    payload = serialize_task(task, queue_positions={task.id: 3})
+
+    assert payload.queue is None
+    assert payload.queue_position == 3
+
+
+class _FakeLaneRedis:
+    """Minimal async Redis stub exposing only `get`, backed by a fixed JSON
+    payload — enough to exercise `_get_lane_positions` parsing."""
+
+    def __init__(self, payload: dict[str, list[str]]) -> None:
+        self._payload = json.dumps(payload)
+
+    async def get(self, key: str) -> str:
+        return self._payload
+
+
+async def test_get_lane_positions_parses_and_dedupes() -> None:
+    task_a = uuid.uuid4()
+    task_b = uuid.uuid4()
+    task_c = uuid.uuid4()
+    redis = _FakeLaneRedis(
+        {
+            "network": [str(task_a)],
+            "ffmpeg": [],
+            "gpu_asr": [str(task_b), str(task_b)],
+            "gpu_llm": [str(task_c)],
+        }
+    )
+
+    positions = await _get_lane_positions(redis, "vts:")
+
+    assert positions == {
+        task_a: ("network", 1),
+        task_b: ("gpu", 1),
+        task_c: ("gpu", 1),
+    }
