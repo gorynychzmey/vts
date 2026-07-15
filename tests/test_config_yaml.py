@@ -272,3 +272,17 @@ def test_lane_settings_yaml_override() -> None:
     assert settings.worker_max_active_tasks == 2
     assert settings.lane_gpu_slots == 2
     assert settings.gpu_asr_burst == 5
+
+
+def test_diarization_defaults() -> None:
+    from vts.core.config import Settings
+
+    settings = Settings()
+    assert settings.diarization_url == "http://diarization:9100"
+    assert settings.diarization_backend == "pyannote"
+    # Off by default: a new feature on uncalibrated thresholds plus an extra
+    # pass over the audio. Turning it on later is easy; the reverse is not.
+    assert settings.diarization_enabled_default is False
+    assert settings.diarization_min_words == 2
+    assert settings.diarization_min_seconds == 0.8
+    assert settings.diarization_min_speaker_share == 0.05

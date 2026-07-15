@@ -14,6 +14,16 @@ services:
   whisper:
     url: http://whisper:9000
     backend: asr  # asr (onerahmet/openai-whisper-asr-webservice) or cpp (whisper.cpp server)
+  diarization:
+    url: http://diarization:9100
+    backend: pyannote
+    # Off by default; enable per task with the `diarize` option.
+    enabled_default: false
+    # Split an utterance only when a speaker group clears BOTH thresholds.
+    min_words: 2
+    min_seconds: 0.8
+    # Speakers below this share of speech are noise, not people.
+    min_speaker_share: 0.05
   llm:
     # Default targets the llama.cpp container in docker-compose.yml
     # (--profile llm-llamacpp). The shipped prompts in ./prompts/ are tuned

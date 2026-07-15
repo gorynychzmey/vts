@@ -91,6 +91,18 @@ class Settings(BaseSettings):
 
     whisper_url: str = "http://whisper:9000"
     whisper_backend: str = "asr"
+    diarization_url: str = "http://diarization:9100"
+    diarization_backend: str = "pyannote"
+    # Diarization stays opt-in: it costs a full extra pass over the audio and
+    # gives nothing for single-voice recordings.
+    diarization_enabled_default: bool = False
+    # An utterance splits only when a speaker group clears BOTH thresholds.
+    # Short backchannels ("угу") are where diarization is least reliable, so
+    # splitting on them trades readable text for a low-confidence signal.
+    diarization_min_words: int = 2
+    diarization_min_seconds: float = 0.8
+    # Speakers below this share of total speech are phantoms from music or echo.
+    diarization_min_speaker_share: float = 0.05
     llm_url: str = "http://llama:8000/v1"
     llm_api_key: str | None = None
     llm_model: str = "Qwen2.5-7B-Instruct-Q4"
@@ -399,6 +411,12 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_redis_prefix": "redis_prefix",
         "services_whisper_url": "whisper_url",
         "services_whisper_backend": "whisper_backend",
+        "services_diarization_url": "diarization_url",
+        "services_diarization_backend": "diarization_backend",
+        "services_diarization_enabled_default": "diarization_enabled_default",
+        "services_diarization_min_words": "diarization_min_words",
+        "services_diarization_min_seconds": "diarization_min_seconds",
+        "services_diarization_min_speaker_share": "diarization_min_speaker_share",
         "services_llm_url": "llm_url",
         "services_llm_api_key": "llm_api_key",
         "services_llm_model": "llm_model",

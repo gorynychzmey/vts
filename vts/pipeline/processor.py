@@ -28,6 +28,7 @@ from vts.services.redis_bus import RedisBus
 from vts.services.storage import cow_copy_dir, ensure_task_dirs
 from vts.services.summarizer import LLMClient
 from vts.services.transcription import WhisperBackend, create_whisper_backend
+from vts.services.diarization import DiarizationBackend, create_diarization_backend
 from vts.metrics import MetricsEmitter, aggregate_task_metrics
 
 
@@ -62,6 +63,9 @@ class TaskProcessor:
         self.bus = RedisBus(redis, settings)
         self.lanes = lanes or LaneManager(settings)
         self.whisper: WhisperBackend = create_whisper_backend(settings.whisper_url, settings.whisper_backend)
+        self.diarization: DiarizationBackend = create_diarization_backend(
+            settings.diarization_url, settings.diarization_backend
+        )
         self._task_metrics: dict[str, MetricsEmitter] = {}
         self._task_n_ctx: dict[str, int] = {}
         self._llm = LLMClient(url=settings.llm_url, api_key=settings.llm_api_key)

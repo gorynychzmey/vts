@@ -34,6 +34,7 @@ class PipelineContext:
         self.bus = proc.bus
         self.lanes = proc.lanes
         self.whisper = proc.whisper
+        self.diarization = proc.diarization
         self.llm = proc._llm
         self._task_metrics = proc._task_metrics
         self._task_n_ctx = proc._task_n_ctx
