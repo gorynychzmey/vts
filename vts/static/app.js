@@ -1168,6 +1168,7 @@ function createRuntime(task) {
     failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
     queue: task.queue || null,
+    capabilities: task.capabilities || {},
     enabledSteps,
     stepStatusByName,
     transcriptReady: Boolean(task.transcript_path),
@@ -3046,6 +3047,10 @@ async function refreshAll() {
   await checkServerVersion();
   await loadMe();
   await loadAdminPanel();
+  try {
+    const cfg = await api("/api/status-config");
+    if (cfg && cfg.status_flags) window.statusPred.setFlags(cfg.status_flags);
+  } catch { /* predicates degrade to false; loadTasks still renders */ }
   await loadTasks();
   connectEvents();
   startVersionWatcher();
