@@ -18,6 +18,7 @@ from vts.core.config import Settings
 from vts.core.failures import classify_failure_code
 from vts.db.models import StepStatus, TaskStatus
 from vts.db.repo import Repo
+from vts.services import task_status as _ts
 from vts.pipeline.steps.base import StepState
 from vts.pipeline.steps.registry import resolve_step
 from vts.pipeline.types import build_dag_steps
@@ -73,7 +74,7 @@ class TaskProcessor:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 return
-            if task.status in {TaskStatus.canceled, TaskStatus.completed, TaskStatus.archived}:
+            if _ts.is_skippable_on_start(task.status):
                 return
             task_options = self._task_options(task.options)
 

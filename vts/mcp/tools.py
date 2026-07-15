@@ -19,6 +19,7 @@ from vts.mcp.schemas import (
     TranscriptResult,
     WaitResult,
 )
+from vts.services import task_status
 from vts.services.preset_expand import expand_preset_options, resolve_preset
 from vts.services.preset_registry import (
     default_system_preset,
@@ -544,7 +545,7 @@ async def get_transcript(
     )
 
 
-_TERMINAL = {"completed", "failed", "canceled"}
+_TERMINAL = {s.value for s in task_status.TERMINAL_FOR_WAIT_STATUSES}
 _WAIT_POLL_INTERVAL_SECONDS = 5.0  # seconds between DB re-checks when no event arrives
 
 

@@ -85,16 +85,17 @@ from vts.services.push import (
 )
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
+from vts.services import task_status as _ts
 from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
 from vts.services.upload_session import UploadSession
 
 
 def can_pause_task(status: TaskStatus) -> bool:
-    return status in {TaskStatus.queued, TaskStatus.running, TaskStatus.waiting}
+    return _ts.can_pause(status)
 
 
 def can_resume_task(status: TaskStatus) -> bool:
-    return status in {TaskStatus.paused, TaskStatus.failed}
+    return _ts.can_resume(status)
 
 
 SUMMARY_STEP_NAMES = frozenset(
@@ -1951,7 +1952,7 @@ def create_app() -> FastAPI:
             if task is None:
                 results[tid] = "not_found"
                 continue
-            if task.status not in {TaskStatus.completed, TaskStatus.failed}:
+            if not _ts.can_archive(task.status):
                 results[tid] = f"cannot_archive:{task.status.value}"
                 continue
             await asyncio.to_thread(_archive_task_artifacts, task)

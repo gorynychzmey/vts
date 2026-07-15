@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User, UserStepWeights
 from vts.metrics.step_weights import StepDuration
+from vts.services import task_status
 
 
 def utcnow() -> datetime:
@@ -183,7 +184,8 @@ class Repo:
         return bool(result.rowcount)
 
     async def requeue_running_tasks(self) -> list[uuid.UUID]:
-        stmt = select(Task).where(Task.status.in_([TaskStatus.running, TaskStatus.waiting]))
+        # "Active" set (running/waiting) for recovery/requeue on startup.
+        stmt = select(Task).where(Task.status.in_(list(task_status.ACTIVE_STATUSES)))
         result = await self.session.scalars(stmt)
         tasks = list(result.all())
         for task in tasks:
