@@ -1856,19 +1856,23 @@ function syncSourceType() {
   const urlInput = form.url;
   const fileInput = document.getElementById("file-input");
   if (!fileInput) return;
+  // `audio_only` only means anything to yt-dlp, which never runs for an uploaded
+  // file, so the pill is hidden for the File source. The checkbox keeps its
+  // value on purpose: presets stay clean and the choice survives switching back
+  // to a URL. The flag is dropped at the upload boundary instead.
+  const audioOnlyPill = document.getElementById("audio-only-pill");
   if (isFile) {
     urlInput.classList.add("hidden");
     urlInput.required = false;
     fileInput.classList.remove("hidden");
     fileInput.required = true;
-    form.audio_only.disabled = true;
-    form.audio_only.checked = false;
+    if (audioOnlyPill) audioOnlyPill.classList.add("hidden");
   } else {
     urlInput.classList.remove("hidden");
     urlInput.required = true;
     fileInput.classList.add("hidden");
     fileInput.required = false;
-    form.audio_only.disabled = false;
+    if (audioOnlyPill) audioOnlyPill.classList.remove("hidden");
   }
 }
 
@@ -2248,10 +2252,6 @@ function applyPresetOptions(options) {
     renderPromptMultiselect(promptSelect, promptsCache, filtered);
   }
   syncSummaryToggle();
-  // audio_only is a yt-dlp download hint and is meaningless for an uploaded
-  // file, so syncSourceType() disables+clears it for the File source. A preset
-  // must not smuggle it back in past that gate: re-sync after applying.
-  syncSourceType();
   return dangling;
 }
 
@@ -2470,9 +2470,13 @@ async function createTask(event) {
       // a clear message instead of mid-upload (covers the single-shot XHR path,
       // which reads the file natively and only reports a generic network error).
       await file.slice(0, 1).arrayBuffer();
+      // audio_only is a yt-dlp download hint: DownloadStep skips the download
+      // entirely for an uploaded file, so the flag is meaningless here. Drop it
+      // at the boundary rather than clearing the control — the form keeps the
+      // user's choice for presets and for switching back to a URL source.
       const fields = {
         language: form.language.value || "",
-        audio_only: form.audio_only.checked,
+        audio_only: false,
         transcript: form.transcript.checked,
         prompts: JSON.stringify(getSelectedPrompts()),
         display_name: "",
