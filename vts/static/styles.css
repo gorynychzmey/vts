@@ -288,6 +288,13 @@ input[type="file"] {
   opacity: 0.55;
 }
 
+/* Language is only read by the transcription/summarization steps, so it means
+   nothing without a transcript. Dimmed rather than hidden, next to the prompt
+   select, so the dependency on the Transcript checkbox stays visible. */
+.language-control.disabled {
+  opacity: 0.55;
+}
+
 .prompt-select-toggle {
   display: inline-flex;
   align-items: center;

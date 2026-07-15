@@ -59,6 +59,7 @@ window.__VTS_I18N.en = {
 "preset.manage.default_badge": "default",
 "preset.copy_suffix": " (copy)",
 "new_task.language": "Language",
+"new_task.language_tooltip": "Spoken language of the media. Leave on auto to detect it. Only used for transcription and the summary, so it has no effect without a transcript.",
 "new_task.language_auto": "auto",
 "new_task.language_en": "English",
 "new_task.language_ru": "Russian",

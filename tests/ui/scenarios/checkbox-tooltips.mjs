@@ -86,6 +86,41 @@ export async function run() {
       failures.push("audio_only: title lost when the pill is hidden on the File source");
     }
 
+    // --- unchecking Transcript dims language + prompts, but keeps their values ---
+    await page.click("label:has(#source-type-url)");
+    await page.selectOption("#language", "ru");
+    await page.click("#transcript"); // uncheck
+    await page.waitForTimeout(80);
+
+    const off = await page.evaluate(() => ({
+      langDimmed: document.getElementById("language-control")?.classList.contains("disabled"),
+      langDisabled: document.getElementById("language")?.disabled,
+      langValue: document.getElementById("language")?.value,
+      promptsDimmed: document.getElementById("prompt-select")?.classList.contains("disabled"),
+      langVisible: !!document.getElementById("language-control")?.offsetParent,
+    }));
+    if (!off.langDimmed) failures.push("transcript off: language control not dimmed");
+    if (!off.langDisabled) failures.push("transcript off: language select still interactive");
+    if (!off.promptsDimmed) failures.push("transcript off: prompt select not dimmed (pre-existing behavior lost)");
+    // Dimmed, NOT hidden — the point is to show the dependency, not hide it.
+    if (!off.langVisible) failures.push("transcript off: language control hidden instead of dimmed");
+    // Never clear the value: currentFormOptions() reads it and a cleared value
+    // would mark a preset dirty, letting a save overwrite it (vts-86k class).
+    if (off.langValue !== "ru") failures.push(`transcript off: language value was cleared ("${off.langValue}") — preset-corruption risk`);
+
+    // --- re-checking Transcript restores both ---
+    await page.click("#transcript"); // check again
+    await page.waitForTimeout(80);
+    const on = await page.evaluate(() => ({
+      langDimmed: document.getElementById("language-control")?.classList.contains("disabled"),
+      langDisabled: document.getElementById("language")?.disabled,
+      langValue: document.getElementById("language")?.value,
+      promptsDimmed: document.getElementById("prompt-select")?.classList.contains("disabled"),
+    }));
+    if (on.langDimmed || on.langDisabled) failures.push("transcript on: language still dimmed/disabled");
+    if (on.promptsDimmed) failures.push("transcript on: prompts still dimmed");
+    if (on.langValue !== "ru") failures.push(`transcript on: language value lost ("${on.langValue}")`);
+
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));
   } finally {
     await browser.close();

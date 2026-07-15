@@ -2528,10 +2528,19 @@ async function createTask(event) {
 }
 
 function syncSummaryToggle() {
+  const disabled = !form.transcript.checked;
+  // Language only feeds the transcription/summarization steps, which do not run
+  // without a transcript. Dim it alongside the prompts so the dependency reads,
+  // but never clear the value: currentFormOptions() reads it, so clearing would
+  // mark a preset dirty and let a later save overwrite it (see vts-86k).
+  const languageControl = document.getElementById("language-control");
+  if (languageControl) {
+    languageControl.classList.toggle("disabled", disabled);
+  }
+  form.language.disabled = disabled;
   if (!promptSelect) {
     return;
   }
-  const disabled = !form.transcript.checked;
   promptSelect.classList.toggle("disabled", disabled);
   const toggle = promptSelect.querySelector(".prompt-select-toggle");
   if (toggle) {

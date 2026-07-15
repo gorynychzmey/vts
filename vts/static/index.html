@@ -234,7 +234,12 @@
               <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
               <div class="prompt-select" id="prompt-select"></div>
             </div>
-            <label class="language-control">
+            <label
+              class="language-control"
+              id="language-control"
+              title="Spoken language of the media. Leave on auto to detect it. Only used for transcription and the summary, so it has no effect without a transcript."
+              data-i18n-title="new_task.language_tooltip"
+            >
               <span data-i18n="new_task.language">Language</span>
               <select id="language" name="language">
                 <option value="" data-i18n="new_task.language_auto">auto</option>

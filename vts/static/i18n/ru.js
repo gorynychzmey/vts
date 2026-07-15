@@ -59,6 +59,7 @@ window.__VTS_I18N.ru = {
 "preset.manage.default_badge": "основной",
 "preset.copy_suffix": " (копия)",
 "new_task.language": "Язык",
+"new_task.language_tooltip": "Язык записи. Оставьте «авто», чтобы определить автоматически. Используется только для транскрипции и сводки — без транскрипта ни на что не влияет.",
 "new_task.language_auto": "авто",
 "new_task.language_en": "Английский",
 "new_task.language_ru": "Русский",

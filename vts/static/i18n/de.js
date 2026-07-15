@@ -59,6 +59,7 @@ window.__VTS_I18N.de = {
 "preset.manage.default_badge": "Standard",
 "preset.copy_suffix": " (Kopie)",
 "new_task.language": "Sprache",
+"new_task.language_tooltip": "Gesprochene Sprache der Aufnahme. Für automatische Erkennung auf «auto» lassen. Wird nur für Transkription und Zusammenfassung verwendet — ohne Transkript ohne Wirkung.",
 "new_task.language_auto": "auto",
 "new_task.language_en": "Englisch",
 "new_task.language_ru": "Russisch",
