@@ -132,6 +132,41 @@ export async function run() {
     );
     if (editChecked !== 1) failures.push(`expected 1 checked prompt (u1) in edit mode, got ${editChecked}`);
 
+    // No stray horizontal scrollbar, and the row-action tooltips stay inside the
+    // dialog. Both had the same cause: a `white-space: nowrap` bubble on a
+    // right-edge icon button is wider than its container, so it was clipped by
+    // the dialog edge AND inflated the dialog's scrollWidth.
+    const overflow = await page.evaluate(() => {
+      const d = document.getElementById("presets-dialog");
+      return { clientWidth: d.clientWidth, scrollWidth: d.scrollWidth };
+    });
+    if (overflow.scrollWidth > overflow.clientWidth) {
+      failures.push(
+        `presets-dialog scrolls horizontally: scrollWidth ${overflow.scrollWidth} > clientWidth ${overflow.clientWidth}`
+      );
+    }
+
+    const tipFit = await page.evaluate(() => {
+      const d = document.getElementById("presets-dialog");
+      const btns = [...d.querySelectorAll(".prompts-actions [data-tooltip]")];
+      if (!btns.length) return { checked: 0, clipped: [] };
+      const dr = d.getBoundingClientRect();
+      const clipped = [];
+      for (const b of btns) {
+        const br = b.getBoundingClientRect();
+        const w = parseFloat(getComputedStyle(b, "::after").width);
+        // Bubbles here are right-anchored to the button.
+        if (br.right - w < dr.left - 1 || br.right > dr.right + 1) {
+          clipped.push({ tip: b.getAttribute("data-tooltip"), left: Math.round(br.right - w), dialogLeft: Math.round(dr.left) });
+        }
+      }
+      return { checked: btns.length, clipped };
+    });
+    if (!tipFit.checked) failures.push("no [data-tooltip] action buttons found in a preset row");
+    for (const c of tipFit.clipped) {
+      failures.push(`tooltip clipped by the dialog edge: "${c.tip}" starts at ${c.left}, dialog starts at ${c.dialogLeft}`);
+    }
+
     // Close via the X button.
     await clickReal(page, "#presets-close-btn");
     await page.waitForTimeout(200);

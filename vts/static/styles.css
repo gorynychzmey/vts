@@ -531,6 +531,22 @@ input[type="file"] {
   transition: opacity 0.12s ease;
   z-index: 50;
 }
+/* Right-aligned action buttons: a centered nowrap bubble on the last button
+   sticks out past the container, which clips the text against a dialog edge AND
+   inflates the scrollWidth of the scrollable ancestor (that was the stray
+   horizontal scrollbar under the presets dialog). Anchor those bubbles to the
+   button's right edge and let long text wrap instead of running off. */
+.prompts-actions [data-tooltip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+  white-space: normal;
+  width: max-content;
+  max-width: 16rem;
+  text-align: left;
+  line-height: 1.25;
+}
+
 [data-tooltip-below]::after {
   bottom: auto;
   top: calc(100% + 0.35rem);
