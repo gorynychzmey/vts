@@ -112,3 +112,18 @@ def test_render_never_emits_literal_none_label() -> None:
     ]
     rendered = render_transcript(entries, min_share=0.05)
     assert "None" not in rendered
+
+
+def test_render_dialogue_starting_with_none_entry() -> None:
+    # A leading None is realistic: audio opening on music, noise or an uncovered
+    # intro. This pins the sentinel in render_transcript — keying the loop on a
+    # bare None instead would collide with the initial "nothing rendered yet"
+    # state and take the append-to-previous branch with no previous block.
+    entries = [
+        {"start": 0.0, "end": 5.0, "text": "кто-то", "speaker": None},
+        {"start": 5.0, "end": 9.0, "text": "привет", "speaker": "SPEAKER_00"},
+        {"start": 9.0, "end": 14.0, "text": "ответ", "speaker": "SPEAKER_01"},
+    ]
+    assert render_transcript(entries, min_share=0.05) == (
+        "кто-то\n\nГолос 1: привет\n\nГолос 2: ответ"
+    )
