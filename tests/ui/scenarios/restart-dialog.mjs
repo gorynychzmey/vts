@@ -17,6 +17,10 @@ const COMPLETED_TASK = {
     { name: "summarize_windows", status: "completed", started_at: "2026-06-28T10:00:00Z", finished_at: "2026-06-28T10:01:00Z" },
     { name: "summarize_final", status: "completed", started_at: "2026-06-28T10:01:00Z", finished_at: "2026-06-28T10:02:00Z" },
   ],
+  // The real API always sends these (vts.api.main.can_restart_*_task); for a
+  // completed task with a selected summary prompt and completed summarize_windows
+  // both are true. The frontend reads them instead of re-deriving the rule (vts-c2n).
+  capabilities: { can_restart_summary: true, can_restart_final_summary: true },
   created_at: "2026-06-28T10:00:00Z", updated_at: "2026-06-28T10:02:00Z",
   progress: { transcribe: { current: 1, total: 1 }, summary: { current: 2, total: 2 } }, stats: {},
 };

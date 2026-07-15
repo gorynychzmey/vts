@@ -56,13 +56,6 @@ const TRANSCRIPT_HEAD = [
 ];
 // Back-compat alias kept for any legacy references (full static summary path).
 const DAG_STEPS = [...DAG_HEAD, "summarize_final"];
-const SUMMARY_STEPS = new Set([
-  "prepare_llama_model",
-  "prepare_summary_chunks",
-  "summarize_windows",
-  "pack_window_notes",
-  "summarize_final"
-]);
 // Relative per-step weights (in seconds) — medians recomputed over completed
 // pipeline runs on 2026-06-28 (n=56–64 runs per step).
 const STEP_WEIGHT_SECONDS = {
@@ -1216,6 +1209,8 @@ function resolveActiveStep(runtime) {
   // regardless of any leftover download flags from live SSE events watched
   // during the run (hasVideo/hasAudio persist on runtime and would otherwise
   // resolve back to "download" -> "step 1 of N" on the post-completion render).
+  // specific status, not a group: `failed` must resolve to failedStepName below,
+  // so isFinished() here would mis-resolve failed/canceled/archived tasks.
   if (runtime.baseStatus === "completed" && runtime.enabledSteps.length > 0) {
     return runtime.enabledSteps[runtime.enabledSteps.length - 1];
   }
@@ -1236,6 +1231,10 @@ function resolveActiveStep(runtime) {
   if (failedFromSnapshot) {
     return failedFromSnapshot;
   }
+  // specific status, not a group: resolving the first incomplete step is a
+  // running-only fallback. A `waiting` task must fall through to "" so the
+  // overall bar counts only finished-step weight (vts-qzl); isActive() here
+  // would add partial active-step weight and change what `waiting` renders.
   if (runtime.baseStatus === "running") {
     const firstIncomplete = runtime.enabledSteps.find(
       (step) => !isStepFinishedStatus(runtime.stepStatusByName[step] || "")
@@ -1244,6 +1243,8 @@ function resolveActiveStep(runtime) {
       return firstIncomplete;
     }
   }
+  // specific status, not a group: isPending() also covers `waiting`, which must
+  // NOT snap back to step 1 (vts-qzl).
   if (runtime.baseStatus === "queued" && runtime.enabledSteps.length > 0) {
     return runtime.enabledSteps[0];
   }
@@ -1317,12 +1318,16 @@ function computeActiveStepLocalProgress(runtime, active) {
 }
 
 function computeLocalStepProgress(runtime) {
+  // Each branch below renders a DIFFERENT string ("100%" / failed / queue
+  // position), so these are per-status renders, not a group question:
+  // isFinished()/isPending() would collapse distinct outputs.
   if (runtime.baseStatus === "completed") {
     return { value: 1, indeterminate: false, text: "100%" };
   }
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
+  // specific status, not a group: `waiting` (also pending) is handled below.
   if (runtime.baseStatus === "queued") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
@@ -1356,12 +1361,15 @@ function computeLocalStepProgress(runtime) {
 }
 
 function computeOverallProgress(runtime) {
+  // Per-status renders, not a group question — see computeLocalStepProgress.
   if (runtime.baseStatus === "completed") {
     return { value: 1, indeterminate: false, text: "100%" };
   }
   if (runtime.baseStatus === "failed") {
     return { value: 1, indeterminate: false, text: t("progress.failed") };
   }
+  // specific status, not a group: `waiting` must fall through to the per-step
+  // computation below (vts-qzl), so isPending() here would regress it.
   if (runtime.baseStatus === "queued") {
     if (runtime.queuePosition) {
       return { value: 0, indeterminate: false, text: t("progress.queue_pos", { position: runtime.queuePosition }) };
@@ -1519,21 +1527,11 @@ function renderTaskRuntime(taskEl) {
   renderTaskTitle(taskEl);
   renderTaskStats(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition, runtime.queue);
-  const canPause = runtime.baseStatus === "queued" || runtime.baseStatus === "running";
-  const canResume = runtime.baseStatus === "paused" || runtime.baseStatus === "failed";
-  const failedSummaryStep = runtime.enabledSteps.find(
-    (stepName) => SUMMARY_STEPS.has(stepName) && runtime.stepStatusByName[stepName] === "failed"
-  );
-  const canRestartSummary =
-    runtime.summaryExpected &&
-    (runtime.baseStatus === "completed" || (runtime.baseStatus === "failed" && Boolean(failedSummaryStep)));
-  const windowsCompleted = runtime.stepStatusByName["summarize_windows"] === "completed";
-  const finalFailed = runtime.stepStatusByName["summarize_final"] === "failed";
-  const canRestartFinalSummary =
-    runtime.summaryExpected &&
-    windowsCompleted &&
-    (runtime.baseStatus === "completed" || (runtime.baseStatus === "failed" && finalFailed));
-  const canArchive = runtime.baseStatus === "completed" || runtime.baseStatus === "failed";
+  const canPause = statusPred.canPause(runtime.baseStatus);
+  const canResume = statusPred.canResume(runtime.baseStatus);
+  const canRestartSummary = statusPred.canRestartSummary(runtime);
+  const canRestartFinalSummary = statusPred.canRestartFinalSummary(runtime);
+  const canArchive = statusPred.canArchive(runtime.baseStatus);
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   if (elements.restartSummaryBtn) {
@@ -1570,6 +1568,8 @@ function renderTaskRuntime(taskEl) {
     renderResultPromptSelect(taskEl);
   }
 
+  // specific status, not a group: only a running task's elapsed timer ticks;
+  // a waiting task is not executing, so it must keep a blank runtime.
   if (runtime.baseStatus === "running") {
     if (!runtime.taskStartedAt) {
       runtime.taskStartedAt = Date.now();
@@ -1593,6 +1593,7 @@ function renderTaskRuntime(taskEl) {
     elements.stepLabelEl.textContent = t("step.waiting", { total: runtime.enabledSteps.length });
   }
 
+  // specific status, not a group: step stopwatch runs only while executing.
   if (runtime.baseStatus === "running" && runtime.currentStepStartedAt) {
     const elapsed = (Date.now() - runtime.currentStepStartedAt) / 1000;
     elements.stepTimeEl.textContent = formatDuration(elapsed);
@@ -2630,6 +2631,7 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", qu
   if (queue !== undefined) {
     runtime.queue = queue || null;
   }
+  // specific status, not a group: failure-specific error/code parsing.
   if (runtime.baseStatus === "failed") {
     runtime.failureError = parseErrorMessage(errorMessage);
     runtime.failureCode = parseFailureCode(failureCode) || detectFailureCode(runtime.failureError);
@@ -2640,13 +2642,17 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", qu
   if (runtime.baseStatus !== "queued") {
     runtime.queuePosition = null;
   }
+  // specific status, not a group: running-only timer start (see renderTaskRuntime).
   if (runtime.baseStatus === "running" && !runtime.taskStartedAt) {
     runtime.taskStartedAt = Date.now();
   }
+  // specific status, not a group: only a completed run publishes a summary.
   if (runtime.baseStatus === "completed" && runtime.summaryExpected) {
     runtime.summaryReady = true;
     void refreshQueuePositions();
   }
+  // specific status, not a group: isFinished() also covers canceled/archived,
+  // which would add a final-data fetch this branch never did.
   if (runtime.baseStatus === "completed" || runtime.baseStatus === "failed") {
     void api(`/api/tasks/${taskId}`).then((task) => {
       if (taskEl._runtime === runtime && task) {
@@ -2727,6 +2733,7 @@ function patchTaskProgress(taskId, phase, payload) {
   }
   const runtime = taskEl._runtime;
   const stepPhase = String(phase || "");
+  // specific status, not a group: only a running task emits download progress.
   if (!runtime.currentStepName && runtime.baseStatus === "running") {
     runtime.currentStepName = "download";
   }
@@ -2756,6 +2763,7 @@ function patchSegmentProgress(taskId, current, total) {
   const runtime = taskEl._runtime;
   runtime.segment.current = Number(current) || 0;
   runtime.segment.total = Number(total) || 0;
+  // specific status, not a group: only a running task emits segment progress.
   if (runtime.baseStatus === "running" && !runtime.currentStepName) {
     runtime.currentStepName = "segment_audio";
   }
@@ -2858,6 +2866,8 @@ function updateQueueWatcher(tasks) {
 }
 
 function updateQueueWatcherFromDom() {
+  // specific status, not a group: only `queued` tasks have a queue position to
+  // poll; isPending() would also spin the timer up for `waiting` tasks.
   const hasQueued = Array.from(document.querySelectorAll(".task")).some((taskEl) => {
     return taskEl._runtime && taskEl._runtime.baseStatus === "queued";
   });
