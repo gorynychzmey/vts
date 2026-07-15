@@ -190,6 +190,53 @@ def test_waiting_status_exists():
     assert TaskStatus.waiting.value == "waiting"
 
 
+def test_summary_stages_is_subset_of_summary_step_names():
+    # Drift guard for C1 (SUMMARY_STEP_NAMES missing `pack_window_notes` after it was
+    # added to the pipeline). There are two independent copies of "which steps belong
+    # to the summary pipeline":
+    #   - vts.api.main.SUMMARY_STEP_NAMES: the *restartable* summary steps used to
+    #     gate can_restart_summary_task (any step in this set that failed => the
+    #     summary phase can be restarted).
+    #   - vts.mcp.tools._SUMMARY_STAGES: the steps whose *progress* is reported via
+    #     summary_progress_for_task (current/total window counts) rather than ASR
+    #     progress or no progress at all.
+    # These are NOT required to be equal: _SUMMARY_STAGES intentionally excludes the
+    # prep steps `prepare_llama_model` and `prepare_summary_chunks` because those
+    # steps don't have a meaningful window current/total to report yet (progress
+    # only becomes countable once window summarization starts). So the true
+    # relationship is _SUMMARY_STAGES ⊆ SUMMARY_STEP_NAMES, not equality. Assert the
+    # subset relationship, and print the symmetric difference on failure so a future
+    # drift (e.g. a renamed/removed step) names the exact offending step.
+    from vts.api.main import SUMMARY_STEP_NAMES
+    from vts.mcp.tools import _SUMMARY_STAGES
+
+    missing_from_step_names = _SUMMARY_STAGES - SUMMARY_STEP_NAMES
+    assert not missing_from_step_names, (
+        "_SUMMARY_STAGES (vts/mcp/tools.py) has stages not present in "
+        f"SUMMARY_STEP_NAMES (vts/api/main.py): {sorted(missing_from_step_names)}. "
+        "Either SUMMARY_STEP_NAMES is missing a step (like C1's pack_window_notes) "
+        "or _SUMMARY_STAGES references a stage that no longer exists."
+    )
+
+
+def test_summary_step_names_are_real_pipeline_steps():
+    # Guard against a typo'd or removed step name in SUMMARY_STEP_NAMES: every name
+    # in it must actually appear in the pipeline's real step list. `summarize_final`
+    # is the one exception — it's a finalize/tail step appended per selected prompt
+    # by build_dag_steps(), not part of the static DAG_HEAD, so it's covered via
+    # DAG_STEPS (DAG_HEAD + "summarize_final") instead of DAG_HEAD alone.
+    from vts.api.main import SUMMARY_STEP_NAMES
+    from vts.pipeline.types import DAG_STEPS
+
+    unknown_steps = SUMMARY_STEP_NAMES - set(DAG_STEPS)
+    assert not unknown_steps, (
+        "SUMMARY_STEP_NAMES (vts/api/main.py) references step names that don't "
+        f"exist in the real pipeline step list DAG_STEPS (vts/pipeline/types.py): "
+        f"{sorted(unknown_steps)}. Symmetric difference with DAG_STEPS: "
+        f"{sorted(SUMMARY_STEP_NAMES ^ set(DAG_STEPS))}."
+    )
+
+
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
     engine = make_test_engine()
