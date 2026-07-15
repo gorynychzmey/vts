@@ -31,6 +31,7 @@ from vts.services.summarizer import (
     inject_budget_vars,
     load_prompt,
     parse_json_response,
+    split_utterances,
 )
 from vts.services.storage import write_json
 from vts.metrics import QualityAnalyzer
@@ -52,6 +53,35 @@ _SEGMENT_PROMPT_FALLBACK = (
     " interjections, false starts and repetitions, but keep all content,"
     " wording and order. Do not summarize."
 )
+
+
+# The rewrite prompt tells the model to clean up speech, which invites it to
+# dissolve "Голос 2:" into prose. Diarized tasks get an explicit instruction to
+# keep the labels; undiarized ones must not carry this noise.
+#
+# The unlabelled-block clause is load-bearing, not hedging. The renderer emits
+# a bare block for audio diarization never covered, and split_utterances merges
+# a mid-transcript one into the PRECEDING utterance — so the model really does
+# receive unlabelled text sitting under someone else's label. Saying "each
+# utterance starts with a label" would be a lie the model acts on: it would
+# attribute that text to the speaker above it, manufacturing the false claim
+# the renderer deliberately refused to make.
+_KEEP_SPEAKERS_INSTRUCTION = (
+    " The text is a dialogue where an utterance may start with a speaker label"
+    ' ("Голос 1:", "Голос 2:", ...). Keep every label exactly as it appears, at'
+    " the start of that speaker's utterance. Never merge utterances from"
+    " different speakers and never invent labels."
+    " Some text carries no label — that means the speaker is unknown. Leave it"
+    " unlabelled: never attribute it to a nearby speaker and never guess who"
+    " said it."
+)
+
+
+def rewrite_prompt(base_prompt: str, diarized: bool) -> str:
+    """The window-rewrite prompt, with label preservation for diarized tasks."""
+    if not diarized:
+        return base_prompt
+    return base_prompt + _KEEP_SPEAKERS_INSTRUCTION
 
 
 # --- summary domain helpers (pure module functions) -------------------------
@@ -326,6 +356,11 @@ class PrepareSummaryChunksStep(Step):
             write_json(st.dirs["outputs"] / "summary_chunks.json", {"chunks": [], "segmentation": "split"})
             return True
 
+        # Labels in the text are the signal — not the task option — because a
+        # diarized task with one speaker renders flat text and needs no special
+        # handling downstream.
+        diarized = len(split_utterances(transcript)) > 1
+
         st.logger.info("summary chunk preparation started")
         mode = str(getattr(ctx.settings, "summary_segmentation", "auto") or "auto")
         budget_cfg = token_budget_config(ctx.settings, await ctx.get_n_ctx(st.task_id, st.logger))
@@ -381,8 +416,9 @@ class PrepareSummaryChunksStep(Step):
                 window_tokens=window_tokens,
                 overlap_ratio=0.15,
                 tokenizer_path=tokenizer_path(ctx.settings),
+                split_on_utterances=diarized,
             )
-        payload = {"chunks": chunks, "segmentation": "whole" if send_whole else "split"}
+        payload = {"chunks": chunks, "segmentation": "whole" if send_whole else "split", "diarized": diarized}
         st.logger.info("summary chunk preparation finished: %s windows", len(chunks))
         write_json(chunks_file, payload)
         write_json(st.dirs["outputs"] / "summary_chunks.json", payload)
@@ -411,10 +447,6 @@ class SummarizeWindowsStep(Step):
         output_mirror = st.dirs["outputs"] / "window_summaries.json"
 
         output_language = effective_language(st.task_options, st.dirs)
-        segment_prompt = render_prompt_with_language(
-            load_prompt(ctx.settings.prompts_dir, "segment_prompt.md", _SEGMENT_PROMPT_FALLBACK),
-            output_language,
-        )
         chunks_file = summary_dir / "chunks.json"
         if not chunks_file.exists():
             chunks_file = st.dirs["outputs"] / "summary_chunks.json"
@@ -425,7 +457,19 @@ class SummarizeWindowsStep(Step):
         if not isinstance(chunks, list):
             raise RuntimeError("Invalid summary chunks payload")
         whole_mode = chunks_payload.get("segmentation") == "whole"
+        # Read the diarization flag back from the chunks payload (written by
+        # PrepareSummaryChunksStep) so the rewrite prompt keeps speaker labels
+        # for exactly the tasks that carry them.
+        diarized = bool(chunks_payload.get("diarized", False))
         total_windows = len(chunks)
+
+        segment_prompt = rewrite_prompt(
+            render_prompt_with_language(
+                load_prompt(ctx.settings.prompts_dir, "segment_prompt.md", _SEGMENT_PROMPT_FALLBACK),
+                output_language,
+            ),
+            diarized,
+        )
 
         windows_by_index: dict[int, dict[str, Any]] = {}
         if output.exists():
@@ -666,8 +710,9 @@ class SummarizeWindowsStep(Step):
                     window_tokens=window_tokens,
                     overlap_ratio=0.15,
                     tokenizer_path=tokenizer_path(ctx.settings),
+                    split_on_utterances=diarized,
                 )
-                split_payload = {"chunks": chunks, "segmentation": "split"}
+                split_payload = {"chunks": chunks, "segmentation": "split", "diarized": diarized}
                 write_json(summary_dir / "chunks.json", split_payload)
                 write_json(st.dirs["outputs"] / "summary_chunks.json", split_payload)
                 whole_mode = False
