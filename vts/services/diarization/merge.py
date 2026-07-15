@@ -6,9 +6,108 @@ merge rules stay testable without a diarization backend.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 DiarSegment = dict[str, Any]
+
+
+def _normalize_token(value: str) -> str:
+    # Mirrors vts.pipeline.steps.transcription.normalize_token. Duplicated (not
+    # imported) to avoid a cycle: transcription.py imports this module, so this
+    # module cannot import back from transcription.py.
+    return re.sub(r"[^\wа-яА-ЯёЁ]+", "", value, flags=re.UNICODE).strip().lower()
+
+
+def trim_repetitive_units(units: list[str]) -> tuple[list[str], dict[str, Any]]:
+    """Drop leading/trailing runs of repeated units (Whisper hallucinations).
+
+    Shared core of the repeat-detection heuristic: a unit here is whatever the
+    caller considers atomic — a sentence for flat-text cleanup
+    (`trim_repetitive_edges` in vts.pipeline.steps.transcription), or a whole
+    transcript entry for the diarized path (`trim_repetitive_entries` below).
+    Keeping this in one place means both paths agree on what counts as a
+    hallucinated repeat instead of drifting apart.
+    """
+    removed_head = 0
+    removed_tail = 0
+    head_phrase: str | None = None
+    tail_phrase: str | None = None
+    min_repeats = 6
+
+    remaining = list(units)
+
+    while len(remaining) >= min_repeats:
+        head = _normalize_token(remaining[0])
+        if not head or len(head) > 64:
+            break
+        repeats = 0
+        for unit in remaining:
+            if _normalize_token(unit) == head:
+                repeats += 1
+            else:
+                break
+        if repeats < min_repeats:
+            break
+        removed_head += repeats
+        head_phrase = remaining[0]
+        remaining = remaining[repeats:]
+
+    while len(remaining) >= min_repeats:
+        tail = _normalize_token(remaining[-1])
+        if not tail or len(tail) > 64:
+            break
+        repeats = 0
+        for unit in reversed(remaining):
+            if _normalize_token(unit) == tail:
+                repeats += 1
+            else:
+                break
+        if repeats < min_repeats:
+            break
+        removed_tail += repeats
+        tail_phrase = remaining[-1]
+        remaining = remaining[: len(remaining) - repeats]
+
+    return remaining, {
+        "removed_head_sentences": removed_head,
+        "removed_tail_sentences": removed_tail,
+        "head_phrase": head_phrase,
+        "tail_phrase": tail_phrase,
+    }
+
+
+def trim_repetitive_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Drop leading/trailing entries whose text is a repeated ASR hallucination.
+
+    Entry-list counterpart of `trim_repetitive_edges`: it must run BEFORE
+    rendering so labels like "Голос 1:" (added only at render time) never enter
+    the repeat-detection heuristic, which splits on `[.!?…]` and would corrupt
+    or eat those labels if applied to already-rendered dialogue text.
+
+    Each entry's `text` is treated as one atomic unit (an entry is already one
+    ASR chunk, the same granularity `trim_repetitive_edges` targets via
+    sentences), so no further splitting happens here.
+    """
+    if not entries:
+        return list(entries), {
+            "removed_head_sentences": 0,
+            "removed_tail_sentences": 0,
+            "head_phrase": None,
+            "tail_phrase": None,
+        }
+    texts = [str(entry.get("text", "")).strip() for entry in entries]
+    _kept_texts, meta = trim_repetitive_units(texts)
+    # trim_repetitive_units only ever removes a prefix run and/or a suffix run,
+    # so the surviving slice is contiguous — the two counts fully determine it.
+    head_count = meta["removed_head_sentences"]
+    tail_count = meta["removed_tail_sentences"]
+    if head_count or tail_count:
+        end_index = len(entries) - tail_count
+        kept_entries = entries[head_count:end_index]
+    else:
+        kept_entries = list(entries)
+    return kept_entries, meta
 
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -290,11 +389,14 @@ def label_map(entries: list[dict[str, Any]]) -> dict[str, str]:
     return mapping
 
 
-def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
-    """Flat text for a monologue, labelled turns for a dialogue."""
-    cleaned = drop_marginal_speakers(entries, min_share)
-    mapping = label_map(cleaned)
+def render_cleaned_transcript(cleaned: list[dict[str, Any]], mapping: dict[str, str]) -> str:
+    """Render already-cleaned entries (post `drop_marginal_speakers`) to text.
 
+    Split out from `render_transcript` so a caller that must also return the
+    cleaned entries (e.g. `apply_diarization`) can run `drop_marginal_speakers`
+    exactly once and derive both the entries it hands back AND the rendered
+    text from that single cleaned list, instead of drifting by cleaning twice.
+    """
     if len(mapping) <= 1:
         return " ".join(str(entry["text"]).strip() for entry in cleaned if str(entry["text"]).strip())
 
@@ -321,3 +423,16 @@ def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
             continue
         blocks[-1] = blocks[-1] + " " + text
     return "\n\n".join(blocks)
+
+
+def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
+    """Flat text for a monologue, labelled turns for a dialogue.
+
+    Thin wrapper kept for callers that only need text, not the cleaned entries
+    (e.g. tests exercising this module directly). `apply_diarization` calls
+    `drop_marginal_speakers` + `render_cleaned_transcript` itself instead, so
+    the reassignment happens exactly once and its output is shared.
+    """
+    cleaned = drop_marginal_speakers(entries, min_share)
+    mapping = label_map(cleaned)
+    return render_cleaned_transcript(cleaned, mapping)

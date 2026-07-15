@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
-from vts.services.diarization.merge import merge_entries, render_transcript
+from vts.services.diarization.merge import (
+    drop_marginal_speakers,
+    label_map,
+    merge_entries,
+    render_cleaned_transcript,
+    trim_repetitive_entries,
+    trim_repetitive_units,
+)
 from vts.services.storage import write_json
 from vts.pipeline.steps.base import Step, StepState, log_payload
 
@@ -127,54 +134,15 @@ def trim_repetitive_edges(text: str) -> tuple[str, dict[str, Any]]:
             "tail_phrase": None,
         }
 
-    sentences = list(raw_sentences)
-    removed_head = 0
-    removed_tail = 0
-    head_phrase: str | None = None
-    tail_phrase: str | None = None
-    min_repeats = 6
-
-    while len(sentences) >= min_repeats:
-        head = normalize_token(sentences[0])
-        if not head or len(head) > 64:
-            break
-        repeats = 0
-        for sentence in sentences:
-            if normalize_token(sentence) == head:
-                repeats += 1
-            else:
-                break
-        if repeats < min_repeats:
-            break
-        removed_head += repeats
-        head_phrase = sentences[0]
-        sentences = sentences[repeats:]
-
-    while len(sentences) >= min_repeats:
-        tail = normalize_token(sentences[-1])
-        if not tail or len(tail) > 64:
-            break
-        repeats = 0
-        for sentence in reversed(sentences):
-            if normalize_token(sentence) == tail:
-                repeats += 1
-            else:
-                break
-        if repeats < min_repeats:
-            break
-        removed_tail += repeats
-        tail_phrase = sentences[-1]
-        sentences = sentences[:-repeats]
-
+    # Repeat-detection core lives in merge.py (trim_repetitive_units) so the
+    # diarized path (trim_repetitive_entries, operating on whole entries
+    # instead of sentences) shares the exact same heuristic rather than
+    # reimplementing it and risking drift between the two paths.
+    sentences, meta = trim_repetitive_units(raw_sentences)
     cleaned = " ".join(sentences).strip()
     if not cleaned:
         cleaned = text.strip()
-    return cleaned, {
-        "removed_head_sentences": removed_head,
-        "removed_tail_sentences": removed_tail,
-        "head_phrase": head_phrase,
-        "tail_phrase": tail_phrase,
-    }
+    return cleaned, meta
 
 
 def tail_prompt(text: str, max_chars: int = 800) -> str | None:
@@ -192,28 +160,40 @@ def apply_diarization(
     min_words: int,
     min_seconds: float,
     min_share: float,
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
     """Attribute entries to speakers, returning the rendered text when diarized.
 
-    Returns the entries unchanged and `None` when there is no diarization
-    artifact or it cannot be read: the transcript is the valuable output, and a
-    broken speaker artifact must never fail a task.
+    Returns the entries unchanged, `None` text and `None` cleanup meta when
+    there is no diarization artifact or it cannot be read: the transcript is
+    the valuable output, and a broken speaker artifact must never fail a task.
+
+    When diarized, hallucination cleanup runs on the ENTRY list before
+    rendering — never on the rendered dialogue text, which already carries
+    "Голос N:" labels that the sentence-splitting heuristic would corrupt.
+    `drop_marginal_speakers` runs exactly once here, and both the returned
+    entries and the rendered text derive from that same cleaned list, so a
+    downstream consumer (e.g. speaker enrollment) never sees a phantom speaker
+    that the rendered text has already folded away.
     """
     if not diarization_path.exists():
-        return entries, None
+        return entries, None, None
     try:
         payload = json.loads(diarization_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return entries, None
+        return entries, None, None
     if not isinstance(payload, dict):
-        return entries, None
+        return entries, None, None
 
     diar_segments = payload.get("segments")
     if not isinstance(diar_segments, list) or not diar_segments:
-        return entries, None
+        return entries, None, None
 
     merged = merge_entries(entries, raw_json_by_index, diar_segments, min_words, min_seconds)
-    return merged, render_transcript(merged, min_share)
+    trimmed, cleanup_meta = trim_repetitive_entries(merged)
+    cleaned = drop_marginal_speakers(trimmed, min_share)
+    mapping = label_map(cleaned)
+    text = render_cleaned_transcript(cleaned, mapping)
+    return cleaned, text, cleanup_meta
 
 
 def transcribe_audio_path(dirs: dict[str, Path]) -> Path:
@@ -558,7 +538,7 @@ class MergeTranscriptStep(Step):
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)
 
-            entries, diarized_text = apply_diarization(
+            entries, diarized_text, diarized_cleanup_meta = apply_diarization(
                 entries,
                 raw_json_by_index,
                 st.dirs["outputs"] / "diarization.json",
@@ -566,7 +546,16 @@ class MergeTranscriptStep(Step):
                 min_seconds=float(getattr(ctx.settings, "diarization_min_seconds", 0.8)),
                 min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
             )
-            final_text = diarized_text if diarized_text is not None else cleaned_text
+            # The diarized path cleans hallucinations at the entry level (see
+            # apply_diarization), which can drop a different number of units than
+            # the flat trim_repetitive_edges(merged_text) above ran on the same
+            # underlying text. cleanup_meta must describe what actually landed in
+            # `final_text`/`entries`, so swap it in whenever diarization applied.
+            if diarized_text is not None:
+                final_text = diarized_text
+                cleanup_meta = diarized_cleanup_meta
+            else:
+                final_text = cleaned_text
 
             write_json(
                 transcript_json,
