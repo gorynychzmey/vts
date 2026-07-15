@@ -91,6 +91,14 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
             },
             "redis": {"url": "redis://cache:6379/1", "prefix": "custom:"},
             "whisper": {"url": "http://whisper-internal:9000"},
+            "diarization": {
+                "url": "http://diarization-internal:9100",
+                "backend": "pyannote",
+                "enabled_default": True,
+                "min_words": 9,
+                "min_seconds": 2.5,
+                "min_speaker_share": 0.25,
+            },
             "llm": {
                 "url": "http://llama-internal:8000/v1",
                 "model": "Qwen2.5-14B-Instruct-Q4",
@@ -147,6 +155,15 @@ def test_settings_accepts_structured_sections_from_yaml() -> None:
     assert settings.redis_url == "redis://cache:6379/1"
     assert settings.redis_prefix == "custom:"
     assert settings.whisper_url == "http://whisper-internal:9000"
+    # Every diarization value differs from its default, so a typo in any of the
+    # six services_diarization_* aliases fails here instead of silently falling
+    # back to the default while the setting looks configurable.
+    assert settings.diarization_url == "http://diarization-internal:9100"
+    assert settings.diarization_backend == "pyannote"
+    assert settings.diarization_enabled_default is True
+    assert settings.diarization_min_words == 9
+    assert settings.diarization_min_seconds == 2.5
+    assert settings.diarization_min_speaker_share == 0.25
     assert settings.llm_url == "http://llama-internal:8000/v1"
     assert settings.llm_model == "Qwen2.5-14B-Instruct-Q4"
     assert settings.segment_target_seconds == 240
