@@ -238,3 +238,76 @@ def merge_entries(
             split_entry_by_speaker(entry, entry_words, diar_segments, min_words, min_seconds)
         )
     return merged
+
+
+def drop_marginal_speakers(
+    entries: list[dict[str, Any]],
+    min_share: float,
+) -> list[dict[str, Any]]:
+    """Reassign speakers holding a negligible share of speech.
+
+    Diarization invents phantom speakers on music, echo and noise. Such a
+    phantom would flip a monologue into a two-voice dialogue, so anything below
+    `min_share` of total speech time is folded into the dominant speaker.
+    """
+    totals: dict[str, float] = {}
+    for entry in entries:
+        speaker = entry.get("speaker")
+        if speaker is None:
+            continue
+        totals[speaker] = totals.get(speaker, 0.0) + (float(entry["end"]) - float(entry["start"]))
+
+    if not totals:
+        return list(entries)
+
+    overall = sum(totals.values())
+    if overall <= 0:
+        return list(entries)
+
+    dominant = max(totals, key=lambda key: totals[key])
+    marginal = {speaker for speaker, total in totals.items() if (total / overall) < min_share}
+    if not marginal:
+        return list(entries)
+
+    return [
+        {**entry, "speaker": dominant} if entry.get("speaker") in marginal else dict(entry)
+        for entry in entries
+    ]
+
+
+def label_map(entries: list[dict[str, Any]]) -> dict[str, str]:
+    """Technical tags -> "Голос N", numbered by first appearance.
+
+    "Голос 1" is whoever spoke first, which is what a reader expects. The
+    technical tag stays in the data; this mapping exists only for rendering.
+    """
+    mapping: dict[str, str] = {}
+    for entry in entries:
+        speaker = entry.get("speaker")
+        if speaker is None or speaker in mapping:
+            continue
+        mapping[speaker] = f"Голос {len(mapping) + 1}"
+    return mapping
+
+
+def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
+    """Flat text for a monologue, labelled turns for a dialogue."""
+    cleaned = drop_marginal_speakers(entries, min_share)
+    mapping = label_map(cleaned)
+
+    if len(mapping) <= 1:
+        return " ".join(str(entry["text"]).strip() for entry in cleaned if str(entry["text"]).strip())
+
+    blocks: list[str] = []
+    current: str | None = None
+    for entry in cleaned:
+        text = str(entry["text"]).strip()
+        if not text:
+            continue
+        speaker = entry.get("speaker")
+        if speaker != current:
+            blocks.append(f"{mapping[speaker]}: {text}")
+            current = speaker
+            continue
+        blocks[-1] = blocks[-1] + " " + text
+    return "\n\n".join(blocks)
