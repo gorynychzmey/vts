@@ -123,3 +123,20 @@ def test_normalize_output_keeps_good_segments_alongside_dropped_ones() -> None:
         {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
         {"start": 9.0, "end": 12.0, "speaker": "SPEAKER_03"},
     ]
+
+
+def test_normalize_output_warns_when_every_segment_is_dropped(caplog) -> None:
+    # Dropping is silent by design, so a systematically broken sidecar would
+    # look like a quiet monologue. The log is what makes it visible.
+    payload = {"segments": [{"start": "abc", "end": "x", "speaker": "SPEAKER_00"}]}
+    with caplog.at_level("WARNING"):
+        result = _pyannote().normalize_output(payload)
+    assert result["segments"] == []
+    assert "none survived normalization" in caplog.text
+
+
+def test_normalize_output_silent_when_genuinely_empty(caplog) -> None:
+    # An empty segments list is not evidence of a broken response — no warning.
+    with caplog.at_level("WARNING"):
+        _pyannote().normalize_output({"segments": []})
+    assert caplog.text == ""

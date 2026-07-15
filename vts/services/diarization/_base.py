@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 
 class DiarizationBackend(ABC):
@@ -50,6 +53,17 @@ class DiarizationBackend(ABC):
                 # only this segment, keeping the partial-diarization promise.
                 continue
             segments.append(coerced)
+
+        # Dropping is silent by design, which makes a systematically broken
+        # sidecar look like a quiet monologue rather than a failure. Say so in
+        # the log, so it is visible on day one instead of after someone notices
+        # transcripts stopped carrying speakers.
+        if raw_segments and not segments:
+            _log.warning(
+                "diarization response had %d segment(s) but none survived normalization: %r",
+                len(raw_segments),
+                payload,
+            )
 
         embeddings = payload.get("embeddings")
         if not isinstance(embeddings, dict):

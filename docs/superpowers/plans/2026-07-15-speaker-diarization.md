@@ -1375,10 +1375,48 @@ class DiarizeStep(Step):
             raise RuntimeError(f"Missing audio for diarization: {audio_path}")
 
         payload = await ctx.diarization.diarize(audio_path=audio_path)
+
+        # We sent audio and got no speakers back. This is NOT what a monologue
+        # looks like — a real single-speaker result is one segment spanning the
+        # audio, never zero. So this means the sidecar failed or returned
+        # something unparseable, and normalize_output degraded it to empty.
+        # Writing the artifact anyway would render flat text: a broken sidecar
+        # would be indistinguishable from a genuine monologue — wrong, but not
+        # obviously wrong, which is the worst failure shape to ship.
+        if not payload.get("segments"):
+            raise RuntimeError(
+                "Diarization returned no speaker segments; refusing to write an "
+                "empty artifact that would silently render as a monologue"
+            )
+
         write_json(output, payload)
         st.logger.info("diarization finished: speakers=%s", payload.get("num_speakers"))
         return True
 ```
+
+**Why this raises rather than degrading:** the client's `normalize_output` deliberately drops malformed segments instead of raising, because a partial diarization beats failing a whole task over one bad span. That is right for a *normalizer* — it has no task context and cannot know whether emptiness is fatal. The step does have that context, so the policy lives here. The pipeline already fails a task loudly when a required artifact cannot be produced; diarization is opt-in, so a user who asked for it should learn it failed rather than silently receive an unlabelled transcript.
+
+Add this test to `tests/test_diarization_step.py`:
+
+```python
+async def test_step_raises_when_no_segments_returned(tmp_path: Path) -> None:
+    # A broken sidecar degrades to {"segments": [], ...}. Writing that would
+    # render flat text — indistinguishable from a real monologue.
+    class _EmptyBackend:
+        async def diarize(self, audio_path: Path, timeout_seconds: int = 1800) -> dict:
+            return {"segments": [], "embeddings": {}, "num_speakers": 0}
+
+    dirs = _dirs(tmp_path)
+    (dirs["media"] / "audio_16k.wav").write_bytes(b"RIFF")
+    ctx = _ctx(_EmptyBackend())
+
+    with pytest.raises(RuntimeError, match="no speaker segments"):
+        await DiarizeStep().run(ctx, _state(tmp_path, dirs, {"diarize": True}))
+
+    assert not (dirs["outputs"] / "diarization.json").exists()
+```
+
+Note this test needs `import pytest` in the file.
 
 - [ ] **Step 4: Run test to verify it fails on settings**
 
