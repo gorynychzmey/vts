@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
 from ._base import DiarizationBackend
-
-_log = logging.getLogger(__name__)
 
 
 class PyannoteBackend(DiarizationBackend):

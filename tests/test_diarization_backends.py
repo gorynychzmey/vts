@@ -56,3 +56,70 @@ def test_normalize_output_infers_num_speakers() -> None:
         ]
     }
     assert _pyannote().normalize_output(payload)["num_speakers"] == 2
+
+
+def test_normalize_output_infers_num_speakers_counts_distinct() -> None:
+    # 3 segments but only 2 distinct speakers: pins distinct-speaker-count
+    # semantics against a segment-count mutation (len(segments) would give 3).
+    payload = {
+        "segments": [
+            {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+            {"start": 5.0, "end": 9.0, "speaker": "SPEAKER_01"},
+            {"start": 9.0, "end": 12.0, "speaker": "SPEAKER_00"},
+        ]
+    }
+    assert _pyannote().normalize_output(payload)["num_speakers"] == 2
+
+
+def test_normalize_output_segments_not_a_list_is_treated_as_empty() -> None:
+    # The sidecar is untrusted input; a wrong type must not be iterated.
+    result = _pyannote().normalize_output({"segments": 5})
+    assert result["segments"] == []
+    assert result["num_speakers"] == 0
+
+
+def test_normalize_output_segments_as_dict_is_treated_as_empty() -> None:
+    result = _pyannote().normalize_output({"segments": {"start": 0.0}})
+    assert result["segments"] == []
+
+
+def test_normalize_output_segments_as_string_is_treated_as_empty() -> None:
+    result = _pyannote().normalize_output({"segments": "garbage"})
+    assert result["segments"] == []
+
+
+def test_normalize_output_drops_segment_with_non_numeric_start() -> None:
+    payload = {
+        "segments": [
+            {"start": "abc", "end": "5.0", "speaker": "SPEAKER_00"},
+        ]
+    }
+    result = _pyannote().normalize_output(payload)
+    assert result["segments"] == []
+
+
+def test_normalize_output_drops_segment_with_non_numeric_end() -> None:
+    payload = {
+        "segments": [
+            {"start": 0.0, "end": "not-a-number", "speaker": "SPEAKER_00"},
+        ]
+    }
+    result = _pyannote().normalize_output(payload)
+    assert result["segments"] == []
+
+
+def test_normalize_output_keeps_good_segments_alongside_dropped_ones() -> None:
+    # The actual promise: one bad segment must not take good ones down with it.
+    payload = {
+        "segments": [
+            {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+            {"start": "abc", "end": "5.0", "speaker": "SPEAKER_01"},
+            {"start": 5.0, "end": "bad", "speaker": "SPEAKER_02"},
+            {"start": 9.0, "end": 12.0, "speaker": "SPEAKER_03"},
+        ]
+    }
+    result = _pyannote().normalize_output(payload)
+    assert result["segments"] == [
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+        {"start": 9.0, "end": 12.0, "speaker": "SPEAKER_03"},
+    ]

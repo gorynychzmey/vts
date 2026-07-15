@@ -27,20 +27,29 @@ class DiarizationBackend(ABC):
         diarization still beats failing a whole task over one bad span.
         """
         segments: list[dict[str, Any]] = []
-        for segment in payload.get("segments") or []:
+        raw_segments = payload.get("segments")
+        # The sidecar is a separate process: a wrong type here (e.g. an int
+        # or a string instead of a list) must not be iterated.
+        if not isinstance(raw_segments, list):
+            raw_segments = []
+        for segment in raw_segments:
             if not isinstance(segment, dict):
                 continue
             if segment.get("start") is None or segment.get("end") is None:
                 continue
             if not segment.get("speaker"):
                 continue
-            segments.append(
-                {
+            try:
+                coerced = {
                     "start": float(segment["start"]),
                     "end": float(segment["end"]),
                     "speaker": str(segment["speaker"]),
                 }
-            )
+            except (TypeError, ValueError):
+                # One unparsable field (e.g. non-numeric start/end) drops
+                # only this segment, keeping the partial-diarization promise.
+                continue
+            segments.append(coerced)
 
         embeddings = payload.get("embeddings")
         if not isinstance(embeddings, dict):
