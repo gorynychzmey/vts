@@ -103,6 +103,7 @@ SUMMARY_STEP_NAMES = frozenset(
         "prepare_llama_model",
         "prepare_summary_chunks",
         "summarize_windows",
+        "pack_window_notes",
         "summarize_final",
     }
 )
@@ -121,6 +122,16 @@ def can_restart_summary_task(task: Task) -> bool:
 
 
 def can_restart_final_summary_task(task: Task) -> bool:
+    # Mirrors the frontend's `summaryExpected`: ANY selected prompt yields a
+    # finalize step (system:summary -> summarize_final, anything else ->
+    # finalize:<source>:<id>), so restarting the final summary only requires that
+    # at least one prompt is selected. This is deliberately weaker than
+    # can_restart_summary_task's system:summary gate above -- restarting *the
+    # summary* is meaningless without the summary prompt, but restarting the
+    # finalize tail is valid for a user-prompt-only task.
+    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
+    if not refs:
+        return False
     summarize_windows_status = _find_step_status(task, "summarize_windows")
     if summarize_windows_status != StepStatus.completed:
         return False

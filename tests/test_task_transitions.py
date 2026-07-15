@@ -126,6 +126,64 @@ def test_can_restart_final_summary_task() -> None:
     assert can_restart_final_summary_task(custom_only)  # NEW: gate no longer requires summary
 
 
+def test_can_restart_summary_task_allows_failed_pack_window_notes() -> None:
+    # C1: pack_window_notes is a real summary step (vts/pipeline/types.py) and the
+    # frontend's SUMMARY_STEPS (app.js on main) included it. A task that failed in
+    # pack_window_notes is a recoverable summary failure and must stay restartable.
+    failed_pack = SimpleNamespace(
+        status=TaskStatus.failed,
+        options={"transcript": True, "prompts": [{"source": "system", "id": "summary"}]},
+        steps=[SimpleNamespace(name="pack_window_notes", status=StepStatus.failed)],
+    )
+    # Control: an unrelated failed step must NOT enable the summary restart.
+    failed_unrelated = SimpleNamespace(
+        status=TaskStatus.failed,
+        options={"transcript": True, "prompts": [{"source": "system", "id": "summary"}]},
+        steps=[SimpleNamespace(name="extract_audio", status=StepStatus.failed)],
+    )
+
+    assert can_restart_summary_task(failed_pack)
+    assert not can_restart_summary_task(failed_unrelated)
+
+
+def test_can_restart_final_summary_task_requires_a_selected_prompt() -> None:
+    # I1: mirrors the frontend's `summaryExpected` gate (app.js:1174 on main) —
+    # restarting the final summary requires at least one selected prompt.
+    windows_ok = SimpleNamespace(name="summarize_windows", status=StepStatus.completed)
+
+    # No prompt selected at all, but windows completed: the frontend disabled the
+    # button here. Without the refs gate this wrongly returns True.
+    no_prompts_legacy = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "summary": False},
+        steps=[windows_ok],
+    )
+    no_prompts_list = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": []},
+        steps=[windows_ok],
+    )
+    # Control: WITH the system summary prompt selected -> still True.
+    with_summary = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": [{"source": "system", "id": "summary"}]},
+        steps=[windows_ok],
+    )
+    # The gate is "any prompt selected", NOT "the system summary prompt selected":
+    # a user-prompt-only task produces a `finalize:user:<id>` step, which the
+    # frontend's summaryExpected counted. It must stay restartable.
+    user_prompt_only = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": [{"source": "user", "id": "42"}]},
+        steps=[windows_ok],
+    )
+
+    assert not can_restart_final_summary_task(no_prompts_legacy)
+    assert not can_restart_final_summary_task(no_prompts_list)
+    assert can_restart_final_summary_task(with_summary)
+    assert can_restart_final_summary_task(user_prompt_only)
+
+
 def test_waiting_status_exists():
     from vts.db.models import TaskStatus
 
