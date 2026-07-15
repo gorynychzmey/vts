@@ -2568,7 +2568,40 @@ Verify, in order:
 - **`redacted_transcript.txt` still carries the labels** — this is the load-bearing check. If the LLM dissolved them despite Task 8's instruction, the chain to the memo is broken, and the spec's open question ("насколько надёжно LLM сохраняет метки") is answered No. Report this rather than working around it.
 - the summary/memo attributes ideas and tasks to specific voices
 
-- [ ] **Step 3: Calibrate the thresholds**
+- [ ] **Step 3: Add diarize's seed step weight — now that you can measure it**
+
+`SEED_STEP_WEIGHTS` (`vts/metrics/step_weights.py:81`) holds measured seconds per
+step and drives the progress bar. `diarize` is not in it, so `merge_with_seed`
+(`:56-69`, which iterates `seed.items()` and emits only seed keys) silently drops
+every real per-user `diarize` sample — the step contributes nothing to progress
+forever.
+
+This was deliberately deferred to here: a seed value is a *measurement*, and until
+this task no one had ever run the container on real audio. Inventing a number
+earlier would have written a fiction into the progress bar.
+
+Note this is not breakage — `pack_window_notes` already sits in `DAG_HEAD` without
+a seed weight, so the precedent exists and the pipeline tolerates it. It is a
+progress-accuracy gap.
+
+From the run in Step 1, take the actual `diarize` duration (the step logs it; also
+check the task's step rows) and add it:
+
+```python
+    "transcribe_segments": 174.8,
+    "diarize": <measured seconds>,
+    "merge_transcript": 0.1,
+```
+
+`tests/test_step_weights.py:108` asserts `len(SEED_STEP_WEIGHTS) == 10` — a
+deliberate tripwire. Bump it to 11 and say why in the commit.
+
+Beware: diarization time scales with audio length, and the seed is a single
+number. Use a duration typical of your meetings rather than a short fixture, and
+sanity-check it against `transcribe_segments`' 174.8 — if diarization lands wildly
+above that, the progress bar will feel wrong and the number deserves a second run.
+
+- [ ] **Step 4: Calibrate the thresholds**
 
 If backchannels ("угу") shred the text → raise `diarization_min_words` / `diarization_min_seconds`.
 If real short replies vanish → lower them.
@@ -2576,15 +2609,15 @@ If a phantom speaker survives → raise `diarization_min_speaker_share`.
 
 Record what you changed and why in the bd issue.
 
-- [ ] **Step 4: Update the spec's open questions**
+- [ ] **Step 5: Update the spec's open questions**
 
 Edit `docs/superpowers/specs/2026-07-15-speaker-diarization-design.md`, replacing the estimated thresholds in the "Открытые вопросы" section with the calibrated values and the evidence.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-07-15-speaker-diarization-design.md config.yaml
-git commit -m "chore(diarization): calibrate thresholds on a real meeting (vts-5xz)"
+git add docs/superpowers/specs/2026-07-15-speaker-diarization-design.md config.yaml vts/metrics/step_weights.py tests/test_step_weights.py
+git commit -m "chore(diarization): calibrate thresholds and seed weight on a real meeting (vts-5xz)"
 ```
 
 ---
