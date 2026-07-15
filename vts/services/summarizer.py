@@ -32,8 +32,12 @@ def split_utterances(text: str) -> list[str]:
     starts = [match.start() for match in _UTTERANCE_RE.finditer(text)]
     if not starts:
         return [text]
-    bounds = starts + [len(text)]
-    return [text[bounds[i] : bounds[i + 1]].strip() for i in range(len(starts))]
+    # Text before the first label is a bare block: the renderer emits one for
+    # audio diarization never covered, and refuses to attribute it to anyone.
+    # Without this it would be dropped outright — a meeting opening on music or
+    # crosstalk would silently never reach the summary.
+    bounds = ([0] if starts[0] else []) + starts + [len(text)]
+    return [text[bounds[i] : bounds[i + 1]].strip() for i in range(len(bounds) - 1)]
 
 
 @lru_cache(maxsize=4)

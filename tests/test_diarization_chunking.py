@@ -249,3 +249,39 @@ async def test_chunk_text_utterance_mode_budget_property_fuzz(trial: int) -> Non
         assert actual <= window_tokens, (
             f"trial={trial} window_tokens={window_tokens} chunk={chunk!r} tokens={actual}"
         )
+
+
+def test_split_utterances_keeps_a_leading_bare_block() -> None:
+    # The renderer emits an unlabelled block for audio diarization never
+    # covered, deliberately refusing to attribute it. A LEADING one has no
+    # previous block to merge into, so dropping the prefix loses it outright —
+    # a meeting opening on music or crosstalk never reaches the summary.
+    text = "вступительная фраза без спикера\n\nГолос 1: первый\n\nГолос 2: второй"
+    assert split_utterances(text) == [
+        "вступительная фраза без спикера",
+        "Голос 1: первый",
+        "Голос 2: второй",
+    ]
+
+
+def test_split_utterances_conserves_text_from_the_real_renderer() -> None:
+    # Draw the input from the actual producer rather than hand-rolled labels:
+    # synthetic fixtures kept missing shapes the renderer really emits, which
+    # is how the leading-bare-block loss survived a 2000-trial fuzz.
+    from vts.services.diarization.merge import drop_marginal_speakers, label_map, render_cleaned_transcript
+
+    shapes = [
+        [{"start": 0.0, "end": 5.0, "text": "аноним", "speaker": None},
+         {"start": 5.0, "end": 40.0, "text": "первый", "speaker": "SPEAKER_00"},
+         {"start": 40.0, "end": 80.0, "text": "второй", "speaker": "SPEAKER_01"}],
+        [{"start": 0.0, "end": 40.0, "text": "первый", "speaker": "SPEAKER_00"},
+         {"start": 40.0, "end": 45.0, "text": "аноним", "speaker": None},
+         {"start": 45.0, "end": 80.0, "text": "второй", "speaker": "SPEAKER_01"}],
+        [{"start": 0.0, "end": 40.0, "text": "первый", "speaker": "SPEAKER_00"},
+         {"start": 40.0, "end": 80.0, "text": "второй", "speaker": "SPEAKER_01"},
+         {"start": 80.0, "end": 85.0, "text": "аноним", "speaker": None}],
+    ]
+    for entries in shapes:
+        cleaned = drop_marginal_speakers(entries, 0.0)
+        rendered = render_cleaned_transcript(cleaned, label_map(cleaned))
+        assert "\n\n".join(split_utterances(rendered)) == rendered, rendered
