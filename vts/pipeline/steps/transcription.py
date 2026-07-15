@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
+from vts.services.diarization.merge import merge_entries, render_transcript
 from vts.services.storage import write_json
 from vts.pipeline.steps.base import Step, StepState, log_payload
 
@@ -181,6 +182,38 @@ def tail_prompt(text: str, max_chars: int = 800) -> str | None:
     if not normalized:
         return None
     return normalized[-max_chars:]
+
+
+def apply_diarization(
+    entries: list[dict[str, Any]],
+    raw_json_by_index: dict[int, dict[str, Any]],
+    diarization_path: Path,
+    *,
+    min_words: int,
+    min_seconds: float,
+    min_share: float,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Attribute entries to speakers, returning the rendered text when diarized.
+
+    Returns the entries unchanged and `None` when there is no diarization
+    artifact or it cannot be read: the transcript is the valuable output, and a
+    broken speaker artifact must never fail a task.
+    """
+    if not diarization_path.exists():
+        return entries, None
+    try:
+        payload = json.loads(diarization_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return entries, None
+    if not isinstance(payload, dict):
+        return entries, None
+
+    diar_segments = payload.get("segments")
+    if not isinstance(diar_segments, list) or not diar_segments:
+        return entries, None
+
+    merged = merge_entries(entries, raw_json_by_index, diar_segments, min_words, min_seconds)
+    return merged, render_transcript(merged, min_share)
 
 
 def transcribe_audio_path(dirs: dict[str, Path]) -> Path:
@@ -514,23 +547,37 @@ class MergeTranscriptStep(Step):
             segments = await repo.get_task_segments(st.task_id)
             entries: list[dict[str, Any]] = []
             merged_tokens: list[str] = []
+            raw_json_by_index: dict[int, dict[str, Any]] = {}
             for segment in segments:
                 text = segment.text.strip()
                 if text:
                     merged_tokens.append(text)
+                    if isinstance(segment.raw_json, dict) and segment.raw_json:
+                        raw_json_by_index[len(entries)] = segment.raw_json
                     entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)
+
+            entries, diarized_text = apply_diarization(
+                entries,
+                raw_json_by_index,
+                st.dirs["outputs"] / "diarization.json",
+                min_words=int(getattr(ctx.settings, "diarization_min_words", 2)),
+                min_seconds=float(getattr(ctx.settings, "diarization_min_seconds", 0.8)),
+                min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
+            )
+            final_text = diarized_text if diarized_text is not None else cleaned_text
+
             write_json(
                 transcript_json,
                 {
-                    "text": cleaned_text,
+                    "text": final_text,
                     "raw_text": merged_text,
                     "entries": entries,
                     "cleanup": cleanup_meta,
                 },
             )
-            transcript_txt.write_text(cleaned_text, encoding="utf-8")
+            transcript_txt.write_text(final_text, encoding="utf-8")
             st.logger.info(
                 "transcript merge cleanup: start_removed=%s end_removed=%s",
                 cleanup_meta.get("removed_head_sentences", 0),
