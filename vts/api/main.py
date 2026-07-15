@@ -691,6 +691,10 @@ def serialize_task(
         status=task.status.value,
         queue_position=queue_position,
         queue=queue,
+        capabilities={
+            "can_restart_summary": can_restart_summary_task(task),
+            "can_restart_final_summary": can_restart_final_summary_task(task),
+        },
         options=task.options,
         transcript_path=task.transcript_path,
         summary_path=task.summary_path,
@@ -751,6 +755,10 @@ def serialize_task_compact(
         status=task.status.value,
         queue_position=queue_position,
         queue=queue,
+        capabilities={
+            "can_restart_summary": can_restart_summary_task(task),
+            "can_restart_final_summary": can_restart_final_summary_task(task),
+        },
         failure_code=classify_failure_code(task.error_message),
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -1160,6 +1168,12 @@ def create_app() -> FastAPI:
     @app.get("/api/version")
     async def version() -> JSONResponse:
         return JSONResponse({"version": __version__}, headers=no_cache_headers)
+
+    @app.get("/api/status-config")
+    async def status_config() -> JSONResponse:
+        """Pure-status semantics for the frontend, fetched once at bootstrap.
+        Task-DEPENDENT capabilities ride per-task on TaskOut.capabilities."""
+        return JSONResponse({"status_flags": _ts.status_flags()}, headers=no_cache_headers)
 
     @app.get("/api/me", response_model=MeOut)
     async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeOut:

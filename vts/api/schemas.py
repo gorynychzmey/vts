@@ -144,6 +144,14 @@ class TaskStatsOut(BaseModel):
     media_bytes: int | None = Field(default=None, ge=0)
 
 
+class TaskCapabilities(BaseModel):
+    """Task-DEPENDENT capabilities (read task.steps/options), so they ship
+    per-task. Pure-status flags (pause/resume/archive) are NOT here — they
+    are delivered once via GET /api/status-config."""
+    can_restart_summary: bool = False
+    can_restart_final_summary: bool = False
+
+
 class TaskOut(BaseModel):
     id: UUID
     source_url: str
@@ -151,6 +159,7 @@ class TaskOut(BaseModel):
     status: str
     queue_position: int | None = Field(default=None, ge=1)
     queue: str | None = None
+    capabilities: TaskCapabilities = Field(default_factory=TaskCapabilities)
     options: dict[str, Any]
     transcript_path: str | None
     summary_path: str | None
@@ -178,6 +187,7 @@ class TaskCompactOut(BaseModel):
     status: str
     queue_position: int | None = Field(default=None, ge=1)
     queue: str | None = None
+    capabilities: TaskCapabilities = Field(default_factory=TaskCapabilities)
     failure_code: str | None = None
     created_at: datetime
     updated_at: datetime

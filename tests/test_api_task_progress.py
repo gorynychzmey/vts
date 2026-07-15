@@ -318,3 +318,80 @@ async def test_get_lane_positions_skips_non_uuid_entries() -> None:
     positions = await _get_lane_positions(redis, "vts:")
 
     assert positions == {task_a: ("gpu", 1)}
+
+
+# --- capabilities (vts-c2n) ---
+
+_SUMMARY_OPTIONS: dict[str, object] = {"prompts": [{"source": "system", "id": "summary"}]}
+
+
+def test_capabilities_completed_summary_task_can_restart_summary(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[_step("summarize_windows", StepStatus.completed)],
+        options=_SUMMARY_OPTIONS,
+    )
+    task.status = TaskStatus.completed
+
+    payload = serialize_task(task)
+
+    assert payload.capabilities.can_restart_summary is True
+    assert payload.capabilities.can_restart_final_summary is True
+
+
+def test_capabilities_queued_task_has_no_restart_capabilities(tmp_path: Path) -> None:
+    task = _task(tmp_path, steps=[], options=_SUMMARY_OPTIONS)
+    task.status = TaskStatus.queued
+
+    payload = serialize_task(task)
+
+    assert payload.capabilities.can_restart_summary is False
+    assert payload.capabilities.can_restart_final_summary is False
+
+
+def test_capabilities_failed_final_summary_can_restart_final_only(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[
+            _step("summarize_windows", StepStatus.completed),
+            _step("summarize_final", StepStatus.failed),
+        ],
+        options=_SUMMARY_OPTIONS,
+    )
+    task.status = TaskStatus.failed
+
+    payload = serialize_task(task)
+
+    # summary restart needs a failed SUMMARY_STEP_NAMES step: summarize_final qualifies
+    assert payload.capabilities.can_restart_summary is True
+    assert payload.capabilities.can_restart_final_summary is True
+
+
+def test_capabilities_completed_without_summary_prompt_cannot_restart_summary(tmp_path: Path) -> None:
+    task = _task(
+        tmp_path,
+        steps=[_step("summarize_windows", StepStatus.completed)],
+        options={"prompts": [{"source": "user", "id": "custom"}]},
+    )
+    task.status = TaskStatus.completed
+
+    payload = serialize_task(task)
+
+    assert payload.capabilities.can_restart_summary is False
+    # final-summary restart does not depend on prompt selection
+    assert payload.capabilities.can_restart_final_summary is True
+
+
+def test_capabilities_compact_serializer_matches_full(tmp_path: Path) -> None:
+    from vts.api.main import serialize_task_compact
+
+    task = _task(
+        tmp_path,
+        steps=[_step("summarize_windows", StepStatus.completed)],
+        options=_SUMMARY_OPTIONS,
+    )
+    task.status = TaskStatus.completed
+
+    compact = serialize_task_compact(task)
+
+    assert compact.capabilities == serialize_task(task).capabilities
