@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
 from vts.services.diarization.merge import (
+    SENTENCE_SPLIT_RE,
     drop_marginal_speakers,
     label_map,
     merge_entries,
@@ -125,7 +126,7 @@ def trim_repetitive_edges(text: str) -> tuple[str, dict[str, Any]]:
             "head_phrase": None,
             "tail_phrase": None,
         }
-    raw_sentences = [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text) if item.strip()]
+    raw_sentences = [item.strip() for item in SENTENCE_SPLIT_RE.split(text) if item.strip()]
     if not raw_sentences:
         return text.strip(), {
             "removed_head_sentences": 0,

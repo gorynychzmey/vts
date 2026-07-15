@@ -77,11 +77,12 @@ def trim_repetitive_units(units: list[str]) -> tuple[list[str], dict[str, Any]]:
     }
 
 
-# Same split trim_repetitive_edges uses (vts.pipeline.steps.transcription):
-# sentence boundaries on [.!?…] followed by whitespace. Shared as a constant
-# (not re-derived) so the two paths can never drift on what counts as a
-# sentence boundary.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+# Sentence boundaries: [.!?…] followed by whitespace. Imported by
+# trim_repetitive_edges (vts.pipeline.steps.transcription) rather than
+# re-derived there, so the flat and diarized paths cannot drift on what counts
+# as a sentence — they must agree, or enabling diarization would silently
+# change which text survives cleanup.
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 
 
 def trim_repetitive_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -119,7 +120,7 @@ def trim_repetitive_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[st
         text = str(entry.get("text", "")).strip()
         if not text:
             continue
-        for piece in _SENTENCE_SPLIT_RE.split(text):
+        for piece in SENTENCE_SPLIT_RE.split(text):
             piece = piece.strip()
             if piece:
                 sentences.append(piece)
@@ -161,6 +162,11 @@ def trim_repetitive_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[st
         owned = sentences_by_owner.get(index)
         if not owned:
             continue
+        # start/end stay entry-level, not text-level: when trimming consumes
+        # most of a 300s chunk the span overstates the surviving text, and there
+        # are no per-sentence timings at this layer to narrow it. Fine for the
+        # transcript and for speaker lookup; a consumer seeking by timestamp
+        # should not trust these to bound the text exactly.
         kept_entries.append({**entry, "text": " ".join(owned)})
 
     return kept_entries, meta
