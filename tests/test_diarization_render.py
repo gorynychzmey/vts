@@ -64,3 +64,51 @@ def test_render_without_speakers_is_flat_text() -> None:
         {"start": 5.0, "end": 9.0, "text": "вторая", "speaker": None},
     ]
     assert render_transcript(entries, min_share=0.05) == "первая вторая"
+
+
+def test_drop_marginal_speakers_keeps_speaker_at_exact_min_share() -> None:
+    # 5.0s of 100.0s is EXACTLY min_share=0.05. The cutoff is `<` (exclusive),
+    # so a speaker sitting exactly on the boundary must survive, not be dropped.
+    entries = [
+        {"start": 0.0, "end": 95.0, "text": "первый", "speaker": "SPEAKER_00"},
+        {"start": 95.0, "end": 100.0, "text": "второй", "speaker": "SPEAKER_01"},
+    ]
+    result = drop_marginal_speakers(entries, min_share=0.05)
+    assert [e["speaker"] for e in result] == ["SPEAKER_00", "SPEAKER_01"]
+
+
+def test_render_dialogue_with_none_entry_between_speakers_does_not_crash() -> None:
+    # merge_entries routinely emits speaker: None for stretches diarization did
+    # not cover. A false attribution is worse than an unlabelled line, so this
+    # must render as a bare block, never crash, and never corrupt the speakers
+    # on either side of it.
+    entries = [
+        {"start": 0.0, "end": 5.0, "text": "первая фраза", "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 9.0, "text": "непонятно кто", "speaker": None},
+        {"start": 9.0, "end": 14.0, "text": "вторая фраза", "speaker": "SPEAKER_01"},
+    ]
+    assert render_transcript(entries, min_share=0.05) == (
+        "Голос 1: первая фраза\n\nнепонятно кто\n\nГолос 2: вторая фраза"
+    )
+
+
+def test_render_consecutive_none_entries_merge_into_one_bare_block() -> None:
+    entries = [
+        {"start": 0.0, "end": 5.0, "text": "привет", "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 7.0, "text": "неразборчиво", "speaker": None},
+        {"start": 7.0, "end": 9.0, "text": "совсем неразборчиво", "speaker": None},
+        {"start": 9.0, "end": 14.0, "text": "нормально", "speaker": "SPEAKER_01"},
+    ]
+    assert render_transcript(entries, min_share=0.05) == (
+        "Голос 1: привет\n\nнеразборчиво совсем неразборчиво\n\nГолос 2: нормально"
+    )
+
+
+def test_render_never_emits_literal_none_label() -> None:
+    entries = [
+        {"start": 0.0, "end": 5.0, "text": "первая фраза", "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 9.0, "text": "непонятно кто", "speaker": None},
+        {"start": 9.0, "end": 14.0, "text": "вторая фраза", "speaker": "SPEAKER_01"},
+    ]
+    rendered = render_transcript(entries, min_share=0.05)
+    assert "None" not in rendered

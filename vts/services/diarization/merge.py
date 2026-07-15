@@ -298,16 +298,26 @@ def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
     if len(mapping) <= 1:
         return " ".join(str(entry["text"]).strip() for entry in cleaned if str(entry["text"]).strip())
 
+    # A sentinel distinct from any real speaker AND from the initial "no block yet"
+    # state, so a leading None-speaker entry still opens its own bare block instead
+    # of being mistaken for "nothing rendered yet".
+    _NONE_SENTINEL = object()
+
     blocks: list[str] = []
-    current: str | None = None
+    current: object | None = None
     for entry in cleaned:
         text = str(entry["text"]).strip()
         if not text:
             continue
         speaker = entry.get("speaker")
-        if speaker != current:
-            blocks.append(f"{mapping[speaker]}: {text}")
-            current = speaker
+        # A None speaker means diarization covered nothing here — attributing it
+        # to a neighbour would be a false claim about who said it, which is worse
+        # than leaving it unlabelled. So it always starts its own block, never
+        # merges into a labelled neighbour, and carries no "Голос N" prefix.
+        key = _NONE_SENTINEL if speaker is None else speaker
+        if key != current:
+            blocks.append(text if speaker is None else f"{mapping[speaker]}: {text}")
+            current = key
             continue
         blocks[-1] = blocks[-1] + " " + text
     return "\n\n".join(blocks)
