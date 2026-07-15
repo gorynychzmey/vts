@@ -77,36 +77,92 @@ def trim_repetitive_units(units: list[str]) -> tuple[list[str], dict[str, Any]]:
     }
 
 
+# Same split trim_repetitive_edges uses (vts.pipeline.steps.transcription):
+# sentence boundaries on [.!?…] followed by whitespace. Shared as a constant
+# (not re-derived) so the two paths can never drift on what counts as a
+# sentence boundary.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+
+
 def trim_repetitive_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Drop leading/trailing entries whose text is a repeated ASR hallucination.
+    """Drop leading/trailing SENTENCES that are a repeated ASR hallucination.
 
     Entry-list counterpart of `trim_repetitive_edges`: it must run BEFORE
     rendering so labels like "Голос 1:" (added only at render time) never enter
     the repeat-detection heuristic, which splits on `[.!?…]` and would corrupt
     or eat those labels if applied to already-rendered dialogue text.
 
-    Each entry's `text` is treated as one atomic unit (an entry is already one
-    ASR chunk, the same granularity `trim_repetitive_edges` targets via
-    sentences), so no further splitting happens here.
+    An entry is a multi-minute ASR chunk (`segment_target_seconds`), not a
+    single sentence, so treating a whole entry as one atomic unit (as an
+    earlier version of this function did) misses hallucinations that recur
+    WITHIN an entry or span only a couple of entries — well under
+    `min_repeats`. This flattens every entry's text into its component
+    sentences, runs the exact same `trim_repetitive_units` heuristic
+    `trim_repetitive_edges` uses over that flattened stream (so a repeat run
+    crossing an entry boundary is still caught), then rebuilds entries from
+    the surviving sentences. Each surviving sentence keeps its owning entry's
+    speaker/start/end; an entry left with no surviving sentences is dropped.
     """
+    empty_meta = {
+        "removed_head_sentences": 0,
+        "removed_tail_sentences": 0,
+        "head_phrase": None,
+        "tail_phrase": None,
+    }
     if not entries:
-        return list(entries), {
-            "removed_head_sentences": 0,
-            "removed_tail_sentences": 0,
-            "head_phrase": None,
-            "tail_phrase": None,
-        }
-    texts = [str(entry.get("text", "")).strip() for entry in entries]
-    _kept_texts, meta = trim_repetitive_units(texts)
-    # trim_repetitive_units only ever removes a prefix run and/or a suffix run,
-    # so the surviving slice is contiguous — the two counts fully determine it.
+        return list(entries), dict(empty_meta)
+
+    # Flatten to (sentence, owning-entry-index) pairs across ALL entries.
+    sentences: list[str] = []
+    owners: list[int] = []
+    for index, entry in enumerate(entries):
+        text = str(entry.get("text", "")).strip()
+        if not text:
+            continue
+        for piece in _SENTENCE_SPLIT_RE.split(text):
+            piece = piece.strip()
+            if piece:
+                sentences.append(piece)
+                owners.append(index)
+
+    if not sentences:
+        return list(entries), dict(empty_meta)
+
+    kept_sentences, meta = trim_repetitive_units(sentences)
+    # trim_repetitive_units only ever removes a prefix run and/or a suffix
+    # run, so the surviving slice is contiguous — the two counts fully
+    # determine which (sentence, owner) pairs survived.
     head_count = meta["removed_head_sentences"]
     tail_count = meta["removed_tail_sentences"]
     if head_count or tail_count:
-        end_index = len(entries) - tail_count
-        kept_entries = entries[head_count:end_index]
+        end_index = len(sentences) - tail_count
+        kept_owners = owners[head_count:end_index]
     else:
-        kept_entries = list(entries)
+        kept_owners = owners
+
+    if not kept_sentences:
+        # Same all-repeats safety net trim_repetitive_edges applies: trimming
+        # every sentence away would leave nothing to show, which is worse
+        # than showing the (hallucinated) original, so fall back to the
+        # untrimmed entries. `meta` still reports what WOULD have been
+        # removed, matching trim_repetitive_edges's contract.
+        return list(entries), meta
+
+    # Regroup surviving sentences by owning entry, preserving entry order and
+    # each entry's own speaker/start/end. An entry that lost every one of its
+    # sentences (fully inside the trimmed run) contributes nothing and is
+    # dropped rather than kept with empty text.
+    sentences_by_owner: dict[int, list[str]] = {}
+    for owner, sentence in zip(kept_owners, kept_sentences):
+        sentences_by_owner.setdefault(owner, []).append(sentence)
+
+    kept_entries: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        owned = sentences_by_owner.get(index)
+        if not owned:
+            continue
+        kept_entries.append({**entry, "text": " ".join(owned)})
+
     return kept_entries, meta
 
 

@@ -1,4 +1,11 @@
-from vts.services.diarization.merge import speaker_at, usable_words, split_entry_by_speaker, merge_entries
+from vts.pipeline.steps.transcription import trim_repetitive_edges
+from vts.services.diarization.merge import (
+    merge_entries,
+    speaker_at,
+    split_entry_by_speaker,
+    trim_repetitive_entries,
+    usable_words,
+)
 
 DIAR = [
     {"start": 0.0, "end": 10.0, "speaker": "SPEAKER_00"},
@@ -229,3 +236,157 @@ def test_merge_entries_empty_diarization_leaves_speaker_none() -> None:
     entries = [{"start": 0.0, "end": 4.0, "text": "фраза"}]
     result = merge_entries(entries, {}, [], min_words=2, min_seconds=0.8)
     assert result[0]["speaker"] is None
+
+
+# --- Finding 1: sentence-granularity trimming on the entry list -------------
+#
+# Production entries are ~300s ASR chunks (segment_target_seconds), each one
+# containing dozens of sentences — never one sentence per entry. These tests
+# pin that trim_repetitive_entries agrees with trim_repetitive_edges (the flat
+# path) on what gets removed, at that realistic shape and at shapes smaller
+# than min_repeats=6 entries where the old whole-entry-as-unit approach could
+# never even start its loop.
+
+_HALLUCINATION = "Продолжение следует."
+
+
+def _entries_from_texts(texts: list[str], *, seconds_each: float = 300.0) -> list[dict]:
+    entries = []
+    for i, text in enumerate(texts):
+        entries.append(
+            {
+                "start": i * seconds_each,
+                "end": (i + 1) * seconds_each,
+                "text": text,
+                "speaker": "SPEAKER_00",
+            }
+        )
+    return entries
+
+
+def _flat_text(entries: list[dict]) -> str:
+    return " ".join(str(e["text"]).strip() for e in entries if str(e["text"]).strip())
+
+
+def test_realistic_shape_diarized_and_flat_remove_identical_content() -> None:
+    # 3 entries of 300s, matching segment_target_seconds; the last one is a
+    # single 5-minute ASR chunk containing 30 looped hallucination sentences
+    # (silence at the tail of a 15-minute video) plus nothing else.
+    real_speech_1 = "Привет всем. Сегодня поговорим о важном."
+    real_speech_2 = "Продолжаем обсуждение основной темы. Это было интересно."
+    tail_hallucination = " ".join([_HALLUCINATION] * 30)
+
+    entries = _entries_from_texts([real_speech_1, real_speech_2, tail_hallucination])
+    flat_input = _flat_text(entries)
+
+    diarized_kept, diarized_meta = trim_repetitive_entries(entries)
+    flat_cleaned, flat_meta = trim_repetitive_edges(flat_input)
+
+    # The property under test: same input, same content removed.
+    diarized_text = _flat_text(diarized_kept)
+    assert diarized_text == flat_cleaned
+    assert diarized_meta["removed_head_sentences"] == flat_meta["removed_head_sentences"]
+    assert diarized_meta["removed_tail_sentences"] == flat_meta["removed_tail_sentences"]
+    # And concretely: all 30 hallucinated sentences must be gone, not 0.
+    assert flat_meta["removed_tail_sentences"] == 30
+    assert diarized_meta["removed_tail_sentences"] == 30
+    assert _HALLUCINATION not in diarized_text
+
+
+def test_two_entries_four_repeats_each_below_old_entry_count_threshold() -> None:
+    # Only 2 entries total — the old whole-entry-as-unit code could never
+    # reach min_repeats=6 regardless of content. At sentence granularity the
+    # 8 repeated sentences (4 in each entry) clear the threshold.
+    entries = _entries_from_texts(
+        [
+            " ".join([_HALLUCINATION] * 4),
+            " ".join([_HALLUCINATION] * 4) + " Настоящая речь начинается здесь.",
+        ]
+    )
+    flat_input = _flat_text(entries)
+
+    diarized_kept, diarized_meta = trim_repetitive_entries(entries)
+    flat_cleaned, flat_meta = trim_repetitive_edges(flat_input)
+
+    assert _flat_text(diarized_kept) == flat_cleaned
+    assert diarized_meta["removed_head_sentences"] == flat_meta["removed_head_sentences"] == 8
+    assert diarized_meta["removed_tail_sentences"] == flat_meta["removed_tail_sentences"] == 0
+    assert _flat_text(diarized_kept) == "Настоящая речь начинается здесь."
+
+
+def test_five_entries_two_hallucination_sentences_each() -> None:
+    # 5 entries (still under the old 6-entry floor), 2 hallucination sentences
+    # apiece = 10 total, well past min_repeats at sentence granularity. All
+    # 10 sentences are hallucination -> nothing survives -> the all-repeats
+    # safety net falls back to the untrimmed original (same contract as
+    # trim_repetitive_edges: never show empty text), while meta still reports
+    # what WOULD have been removed.
+    entries = _entries_from_texts([" ".join([_HALLUCINATION] * 2) for _ in range(5)])
+    flat_input = _flat_text(entries)
+
+    diarized_kept, diarized_meta = trim_repetitive_entries(entries)
+    flat_cleaned, flat_meta = trim_repetitive_edges(flat_input)
+
+    assert _flat_text(diarized_kept) == flat_cleaned == flat_input
+    assert diarized_meta["removed_head_sentences"] == flat_meta["removed_head_sentences"] == 10
+    assert diarized_kept == entries
+
+
+def test_one_entry_mixing_hallucination_and_real_speech() -> None:
+    # A single entry containing 8 hallucination sentences followed by real
+    # speech: the old code treated the whole entry as one unit and could
+    # never trim anything out of it. At sentence granularity the run of 8
+    # matching sentences at the head is caught, and the real speech survives.
+    text = " ".join([_HALLUCINATION] * 8) + " Настоящая речь продолжается."
+    entries = _entries_from_texts([text])
+    flat_input = _flat_text(entries)
+
+    diarized_kept, diarized_meta = trim_repetitive_entries(entries)
+    flat_cleaned, flat_meta = trim_repetitive_edges(flat_input)
+
+    assert _flat_text(diarized_kept) == flat_cleaned
+    assert diarized_meta["removed_head_sentences"] == flat_meta["removed_head_sentences"] == 8
+    assert _flat_text(diarized_kept) == "Настоящая речь продолжается."
+    # The entry survives (not dropped) because it still has a surviving sentence.
+    assert len(diarized_kept) == 1
+    assert diarized_kept[0]["speaker"] == "SPEAKER_00"
+
+
+def test_trim_repetitive_entries_preserves_speaker_start_end_per_sentence() -> None:
+    # A trimmed run can straddle an entry boundary; surviving sentences must
+    # keep THEIR OWN entry's speaker/start/end, not bleed into a neighbour's.
+    entries = [
+        {"start": 0.0, "end": 300.0, "text": "Настоящая речь первого спикера.", "speaker": "SPEAKER_00"},
+        {
+            "start": 300.0,
+            "end": 600.0,
+            "text": " ".join([_HALLUCINATION] * 6),
+            "speaker": "SPEAKER_01",
+        },
+    ]
+    kept, meta = trim_repetitive_entries(entries)
+    assert meta["removed_tail_sentences"] == 6
+    assert len(kept) == 1
+    assert kept[0]["text"] == "Настоящая речь первого спикера."
+    assert kept[0]["speaker"] == "SPEAKER_00"
+    assert kept[0]["start"] == 0.0
+    assert kept[0]["end"] == 300.0
+
+
+def test_trim_repetitive_entries_empty_list() -> None:
+    kept, meta = trim_repetitive_entries([])
+    assert kept == []
+    assert meta == {
+        "removed_head_sentences": 0,
+        "removed_tail_sentences": 0,
+        "head_phrase": None,
+        "tail_phrase": None,
+    }
+
+
+def test_trim_repetitive_entries_no_repeats_is_noop() -> None:
+    entries = _entries_from_texts(["Первая речь. Вторая мысль.", "Третья мысль тут."])
+    kept, meta = trim_repetitive_entries(entries)
+    assert kept == entries
+    assert meta["removed_head_sentences"] == 0
+    assert meta["removed_tail_sentences"] == 0
