@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from vts.pipeline.steps.base import Step
+from vts.pipeline.steps.diarization import DiarizeStep
 from vts.pipeline.steps.media import (
     DownloadStep,
     ExtractAudioStep,
@@ -28,6 +29,7 @@ STEP_REGISTRY: dict[str, Step] = {
     SegmentAudioStep.name: SegmentAudioStep(),
     DetectLanguageStep.name: DetectLanguageStep(),
     TranscribeSegmentsStep.name: TranscribeSegmentsStep(),
+    DiarizeStep.name: DiarizeStep(),
     MergeTranscriptStep.name: MergeTranscriptStep(),
     PrepareLlamaModelStep.name: PrepareLlamaModelStep(),
     PrepareSummaryChunksStep.name: PrepareSummaryChunksStep(),
