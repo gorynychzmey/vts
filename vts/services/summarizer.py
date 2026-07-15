@@ -9,9 +9,18 @@ from typing import Any
 
 import httpx
 
-# Utterances rendered by the diarization merge start with "Голос N: " at the
-# beginning of a line. Windows must not cut between a label and its text.
-_UTTERANCE_RE = re.compile(r"^Голос \d+: ", re.MULTILINE)
+# Utterances rendered by the diarization merge (render_cleaned_transcript in
+# vts.services.diarization.merge) start with "Голос N: " only at the very
+# start of the text, or right after a blank line ("\n\n") separating blocks —
+# same-speaker text WITHIN a block is joined with a plain space and never
+# contains a bare "\n". Matching at any line start (re.MULTILINE with "^")
+# would also fire on a label-shaped string following a single embedded
+# newline inside an ASR entry's own text (quoted speech, ASR artifacts),
+# which truncates the real utterance and fabricates a wrongly-attributed one
+# — the exact misattribution this whole feature exists to prevent. The
+# lookbehind requires "start of string" or "\n\n" immediately before the
+# label, matching the renderer's actual block boundary, not "any newline".
+_UTTERANCE_RE = re.compile(r"(?:^|(?<=\n\n))Голос \d+: ")
 
 
 def split_utterances(text: str) -> list[str]:
@@ -514,19 +523,45 @@ class LLMClient:
         A ten-minute monologue inside a meeting cannot fit a window, so the
         budget wins — but every continuation carries the label, or the tail
         would be attributed to whoever spoke before.
+
+        The label is prepended as extra text after detokenizing the body, so
+        its tokens must be charged against window_tokens BEFORE slicing —
+        otherwise every continuation chunk comes back over budget by exactly
+        the label's token count (label_tokens full-window body + label on
+        top). We tokenize the label once and slice each body at
+        `window_tokens - label_tokens`.
+
+        Degenerate case: if the label alone meets or exceeds window_tokens,
+        there is no budget left for any body text. Truncating the label would
+        make attribution illegible (worse than a temporarily over-budget
+        chunk), so we never do that — instead we floor the body slice at 1
+        token per chunk. This keeps the label intact and guarantees cursor
+        always advances, so the loop terminates; the resulting chunk is
+        allowed to exceed window_tokens in this narrow, pathological case
+        (label >= window) since there is no way to satisfy the budget and
+        keep the label whole at the same time.
         """
         match = _UTTERANCE_RE.match(utterance)
         label = match.group(0) if match else ""
+        label_tokens = (
+            len(await self.tokenize(model=model, text=label, tokenizer_path=tokenizer_path))
+            if label
+            else 0
+        )
+        # Reserve room for the label in every continuation chunk. Floor at 1
+        # so a label at/over the window still makes progress each iteration.
+        body_budget = max(window_tokens - label_tokens, 1)
+
         parts: list[str] = []
         cursor = 0
         while cursor < len(tokens):
-            part = tokens[cursor : cursor + window_tokens]
+            part = tokens[cursor : cursor + body_budget]
             body = await self.detokenize(model=model, tokens=part, tokenizer_path=tokenizer_path)
             body = body.strip()
             if not body:
                 break
             parts.append(body if body.startswith(label.strip()) and label else f"{label}{body}")
-            cursor += window_tokens
+            cursor += body_budget
         return parts
 
     async def chat_completion(
