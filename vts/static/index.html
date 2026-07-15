@@ -213,11 +213,20 @@
                       title="Save the current task settings as a new preset"
                       data-i18n-title="preset.save_as_tooltip">Save as preset</button>
             </div>
-            <label class="option-pill" id="audio-only-pill">
+            <label
+              class="option-pill"
+              id="audio-only-pill"
+              title="Download only the audio track instead of the full video. Saves bandwidth; does not affect the transcript or the summary."
+              data-i18n-title="new_task.audio_only_tooltip"
+            >
               <input id="audio_only" name="audio_only" type="checkbox" />
               <span data-i18n="new_task.audio_only">Audio only</span>
             </label>
-            <label class="option-pill">
+            <label
+              class="option-pill"
+              title="Transcribe the media. Required for everything downstream — without it no prompts run and no summary is produced."
+              data-i18n-title="new_task.transcript_tooltip"
+            >
               <input id="transcript" name="transcript" type="checkbox" checked />
               <span data-i18n="new_task.transcript">Transcript</span>
             </label>
