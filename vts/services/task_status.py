@@ -1,8 +1,8 @@
 """Single source of task-status semantics. Pure functions over TaskStatus.
 
 Each set encodes EXACTLY a status group used elsewhere in the codebase (see the
-vts-c2n spec). Do NOT unify the three different "terminal" sets — they answer
-different questions and any behavior change belongs in a separate issue.
+vts-c2n spec). The remaining "terminal-ish" sets (FINISHED / SKIPPABLE_ON_START)
+answer different questions and must NOT be unified — see their comments.
 """
 from __future__ import annotations
 
@@ -15,9 +15,18 @@ FINISHED_STATUSES = {
 }
 PAUSABLE_STATUSES = {TaskStatus.queued, TaskStatus.running, TaskStatus.waiting}
 RESUMABLE_STATUSES = {TaskStatus.paused, TaskStatus.failed}
+# `waiting` is deliberately absent: it is a RUNNING task that lost its gpu slot
+# (running->waiting->running, pipeline/context.py), so archiving it would pack
+# artifacts the worker is about to write again. Pausing waiting is cooperative
+# and therefore safe; archiving is not. See vts-1nv.
 ARCHIVABLE_STATUSES = {TaskStatus.completed, TaskStatus.failed}
+# Skipped on worker start-up. Excludes `failed` (a failed task may be retried)
+# — that is why this is NOT the same question as FINISHED_STATUSES.
 SKIPPABLE_ON_START_STATUSES = {TaskStatus.canceled, TaskStatus.completed, TaskStatus.archived}
-TERMINAL_FOR_WAIT_STATUSES = {TaskStatus.completed, TaskStatus.failed, TaskStatus.canceled}
+# "Nothing further will happen to this task" — the condition an MCP waiter needs.
+# Identical to FINISHED_STATUSES by definition, aliased so the two cannot drift
+# apart again (`archived` was missing here until vts-hdl, hanging MCP waiters).
+TERMINAL_FOR_WAIT_STATUSES = FINISHED_STATUSES
 
 
 def is_active(status: TaskStatus) -> bool:

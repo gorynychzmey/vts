@@ -30,6 +30,60 @@ async def test_wait_returns_immediately_if_terminal() -> None:
     assert res.status == "completed"
 
 
+async def test_wait_returns_immediately_if_archived() -> None:
+    # archived is a final state: nothing further will happen, so waiting on it
+    # must return rather than block until timeout (vts-hdl).
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    redis = FakeRedisWithPubSub()
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.archived)
+    repo.tasks[t.id] = t
+
+    res = await wait_for_task(
+        task_id=t.id,
+        until="done",
+        timeout_seconds=5,
+        user=user,
+        repo=repo,
+        redis=redis,
+        events_channel="vts:events",
+    )
+    assert res.reached is True
+    assert res.status == "archived"
+
+
+async def test_wait_unblocks_on_archived_status_event() -> None:
+    # A task archived while we wait must unblock the waiter via the SSE path too.
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    redis = FakeRedisWithPubSub()
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
+    repo.tasks[t.id] = t
+
+    async def publish_later():
+        await asyncio.sleep(0.05)
+        t.status = TaskStatus.archived
+        await redis.publish("vts:events", {
+            "user_id": user.id,
+            "task_id": str(t.id),
+            "event": "task_status",
+            "data": {"status": "archived"},
+        })
+
+    asyncio.create_task(publish_later())
+    res = await wait_for_task(
+        task_id=t.id,
+        until="done",
+        timeout_seconds=2,
+        user=user,
+        repo=repo,
+        redis=redis,
+        events_channel="vts:events",
+    )
+    assert res.reached is True
+    assert res.status == "archived"
+
+
 async def test_wait_unblocks_on_task_status_event() -> None:
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()

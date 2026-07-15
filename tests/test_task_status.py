@@ -42,8 +42,16 @@ def test_skippable_on_start_set():
         TaskStatus.canceled, TaskStatus.completed, TaskStatus.archived}
 
 def test_terminal_for_wait_set():
+    # `archived` is terminal for an MCP waiter: nothing further will happen, so
+    # waiting on it must return rather than hang until timeout (vts-hdl).
     assert {s for s in ALL if ts.is_terminal_for_wait(s)} == {
-        TaskStatus.completed, TaskStatus.failed, TaskStatus.canceled}
+        TaskStatus.completed, TaskStatus.failed, TaskStatus.canceled, TaskStatus.archived}
+
+
+def test_terminal_for_wait_tracks_finished():
+    # The two answer the same question ("nothing further will happen"); pinned so
+    # they cannot drift apart again, which is how the vts-hdl hang arose.
+    assert ts.TERMINAL_FOR_WAIT_STATUSES == ts.FINISHED_STATUSES
 
 def test_status_flags_covers_all_statuses_and_matches_predicates():
     flags = ts.status_flags()
