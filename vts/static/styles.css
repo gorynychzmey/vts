@@ -519,11 +519,23 @@ input[type="file"] {
   bottom: calc(100% + 0.35rem);
   left: 50%;
   transform: translateX(-50%);
-  white-space: nowrap;
-  background: var(--ink, #152018);
-  color: #fff;
+  /* Wrap rather than nowrap: a single-line bubble on a long string is wider
+     than its container, which clips the text and inflates the scrollWidth of
+     any scrollable ancestor (that was the stray scrollbar under the presets
+     dialog, vts-7rj). max-content keeps short labels on one line. */
+  white-space: normal;
+  width: max-content;
+  max-width: 16rem;
+  text-align: center;
+  /* Styled like the browser's native tooltip — light surface, dark text and a
+     dark hairline border — so our bubbles and any remaining native `title`
+     read as the same thing. */
+  background: #fff;
+  color: var(--ink, #152018);
+  border: 1px solid var(--ink, #152018);
+  box-shadow: 0 2px 6px rgb(21 32 24 / 0.18);
   font-size: 0.72rem;
-  line-height: 1;
+  line-height: 1.25;
   padding: 0.3rem 0.5rem;
   border-radius: 6px;
   opacity: 0;
@@ -531,20 +543,23 @@ input[type="file"] {
   transition: opacity 0.12s ease;
   z-index: 50;
 }
-/* Right-aligned action buttons: a centered nowrap bubble on the last button
-   sticks out past the container, which clips the text against a dialog edge AND
-   inflates the scrollWidth of the scrollable ancestor (that was the stray
-   horizontal scrollbar under the presets dialog). Anchor those bubbles to the
-   button's right edge and let long text wrap instead of running off. */
+/* Right-aligned action buttons: a centred bubble on the last button still
+   overhangs the container edge, so anchor these to the button's right edge. */
 .prompts-actions [data-tooltip]::after {
   left: auto;
   right: 0;
   transform: none;
-  white-space: normal;
-  width: max-content;
-  max-width: 16rem;
   text-align: left;
-  line-height: 1.25;
+}
+/* Form controls sitting on a container's left edge (the option pills and the
+   language control): a centred bubble spills off that edge and gets clipped, so
+   anchor those to the control's left edge instead. */
+.options-row > .option-pill[data-tooltip]::after,
+.options-row > .language-control[data-tooltip]::after {
+  left: 0;
+  right: auto;
+  transform: none;
+  text-align: left;
 }
 
 [data-tooltip-below]::after {

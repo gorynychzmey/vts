@@ -12,10 +12,12 @@ export const name = "checkbox-tooltips";
 const AUDIO_PILL = "#audio-only-pill";
 const TRANSCRIPT_PILL = "label.option-pill:has(#transcript)";
 
+// data-i18n-title renders through the styled bubble (data-tooltip), not the
+// native title — the native one never appears on touch.
 async function titleOf(page, sel) {
   return page.evaluate((s) => {
     const el = document.querySelector(s);
-    return el ? el.getAttribute("title") || "" : null;
+    return el ? el.getAttribute("data-tooltip") || "" : null;
   }, sel);
 }
 
@@ -53,6 +55,24 @@ export async function run() {
     if (!/download/i.test(audioTitle)) {
       failures.push(`audio_only: title must say it only affects downloading, got "${audioTitle}"`);
     }
+
+    // --- the bubble looks like a native tooltip and reveals on hover ---
+    const style = await page.evaluate((s) => {
+      const cs = getComputedStyle(document.querySelector(s), "::after");
+      return { bg: cs.backgroundColor, color: cs.color, borderW: cs.borderTopWidth,
+               borderC: cs.borderTopColor, whiteSpace: cs.whiteSpace, rest: cs.opacity };
+    }, AUDIO_PILL);
+    if (style.bg !== "rgb(255, 255, 255)") failures.push(`bubble background should be white, got ${style.bg}`);
+    if (style.borderW === "0px") failures.push("bubble has no border — should read like the native tooltip");
+    if (style.color === "rgb(255, 255, 255)") failures.push("bubble text is white on white");
+    // Long tooltips must wrap; a nowrap bubble overflows its container (vts-7rj).
+    if (style.whiteSpace === "nowrap") failures.push("bubble is nowrap — long text will overflow and clip");
+    if (style.rest !== "0") failures.push(`bubble should be hidden at rest, opacity=${style.rest}`);
+    await page.hover(AUDIO_PILL);
+    await page.waitForTimeout(200);
+    const shown = await page.evaluate((s) => getComputedStyle(document.querySelector(s), "::after").opacity, AUDIO_PILL);
+    if (shown !== "1") failures.push(`bubble did not reveal on hover, opacity=${shown}`);
+    await page.mouse.move(0, 0);
 
     // --- i18n substitution actually happens (not just the HTML default) ---
     // The app picks the locale from navigator.languages (app.js detectLocale),

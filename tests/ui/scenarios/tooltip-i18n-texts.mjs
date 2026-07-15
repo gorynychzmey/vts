@@ -101,12 +101,14 @@ export async function run() {
         failures.push(`[${locale}] document lang expected "${locale}", got "${applied}" — locale detection broken`);
       }
       for (const [selector, byLocale] of Object.entries(EXPECTED)) {
+        // data-i18n-title now renders through the styled bubble (data-tooltip)
+        // rather than the native title, which never shows on touch.
         const title = await page.evaluate(
-          (sel) => document.querySelector(sel)?.getAttribute("title") ?? null,
+          (sel) => document.querySelector(sel)?.getAttribute("data-tooltip") ?? null,
           selector,
         );
         if (title !== byLocale[locale]) {
-          failures.push(`[${locale}] ${selector} title expected "${byLocale[locale]}", got "${title}"`);
+          failures.push(`[${locale}] ${selector} tooltip expected "${byLocale[locale]}", got "${title}"`);
         }
       }
       failures.push(...errors.map((e) => `[${locale}] ${e}`));

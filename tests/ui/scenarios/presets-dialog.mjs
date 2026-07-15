@@ -146,25 +146,44 @@ export async function run() {
       );
     }
 
+    // Every tooltip in the dialog must fit inside it — BOTH edges. The first
+    // version of this check only looked at the right-anchored row actions and
+    // missed the option-pill bubbles spilling off the LEFT edge.
     const tipFit = await page.evaluate(() => {
       const d = document.getElementById("presets-dialog");
-      const btns = [...d.querySelectorAll(".prompts-actions [data-tooltip]")];
-      if (!btns.length) return { checked: 0, clipped: [] };
+      const els = [...d.querySelectorAll("[data-tooltip]")];
       const dr = d.getBoundingClientRect();
       const clipped = [];
-      for (const b of btns) {
-        const br = b.getBoundingClientRect();
-        const w = parseFloat(getComputedStyle(b, "::after").width);
-        // Bubbles here are right-anchored to the button.
-        if (br.right - w < dr.left - 1 || br.right > dr.right + 1) {
-          clipped.push({ tip: b.getAttribute("data-tooltip"), left: Math.round(br.right - w), dialogLeft: Math.round(dr.left) });
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el, "::after");
+        const w = parseFloat(cs.width);
+        if (!w) continue;
+        // Derive the bubble's box from its anchoring. Note getComputedStyle
+        // resolves `left` to a used pixel value even when the rule sets
+        // `left: auto`, so key off `transform` (centred bubbles are the only
+        // ones translated) and the explicit right/left offsets.
+        const centred = cs.transform !== "none";
+        let left;
+        if (centred) left = r.left + r.width / 2 - w / 2;
+        else if (cs.right === "0px") left = r.right - w;   // right-anchored
+        else left = r.left;                                // left-anchored
+        const right = left + w;
+        if (left < dr.left - 1 || right > dr.right + 1) {
+          clipped.push({
+            tip: (el.getAttribute("data-tooltip") || "").slice(0, 40),
+            left: Math.round(left), right: Math.round(right),
+            dialog: [Math.round(dr.left), Math.round(dr.right)],
+          });
         }
       }
-      return { checked: btns.length, clipped };
+      return { checked: els.length, clipped };
     });
-    if (!tipFit.checked) failures.push("no [data-tooltip] action buttons found in a preset row");
+    if (!tipFit.checked) failures.push("no [data-tooltip] elements found in the presets dialog");
     for (const c of tipFit.clipped) {
-      failures.push(`tooltip clipped by the dialog edge: "${c.tip}" starts at ${c.left}, dialog starts at ${c.dialogLeft}`);
+      failures.push(
+        `tooltip clipped by the dialog edge: "${c.tip}" spans ${c.left}..${c.right}, dialog is ${c.dialog[0]}..${c.dialog[1]}`
+      );
     }
 
     // Close via the X button.

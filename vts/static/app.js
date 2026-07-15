@@ -222,7 +222,13 @@ function applyI18n(root = document) {
     el.setAttribute("placeholder", t(el.getAttribute("data-i18n-placeholder") || ""));
   });
   applyAttr("data-i18n-title", (el) => {
-    el.setAttribute("title", t(el.getAttribute("data-i18n-title") || ""));
+    const text = t(el.getAttribute("data-i18n-title") || "");
+    // Render through the styled bubble, not the browser's native tooltip: the
+    // native one never appears on touch (it needs hover), which is why the
+    // bubble exists. `title` stays as the pre-JS/assistive fallback, but is
+    // dropped once the bubble is in place so the two don't both show on hover.
+    el.setAttribute("data-tooltip", text);
+    el.removeAttribute("title");
   });
   applyAttr("data-i18n-aria-label", (el) => {
     el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria-label") || ""));
@@ -1662,33 +1668,33 @@ function renderTasks(tasks) {
     }
     logPre.textContent = t("tab.prompt_log");
 
-    pauseBtn.title = t("action.pause");
+    pauseBtn.setAttribute("data-tooltip", t("action.pause"));
     pauseBtn.setAttribute("aria-label", t("action.pause"));
-    resumeBtn.title = t("action.resume");
+    resumeBtn.setAttribute("data-tooltip", t("action.resume"));
     resumeBtn.setAttribute("aria-label", t("action.resume"));
     if (restartSummaryBtn) {
-      restartSummaryBtn.title = t("action.restart_summary");
+      restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
       restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
     }
     if (restartSummaryFullBtn) {
       restartSummaryFullBtn.textContent = t("action.restart_summary_full");
-      restartSummaryFullBtn.title = t("action.restart_summary_full_tooltip");
+      restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
     }
     if (restartSummaryFinalBtn) {
       restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
-      restartSummaryFinalBtn.title = t("action.restart_summary_final_tooltip");
+      restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
     }
     if (downloadMediaBtn) {
-      downloadMediaBtn.title = t("action.download_media");
+      downloadMediaBtn.setAttribute("data-tooltip", t("action.download_media"));
       downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
     }
     if (archiveBtn) {
-      archiveBtn.title = t("action.archive");
+      archiveBtn.setAttribute("data-tooltip", t("action.archive"));
       archiveBtn.setAttribute("aria-label", t("action.archive"));
     }
-    deleteBtn.title = t("action.delete");
+    deleteBtn.setAttribute("data-tooltip", t("action.delete"));
     deleteBtn.setAttribute("aria-label", t("action.delete"));
-    toggleBtn.title = t("action.expand");
+    toggleBtn.setAttribute("data-tooltip", t("action.expand"));
     toggleBtn.setAttribute("aria-label", t("action.expand"));
 
     root.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -3324,9 +3330,8 @@ function renderPromptsList(prompts) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "icon-btn ghost";
-      editBtn.title = t("prompts.manage.edit");
-      editBtn.setAttribute("aria-label", t("prompts.manage.edit"));
       editBtn.setAttribute("data-tooltip", t("prompts.manage.edit"));
+      editBtn.setAttribute("aria-label", t("prompts.manage.edit"));
       editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", async () => {
         const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
@@ -3341,9 +3346,8 @@ function renderPromptsList(prompts) {
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "icon-btn ghost danger";
-      delBtn.title = t("prompts.manage.delete");
-      delBtn.setAttribute("aria-label", t("prompts.manage.delete"));
       delBtn.setAttribute("data-tooltip", t("prompts.manage.delete"));
+      delBtn.setAttribute("aria-label", t("prompts.manage.delete"));
       delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", async () => {
         const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(prompt.id)}`), { method: "DELETE" });
@@ -3364,9 +3368,8 @@ function renderPromptsList(prompts) {
     const dupBtn = document.createElement("button");
     dupBtn.type = "button";
     dupBtn.className = "icon-btn ghost";
-    dupBtn.title = t("prompts.manage.duplicate");
-    dupBtn.setAttribute("aria-label", t("prompts.manage.duplicate"));
     dupBtn.setAttribute("data-tooltip", t("prompts.manage.duplicate"));
+    dupBtn.setAttribute("aria-label", t("prompts.manage.duplicate"));
     dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePrompt(prompt));
     actions.appendChild(dupBtn);
@@ -3579,9 +3582,8 @@ function renderPresetsList(presets, defaultRef) {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "icon-btn ghost";
-      editBtn.title = t("preset.manage.edit");
-      editBtn.setAttribute("aria-label", t("preset.manage.edit"));
       editBtn.setAttribute("data-tooltip", t("preset.manage.edit"));
+      editBtn.setAttribute("aria-label", t("preset.manage.edit"));
       editBtn.innerHTML = ICON_EDIT;
       editBtn.addEventListener("click", () => fillPresetForm(preset));
       actions.appendChild(editBtn);
@@ -3589,9 +3591,8 @@ function renderPresetsList(presets, defaultRef) {
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "icon-btn ghost danger";
-      delBtn.title = t("preset.manage.delete");
-      delBtn.setAttribute("aria-label", t("preset.manage.delete"));
       delBtn.setAttribute("data-tooltip", t("preset.manage.delete"));
+      delBtn.setAttribute("aria-label", t("preset.manage.delete"));
       delBtn.innerHTML = ICON_DELETE;
       delBtn.addEventListener("click", () => deletePreset(preset));
       actions.appendChild(delBtn);
@@ -3600,9 +3601,8 @@ function renderPresetsList(presets, defaultRef) {
     const dupBtn = document.createElement("button");
     dupBtn.type = "button";
     dupBtn.className = "icon-btn ghost";
-    dupBtn.title = t("preset.manage.duplicate");
-    dupBtn.setAttribute("aria-label", t("preset.manage.duplicate"));
     dupBtn.setAttribute("data-tooltip", t("preset.manage.duplicate"));
+    dupBtn.setAttribute("aria-label", t("preset.manage.duplicate"));
     dupBtn.innerHTML = ICON_DUPLICATE;
     dupBtn.addEventListener("click", () => duplicatePreset(preset));
     actions.appendChild(dupBtn);
@@ -3610,9 +3610,8 @@ function renderPresetsList(presets, defaultRef) {
     const defBtn = document.createElement("button");
     defBtn.type = "button";
     defBtn.className = "icon-btn ghost";
-    defBtn.title = t("preset.manage.make_default");
-    defBtn.setAttribute("aria-label", t("preset.manage.make_default"));
     defBtn.setAttribute("data-tooltip", t("preset.manage.make_default"));
+    defBtn.setAttribute("aria-label", t("preset.manage.make_default"));
     defBtn.innerHTML = ICON_MAKE_DEFAULT;
     defBtn.addEventListener("click", () => makePresetDefault(preset));
     actions.appendChild(defBtn);
