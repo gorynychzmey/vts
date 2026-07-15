@@ -2,13 +2,47 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from _db import make_test_engine
 from vts.api.main import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task
+from vts.api.schemas import PromptRef, TaskCreateRequest
 from vts.db.base import Base
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
+
+
+def test_restart_gates_cannot_see_a_transcriptless_task_with_prompts() -> None:
+    """vts-7zi: the restart gates don't model the frontend's `transcript is False`
+    short-circuit, and don't need to — but ONLY because the API refuses to create
+    the task shape that would expose the difference.
+
+    With transcript=false the pipeline enables just `download`
+    (processor.py:_is_step_enabled), so no summary step ever runs. The old JS
+    derived summaryExpected from enabledSteps and returned False. The Python gates
+    key off the selected prompts instead, so transcript=false + a selected prompt
+    WOULD wrongly report can_restart_summary=True. That shape is unreachable:
+    prompts and transcript=false is rejected at creation. This test pins that
+    coupling — if the validation is ever relaxed, the gates must gain the
+    transcript check, and this test is where that shows up.
+    """
+    with pytest.raises(ValidationError, match="prompts require transcript"):
+        TaskCreateRequest(
+            url="https://example.com/x",
+            transcript=False,
+            prompts=[PromptRef(source="system", id="summary")],
+        )
+
+    # Without prompts (the only creatable transcript=false shape), both gates are
+    # False regardless of status, so the missing short-circuit is unobservable.
+    task = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": False, "prompts": []},
+        steps=[SimpleNamespace(name="download", status=StepStatus.completed)],
+    )
+    assert can_restart_summary_task(task) is False
+    assert can_restart_final_summary_task(task) is False
 
 
 def test_can_pause_task_allows_queued_running_or_waiting() -> None:
