@@ -2248,6 +2248,10 @@ function applyPresetOptions(options) {
     renderPromptMultiselect(promptSelect, promptsCache, filtered);
   }
   syncSummaryToggle();
+  // audio_only is a yt-dlp download hint and is meaningless for an uploaded
+  // file, so syncSourceType() disables+clears it for the File source. A preset
+  // must not smuggle it back in past that gate: re-sync after applying.
+  syncSourceType();
   return dangling;
 }
 
