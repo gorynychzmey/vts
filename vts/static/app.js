@@ -2658,6 +2658,10 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", qu
       if (taskEl._runtime === runtime && task) {
         if (task.stats) runtime.stats = parseTaskStats(task);
         runtime.mediaReady = Boolean(task.media_path);
+        // Restart capabilities are computed server-side from the task's final
+        // steps; SSE patches cannot derive them, so refresh them here or the
+        // restart buttons stay disabled until the next loadTasks().
+        if (task.capabilities) runtime.capabilities = task.capabilities;
         if (task.options && Array.isArray(task.options.prompt_results)) {
           runtime.promptResults = task.options.prompt_results;
         }
@@ -2711,6 +2715,7 @@ function patchTaskStep(taskId, name, status) {
   ) {
     void api(`/api/tasks/${taskId}`).then((task) => {
       if (taskEl._runtime === runtime && task && task.options) {
+        if (task.capabilities) runtime.capabilities = task.capabilities;
         runtime.promptResults = Array.isArray(task.options.prompt_results)
           ? task.options.prompt_results
           : runtime.promptResults;
