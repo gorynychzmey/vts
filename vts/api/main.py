@@ -938,7 +938,7 @@ def _install_custom_openapi(app: FastAPI, settings: Settings) -> None:
                     continue
                 op.setdefault("tags", [tag])
         # Endpoints that must NOT require auth in the spec.
-        for path in ("/api/version", "/healthz"):
+        for path in ("/api/version", "/api/status-config", "/healthz"):
             for op in schema.get("paths", {}).get(path, {}).values():
                 if isinstance(op, dict):
                     op["security"] = []
