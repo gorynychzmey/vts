@@ -70,6 +70,35 @@ async def test_happy_path_creates_queued_task(client):
     assert any(t["id"] == task["id"] for t in tasks)
 
 
+async def test_chunked_upload_forces_audio_only_false(client):
+    # audio_only is a yt-dlp download hint; an uploaded file is never downloaded
+    # (DownloadStep returns early for file://), so the flag is meaningless here.
+    # The server must not take the client's word for it: a curl/MCP/stale-tab
+    # caller passing true would otherwise have the task claim "Audio only: yes"
+    # in the About dialog while the full file was kept (vts-7q2).
+    r = await client.post(
+        "/api/uploads/init",
+        json={"filename": "clip.mp4", "total_size": 6, "transcript": True, "audio_only": True},
+    )
+    assert r.status_code == 200, r.text
+    uid = r.json()["upload_id"]
+    await client.patch(f"/api/uploads/{uid}?offset=0", content=b"abcdef")
+    fin = await client.post(f"/api/uploads/{uid}/finalize")
+    assert fin.status_code == 200, fin.text
+    assert fin.json()["options"]["audio_only"] is False
+
+
+async def test_single_shot_upload_forces_audio_only_false(client):
+    files = {"file": ("clip.mp4", b"abcdef", "video/mp4")}
+    r = await client.post(
+        "/api/tasks/upload",
+        files=files,
+        data={"audio_only": "true", "transcript": "true"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["options"]["audio_only"] is False
+
+
 async def test_offset_endpoint_supports_resume(client):
     uid = await _init(client)
     await client.patch(f"/api/uploads/{uid}?offset=0", content=b"ab")

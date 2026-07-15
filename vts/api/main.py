@@ -1552,7 +1552,9 @@ def create_app() -> FastAPI:
         file: UploadFile = File(...),
         language: str | None = Form(default=None),
         display_name: str | None = Form(default=None),
-        audio_only: bool = Form(default=False),
+        # Accepted and ignored: existing clients (stale tabs, scripts) still post
+        # it. Rejecting would break them for a flag that never did anything here.
+        audio_only: bool = Form(default=False),  # noqa: ARG001
         transcript: bool = Form(default=True),
         prompts: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(get_current_user),
@@ -1584,7 +1586,9 @@ def create_app() -> FastAPI:
         source_url = f"file://{Path(original_filename).name}"
         options = {
             "language": language or None,
-            "audio_only": audio_only,
+            # See /api/uploads/init: file:// tasks are never downloaded, so the
+            # yt-dlp audio_only hint is normalized away rather than trusted.
+            "audio_only": False,
             "transcript": transcript,
             "prompts": normalized_prompts,
         }
@@ -1630,7 +1634,10 @@ def create_app() -> FastAPI:
         upload_id = uuid.uuid4()
         options = {
             "language": payload.language or None,
-            "audio_only": payload.audio_only,
+            # Always a file:// task: audio_only is a yt-dlp download hint and the
+            # download never runs, so the flag is meaningless. Don't take the
+            # client's word for it — a stray true would only mislead the UI.
+            "audio_only": False,
             "transcript": payload.transcript,
             "prompts": normalized_prompts,
         }
