@@ -20,6 +20,9 @@ from vts.metrics.step_weights import StepDuration, aggregate_step_weights, media
 from vts.services.task_progress import summary_progress_for_task
 
 # Fixed-order steps mirrored from app.js STEP_WEIGHT_SECONDS for stable output.
+# A step missing here is measured but never printed, so whoever runs this script
+# to obtain a new weight silently gets nothing back for it. Keep in sync with
+# DAG_HEAD (vts/pipeline/types.py).
 _PRINT_ORDER = [
     "download",
     "extract_audio",
@@ -27,10 +30,12 @@ _PRINT_ORDER = [
     "segment_audio",
     "detect_language",
     "transcribe_segments",
+    "diarize",
     "merge_transcript",
     "prepare_llama_model",
     "prepare_summary_chunks",
     "summarize_windows",
+    "pack_window_notes",
 ]
 
 

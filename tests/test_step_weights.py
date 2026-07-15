@@ -106,3 +106,26 @@ def test_seed_constants_present():
     assert SEED_STEP_WEIGHTS["transcribe_segments"] == 174.8
     assert SEED_FINAL_SUMMARY_FALLBACK == 514.4
     assert len(SEED_STEP_WEIGHTS) == 10
+
+
+def test_recompute_script_prints_every_dag_step() -> None:
+    # The script's _PRINT_ORDER is a hand-maintained mirror of the step list —
+    # the fifth such copy in the codebase. A step missing from it is measured
+    # but never printed, so whoever runs the script to obtain that step's weight
+    # silently gets nothing back and has no hint why.
+    import importlib.util
+    from pathlib import Path
+
+    from vts.pipeline.types import DAG_HEAD
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "recompute_step_weights.py"
+    spec = importlib.util.spec_from_file_location("recompute_step_weights", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert set(module._PRINT_ORDER) == set(DAG_HEAD), (
+        "scripts/recompute_step_weights.py _PRINT_ORDER is out of sync with DAG_HEAD: "
+        f"missing={sorted(set(DAG_HEAD) - set(module._PRINT_ORDER))} "
+        f"unknown={sorted(set(module._PRINT_ORDER) - set(DAG_HEAD))}"
+    )
