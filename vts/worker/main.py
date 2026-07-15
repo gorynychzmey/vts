@@ -18,6 +18,7 @@ from vts.db.session import SessionLocal
 from vts.pipeline.processor import TaskProcessor
 from vts.services.redis_bus import RedisBus
 from vts.services.step_weights_recompute import recompute_all_users
+from vts.services.upload_session import delete_abandoned_sessions, find_abandoned_sessions
 from vts.worker.lanes import LaneManager
 
 
@@ -46,6 +47,41 @@ async def _step_weights_loop() -> None:
         except Exception:
             log.exception("step-weights loop iteration failed")
         await asyncio.sleep(settings.progress_weights_recompute_interval_seconds)
+
+
+async def _upload_gc_tick(*, artifacts_root, ttl_seconds: int) -> list[uuid.UUID]:
+    """Delete uploads abandoned before finalize (vts-ee3).
+
+    Scanning and unlinking are blocking, so they run in a thread; the Task-row
+    check is one query for the whole sweep rather than one per directory.
+    """
+    candidates = await asyncio.to_thread(
+        find_abandoned_sessions, artifacts_root, ttl_seconds=ttl_seconds
+    )
+    if not candidates:
+        return []
+    async with SessionLocal() as session:
+        live = await Repo(session).task_ids_in(list(candidates))
+    return await asyncio.to_thread(
+        delete_abandoned_sessions, candidates, has_task=live.__contains__
+    )
+
+
+async def _upload_gc_loop() -> None:
+    settings = get_settings()
+    log = logging.getLogger("vts.worker")
+    await asyncio.sleep(5)
+    while True:
+        try:
+            removed = await _upload_gc_tick(
+                artifacts_root=settings.artifacts_root,
+                ttl_seconds=settings.upload_session_ttl_seconds,
+            )
+            if removed:
+                log.info("upload-gc: removed %s abandoned session(s)", len(removed))
+        except Exception:
+            log.exception("upload-gc loop iteration failed")
+        await asyncio.sleep(settings.upload_gc_interval_seconds)
 
 
 async def _publish_lane_snapshot(redis: Redis, prefix: str, snapshot: dict[str, list[str]]) -> None:
@@ -180,6 +216,7 @@ async def worker_loop() -> None:
 
     pump_task: asyncio.Task[None] | None = None
     weights_task: asyncio.Task[None] | None = None
+    upload_gc_task: asyncio.Task[None] | None = None
     pubsub = None
     pool = WorkerPool(
         session_factory=SessionLocal,
@@ -204,6 +241,9 @@ async def worker_loop() -> None:
         if settings.progress_weights_enabled:
             weights_task = asyncio.create_task(_step_weights_loop())
 
+        if settings.upload_gc_enabled:
+            upload_gc_task = asyncio.create_task(_upload_gc_loop())
+
         while True:
             admitted = await pool.admit()
             await pool.watch_cancels()
@@ -224,6 +264,10 @@ async def worker_loop() -> None:
             weights_task.cancel()
             with suppress(asyncio.CancelledError):
                 await weights_task
+        if upload_gc_task is not None:
+            upload_gc_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await upload_gc_task
         if pubsub is not None:
             with suppress(Exception):
                 await pubsub.unsubscribe(notify_channel)

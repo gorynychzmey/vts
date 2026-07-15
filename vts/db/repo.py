@@ -131,6 +131,17 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    async def task_ids_in(self, task_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+        """Which of these ids exist as tasks, in ANY status (archived included).
+
+        Used by the abandoned-upload sweep to prove a directory is not a real
+        task's artifacts before deleting it.
+        """
+        if not task_ids:
+            return set()
+        result = await self.session.scalars(select(Task.id).where(Task.id.in_(task_ids)))
+        return set(result.all())
+
     async def get_global_queue_positions(self) -> dict[uuid.UUID, int]:
         stmt = select(Task.id).where(Task.status == TaskStatus.queued).order_by(Task.created_at.asc(), Task.id.asc())
         result = await self.session.scalars(stmt)

@@ -275,6 +275,9 @@ class Settings(BaseSettings):
     upload_chunk_bytes: int = 8_388_608
     max_upload_bytes: int = 2_147_483_648
     upload_session_ttl_seconds: int = 86_400
+    # Background sweep that deletes uploads abandoned before finalize (vts-ee3).
+    upload_gc_enabled: bool = True
+    upload_gc_interval_seconds: int = 3_600
 
     # Feature flags
     features_donor_clone: bool = False
