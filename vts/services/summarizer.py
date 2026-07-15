@@ -2,11 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+# Utterances rendered by the diarization merge start with "Голос N: " at the
+# beginning of a line. Windows must not cut between a label and its text.
+_UTTERANCE_RE = re.compile(r"^Голос \d+: ", re.MULTILINE)
+
+
+def split_utterances(text: str) -> list[str]:
+    """Split rendered dialogue into whole utterances.
+
+    Returns the whole text as one item when it carries no speaker labels, so
+    undiarized transcripts flow through unchanged.
+    """
+    starts = [match.start() for match in _UTTERANCE_RE.finditer(text)]
+    if not starts:
+        return [text]
+    bounds = starts + [len(text)]
+    return [text[bounds[i] : bounds[i + 1]].strip() for i in range(len(starts))]
 
 
 @lru_cache(maxsize=4)
@@ -406,9 +424,17 @@ class LLMClient:
         window_tokens: int = 2000,
         overlap_ratio: float = 0.15,
         tokenizer_path: str | None = None,
+        split_on_utterances: bool = False,
     ) -> list[str]:
         if not text.strip():
             return []
+        if split_on_utterances:
+            return await self._chunk_by_utterances(
+                text=text,
+                model=model,
+                window_tokens=window_tokens,
+                tokenizer_path=tokenizer_path,
+            )
         tokens = await self.tokenize(model=model, text=text, tokenizer_path=tokenizer_path)
         if not tokens:
             return []
@@ -426,6 +452,82 @@ class LLMClient:
                 break
             cursor += step
         return chunks
+
+    async def _chunk_by_utterances(
+        self,
+        *,
+        text: str,
+        model: str,
+        window_tokens: int,
+        tokenizer_path: str | None,
+    ) -> list[str]:
+        """Pack whole utterances into windows.
+
+        No overlap: overlap exists to stitch context torn mid-sentence, and
+        utterance boundaries tear nothing. Keeping 15% would duplicate whole
+        utterances across windows and double them in the summary.
+        """
+        chunks: list[str] = []
+        current: list[str] = []
+        current_tokens = 0
+
+        for utterance in split_utterances(text):
+            tokens = await self.tokenize(model=model, text=utterance, tokenizer_path=tokenizer_path)
+            size = len(tokens)
+
+            if size > window_tokens:
+                if current:
+                    chunks.append("\n\n".join(current))
+                    current, current_tokens = [], 0
+                chunks.extend(
+                    await self._split_long_utterance(
+                        utterance=utterance,
+                        tokens=tokens,
+                        model=model,
+                        window_tokens=window_tokens,
+                        tokenizer_path=tokenizer_path,
+                    )
+                )
+                continue
+
+            if current_tokens + size > window_tokens and current:
+                chunks.append("\n\n".join(current))
+                current, current_tokens = [], 0
+            current.append(utterance)
+            current_tokens += size
+
+        if current:
+            chunks.append("\n\n".join(current))
+        return chunks
+
+    async def _split_long_utterance(
+        self,
+        *,
+        utterance: str,
+        tokens: list[int],
+        model: str,
+        window_tokens: int,
+        tokenizer_path: str | None,
+    ) -> list[str]:
+        """Cut an over-long utterance by tokens, repeating its label.
+
+        A ten-minute monologue inside a meeting cannot fit a window, so the
+        budget wins — but every continuation carries the label, or the tail
+        would be attributed to whoever spoke before.
+        """
+        match = _UTTERANCE_RE.match(utterance)
+        label = match.group(0) if match else ""
+        parts: list[str] = []
+        cursor = 0
+        while cursor < len(tokens):
+            part = tokens[cursor : cursor + window_tokens]
+            body = await self.detokenize(model=model, tokens=part, tokenizer_path=tokenizer_path)
+            body = body.strip()
+            if not body:
+                break
+            parts.append(body if body.startswith(label.strip()) and label else f"{label}{body}")
+            cursor += window_tokens
+        return parts
 
     async def chat_completion(
         self,
