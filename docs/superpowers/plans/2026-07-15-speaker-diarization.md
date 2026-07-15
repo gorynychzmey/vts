@@ -1585,15 +1585,36 @@ Expected: PASS (4 tests)
 
 In `vts/pipeline/steps/transcription.py`, `MergeTranscriptStep.run` currently builds `entries` then writes the artifacts. Replace the body from `merged_text = " ".join(merged_tokens).strip()` through the `write_json(...)` call with:
 
+**The index map must be built against the SAME filtered sequence that produces `entries`.** The existing loop appends an entry only when `segment.text.strip()` is non-empty:
+
+```python
+            for segment in segments:
+                text = segment.text.strip()
+                if text:                      # <-- entries skip empty-text chunks
+                    entries.append(...)
+```
+
+So `enumerate(segments)` over the unfiltered list desynchronises the two the moment any chunk yields empty text — every later entry would then be attributed using **another chunk's words**, scattering speakers at random. Build the map inside that same loop instead, keyed by the entry's own position:
+
+```python
+            entries: list[dict[str, Any]] = []
+            merged_tokens: list[str] = []
+            raw_json_by_index: dict[int, dict[str, Any]] = {}
+            for segment in segments:
+                text = segment.text.strip()
+                if text:
+                    merged_tokens.append(text)
+                    if isinstance(segment.raw_json, dict) and segment.raw_json:
+                        raw_json_by_index[len(entries)] = segment.raw_json
+                    entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
+```
+
+Then:
+
 ```python
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)
 
-            raw_json_by_index = {
-                index: segment.raw_json
-                for index, segment in enumerate(segments)
-                if isinstance(segment.raw_json, dict) and segment.raw_json
-            }
             entries, diarized_text = apply_diarization(
                 entries,
                 raw_json_by_index,
@@ -1616,7 +1637,46 @@ In `vts/pipeline/steps/transcription.py`, `MergeTranscriptStep.run` currently bu
             transcript_txt.write_text(final_text, encoding="utf-8")
 ```
 
-**Note on `raw_json_by_index`:** entries are built one-per-chunk in chunk order, so an entry's index matches its chunk index only while every chunk yields exactly one entry. Verify this holds by reading the loop above; if a chunk can produce zero entries (empty text is skipped), track the chunk index explicitly when appending to `entries` instead of relying on `enumerate`.
+**Add a regression test for the index alignment** — this is the bug the code above exists to prevent, so pin it:
+
+```python
+def test_empty_text_chunk_does_not_shift_word_attribution(tmp_path: Path) -> None:
+    # A chunk with empty text produces no entry. Building the word map over the
+    # unfiltered chunk list would shift every later entry onto another chunk's
+    # words and scatter speakers at random.
+    diar_path = tmp_path / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+                    {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Entry 0 comes from chunk 1 (chunk 0 was silent), so its words are chunk 1's.
+    entries = [{"start": 6.0, "end": 9.0, "text": "привет мир"}]
+    raw_by_index = {
+        0: {
+            "segments": [
+                {
+                    "words": [
+                        {"word": "привет", "start": 6.0, "end": 7.0},
+                        {"word": "мир", "start": 7.0, "end": 9.0},
+                    ]
+                }
+            ]
+        }
+    }
+    result, _ = apply_diarization(
+        entries, raw_by_index, diar_path, min_words=2, min_seconds=0.8, min_share=0.05
+    )
+    assert result[0]["speaker"] == "SPEAKER_01"
+```
+
+Then verify the alignment end-to-end against the real loop: confirm by reading `MergeTranscriptStep.run` that `raw_json_by_index` is keyed by `len(entries)` at append time, never by the position in `segments`.
 
 - [ ] **Step 6: Run the full test suite**
 
@@ -2461,6 +2521,6 @@ git commit -m "chore(diarization): calibrate thresholds on a real meeting (vts-5
 - Removed 7 `@pytest.mark.asyncio` decorators: `pytest.ini` sets `asyncio_mode = auto`.
 
 **Known risk carried into execution:**
-- Task 6 Step 5 assumes entry index == chunk index. The plan flags this explicitly and tells the implementer to verify against the loop rather than trust it.
+- ~~Task 6 Step 5 assumes entry index == chunk index.~~ **RESOLVED 2026-07-15 — it was a real bug, now fixed in the plan.** The Task 1 reviewer traced it and the controller confirmed it in source: `MergeTranscriptStep.run` appends an entry only for non-empty text, so `enumerate(segments)` over the unfiltered list desynchronises on the first silent chunk and attributes every later entry using another chunk's words. Task 6 now builds the map keyed by `len(entries)` at append time and carries a regression test pinning it.
 - Task 10's sha256 values are placeholders by necessity — they must be verified against the live mirror at build time (Step 3), which doubles as re-verification of the un-gated claim.
 - Task 10's `server.py` calls `Pipeline.from_pretrained` on a local dir and `return_embeddings=True`. Both are read from pyannote 4.x docs, not run — the container smoke test (Step 7) is what proves the shape. If the embeddings API differs, fix `server.py` and keep the wire contract (`{"segments", "embeddings", "num_speakers"}`) intact; the client and every test depend on it, not on pyannote's internals.
