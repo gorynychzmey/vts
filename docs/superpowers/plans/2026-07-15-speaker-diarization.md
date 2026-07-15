@@ -2107,6 +2107,15 @@ def test_rewrite_prompt_asks_to_keep_labels_when_diarized() -> None:
     assert base in result
     assert "Голос" in result
     assert len(result) > len(base)
+
+
+def test_rewrite_prompt_tells_the_model_to_leave_unlabelled_text_alone() -> None:
+    # A mid-transcript bare block reaches the model sitting under the previous
+    # speaker's label. Without this clause the model attributes it to them —
+    # the false claim the renderer refused to make by leaving it bare.
+    result = rewrite_prompt("Rewrite it.", diarized=True)
+    assert "unlabelled" in result
+    assert "never attribute" in result.lower()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2122,11 +2131,22 @@ In `vts/pipeline/steps/summarization.py`, next to the existing prompt constant (
 # The rewrite prompt tells the model to clean up speech, which invites it to
 # dissolve "Голос 2:" into prose. Diarized tasks get an explicit instruction to
 # keep the labels; undiarized ones must not carry this noise.
+#
+# The unlabelled-block clause is load-bearing, not hedging. The renderer emits
+# a bare block for audio diarization never covered, and split_utterances merges
+# a mid-transcript one into the PRECEDING utterance — so the model really does
+# receive unlabelled text sitting under someone else's label. Saying "each
+# utterance starts with a label" would be a lie the model acts on: it would
+# attribute that text to the speaker above it, manufacturing the false claim
+# the renderer deliberately refused to make.
 _KEEP_SPEAKERS_INSTRUCTION = (
-    " The text is a dialogue where each utterance starts with a speaker label"
+    " The text is a dialogue where an utterance may start with a speaker label"
     ' ("Голос 1:", "Голос 2:", ...). Keep every label exactly as it appears, at'
     " the start of that speaker's utterance. Never merge utterances from"
     " different speakers and never invent labels."
+    " Some text carries no label — that means the speaker is unknown. Leave it"
+    " unlabelled: never attribute it to a nearby speaker and never guess who"
+    " said it."
 )
 
 
