@@ -12,6 +12,9 @@ DAG_HEAD: Final[list[str]] = [
     "segment_audio",
     "detect_language",
     "transcribe_segments",
+    # Needs transcription's chunks done; merge_transcript consumes the speaker
+    # artifact this step writes, so it must run before that.
+    "diarize",
     "merge_transcript",
     "prepare_llama_model",
     "prepare_summary_chunks",

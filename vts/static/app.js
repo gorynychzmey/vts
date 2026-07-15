@@ -37,6 +37,10 @@ const DAG_HEAD = [
   "segment_audio",
   "detect_language",
   "transcribe_segments",
+  // Runs unconditionally (self-gates on options.diarize internally, same as the
+  // server step) — always present in task.steps, so it must be in the static
+  // head, not the options-gated summary tail.
+  "diarize",
   "merge_transcript",
   "prepare_llama_model",
   "prepare_summary_chunks",
@@ -52,6 +56,7 @@ const TRANSCRIPT_HEAD = [
   "segment_audio",
   "detect_language",
   "transcribe_segments",
+  "diarize",
   "merge_transcript"
 ];
 // Back-compat alias kept for any legacy references (full static summary path).
@@ -65,6 +70,10 @@ const STEP_WEIGHT_SECONDS = {
   segment_audio: 1.2,
   detect_language: 2.6,
   transcribe_segments: 174.8,
+  // No completed-run samples yet (feature just wired into the DAG); a small
+  // placeholder keeps the progress bar sane until server-side weights accrue
+  // real medians (see getStepWeight's serverStepWeights fallback chain).
+  diarize: 1.0,
   merge_transcript: 0.1,
   prepare_llama_model: 6.3,
   prepare_summary_chunks: 0.1,

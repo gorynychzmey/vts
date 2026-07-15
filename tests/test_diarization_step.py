@@ -123,3 +123,19 @@ async def test_step_raises_when_no_segments_returned(tmp_path: Path) -> None:
         await DiarizeStep().run(ctx, _state(tmp_path, dirs, {"diarize": True}))
 
     assert not (dirs["outputs"] / "diarization.json").exists()
+
+
+def test_diarize_is_in_the_dag_between_transcription_and_merge() -> None:
+    # STEP_REGISTRY only maps names to instances; DAG_HEAD is what a task runs.
+    # Without this the step is registered, tested, and never invoked.
+    from vts.pipeline.types import DAG_HEAD
+
+    assert "diarize" in DAG_HEAD
+    assert DAG_HEAD.index("transcribe_segments") < DAG_HEAD.index("diarize")
+    assert DAG_HEAD.index("diarize") < DAG_HEAD.index("merge_transcript")
+
+
+def test_diarize_resolves_from_the_registry() -> None:
+    from vts.pipeline.steps.registry import resolve_step
+
+    assert isinstance(resolve_step("diarize"), DiarizeStep)

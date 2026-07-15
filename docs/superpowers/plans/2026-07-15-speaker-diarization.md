@@ -1455,6 +1455,66 @@ And in `STEP_REGISTRY`, between `TranscribeSegmentsStep` and `MergeTranscriptSte
     DiarizeStep.name: DiarizeStep(),
 ```
 
+- [ ] **Step 6b: Add it to the DAG — without this the step never runs**
+
+`STEP_REGISTRY` only maps a name to an instance. The list of steps a task actually
+executes is `DAG_HEAD` (`vts/pipeline/types.py:8`): `processor.py:150` iterates
+`build_dag_steps(task_options)`, which returns `DAG_HEAD + tail`, and that is the
+only thing that calls `resolve_step`. A step absent from `DAG_HEAD` is registered,
+testable, and dead — unit tests that call `DiarizeStep().run(...)` directly pass
+regardless, because they bypass the DAG.
+
+In `vts/pipeline/types.py`, insert `"diarize"` into `DAG_HEAD` between
+`transcribe_segments` and `merge_transcript`, matching the registry order:
+
+```python
+DAG_HEAD: Final[list[str]] = [
+    "download",
+    "extract_audio",
+    "trim_initial_silence",
+    "segment_audio",
+    "detect_language",
+    "transcribe_segments",
+    "diarize",
+    "merge_transcript",
+    "prepare_llama_model",
+    "prepare_summary_chunks",
+    "summarize_windows",
+    "pack_window_notes",
+]
+```
+
+The step is in the DAG for every task; it decides for itself whether to act,
+returning early when `diarize` is off. That matches how the pipeline already
+treats conditional work, and keeps the step list static rather than making the
+DAG shape depend on options.
+
+Add a test to `tests/test_diarization_step.py` pinning that the step is reachable:
+
+```python
+def test_diarize_is_in_the_dag_between_transcription_and_merge() -> None:
+    # STEP_REGISTRY only maps names to instances; DAG_HEAD is what a task runs.
+    # Without this the step is registered, tested, and never invoked.
+    from vts.pipeline.types import DAG_HEAD
+
+    assert "diarize" in DAG_HEAD
+    # Order matters: diarization needs the transcript's chunks already done, and
+    # merge_transcript consumes the artifact this step writes.
+    assert DAG_HEAD.index("transcribe_segments") < DAG_HEAD.index("diarize")
+    assert DAG_HEAD.index("diarize") < DAG_HEAD.index("merge_transcript")
+
+
+def test_diarize_resolves_from_the_registry() -> None:
+    from vts.pipeline.steps.registry import resolve_step
+
+    assert isinstance(resolve_step("diarize"), DiarizeStep)
+```
+
+**Check the step-weights fallout:** `DAG_HEAD` feeds progress weighting. Grep for
+consumers that enumerate it (`grep -rn "DAG_HEAD\|DAG_STEPS" --include="*.py" vts/ tests/`)
+and confirm a new member does not break them — `tests/test_step_weights*.py` and
+`tests/test_dag_tail.py` are the ones to watch.
+
 - [ ] **Step 7: Run the full test suite**
 
 Run: `pytest tests/ -q`
