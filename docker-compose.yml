@@ -106,6 +106,15 @@ services:
       - whisper_cache:/root/.cache
     restart: unless-stopped
 
+  # ── Speaker diarization ──────────────────────────────────────────────────
+  # pyannote.audio behind HTTP, so the app image stays PyTorch-free.
+  # Weights are vendored into the image at build time (verified by sha256) and
+  # never fetched at runtime. Activate with: --profile diarize
+  diarization:
+    build: ./docker/diarization
+    profiles: ["diarize"]
+    restart: unless-stopped
+
   # ── LLM backend (pick ONE) ───────────────────────────────────────────────
   # Native: llama.cpp server. Default vts target.
   # Activate with: --profile llm-llamacpp

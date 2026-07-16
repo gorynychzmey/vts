@@ -124,6 +124,8 @@ MCP tools exposed once authenticated:
 - **Postgres** for state, **Redis** (or Valkey/KeyDB) for queue + pub/sub.
 - **yt-dlp** + **ffmpeg** for ingest and segmentation.
 - **Whisper ASR webservice** for transcription.
+- **pyannote.audio** for optional speaker diarization (own container, weights
+  vendored at build time — nothing is fetched at runtime).
 - **llama.cpp server** for summarization (Ollama and others also work — see
   [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md)).
 - **Podman + systemd** for production runtime; **Docker Compose** for local.
@@ -180,3 +182,12 @@ how it is maintained. See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md),
 ## License
 
 [MIT](LICENSE) © Viktor Vostrikov
+
+### Third-party models
+
+Speaker diarization uses [pyannote.audio](https://github.com/pyannote/pyannote-audio)
+(MIT) with the `speaker-diarization-community-1` models by Hervé Bredin and the
+pyannote authors, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The models run in the
+`diarization` container; their weights are vendored into the image at build time
+(verified by sha256) and are never fetched at runtime.
