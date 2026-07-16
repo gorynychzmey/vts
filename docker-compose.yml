@@ -113,6 +113,11 @@ services:
   diarization:
     build: ./docker/diarization
     profiles: ["diarize"]
+    environment:
+      # Fill a speaker's breathing pauses shorter than this many seconds.
+      # Calibrated to 0.5 on a real 4-speaker meeting (halves segment
+      # fragmentation without merging distinct speakers).
+      DIAR_MIN_DURATION_OFF: ${DIAR_MIN_DURATION_OFF:-0.5}
     restart: unless-stopped
 
   # ── LLM backend (pick ONE) ───────────────────────────────────────────────

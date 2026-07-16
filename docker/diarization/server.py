@@ -39,7 +39,34 @@ def pipeline() -> Pipeline:
         if _pipeline is None:
             raise RuntimeError(f"pyannote returned no pipeline for {model_dir}")
         _pipeline.to(torch.device(os.environ.get("TORCH_DEVICE", "cpu")))
+        _apply_min_duration_off(_pipeline)
     return _pipeline
+
+
+def _apply_min_duration_off(pipe: Pipeline) -> None:
+    """Override segmentation.min_duration_off from the environment.
+
+    It fills inactive regions shorter than N seconds, merging a speaker's own
+    breathing pauses into one segment. Calibrated to 0.5 on a real 4-speaker
+    meeting: it halves segment fragmentation (785 -> 413) while barely touching
+    cross-speaker boundaries (126 -> 120), which by design it never fills. The
+    model config ships 0.0, so this is opt-in and tunable without a rebuild.
+    """
+    raw = os.environ.get("DIAR_MIN_DURATION_OFF")
+    if raw is None:
+        return
+    try:
+        value = float(raw)
+    except ValueError:
+        _log.warning("ignoring non-numeric DIAR_MIN_DURATION_OFF=%r", raw)
+        return
+    params = pipe.parameters(instantiated=True)
+    if "segmentation" not in params:
+        _log.warning("pipeline has no segmentation params; DIAR_MIN_DURATION_OFF ignored")
+        return
+    params["segmentation"]["min_duration_off"] = value
+    pipe.instantiate(params)
+    _log.info("segmentation.min_duration_off set to %.2f", value)
 
 
 @app.get("/health")
