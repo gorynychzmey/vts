@@ -230,6 +230,15 @@
               <input id="transcript" name="transcript" type="checkbox" checked />
               <span data-i18n="new_task.transcript">Transcript</span>
             </label>
+            <label
+              class="option-pill"
+              id="diarize-pill"
+              title="Label who is speaking (Voice 1, Voice 2, ...). Useful for meetings and interviews; adds a pass over the audio, so it takes noticeably longer."
+              data-i18n-title="new_task.diarize_tooltip"
+            >
+              <input id="diarize" name="diarize" type="checkbox" />
+              <span data-i18n="new_task.diarize">Speakers</span>
+            </label>
             <div class="prompt-select-field">
               <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
               <div class="prompt-select" id="prompt-select"></div>
@@ -605,6 +614,10 @@
           <label class="option-pill" data-i18n-title="new_task.transcript_tooltip">
             <input id="preset-edit-transcript" type="checkbox" checked />
             <span data-i18n="new_task.transcript">Transcript</span>
+          </label>
+          <label class="option-pill" data-i18n-title="new_task.diarize_tooltip">
+            <input id="preset-edit-diarize" type="checkbox" />
+            <span data-i18n="new_task.diarize">Speakers</span>
           </label>
           <label class="language-control" data-i18n-title="new_task.language_tooltip">
             <span data-i18n="new_task.language">Language</span>

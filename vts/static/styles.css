@@ -562,6 +562,15 @@ input[type="file"] {
   text-align: left;
 }
 
+/* The preset dialog is far narrower than the new-task form, so its options row
+   has no room to keep the language control on the same line as the pills: the
+   control lands near the right edge and its tooltip — anchored left, but ~256px
+   wide — still spills past the dialog and forces horizontal scroll. Give the
+   language its own line here; the pills alone fit comfortably. */
+.preset-edit-options > .language-control {
+  flex-basis: 100%;
+}
+
 [data-tooltip-below]::after {
   bottom: auto;
   top: calc(100% + 0.35rem);

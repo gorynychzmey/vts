@@ -1956,6 +1956,7 @@ async function uploadFileChunked(file, fields) {
         language: fields.language || null,
         audio_only: fields.audio_only,
         transcript: fields.transcript,
+        diarize: fields.diarize,
         prompts: fields.prompts,
         display_name: fields.display_name || null,
       }),
@@ -2218,6 +2219,7 @@ function currentFormOptions() {
     language: form.language.value || "",
     audio_only: !!form.audio_only.checked,
     transcript: !!form.transcript.checked,
+    diarize: !!form.diarize.checked,
     prompts: getSelectedPrompts(),
   };
 }
@@ -2239,6 +2241,7 @@ function optionsEqual(a, b) {
     (oa.language || "") === (ob.language || "") &&
     !!oa.audio_only === !!ob.audio_only &&
     !!oa.transcript === !!ob.transcript &&
+    !!oa.diarize === !!ob.diarize &&
     promptRefsEqual(oa.prompts, ob.prompts)
   );
 }
@@ -2262,6 +2265,7 @@ function applyPresetOptions(options) {
   form.language.value = opts.language || "";
   form.audio_only.checked = !!opts.audio_only;
   form.transcript.checked = !!opts.transcript;
+  form.diarize.checked = !!opts.diarize;
   const { filtered, dangling } = filterDanglingPrompts(opts.prompts);
   if (promptSelect) {
     renderPromptMultiselect(promptSelect, promptsCache, filtered);
@@ -2447,6 +2451,7 @@ if (presetResaveBtn) {
 form.language.addEventListener("change", recomputePresetDirty);
 form.audio_only.addEventListener("change", recomputePresetDirty);
 form.transcript.addEventListener("change", recomputePresetDirty);
+form.diarize.addEventListener("change", recomputePresetDirty);
 if (promptSelect) {
   promptSelect.addEventListener("change", recomputePresetDirty);
 }
@@ -2493,6 +2498,7 @@ async function createTask(event) {
         language: form.language.value || "",
         audio_only: false,
         transcript: form.transcript.checked,
+        diarize: form.diarize.checked,
         prompts: JSON.stringify(getSelectedPrompts()),
         display_name: "",
       };
@@ -2507,6 +2513,7 @@ async function createTask(event) {
         if (fields.language) fd.append("language", fields.language);
         fd.append("audio_only", fields.audio_only ? "true" : "false");
         fd.append("transcript", fields.transcript ? "true" : "false");
+        fd.append("diarize", fields.diarize ? "true" : "false");
         fd.append("prompts", fields.prompts);
         await uploadFileWithProgress(fd);
       }
@@ -2516,6 +2523,7 @@ async function createTask(event) {
         language: form.language.value || null,
         audio_only: form.audio_only.checked,
         transcript: form.transcript.checked,
+        diarize: form.diarize.checked,
         prompts: getSelectedPrompts()
       };
       await api("/api/tasks", {
@@ -2553,6 +2561,15 @@ function syncSummaryToggle() {
     languageControl.classList.toggle("disabled", disabled);
   }
   form.language.disabled = disabled;
+  // Diarization labels transcript segments, so it cannot run without one — the
+  // API rejects that pair outright ("diarize requires transcript"). Dim it like
+  // the language control, and for the same reason never clear the checkbox:
+  // currentFormOptions() reads it, so clearing would mark a preset dirty (vts-86k).
+  const diarizePill = document.getElementById("diarize-pill");
+  if (diarizePill) {
+    diarizePill.classList.toggle("disabled", disabled);
+  }
+  form.diarize.disabled = disabled;
   if (!promptSelect) {
     return;
   }
@@ -3453,6 +3470,7 @@ const presetNameInput = document.getElementById("preset-name-input");
 const presetEditLanguage = document.getElementById("preset-edit-language");
 const presetEditAudioOnly = document.getElementById("preset-edit-audio_only");
 const presetEditTranscript = document.getElementById("preset-edit-transcript");
+const presetEditDiarize = document.getElementById("preset-edit-diarize");
 const presetEditPrompts = document.getElementById("preset-edit-prompts");
 const presetSubmitBtn = document.getElementById("preset-submit-btn");
 const presetCancelBtn = document.getElementById("preset-cancel-btn");
@@ -3478,6 +3496,7 @@ function resetPresetForm() {
   if (presetEditLanguage) presetEditLanguage.value = "";
   if (presetEditAudioOnly) presetEditAudioOnly.checked = false;
   if (presetEditTranscript) presetEditTranscript.checked = true;
+  if (presetEditDiarize) presetEditDiarize.checked = false;
   if (presetEditPrompts) {
     renderPromptMultiselect(
       presetEditPrompts,
@@ -3496,6 +3515,7 @@ function fillPresetForm(preset) {
   if (presetEditLanguage) presetEditLanguage.value = opts.language || "";
   if (presetEditAudioOnly) presetEditAudioOnly.checked = !!opts.audio_only;
   if (presetEditTranscript) presetEditTranscript.checked = !!opts.transcript;
+  if (presetEditDiarize) presetEditDiarize.checked = !!opts.diarize;
   if (presetEditPrompts) {
     const { filtered } = filterDanglingPrompts(opts.prompts);
     renderPromptMultiselect(presetEditPrompts, promptsCache, filtered, {
@@ -3680,6 +3700,7 @@ presetForm?.addEventListener("submit", async (event) => {
     language: presetEditLanguage ? presetEditLanguage.value || "" : "",
     audio_only: !!(presetEditAudioOnly && presetEditAudioOnly.checked),
     transcript: !!(presetEditTranscript && presetEditTranscript.checked),
+    diarize: !!(presetEditDiarize && presetEditDiarize.checked),
     prompts: getSelectedFrom(presetEditPrompts),
   };
   try {

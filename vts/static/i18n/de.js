@@ -20,6 +20,8 @@ window.__VTS_I18N.de = {
 "new_task.audio_only_tooltip": "Nur die Audiospur herunterladen statt des vollständigen Videos. Spart Bandbreite; hat keinen Einfluss auf Transkript oder Zusammenfassung.",
 "new_task.transcript": "Transkript",
 "new_task.transcript_tooltip": "Die Aufnahme in Text umwandeln. Grundlage für alles Weitere — ohne Transkript laufen keine Prompts und es entsteht keine Zusammenfassung.",
+"new_task.diarize": "Sprecher",
+"new_task.diarize_tooltip": "Kennzeichnen, wer spricht (Stimme 1, Stimme 2, ...). Nützlich für Meetings und Interviews; erfordert einen zusätzlichen Durchlauf durch die Audiodatei und dauert daher merklich länger.",
 "new_task.summary": "Zusammenfassung",
 "new_task.prompts": "Prompts",
 "new_task.prompts_none": "Keine Prompts",

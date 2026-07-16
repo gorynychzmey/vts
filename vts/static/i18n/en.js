@@ -20,6 +20,8 @@ window.__VTS_I18N.en = {
 "new_task.audio_only_tooltip": "Download only the audio track instead of the full video. Saves bandwidth; does not affect the transcript or the summary.",
 "new_task.transcript": "Transcript",
 "new_task.transcript_tooltip": "Transcribe the media. Required for everything downstream — without it no prompts run and no summary is produced.",
+"new_task.diarize": "Speakers",
+"new_task.diarize_tooltip": "Label who is speaking (Voice 1, Voice 2, ...). Useful for meetings and interviews; adds a pass over the audio, so it takes noticeably longer.",
 "new_task.summary": "Summary",
 "new_task.prompts": "Prompts",
 "new_task.prompts_none": "No prompts",
