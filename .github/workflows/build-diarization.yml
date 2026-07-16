@@ -1,0 +1,127 @@
+name: Build Diarization Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      dockerhub_image_repo:
+        description: "Docker Hub repo (e.g. docker.io/<owner>/vts-diarization). Leave empty to skip the mirror."
+        required: false
+        default: ""
+      ghcr_image_repo:
+        description: "GHCR repo (e.g. ghcr.io/<owner>/vts-diarization)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "diar-build-*"
+
+concurrency:
+  group: build-diarization-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image repositories
+        id: repos
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+
+          dockerhub_input="${{ github.event.inputs.dockerhub_image_repo || '' }}"
+          ghcr_input="${{ github.event.inputs.ghcr_image_repo || '' }}"
+          dockerhub_var="${{ vars.DOCKERHUB_DIARIZATION_REPO || '' }}"
+          ghcr_var="${{ vars.GHCR_DIARIZATION_REPO || '' }}"
+
+          # Docker Hub mirror is optional — an empty repo disables the mirror step.
+          if [[ -n "${dockerhub_input}" ]]; then
+            dockerhub_repo="${dockerhub_input}"
+          elif [[ -n "${dockerhub_var}" ]]; then
+            dockerhub_repo="${dockerhub_var}"
+          else
+            dockerhub_repo=""
+          fi
+
+          if [[ -n "${ghcr_input}" ]]; then
+            ghcr_repo="${ghcr_input}"
+          elif [[ -n "${ghcr_var}" ]]; then
+            ghcr_repo="${ghcr_var}"
+          else
+            ghcr_repo="ghcr.io/${owner_lc}/vts-diarization"
+          fi
+
+          # Version comes from the diar-build-X.Y.Z tag; a manual run falls back
+          # to the VERSION file. The image has its own semver, unrelated to vts.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == diar-build-* ]]; then
+            version="${GITHUB_REF_NAME#diar-build-}"
+          else
+            version="$(cat docker/diarization/VERSION)"
+          fi
+
+          {
+            echo "dockerhub_repo=${dockerhub_repo}"
+            echo "ghcr_repo=${ghcr_repo}"
+            echo "version=${version}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Hub secrets
+        if: steps.repos.outputs.dockerhub_repo != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.DOCKERHUB_USERNAME }}" || -z "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then
+            echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are required when a Docker Hub repo is configured."
+            exit 1
+          fi
+
+      - name: Login to Docker Hub
+        if: steps.repos.outputs.dockerhub_repo != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build, smoke-test, and push to GHCR
+        shell: bash
+        env:
+          CONTAINER_ENGINE: docker
+          USE_BUILDX: auto
+          BUILDX_CACHE_REPO: ${{ steps.repos.outputs.ghcr_repo }}
+          BUILDX_CACHE_MODE: max
+          IMAGE_REPO: ${{ steps.repos.outputs.ghcr_repo }}
+          VERSION_OVERRIDE: ${{ steps.repos.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash ./build-diarization.sh
+
+      - name: Mirror GHCR image to Docker Hub
+        if: steps.repos.outputs.dockerhub_repo != ''
+        shell: bash
+        env:
+          DOCKERHUB_REPO: ${{ steps.repos.outputs.dockerhub_repo }}
+          GHCR_REPO: ${{ steps.repos.outputs.ghcr_repo }}
+          VERSION: ${{ steps.repos.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag "${GHCR_REPO}:${VERSION}" "${DOCKERHUB_REPO}:${VERSION}"
+          docker tag "${GHCR_REPO}:latest" "${DOCKERHUB_REPO}:latest"
+          docker push "${DOCKERHUB_REPO}:${VERSION}"
+          docker push "${DOCKERHUB_REPO}:latest"
