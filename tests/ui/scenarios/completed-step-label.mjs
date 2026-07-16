@@ -7,8 +7,14 @@ import { startStubServer, launch, openPage } from "../harness.mjs";
 
 export const name = "completed-step-label";
 
-// A completed summary task. Its enabled steps are DAG_HEAD (11) + one finalize
-// step for system:summary = 12 total, matching the real summary pipeline.
+// A completed summary task. Its enabled steps are DAG_HEAD + one finalize step
+// for system:summary, matching the real summary pipeline.
+//
+// Keep in sync with vts/pipeline/types.py:DAG_HEAD — this count changes whenever
+// a step is added to the pipeline (it went 11 -> 12 when `diarize` landed, so the
+// total here went 12 -> 13). A mismatch here means the DAG changed, not that the
+// frontend broke.
+const EXPECTED_STEPS = 13;
 const COMPLETED_TASK = {
   id: "22222222-2222-2222-2222-222222222222",
   source_url: "http://x/v", source_title: "Done video",
@@ -83,8 +89,10 @@ export async function run() {
     if (worstIndex === null) {
       failures.push("could not parse any step label across the sampling window");
     } else {
-      if (total !== 12) {
-        failures.push(`expected 12 enabled steps, got total=${total} (label ${JSON.stringify(worstLabel)})`);
+      if (total !== EXPECTED_STEPS) {
+        failures.push(
+          `expected ${EXPECTED_STEPS} enabled steps, got total=${total} (label ${JSON.stringify(worstLabel)})`
+        );
       }
       if (worstIndex !== total) {
         failures.push(

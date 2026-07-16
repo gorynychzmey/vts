@@ -58,8 +58,13 @@ export async function launch() {
   return chromium.launch();
 }
 
-export async function openPage(browser, baseUrl) {
-  const page = await browser.newPage({ viewport: { width: 1100, height: 700 } });
+// The default viewport is deliberately small (1100x700) — it keeps the smoke set
+// honest about cramped layouts. A scenario that drives controls near the bottom
+// of the page can pass its own: the task menu opens below the form, and the form
+// grows as options are added, so at 700px the menu lands off-screen and clicks
+// fail with "element is outside of the viewport" rather than any real bug.
+export async function openPage(browser, baseUrl, viewport = { width: 1100, height: 700 }) {
+  const page = await browser.newPage({ viewport });
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => {

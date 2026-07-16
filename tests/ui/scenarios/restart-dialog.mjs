@@ -41,7 +41,11 @@ export async function run() {
   const browser = await launch();
   const failures = [];
   try {
-    const { page, errors } = await openPage(browser, baseUrl);
+    // Taller than the default: this scenario clicks the task menu, which opens
+    // below the new-task form. The form grows with each option added to it, so
+    // at the default 700px the menu falls off-screen and the click fails on
+    // viewport bounds instead of on the behaviour under test.
+    const { page, errors } = await openPage(browser, baseUrl, { width: 1100, height: 1000 });
 
     // CLOSED STATE (the critical assertion): the dialog must be hidden before any open.
     if (await isVisible(page, "#restart-final-dialog")) {
@@ -53,10 +57,17 @@ export async function run() {
       failures.push("no .restart-summary-btn on the rendered task row");
     } else {
       // Open the menu, then click "Restart final summary only".
+      //
+      // Use a locator, not an ElementHandle: the stub serves no SSE endpoint, so
+      // EventSource.onerror fires and reconnects every 2s, and each reconnect
+      // calls loadTasks() -> renderTasks(), replacing the task row. A handle
+      // grabbed before that detaches ("Element is not attached to the DOM") if
+      // the click lands after a re-render — a race that any timing change can
+      // expose. A locator re-resolves at click time.
       await clickReal(page, ".restart-summary-btn");
       await page.waitForTimeout(150);
-      const finalBtn = await page.$(".restart-summary-final-btn");
-      if (!finalBtn) {
+      const finalBtn = page.locator(".restart-summary-final-btn").first();
+      if ((await finalBtn.count()) === 0) {
         failures.push("no .restart-summary-final-btn in menu");
       } else if (await finalBtn.isDisabled()) {
         failures.push(".restart-summary-final-btn is disabled (gate)");
