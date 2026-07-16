@@ -112,6 +112,7 @@ services:
   # never fetched at runtime. Activate with: --profile diarize
   diarization:
     build: ./docker/diarization
+    image: ${DIARIZATION_IMAGE_REPO:-ghcr.io/OWNER/vts-diarization}:${DIARIZATION_VERSION:-latest}
     profiles: ["diarize"]
     environment:
       # Fill a speaker's breathing pauses shorter than this many seconds.
