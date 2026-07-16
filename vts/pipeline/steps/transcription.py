@@ -182,10 +182,16 @@ def apply_diarization(
     see speaker_label_word) so it matches the recording's language, which is
     also what segment_prompt.md's output-language instruction targets. This is
     a render-time choice only: entries[i]["speaker"] keeps the technical
-    SPEAKER_00 tag regardless of language. Defaults to "ru" (-> "Голос") for
-    zero-regression on callers/tests that predate per-language labels; the
-    real pipeline caller (MergeTranscriptStep) always passes the recording's
-    actual effective_language() explicitly.
+    SPEAKER_00 tag regardless of language.
+
+    The "ru" default applies only when the argument is OMITTED — it exists so
+    callers and tests predating per-language labels keep their old output. It
+    is not the behaviour for language=None: an explicit None resolves to
+    "Speaker" via speaker_label_word. The real caller (MergeTranscriptStep)
+    always passes effective_language() explicitly, and cannot pass None in
+    practice — DetectLanguageStep raises on every no-language path and runs
+    before merge_transcript in the DAG, so a task with no established language
+    fails before reaching here.
     """
     if not diarization_path.exists():
         return entries, None, None
