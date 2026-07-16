@@ -26,6 +26,7 @@ from vts.pipeline.token_budget import (
     uncap_segment_for_input,
     whole_transcript_possible,
 )
+from vts.services.diarization.merge import speaker_label_word
 from vts.services.prompt_registry import list_system_prompts
 from vts.services.summarizer import (
     inject_budget_vars,
@@ -56,8 +57,9 @@ _SEGMENT_PROMPT_FALLBACK = (
 
 
 # The rewrite prompt tells the model to clean up speech, which invites it to
-# dissolve "Голос 2:" into prose. Diarized tasks get an explicit instruction to
-# keep the labels; undiarized ones must not carry this noise.
+# dissolve "Голос 2:" (or "Speaker 2:" for non-Russian recordings) into prose.
+# Diarized tasks get an explicit instruction to keep the labels; undiarized
+# ones must not carry this noise.
 #
 # The unlabelled-block clause is load-bearing, not hedging. The renderer emits
 # a bare block for audio diarization never covered, and split_utterances merges
@@ -66,22 +68,39 @@ _SEGMENT_PROMPT_FALLBACK = (
 # utterance starts with a label" would be a lie the model acts on: it would
 # attribute that text to the speaker above it, manufacturing the false claim
 # the renderer deliberately refused to make.
-_KEEP_SPEAKERS_INSTRUCTION = (
-    " The text is a dialogue where an utterance may start with a speaker label"
-    ' ("Голос 1:", "Голос 2:", ...). Keep every label exactly as it appears, at'
-    " the start of that speaker's utterance. Never merge utterances from"
-    " different speakers and never invent labels."
-    " Some text carries no label — that means the speaker is unknown. Leave it"
-    " unlabelled: never attribute it to a nearby speaker and never guess who"
-    " said it."
-)
+def _keep_speakers_instruction(label_word: str) -> str:
+    """Instruction quoting the label word actually in use.
+
+    Must match what label_map (vts.services.diarization.merge) rendered for
+    this recording's language, or the instruction quotes an example the model
+    will never see (e.g. telling it to preserve "Голос 1:" in an English
+    transcript that only ever contains "Speaker 1:").
+    """
+    return (
+        " The text is a dialogue where an utterance may start with a speaker label"
+        f' ("{label_word} 1:", "{label_word} 2:", ...). Keep every label exactly as'
+        " it appears, at the start of that speaker's utterance. Never merge"
+        " utterances from different speakers and never invent labels."
+        " Some text carries no label — that means the speaker is unknown. Leave it"
+        " unlabelled: never attribute it to a nearby speaker and never guess who"
+        " said it."
+    )
 
 
-def rewrite_prompt(base_prompt: str, diarized: bool) -> str:
-    """The window-rewrite prompt, with label preservation for diarized tasks."""
+def rewrite_prompt(base_prompt: str, diarized: bool, language: str | None = "ru") -> str:
+    """The window-rewrite prompt, with label preservation for diarized tasks.
+
+    `language` picks the label word to quote (speaker_label_word: "Голос" for
+    ru, "Speaker" otherwise) so the instruction matches what the renderer
+    actually produced for this recording. Defaults to "ru" (-> "Голос", the
+    pre-existing behavior) so callers that omit it — including tests pinning
+    the original Russian-only instruction — are unaffected. Real callers
+    (SummarizeWindowsStep) always pass the recording's actual
+    effective_language() explicitly.
+    """
     if not diarized:
         return base_prompt
-    return base_prompt + _KEEP_SPEAKERS_INSTRUCTION
+    return base_prompt + _keep_speakers_instruction(speaker_label_word(language))
 
 
 # --- summary domain helpers (pure module functions) -------------------------
@@ -337,13 +356,35 @@ class PrepareSummaryChunksStep(Step):
 
     async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
         chunks_file = st.dirs["root"] / "summary" / "chunks.json"
-        return chunks_file.exists()
+        if not chunks_file.exists():
+            return False
+        # A chunks.json written before Task 8 (diarization label-preservation)
+        # shipped has no "diarized" key at all. Treating that file as "done"
+        # would let SummarizeWindowsStep read diarized=False back via
+        # chunks_payload.get("diarized", False) and silently drop the
+        # keep-labels instruction for exactly the in-flight tasks caught
+        # mid-rollout. `run` below always writes "diarized" (True or False),
+        # so a missing key can only mean a stale pre-rollout file — treat it
+        # as not-done so it gets recomputed. `run` itself is idempotent here:
+        # it derives chunks purely from transcript.json, which resume never
+        # mutates, so recomputing is safe and yields the same chunks plus the
+        # now-present "diarized" flag.
+        try:
+            payload = json.loads(chunks_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict) or "diarized" not in payload:
+            return False
+        return True
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
         summary_dir = st.dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
         chunks_file = summary_dir / "chunks.json"
-        if chunks_file.exists():
+        if chunks_file.exists() and await self.already_done(ctx, st):
+            # Reuse the same staleness check as already_done: a file missing
+            # the "diarized" key predates this fix and must be recomputed
+            # rather than treated as a valid, already-complete result.
             return True
 
         transcript_json = st.dirs["outputs"] / "transcript.json"
@@ -352,8 +393,12 @@ class PrepareSummaryChunksStep(Step):
         transcript = json.loads(transcript_json.read_text(encoding="utf-8")).get("text", "")
         if not isinstance(transcript, str) or not transcript.strip():
             st.logger.info("summary chunks skipped: empty transcript")
-            write_json(chunks_file, {"chunks": [], "segmentation": "split"})
-            write_json(st.dirs["outputs"] / "summary_chunks.json", {"chunks": [], "segmentation": "split"})
+            # "diarized" must be present (not just correct) so the new
+            # already_done staleness check doesn't treat this payload as
+            # pre-rollout and re-run this step on every resume.
+            empty_payload = {"chunks": [], "segmentation": "split", "diarized": False}
+            write_json(chunks_file, empty_payload)
+            write_json(st.dirs["outputs"] / "summary_chunks.json", empty_payload)
             return True
 
         # Labels in the text are the signal — not the task option — because a
@@ -469,6 +514,7 @@ class SummarizeWindowsStep(Step):
                 output_language,
             ),
             diarized,
+            output_language,
         )
 
         windows_by_index: dict[int, dict[str, Any]] = {}

@@ -22,3 +22,21 @@ def test_rewrite_prompt_tells_the_model_to_leave_unlabelled_text_alone() -> None
     result = rewrite_prompt("Rewrite it.", diarized=True)
     assert "unlabelled" in result
     assert "never attribute" in result.lower()
+
+
+def test_rewrite_prompt_quotes_speaker_label_for_english_language() -> None:
+    # Finding 1: the instruction must quote the label the renderer actually
+    # produced for this recording's language, or it tells the model to keep an
+    # example ("Голос 1:") it will never see in an English transcript.
+    result = rewrite_prompt("Rewrite it.", diarized=True, language="en")
+    assert "Speaker 1:" in result
+    assert "Голос" not in result
+
+
+def test_rewrite_prompt_defaults_to_russian_label_without_language() -> None:
+    # Zero regression: callers that omit `language` (as this pre-existing test
+    # signature did before language mattered) must keep the original
+    # Russian-only instruction.
+    result = rewrite_prompt("Rewrite it.", diarized=True)
+    assert "Голос 1:" in result
+    assert "Speaker" not in result

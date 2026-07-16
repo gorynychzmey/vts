@@ -16,6 +16,7 @@ from vts.services.diarization.merge import (
     label_map,
     merge_entries,
     render_cleaned_transcript,
+    speaker_label_word,
     trim_repetitive_entries,
     trim_repetitive_units,
 )
@@ -161,6 +162,7 @@ def apply_diarization(
     min_words: int,
     min_seconds: float,
     min_share: float,
+    language: str | None = "ru",
 ) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
     """Attribute entries to speakers, returning the rendered text when diarized.
 
@@ -170,11 +172,20 @@ def apply_diarization(
 
     When diarized, hallucination cleanup runs on the ENTRY list before
     rendering — never on the rendered dialogue text, which already carries
-    "Голос N:" labels that the sentence-splitting heuristic would corrupt.
+    "<label> N:" labels that the sentence-splitting heuristic would corrupt.
     `drop_marginal_speakers` runs exactly once here, and both the returned
     entries and the rendered text derive from that same cleaned list, so a
     downstream consumer (e.g. speaker enrollment) never sees a phantom speaker
     that the rendered text has already folded away.
+
+    `language` selects the label word ("Голос" for ru, "Speaker" otherwise —
+    see speaker_label_word) so it matches the recording's language, which is
+    also what segment_prompt.md's output-language instruction targets. This is
+    a render-time choice only: entries[i]["speaker"] keeps the technical
+    SPEAKER_00 tag regardless of language. Defaults to "ru" (-> "Голос") for
+    zero-regression on callers/tests that predate per-language labels; the
+    real pipeline caller (MergeTranscriptStep) always passes the recording's
+    actual effective_language() explicitly.
     """
     if not diarization_path.exists():
         return entries, None, None
@@ -192,7 +203,7 @@ def apply_diarization(
     merged = merge_entries(entries, raw_json_by_index, diar_segments, min_words, min_seconds)
     trimmed, cleanup_meta = trim_repetitive_entries(merged)
     cleaned = drop_marginal_speakers(trimmed, min_share)
-    mapping = label_map(cleaned)
+    mapping = label_map(cleaned, speaker_label_word(language))
     text = render_cleaned_transcript(cleaned, mapping)
     return cleaned, text, cleanup_meta
 
@@ -546,6 +557,12 @@ class MergeTranscriptStep(Step):
                 min_words=int(getattr(ctx.settings, "diarization_min_words", 2)),
                 min_seconds=float(getattr(ctx.settings, "diarization_min_seconds", 0.8)),
                 min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
+                # The label word must match the recording's language: this is
+                # the same effective_language() the ASR step used to transcribe,
+                # and the same value segment_prompt.md's ${LANG} instruction
+                # will later target — keeping them in lockstep is what fixes
+                # the "output MUST be English" vs "keep Голос 1:" contradiction.
+                language=effective_language(st.task_options, st.dirs),
             )
             # The diarized path cleans hallucinations at the entry level (see
             # apply_diarization), which can drop a different number of units than

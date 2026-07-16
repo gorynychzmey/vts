@@ -237,6 +237,35 @@ def test_prepare_never_goes_whole_even_when_conservative_check_fails(tmp_path, m
     assert payload["chunks"] == [text]
 
 
+def test_prepare_already_done_treats_missing_diarized_key_as_not_done(tmp_path, monkeypatch):
+    """Finding 2 regression: a chunks.json written before Task 8 shipped has no
+    "diarized" key. already_done must NOT treat that as complete -- otherwise
+    SummarizeWindowsStep reads diarized back as False (via .get("diarized",
+    False)) and silently drops the keep-labels instruction for exactly the
+    in-flight tasks caught mid-rollout.
+    """
+    dirs = _make_dirs(tmp_path)
+    text = _write_transcript(dirs, words=500)
+    processor, llm = _make_processor(tmp_path, monkeypatch, n_ctx=5000)
+
+    chunks_file = dirs["root"] / "summary" / "chunks.json"
+    stale_payload = {"chunks": [text], "segmentation": "whole"}  # no "diarized" key
+    chunks_file.write_text(json.dumps(stale_payload), encoding="utf-8")
+
+    st = _st(dirs)
+    assert asyncio.run(PrepareSummaryChunksStep().already_done(processor, st)) is False
+
+    # run() must recompute (not short-circuit on file existence alone) and
+    # produce a payload that now carries "diarized" explicitly.
+    assert asyncio.run(PrepareSummaryChunksStep().run(processor, st)) is True
+    payload = _chunks_payload(dirs)
+    assert "diarized" in payload
+    assert payload["diarized"] is False  # single-block undiarized transcript
+
+    # Idempotent: a freshly-written payload (with the key) IS already_done.
+    assert asyncio.run(PrepareSummaryChunksStep().already_done(processor, st)) is True
+
+
 # ---------------------------------------------------------------------------
 # summarize_windows: whole mode behavior
 # ---------------------------------------------------------------------------

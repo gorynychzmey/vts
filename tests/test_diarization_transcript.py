@@ -184,3 +184,70 @@ def test_diarized_path_entries_and_text_agree_on_marginal_speaker(tmp_path: Path
     assert text == "долгий монолог шум"
     # entries must agree: no SPEAKER_01 surviving anywhere.
     assert all(e["speaker"] == "SPEAKER_00" for e in result)
+
+
+def test_english_recording_gets_speaker_labels_not_golos(tmp_path: Path) -> None:
+    # Finding 1: the label word must match the recording's language, or
+    # segment_prompt.md's "Output MUST be in English" instruction directly
+    # contradicts "keep Голос 1: exactly as it appears" for every non-Russian
+    # meeting. entries[i]["speaker"] must still carry the TECHNICAL tag
+    # unchanged (vts-80i, speaker enrollment, looks those up) -- only the
+    # rendered label depends on language.
+    diar_path = tmp_path / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+                    {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    entries = [
+        {"start": 0.0, "end": 4.0, "text": "hello there"},
+        {"start": 6.0, "end": 9.0, "text": "good morning"},
+    ]
+    result, text, _ = apply_diarization(
+        entries, {}, diar_path, min_words=2, min_seconds=0.8, min_share=0.05, language="en"
+    )
+    assert text == "Speaker 1: hello there\n\nSpeaker 2: good morning"
+    # Technical tags untouched by language -- render-time concern only.
+    assert [e["speaker"] for e in result] == ["SPEAKER_00", "SPEAKER_01"]
+
+
+def test_english_diarized_transcript_still_splits_into_utterances(tmp_path: Path) -> None:
+    # End-to-end proof of the Task 7 coupling: split_utterances (summarizer.py)
+    # must recognize "Speaker N:" labels, not just "Голос N:", or an English
+    # diarized transcript renders correctly but silently stops chunking on
+    # utterance boundaries -- the labels become invisible to the splitter.
+    from vts.services.summarizer import split_utterances
+
+    diar_path = tmp_path / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+                    {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    entries = [
+        {"start": 0.0, "end": 4.0, "text": "hello there, how are you"},
+        {"start": 6.0, "end": 9.0, "text": "good morning to you too"},
+    ]
+    _, text, _ = apply_diarization(
+        entries, {}, diar_path, min_words=2, min_seconds=0.8, min_share=0.05, language="en"
+    )
+    assert text is not None
+
+    utterances = split_utterances(text)
+    assert utterances == [
+        "Speaker 1: hello there, how are you",
+        "Speaker 2: good morning to you too",
+    ]
+    assert len(utterances) > 1  # the coupling this test exists to catch

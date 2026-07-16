@@ -9,8 +9,10 @@ from typing import Any
 
 import httpx
 
+from vts.services.diarization.merge import LABEL_WORDS
+
 # Utterances rendered by the diarization merge (render_cleaned_transcript in
-# vts.services.diarization.merge) start with "Голос N: " only at the very
+# vts.services.diarization.merge) start with "<label> N: " only at the very
 # start of the text, or right after a blank line ("\n\n") separating blocks —
 # same-speaker text WITHIN a block is joined with a plain space and never
 # contains a bare "\n". Matching at any line start (re.MULTILINE with "^")
@@ -20,7 +22,14 @@ import httpx
 # — the exact misattribution this whole feature exists to prevent. The
 # lookbehind requires "start of string" or "\n\n" immediately before the
 # label, matching the renderer's actual block boundary, not "any newline".
-_UTTERANCE_RE = re.compile(r"(?:^|(?<=\n\n))Голос \d+: ")
+#
+# The label word varies by recording language (label_map/speaker_label_word in
+# merge.py — "Голос" for ru, "Speaker" otherwise), so this regex is built from
+# merge.LABEL_WORDS rather than hardcoding "Голос". A splitter that only knew
+# "Голос" would see an English-language diarized transcript's "Speaker 1: ..."
+# as one undifferentiated blob and silently stop splitting on utterances.
+_LABEL_ALTERNATION = "|".join(re.escape(word) for word in LABEL_WORDS)
+_UTTERANCE_RE = re.compile(rf"(?:^|(?<=\n\n))(?:{_LABEL_ALTERNATION}) \d+: ")
 
 
 def split_utterances(text: str) -> list[str]:

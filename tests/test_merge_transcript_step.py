@@ -178,7 +178,10 @@ def test_merge_transcript_step_attributes_speakers_correctly_across_a_silent_chu
         user_id="user-1",
         dirs=dirs,
         logger=logging.getLogger("test_merge_transcript_step"),
-        task_options={},
+        # Explicit language so the rendered label matches the fixture's actual
+        # language (Russian) -- in the real pipeline this always comes from
+        # DetectLanguageStep having already run before MergeTranscriptStep.
+        task_options={"language": "ru"},
     )
 
     success = asyncio.run(MergeTranscriptStep().run(ctx, st))

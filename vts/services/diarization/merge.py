@@ -436,18 +436,54 @@ def drop_marginal_speakers(
     ]
 
 
-def label_map(entries: list[dict[str, Any]]) -> dict[str, str]:
-    """Technical tags -> "Голос N", numbered by first appearance.
+# Label word per recording language, so the rendered "Голос N:" / "Speaker N:"
+# prefix matches the language the transcript is actually written in — the
+# labels are read by both a human and (via segment_prompt.md's output-language
+# instruction) an LLM that is told to rewrite anything not in that language.
+# A Russian recording keeps "Голос" (the pre-existing, most common case);
+# every other language — including ones without a dedicated word here — falls
+# back to "Speaker", which reads as reasonable English regardless of the
+# actual output language and is never mistaken for prose to "rewrite away".
+_LABEL_WORDS: dict[str, str] = {
+    "ru": "Голос",
+    "en": "Speaker",
+}
+DEFAULT_LABEL_WORD = "Speaker"
 
-    "Голос 1" is whoever spoke first, which is what a reader expects. The
-    technical tag stays in the data; this mapping exists only for rendering.
+# All label words `label_map` can ever produce, in a stable order. Consumers
+# that must recognize a rendered label without knowing which language produced
+# it (e.g. summarizer.split_utterances) key off this set instead of
+# hardcoding "Голос", so they can never silently fall out of sync with this
+# module when a new language is added here.
+LABEL_WORDS: tuple[str, ...] = tuple(dict.fromkeys([*_LABEL_WORDS.values(), DEFAULT_LABEL_WORD]))
+
+
+def speaker_label_word(language: str | None) -> str:
+    """The label word ("Голос", "Speaker", ...) for a recording's language.
+
+    Render-time only: never changes what is stored in entries[i]["speaker"]
+    (the technical SPEAKER_00 tag), only what label_map prints for a reader.
+    """
+    key = (language or "").strip().lower()
+    return _LABEL_WORDS.get(key, DEFAULT_LABEL_WORD)
+
+
+def label_map(entries: list[dict[str, Any]], label_word: str = "Голос") -> dict[str, str]:
+    """Technical tags -> "<label_word> N", numbered by first appearance.
+
+    "<label_word> 1" is whoever spoke first, which is what a reader expects.
+    The technical tag stays in the data; this mapping exists only for
+    rendering. `label_word` defaults to "Голос" for callers that predate
+    per-language labels (this module's own render_transcript wrapper, and
+    tests exercising it directly) — new callers should pass
+    speaker_label_word(language) explicitly.
     """
     mapping: dict[str, str] = {}
     for entry in entries:
         speaker = entry.get("speaker")
         if speaker is None or speaker in mapping:
             continue
-        mapping[speaker] = f"Голос {len(mapping) + 1}"
+        mapping[speaker] = f"{label_word} {len(mapping) + 1}"
     return mapping
 
 
@@ -487,14 +523,16 @@ def render_cleaned_transcript(cleaned: list[dict[str, Any]], mapping: dict[str, 
     return "\n\n".join(blocks)
 
 
-def render_transcript(entries: list[dict[str, Any]], min_share: float) -> str:
+def render_transcript(entries: list[dict[str, Any]], min_share: float, label_word: str = "Голос") -> str:
     """Flat text for a monologue, labelled turns for a dialogue.
 
     Thin wrapper kept for callers that only need text, not the cleaned entries
     (e.g. tests exercising this module directly). `apply_diarization` calls
     `drop_marginal_speakers` + `render_cleaned_transcript` itself instead, so
     the reassignment happens exactly once and its output is shared.
+    `label_word` defaults to "Голос" so existing callers/tests keep their
+    current (Russian) output unchanged.
     """
     cleaned = drop_marginal_speakers(entries, min_share)
-    mapping = label_map(cleaned)
+    mapping = label_map(cleaned, label_word)
     return render_cleaned_transcript(cleaned, mapping)
