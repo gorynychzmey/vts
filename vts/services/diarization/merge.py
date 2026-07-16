@@ -207,6 +207,44 @@ def speaker_at(
     return best_speaker
 
 
+def nearest_speaker(
+    diar_segments: list[DiarSegment],
+    start: float,
+    end: float,
+) -> str | None:
+    """`speaker_at`, but fills gaps with the nearest segment instead of None.
+
+    Whisper timestamps and pyannote boundaries come from independent models and
+    do not line up to the word. At a speaker change, one or two words land in
+    the silent gap between segments and overlap neither. Attributing them to the
+    nearest segment edge puts them with the speaker they are acoustically
+    closest to — usually the one about to talk — instead of stranding them on
+    the previous speaker.
+
+    This cannot be perfect: nobody spoke during the gap, so the true owner is
+    unknowable. The ≥2-word / ≥0.8s split threshold absorbs the residual
+    single-word misplacements downstream.
+    """
+    speaker = speaker_at(diar_segments, start, end)
+    if speaker is not None:
+        return speaker
+
+    midpoint = (start + end) / 2
+    nearest: str | None = None
+    best_distance = float("inf")
+    for segment in diar_segments:
+        seg_start = float(segment["start"])
+        seg_end = float(segment["end"])
+        if seg_start <= midpoint <= seg_end:
+            distance = 0.0
+        else:
+            distance = min(abs(midpoint - seg_start), abs(midpoint - seg_end))
+        if distance < best_distance:
+            best_distance = distance
+            nearest = str(segment["speaker"])
+    return nearest
+
+
 def _glue_subwords(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Join subword tokens into whole words.
 
@@ -280,14 +318,16 @@ def _group_words_by_speaker(
 ) -> list[dict[str, Any]]:
     """Consecutive words sharing a speaker, collapsed into groups.
 
-    Words that overlap no diarization segment inherit the running speaker, so a
-    gap in diarization never drops text.
+    A word in the silent gap between two speakers is assigned to the nearest
+    segment (`nearest_speaker`), not left to inherit the running one — that is
+    what moves a turn boundary onto the acoustic change instead of stranding the
+    incoming speaker's first words on the previous group.
     """
     groups: list[dict[str, Any]] = []
     for word in words:
         start = float(word["start"])
         end = float(word["end"])
-        speaker = speaker_at(diar_segments, start, end)
+        speaker = nearest_speaker(diar_segments, start, end)
         if groups and (speaker is None or groups[-1]["speaker"] == speaker):
             groups[-1]["words"].append(word)
             groups[-1]["end"] = end

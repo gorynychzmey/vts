@@ -1,6 +1,7 @@
 from vts.pipeline.steps.transcription import trim_repetitive_edges
 from vts.services.diarization.merge import (
     merge_entries,
+    nearest_speaker,
     speaker_at,
     split_entry_by_speaker,
     trim_repetitive_entries,
@@ -26,7 +27,33 @@ def test_speaker_at_picks_maximum_overlap() -> None:
 
 
 def test_speaker_at_no_overlap_returns_none() -> None:
+    # speaker_at answers "who is speaking during this span" — silence has no
+    # answer. Filling the gap is nearest_speaker's job, kept separate on purpose.
     assert speaker_at(DIAR, 30.0, 40.0) is None
+
+
+def test_nearest_speaker_prefers_overlap() -> None:
+    # When there IS overlap, nearest_speaker matches speaker_at exactly.
+    assert nearest_speaker(DIAR, 1.0, 5.0) == "SPEAKER_00"
+    assert nearest_speaker(DIAR, 9.0, 14.0) == "SPEAKER_01"
+
+
+def test_nearest_speaker_fills_gap_toward_closer_edge() -> None:
+    # The real bug: a word in the 10.0-boundaryless gap between two speakers.
+    # DIAR is 0-10 SPEAKER_00, 10-20 SPEAKER_01 — contiguous, so make a gap.
+    gapped = [
+        {"start": 0.0, "end": 10.0, "speaker": "SPEAKER_00"},
+        {"start": 12.0, "end": 20.0, "speaker": "SPEAKER_01"},
+    ]
+    # 10.4 is 0.4 past SPEAKER_00's end, 1.6 before SPEAKER_01 -> SPEAKER_00.
+    assert nearest_speaker(gapped, 10.4, 10.4) == "SPEAKER_00"
+    # 11.7 is 1.7 past SPEAKER_00, 0.3 before SPEAKER_01 -> SPEAKER_01. This is
+    # the "в принципе" case: the word belongs to the speaker about to start.
+    assert nearest_speaker(gapped, 11.7, 11.7) == "SPEAKER_01"
+
+
+def test_nearest_speaker_none_on_empty() -> None:
+    assert nearest_speaker([], 5.0, 5.0) is None
 
 
 def test_speaker_at_zero_length_word_inside_segment() -> None:
