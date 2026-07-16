@@ -29,6 +29,24 @@ def test_speaker_at_no_overlap_returns_none() -> None:
     assert speaker_at(DIAR, 30.0, 40.0) is None
 
 
+def test_speaker_at_zero_length_word_inside_segment() -> None:
+    # Whisper emits zero-length words (a real one: "в" at 21.28-21.28). Area of
+    # overlap is 0 for those, so an area-only rule never attributes them — not
+    # even in the middle of a confident segment. 3% of this meeting's words.
+    assert speaker_at(DIAR, 5.0, 5.0) == "SPEAKER_00"
+    assert speaker_at(DIAR, 15.0, 15.0) == "SPEAKER_01"
+
+
+def test_speaker_at_zero_length_word_outside_any_segment() -> None:
+    assert speaker_at(DIAR, 30.0, 30.0) is None
+
+
+def test_speaker_at_zero_length_word_on_boundary() -> None:
+    # Exactly on the 10.0 boundary: both segments touch it, so the earlier one
+    # wins, matching the tie rule for non-zero spans.
+    assert speaker_at(DIAR, 10.0, 10.0) == "SPEAKER_00"
+
+
 def test_speaker_at_empty_diarization_returns_none() -> None:
     assert speaker_at([], 1.0, 5.0) is None
 
@@ -54,9 +72,10 @@ def test_usable_words_none_when_no_words() -> None:
     assert usable_words({}) is None
 
 
-def test_usable_words_rejects_subword_fragments() -> None:
-    # whisper.cpp emits subword tokens; splitting utterances on those would cut
-    # words in half, so they must be rejected outright.
+def test_usable_words_glues_subword_fragments() -> None:
+    # whisper.cpp splits words into subword tokens; a token without a leading
+    # space continues the previous one. Gluing them recovers whole words with
+    # exact boundaries — the first token's start, the last one's end.
     raw = {
         "segments": [
             {
@@ -69,7 +88,56 @@ def test_usable_words_rejects_subword_fragments() -> None:
             }
         ]
     }
-    assert usable_words(raw) is None
+    words = usable_words(raw)
+    assert words is not None
+    assert [w["word"] for w in words] == ["которые"]
+    assert words[0]["start"] == 0.0
+    assert words[0]["end"] == 0.4
+
+
+def test_usable_words_glues_real_cpp_payload() -> None:
+    # Verbatim from a real whisper.cpp task (c31487fb, 2026-07-05): "прогоняет"
+    # and "иишку." arrive in pieces, and t_dtw marks the cpp backend.
+    raw = {
+        "segments": [
+            {
+                "words": [
+                    {"word": " и", "start": 0.0, "end": 0.09, "t_dtw": -1},
+                    {"word": " прог", "start": 0.09, "end": 0.42, "t_dtw": -1},
+                    {"word": "он", "start": 0.53, "end": 0.62, "t_dtw": -1},
+                    {"word": "яет", "start": 0.65, "end": 0.9, "t_dtw": -1},
+                    {"word": " через", "start": 0.9, "end": 1.35, "t_dtw": -1},
+                    {"word": " и", "start": 1.35, "end": 1.44, "t_dtw": -1},
+                    {"word": "иш", "start": 1.44, "end": 1.62, "t_dtw": -1},
+                    {"word": "ку", "start": 1.62, "end": 1.76, "t_dtw": -1},
+                    {"word": ".", "start": 1.76, "end": 1.87, "t_dtw": -1},
+                ]
+            }
+        ]
+    }
+    words = usable_words(raw)
+    assert words is not None
+    assert [w["word"] for w in words] == ["и", "прогоняет", "через", "иишку."]
+    # "прогоняет" spans its first token's start to its last token's end.
+    assert words[1]["start"] == 0.09
+    assert words[1]["end"] == 0.9
+
+
+def test_usable_words_leaves_whole_words_alone() -> None:
+    # The asr backend already emits whole words; gluing must not merge them.
+    raw = {
+        "segments": [
+            {
+                "words": [
+                    {"word": " привет", "start": 0.0, "end": 0.5},
+                    {"word": " мир", "start": 0.5, "end": 1.0},
+                ]
+            }
+        ]
+    }
+    words = usable_words(raw)
+    assert words is not None
+    assert [w["word"] for w in words] == ["привет", "мир"]
 
 
 def test_usable_words_none_when_timestamps_missing() -> None:

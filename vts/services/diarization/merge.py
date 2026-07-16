@@ -185,7 +185,18 @@ def speaker_at(
 
     Ties resolve to the earliest segment, so the result never depends on sort
     stability of the caller's input.
+
+    Zero-length spans are matched by containment rather than area. Whisper emits
+    words with start == end, and their overlap area is 0 against every segment —
+    an area-only rule would leave them unattributed even in the middle of a
+    confident segment.
     """
+    if end <= start:
+        for segment in diar_segments:
+            if float(segment["start"]) <= start <= float(segment["end"]):
+                return str(segment["speaker"])
+        return None
+
     best_speaker: str | None = None
     best_overlap = 0.0
     for segment in diar_segments:
@@ -196,20 +207,50 @@ def speaker_at(
     return best_speaker
 
 
-# whisper.cpp emits subword tokens in `words` ("к", "от", "ор", "ые"), which are
-# useless for splitting utterances. Real words are longer and mostly not glued
-# fragments; a corpus where most tokens are 1-2 chars is a tokenizer artifact,
-# not speech.
-_SUBWORD_MAX_LEN = 2
-_SUBWORD_RATIO = 0.5
+def _glue_subwords(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join subword tokens into whole words.
+
+    Whisper's tokenizer marks a word boundary with a LEADING SPACE, so a piece
+    that continues the previous word arrives without one (" прог" + "он" +
+    "яет" -> "прогоняет"). A glued word spans the first piece's start to the
+    last piece's end — exactly the interval the speaker lookup needs.
+
+    Verified against a real cpp task: 1321 tokens glued back into 694 words,
+    matching Whisper's own text everywhere except one spot where Whisper itself
+    broke a word across a newline ("инструмент\\nы.") and the gluing got it right.
+
+    Gluing only runs when the payload actually carries that boundary marker. A
+    backend that pre-strips its words gives no boundaries to read, and joining
+    on "no leading space" would then weld every word into one — worse than the
+    fallback it replaces.
+    """
+    if not any(str(word.get("word", "")).startswith(" ") for word in words):
+        return [
+            {**word, "word": str(word.get("word", "")).strip(), "start": float(word["start"]), "end": float(word["end"])}
+            for word in words
+            if str(word.get("word", "")).strip()
+        ]
+
+    glued: list[dict[str, Any]] = []
+    for word in words:
+        raw = str(word.get("word", ""))
+        text = raw.strip()
+        if not text:
+            continue
+        if raw.startswith(" ") or not glued:
+            glued.append({**word, "word": text, "start": float(word["start"]), "end": float(word["end"])})
+            continue
+        glued[-1]["word"] += text
+        glued[-1]["end"] = float(word["end"])
+    return glued
 
 
 def usable_words(raw_json: dict[str, Any]) -> list[dict[str, Any]] | None:
     """Word-level timestamps from a Whisper payload, or None when unusable.
 
-    Returns None when the backend gave no words, gave words without timestamps,
-    or gave subword fragments (whisper.cpp). Callers fall back to whole-entry
-    attribution in that case.
+    Returns None only when the backend gave no words at all or gave them without
+    timestamps. Subword tokens are glued rather than rejected: their timestamps
+    are per-token, so word boundaries survive the join intact.
     """
     segments = raw_json.get("segments")
     if not isinstance(segments, list):
@@ -229,10 +270,8 @@ def usable_words(raw_json: dict[str, Any]) -> list[dict[str, Any]] | None:
     if not words:
         return None
 
-    short = sum(1 for w in words if len(str(w.get("word", "")).strip()) <= _SUBWORD_MAX_LEN)
-    if short / len(words) > _SUBWORD_RATIO:
-        return None
-    return words
+    glued = _glue_subwords(words)
+    return glued or None
 
 
 def _group_words_by_speaker(
