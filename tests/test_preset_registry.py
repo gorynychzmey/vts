@@ -54,4 +54,15 @@ def test_filter_keeps_system_drops_unknown_user():
 def test_expand_defaults_missing_and_filters():
     opts = {"audio_only": True, "prompts": [{"source":"user","id":"gone"}]}
     out = expand_preset_options(opts, set())
-    assert out == {"language": None, "audio_only": True, "transcript": True, "prompts": []}
+    assert out == {"language": None, "audio_only": True, "transcript": True, "diarize": False, "prompts": []}
+
+def test_expand_diarize_defaults_false_when_missing():
+    out = expand_preset_options({}, set())
+    assert out["diarize"] is False
+
+def test_expand_diarize_true_survives():
+    # A preset saved with diarize=True must not be silently dropped by
+    # expand_preset_options's explicit-key rebuild.
+    opts = {"transcript": True, "diarize": True}
+    out = expand_preset_options(opts, set())
+    assert out["diarize"] is True

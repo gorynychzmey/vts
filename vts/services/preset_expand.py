@@ -34,5 +34,6 @@ def expand_preset_options(options: dict, valid_user_prompt_ids: set[str]) -> dic
         "language": o.get("language"),
         "audio_only": bool(o.get("audio_only", False)),
         "transcript": bool(o.get("transcript", True)),
+        "diarize": bool(o.get("diarize", False)),
         "prompts": filter_prompt_refs(o.get("prompts", []), valid_user_prompt_ids),
     }

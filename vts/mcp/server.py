@@ -86,6 +86,7 @@ def build_mcp_server() -> FastMCP:
         language: str | None = None,
         audio_only: bool = False,
         transcript: bool = True,
+        diarize: bool = False,
         prompts: list[dict] | None = None,
         preset: dict | None = None,
     ) -> SubmitVideoResult:
@@ -98,6 +99,9 @@ def build_mcp_server() -> FastMCP:
             audio_only: Download audio track only, skip video. Default: False.
             transcript: Run ASR transcription. Default: True. Set False to
                 skip transcription entirely (audio/video download only).
+            diarize: Run speaker diarization and attribute transcript lines to
+                speakers. Default: False (costs a full extra pass over the
+                audio). Requires transcript=True (rejected with 422 otherwise).
             prompts: Prompts to run against the transcript, each a ref like
                 {"source": "system", "id": "summary"} or
                 {"source": "user", "id": "<prompt-uuid>"}. Defaults to the
@@ -121,6 +125,7 @@ def build_mcp_server() -> FastMCP:
                     language=language,
                     audio_only=audio_only,
                     transcript=transcript,
+                    diarize=diarize,
                     prompts=prompts,
                     preset=preset,
                 )

@@ -87,6 +87,7 @@ async def test_submit_video_defaults_match_web_pipeline(tmp_path: Path) -> None:
         "language": None,
         "audio_only": False,
         "transcript": True,
+        "diarize": False,
         "prompts": [{"source": "system", "id": "summary"}],
     }
     assert "summary" not in opts
@@ -113,9 +114,65 @@ async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> N
         "language": "en",
         "audio_only": True,
         "transcript": True,
+        "diarize": False,
         "prompts": [],
     }
     assert "summary" not in opts
+
+
+async def test_submit_video_diarize_true_reaches_options(tmp_path: Path) -> None:
+    """submit_video(diarize=True) must put diarize: True into the options
+    dict handed to create_task — this is the exact wiring Finding 1 was
+    missing (submit_video had no diarize param at all)."""
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    await submit_video(
+        url="https://x/abc",
+        user=user,
+        repo=repo,
+        bus=bus,
+        artifacts_root=tmp_path,
+        diarize=True,
+    )
+    assert repo.last_options["diarize"] is True
+
+
+async def test_submit_video_diarize_defaults_false(tmp_path: Path) -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    await submit_video(
+        url="https://x/abc",
+        user=user,
+        repo=repo,
+        bus=bus,
+        artifacts_root=tmp_path,
+    )
+    assert repo.last_options["diarize"] is False
+
+
+async def test_submit_video_rejects_diarize_without_transcript(tmp_path: Path) -> None:
+    """Mirrors TaskCreateRequest.validate_stage_dependencies in web: diarize
+    needs a transcript to attribute speakers to."""
+    from fastapi import HTTPException
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    bus = FakeBus()
+    with pytest.raises(HTTPException) as exc:
+        await submit_video(
+            url="https://x/abc",
+            user=user,
+            repo=repo,
+            bus=bus,
+            artifacts_root=tmp_path,
+            transcript=False,
+            diarize=True,
+            prompts=[],
+        )
+    assert exc.value.status_code == 422
+    assert "transcript" in exc.value.detail.lower()
 
 
 async def test_submit_video_rejects_prompts_without_transcript(tmp_path: Path) -> None:

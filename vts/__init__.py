@@ -1,3 +1,3 @@
 """vts package metadata."""
 
-__version__ = "1.3.28"
+__version__ = "1.3.29"

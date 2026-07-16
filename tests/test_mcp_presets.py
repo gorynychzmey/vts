@@ -123,8 +123,29 @@ async def test_submit_video_no_preset_unchanged(
         "language": None,
         "audio_only": False,
         "transcript": True,
+        "diarize": False,
         "prompts": [{"source": "system", "id": "summary"}],
     }
+
+
+async def test_submit_video_with_preset_diarize_survives_expansion(
+    fake_user: FakeUser, fake_bus: FakeBus, tmp_path: Path
+) -> None:
+    """A preset saved with diarize=True must still request diarization when
+    consumed via submit_video(preset=...) — this is the exact chain that
+    silently dropped the flag before expand_preset_options copied it."""
+    repo = FakeRepo()
+    preset = await repo.create_preset(
+        uuid.UUID(fake_user.id),
+        "diarized",
+        {"transcript": True, "diarize": True, "prompts": [{"source": "system", "id": "summary"}]},
+    )
+    await tools.submit_video(
+        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        artifacts_root=tmp_path,
+        preset={"source": "user", "id": str(preset.id)},
+    )
+    assert repo.last_options["diarize"] is True
 
 
 async def test_submit_video_preset_drops_unknown_user_prompt(

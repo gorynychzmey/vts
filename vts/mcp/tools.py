@@ -79,6 +79,7 @@ async def submit_video(
     language: str | None = None,
     audio_only: bool = False,
     transcript: bool = True,
+    diarize: bool = False,
     prompts: list[dict] | None = None,
     preset: dict | None = None,
 ) -> SubmitVideoResult:
@@ -88,7 +89,9 @@ async def submit_video(
     runs the full transcript+summary pipeline by default. `prompts` defaults
     to the single system "summary" prompt; non-empty prompts require
     `transcript=True` — the worker would otherwise have nothing to run
-    prompts against.
+    prompts against. `diarize` defaults to False (it costs a full extra pass
+    over the audio) and likewise requires `transcript=True` — there is
+    nothing to attribute speakers to without a transcript.
 
     `preset` (a ref like {"source": "system", "id": "default"} or
     {"source": "user", "id": "<uuid>"}) supplies default pipeline options.
@@ -100,6 +103,8 @@ async def submit_video(
         else preset's.
       - transcript: caller wins if `transcript is False` (non-default),
         else preset's.
+      - diarize: caller wins if `diarize is True` (non-default), else
+        preset's.
       - prompts: caller wins if `prompts is not None`, else preset's.
     With no preset, behaviour is unchanged.
     """
@@ -140,6 +145,8 @@ async def submit_video(
             audio_only = bool(base["audio_only"])
         if transcript is True:
             transcript = bool(base["transcript"])
+        if diarize is False:
+            diarize = bool(base["diarize"])
         if prompts is None:
             norm = list(base["prompts"])
         else:
@@ -152,6 +159,8 @@ async def submit_video(
                 norm.append(ref_to_dict(source, ref_id))
     if norm and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
+    if diarize and not transcript:
+        raise HTTPException(status_code=422, detail="diarize requires transcript")
     task_id = uuid.uuid4()
     artifact = task_dir(artifacts_root, user.username, task_id)
     artifact.mkdir(parents=True, exist_ok=True)
@@ -159,6 +168,7 @@ async def submit_video(
         "language": language,
         "audio_only": audio_only,
         "transcript": transcript,
+        "diarize": diarize,
         "prompts": norm,
     }
     task = await repo.create_task(
