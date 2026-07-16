@@ -61,6 +61,7 @@ class PresetOptions(BaseModel):
     language: str | None = None
     audio_only: bool = False
     transcript: bool = True
+    diarize: bool = False
     prompts: list[PromptRef] = Field(default_factory=list)
 
 
@@ -103,12 +104,15 @@ class TaskCreateRequest(BaseModel):
     language: str | None = None
     audio_only: bool = False
     transcript: bool = Field(default=True, validation_alias=AliasChoices("transcript", "do_transcribe"))
+    diarize: bool = False
     prompts: list[PromptRef] = Field(default_factory=_default_prompts)
 
     @model_validator(mode="after")
     def validate_stage_dependencies(self) -> "TaskCreateRequest":
         if self.prompts and not self.transcript:
             raise ValueError("prompts require transcript")
+        if self.diarize and not self.transcript:
+            raise ValueError("diarize requires transcript")
         return self
 
 
@@ -304,6 +308,7 @@ class UploadInitRequest(BaseModel):
     language: str | None = None
     audio_only: bool = False
     transcript: bool = True
+    diarize: bool = False
     prompts: str | None = None
     display_name: str | None = None
 
