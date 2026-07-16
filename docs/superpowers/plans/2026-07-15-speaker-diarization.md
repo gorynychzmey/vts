@@ -10,6 +10,19 @@
 
 **Спека:** `docs/superpowers/specs/2026-07-15-speaker-diarization-design.md` — читать перед началом, там обоснования решений.
 
+## Статус (2026-07-16)
+
+**Задачи 1-10 — DONE.** 997 тестов проходят. Контейнер собран и verified offline.
+
+Остаётся **Task 11** — калибровка на реальной встрече 4+. Пороги в конфиге сейчас
+прикидки, и главный открытый вопрос — сохранит ли LLM метки `Голос N:` при
+переписывании окон — проверяется только реальным прогоном.
+
+Реализация шла с доработками сверх плана (см. историю коммитов): язык меток
+следует языку записи, бюджет окна учитывает токены метки, галлюцинации режутся
+на границе предложений. Task 10 разошёлся с планом в трёх местах — подробности
+в самой секции Task 10.
+
 ## Global Constraints
 
 - **PyTorch НЕ добавляется в `requirements.txt`.** Основное приложение — оркестратор; ML живёт в контейнерах. Нарушение этого правила — провал задачи.
@@ -2309,260 +2322,56 @@ git commit -m "feat(diarization): diarize option on the submit API (vts-5xz)"
 
 ---
 
-## Task 10: Diarization container
+## Task 10: Diarization container — DONE (2026-07-16)
+
+Built, smoke-tested, and verified offline. Commit `09bbf5f`.
+
+**Files created:** `docker/diarization/{Dockerfile,server.py,requirements.txt,fetch_models.py}`
+**Files modified:** `docker-compose.yml` (profile `diarize`), `README.md` (Stack + CC-BY-4.0 attribution)
+
+### What the plan got wrong — read this before touching the container
+
+The plan was written from the pyannote docs. Running it corrected three things:
+
+1. **The model repo is not two `.bin` files.** It also ships `config.yaml`
+   (wires the pipeline with `$model`-relative paths) and `plda/` (two `.npz`
+   with the VBx clustering parameters). Without them `from_pretrained` has
+   nothing to load. All five artifacts are pinned in `fetch_models.py`.
+
+2. **pyannote 4.x returns `DiarizeOutput`, not `Annotation`.** It has three
+   fields — `speaker_diarization`, `exclusive_speaker_diarization`,
+   `speaker_embeddings` — and carries embeddings **by default**. There is no
+   `return_embeddings` flag; passing one is not the API.
+
+3. **Use `exclusive_speaker_diarization`.** The consumer attributes each word to
+   exactly one speaker, so overlapping turns would force an arbitrary pick
+   downstream. The exclusive variant makes that choice in the model, where the
+   acoustic evidence still exists.
+
+### Verified facts (2026-07-16)
+
+- Weights download **anonymously, no token, HTTP 200** — the un-gated claim
+  holds. Sizes match the research exactly (5,906,507 and 26,646,242 bytes) and
+  the sha256 match what the research found a month earlier, so the weights were
+  not swapped.
+- HF API reports `gated: False` machine-readably.
+- `config.yaml` confirms community-1 uses **VBxClustering**, not spectral —
+  independent support for the spec's stack decision.
+- Embeddings are `shape=(N, 256)`, positional, aligned with
+  `speaker_diarization.labels()`. This is what vts-80i needs.
+- **Offline verified:** a full `/diarize` succeeds with `--network none` and
+  `huggingface.co` confirmed unreachable (`gaierror`). Nothing is fetched at
+  runtime.
+
+### Environment notes
+
+- The build context must be an absolute path if your shell's cwd may have moved.
+- Rootless podman here does not publish ports to the host; drive the container
+  with `docker exec ... python -c` against `http://localhost:9100` from inside.
+- Synthetic tones diarize to one speaker. That is not a failure — pyannote is
+  trained on human speech. Use them to check the wire contract only; real
+  speaker counts need a real recording (Task 11).
 
-**Files:**
-- Create: `docker/diarization/Dockerfile`, `docker/diarization/server.py`, `docker/diarization/requirements.txt`, `docker/diarization/fetch_models.py`
-- Modify: `docker-compose.yml`, `README.md` (attribution)
-
-**Interfaces:**
-- Consumes: nothing
-- Produces: `POST /diarize` returning `{"segments": [...], "embeddings": {...}, "num_speakers": int}`
-
-**Critical constraints:**
-- Weights are vendored at **build** time by verified sha256 — no runtime HF fetch. The `pyannote-community/` mirror is maintained by a single unverified user; pinning hashes is what makes it safe.
-- `pyannote/segmentation` sha256: `7ad24338bcbb8bcfb2ba1b2e2b0e9f7e...` — **verify against the live model card before building**; the spec records the sizes (5,906,507 B segmentation, 26,646,242 B embedding) as a cross-check.
-- pyannote weights are CC-BY-4.0 → attribution required in README.
-
-- [ ] **Step 1: Write the requirements file**
-
-Create `docker/diarization/requirements.txt`:
-
-```
-pyannote.audio==4.0.7
-fastapi==0.136.1
-uvicorn[standard]==0.35.0
-python-multipart==0.0.32
-```
-
-- [ ] **Step 2: Write the model fetch script**
-
-Create `docker/diarization/fetch_models.py`:
-
-```python
-"""Vendor pyannote weights at build time, verified by hash.
-
-Runtime must never reach out to Hugging Face: the community mirror is run by a
-single unverified account, so the hashes pinned here are the only thing standing
-between a build and a supply-chain surprise.
-"""
-
-from __future__ import annotations
-
-import hashlib
-import sys
-from pathlib import Path
-
-import httpx
-
-MODELS = {
-    "segmentation": {
-        "url": "https://huggingface.co/pyannote-community/speaker-diarization-community-1/resolve/main/segmentation/pytorch_model.bin",
-        "size": 5_906_507,
-        "sha256": "REPLACE_WITH_VERIFIED_HASH",
-    },
-    "embedding": {
-        "url": "https://huggingface.co/pyannote-community/speaker-diarization-community-1/resolve/main/embedding/pytorch_model.bin",
-        "size": 26_646_242,
-        "sha256": "REPLACE_WITH_VERIFIED_HASH",
-    },
-}
-
-
-def fetch(name: str, spec: dict, target_dir: Path) -> None:
-    target = target_dir / name / "pytorch_model.bin"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with httpx.stream("GET", spec["url"], follow_redirects=True, timeout=300) as response:
-        response.raise_for_status()
-        digest = hashlib.sha256()
-        size = 0
-        with target.open("wb") as handle:
-            for block in response.iter_bytes():
-                digest.update(block)
-                size += len(block)
-                handle.write(block)
-    if size != spec["size"]:
-        raise SystemExit(f"{name}: size {size} != expected {spec['size']}")
-    if digest.hexdigest() != spec["sha256"]:
-        raise SystemExit(f"{name}: sha256 {digest.hexdigest()} != expected {spec['sha256']}")
-    print(f"{name}: verified {size} bytes")
-
-
-if __name__ == "__main__":
-    target_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "/models")
-    for name, spec in MODELS.items():
-        fetch(name, spec, target_dir)
-```
-
-- [ ] **Step 3: Verify the hashes before building**
-
-Run:
-
-```bash
-curl -sL https://huggingface.co/pyannote-community/speaker-diarization-community-1/resolve/main/segmentation/pytorch_model.bin | sha256sum
-curl -sL https://huggingface.co/pyannote-community/speaker-diarization-community-1/resolve/main/embedding/pytorch_model.bin | sha256sum
-```
-
-Expected: two hashes, and the downloads succeed **without** a token (that is the un-gated claim being re-verified). Paste both into `fetch_models.py`, replacing `REPLACE_WITH_VERIFIED_HASH`.
-
-If either download returns 401, STOP: the mirror's gating changed, and the spec's stack decision needs revisiting rather than working around.
-
-- [ ] **Step 4: Write the server**
-
-Create `docker/diarization/server.py`:
-
-```python
-"""Diarization sidecar: pyannote behind one HTTP endpoint.
-
-Lives in its own container so the main app stays PyTorch-free — VTS is an
-orchestrator, and every ML model it uses runs behind HTTP.
-"""
-
-from __future__ import annotations
-
-import os
-import tempfile
-from pathlib import Path
-
-import torch
-from fastapi import FastAPI, File, UploadFile
-from pyannote.audio import Pipeline
-
-app = FastAPI()
-_pipeline: Pipeline | None = None
-
-
-def pipeline() -> Pipeline:
-    global _pipeline
-    if _pipeline is None:
-        _pipeline = Pipeline.from_pretrained(os.environ.get("MODEL_DIR", "/models"))
-        _pipeline.to(torch.device("cpu"))
-    return _pipeline
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/diarize")
-async def diarize(file: UploadFile = File(...)) -> dict:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-        handle.write(await file.read())
-        audio_path = Path(handle.name)
-    try:
-        output = pipeline()(str(audio_path), return_embeddings=True)
-    finally:
-        audio_path.unlink(missing_ok=True)
-
-    diarization = output[0] if isinstance(output, tuple) else output
-    raw_embeddings = output[1] if isinstance(output, tuple) and len(output) > 1 else None
-
-    segments = [
-        {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
-    ]
-    labels = list(diarization.labels())
-    embeddings = {}
-    if raw_embeddings is not None:
-        for index, label in enumerate(labels):
-            if index < len(raw_embeddings):
-                embeddings[str(label)] = [float(value) for value in raw_embeddings[index]]
-
-    return {"segments": segments, "embeddings": embeddings, "num_speakers": len(labels)}
-```
-
-- [ ] **Step 5: Write the Dockerfile**
-
-Create `docker/diarization/Dockerfile`:
-
-```dockerfile
-FROM python:3.11-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Weights land at build time, verified by hash: the runtime never talks to
-# Hugging Face, which is what keeps the deployment on-prem and reproducible.
-COPY fetch_models.py .
-RUN python fetch_models.py /models
-
-COPY server.py .
-ENV MODEL_DIR=/models
-EXPOSE 9100
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9100"]
-```
-
-- [ ] **Step 6: Add the compose service**
-
-In `docker-compose.yml`, after the `whisper` service (:100-106):
-
-```yaml
-  # Speaker diarization (pyannote.audio). Activate with: --profile diarize
-  diarization:
-    build: ./docker/diarization
-    profiles: ["diarize"]
-    ports:
-      - "9100:9100"
-    restart: unless-stopped
-```
-
-- [ ] **Step 7: Build and smoke-test the container**
-
-```bash
-docker compose --profile diarize build diarization
-docker compose --profile diarize up -d diarization
-curl -sf http://localhost:9100/health
-```
-
-Expected: `{"status":"ok"}`
-
-Then diarize a real two-voice sample:
-
-```bash
-curl -s -F "file=@/path/to/two_speakers.wav" http://localhost:9100/diarize | head -c 400
-```
-
-Expected: JSON with `segments`, `embeddings`, and `num_speakers` ≥ 2.
-
-- [ ] **Step 8: Verify offline operation**
-
-```bash
-docker compose --profile diarize down
-docker network disconnect bridge $(docker compose --profile diarize ps -q diarization) 2>/dev/null || true
-docker run --rm --network none -p 9100:9100 $(docker compose --profile diarize images -q diarization) &
-sleep 20 && curl -sf http://localhost:9100/health
-```
-
-Expected: healthy with no network — this is the acceptance criterion "verified offline". If it fails, weights are being fetched at runtime and Step 2's vendoring is broken.
-
-- [ ] **Step 9: Add the CC-BY-4.0 attribution**
-
-In `README.md`, in the credits/licences section:
-
-```markdown
-### Speaker diarization
-
-Diarization uses [pyannote.audio](https://github.com/pyannote/pyannote-audio)
-(MIT) with the `speaker-diarization-community-1` models, licensed
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by the pyannote
-authors. The models run in the `diarization` container; weights are vendored at
-build time and never fetched at runtime.
-```
-
-- [ ] **Step 10: Commit**
-
-```bash
-git add docker/diarization/ docker-compose.yml README.md
-git commit -m "feat(diarization): pyannote sidecar container with vendored weights (vts-5xz)"
-```
-
----
 
 ## Task 11: End-to-end verification on a real meeting
 
