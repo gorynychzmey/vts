@@ -1,0 +1,22 @@
+[Unit]
+Description=VTS Diarization Container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/vts/config/vts.env
+ExecStartPre=/usr/bin/podman pull ${DIARIZATION_IMAGE}
+# No prompts/state/data mounts: the sidecar only takes audio over HTTP and
+# returns speaker segments. Its weights are baked into the image, so it needs
+# no volumes and no network access beyond serving the API.
+ExecStart=/usr/bin/podman run --rm --name vts-diarization \
+  -e DIAR_MIN_DURATION_OFF=${DIAR_MIN_DURATION_OFF} \
+  -p 9100:9100 \
+  ${DIARIZATION_IMAGE}
+ExecStop=/usr/bin/podman stop -t 20 vts-diarization
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
