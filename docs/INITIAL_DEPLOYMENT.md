@@ -122,6 +122,23 @@ sudo systemctl enable --now vts-webapi.service
 sudo systemctl enable --now vts-worker.service
 ```
 
+### Diarization sidecar (optional)
+
+Only needed if you use the `diarize` option. It is released on its own
+`diar-build-X.Y.Z` tag, independently of VTS, so install it whenever you first
+need it:
+
+```bash
+sudo cp systemd/vts-diarization.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vts-diarization.service
+```
+
+Requires `DIARIZATION_IMAGE` in `/opt/vts/config/vts.env` (see
+`systemd/vts.env.example`). `deploy-after-diarization.yml` pulls that exact
+reference and restarts this unit, so the unit must exist before the first
+diarization deploy — otherwise the deploy fails fast on a missing unit.
+
 ## 7. Verify deployment
 
 ```bash
@@ -129,6 +146,13 @@ sudo systemctl status vts-webapi.service --no-pager
 sudo systemctl status vts-worker.service --no-pager
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/api/version
+```
+
+If you installed the diarization sidecar:
+
+```bash
+sudo systemctl status vts-diarization.service --no-pager
+curl -fsS http://127.0.0.1:9100/health
 ```
 
 Open UI via reverse proxy that injects `X-Forwarded-User`.
