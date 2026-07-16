@@ -5,6 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Calibrated default, overridable from the env file below. Without this the unit
+# would pass an empty -e when the var is unset, and the server would log
+# "ignoring non-numeric" and silently fall back to the model default of 0.0 —
+# i.e. uncalibrated, over-fragmented segmentation, with nothing failing.
+Environment=DIAR_MIN_DURATION_OFF=0.5
 EnvironmentFile=/opt/vts/config/vts.env
 ExecStartPre=/usr/bin/podman pull ${DIARIZATION_IMAGE}
 # No prompts/state/data mounts: the sidecar only takes audio over HTTP and
