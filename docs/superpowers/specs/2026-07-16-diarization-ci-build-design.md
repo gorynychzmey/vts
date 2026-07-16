@@ -28,6 +28,7 @@
 
 **Новые файлы:**
 - `.github/workflows/build-diarization.yml`
+- `.github/workflows/deploy-after-diarization.yml`
 - `build-diarization.sh`
 - `docker/diarization/VERSION`
 
@@ -132,13 +133,34 @@ offline-инвариант (веса вшиты, рантайм не ходит 
 - **Smoke-тест сам по себе** уже покрывает: health, контракт /diarize, offline.
 - CI-прогон workflow — по факту первого тега `diar-build-1.0.0`.
 
+## Автодеплой (deploy-after-diarization.yml)
+
+Симметрично vts (решение Виктора): `workflow_run` после успешной сборки
+диаризации → SSH на прод-хост → `podman pull` нового образа → `systemctl
+restart` сервиса диаризации. По образцу `deploy-after-build.yml`.
+
+Отличия от vts-деплоя:
+- `workflow_run.workflows: ['Build Diarization Image']` (не 'Build Images').
+- `concurrency.group: deploy-after-diarization` (свой, чтобы не гонки с
+  vts-деплоем).
+- Перезапускает ОДИН сервис — диаризацию. Новая var `DIARIZATION_SERVICE`
+  (дефолт `vts-diarization.service`), вместо `WEBAPI_SERVICE`/`WORKER_SERVICE`.
+- На хосте читает `DIARIZATION_IMAGE` из env-файла (вместо `VTS_IMAGE`),
+  `podman pull`, рестарт, `systemctl status` для fail-fast.
+
+Переиспользует те же secrets/vars vts-деплоя: `DEPLOY_HOST`, `DEPLOY_SSH_KEY`,
+`DEPLOY_KNOWN_HOSTS`, `DEPLOY_USER`/`PORT`/`REMOTE_DIR`/`ENV_FILE`,
+`DEPLOY_JUMP_HOST`. Ничего нового заводить не нужно, кроме `DIARIZATION_SERVICE`
+и `DIARIZATION_IMAGE` в env-файле прода.
+
+Remote-скрипт — heredoc с `set -euo pipefail`, как у vts (логика в CI YAML, не
+на хосте, версионируется).
+
 ## Открытые вопросы (в имплементацию, не блокируют)
 
-- Точная форма двух `push`-условий в `on:` (tag-only) — деталь синтаксиса YAML.
-- Нужен ли деплой-шаг после сборки диаризации (перезапуск сервиса на проде) —
-  у vts есть `deploy-after-build.yml`. Для диаризации, вероятно, НЕ нужен: образ
-  меняется редко, деплой можно делать вручную обновлением `DIARIZATION_IMAGE` в
-  env прода. Решить при имплементации; по умолчанию НЕ добавляем автодеплой.
+- Точная форма `on:` (tag-only push + workflow_dispatch) — деталь синтаксиса YAML.
+- Имя workflow для `workflow_run` в deploy-триггере должно ТОЧНО совпадать с
+  `name:` в build-diarization.yml — при имплементации свериться дословно.
 
 ## Вне скоупа
 
