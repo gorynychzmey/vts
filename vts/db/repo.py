@@ -5,9 +5,22 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, undefer
 
-from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User, UserStepWeights
+from vts.db.models import (
+    ApiToken,
+    AsrSegment,
+    Preset,
+    Prompt,
+    Speaker,
+    Step,
+    StepStatus,
+    Task,
+    TaskStatus,
+    User,
+    UserStepWeights,
+    VoiceSample,
+)
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 
@@ -561,6 +574,93 @@ class Repo:
         await self.session.delete(preset)
         await self.session.flush()
         return True
+
+    # ------------------------------------------------------------------
+    # Speaker registry CRUD
+    # ------------------------------------------------------------------
+
+    async def create_speaker(self, user_id: uuid.UUID, name: str) -> Speaker:
+        speaker = Speaker(user_id=user_id, name=name)
+        self.session.add(speaker)
+        await self.session.flush()
+        return speaker
+
+    async def list_speakers(self, user_id: uuid.UUID) -> list[Speaker]:
+        stmt = select(Speaker).where(Speaker.user_id == user_id).order_by(Speaker.name.asc())
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID) -> Speaker | None:
+        stmt = select(Speaker).where(Speaker.id == speaker_id, Speaker.user_id == user_id)
+        return await self.session.scalar(stmt)
+
+    async def rename_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID, name: str) -> Speaker | None:
+        speaker = await self.get_speaker(user_id, speaker_id)
+        if speaker is None:
+            return None
+        speaker.name = name
+        await self.session.flush()
+        return speaker
+
+    async def delete_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID) -> bool:
+        speaker = await self.get_speaker(user_id, speaker_id)
+        if speaker is None:
+            return False
+        await self.session.delete(speaker)
+        await self.session.flush()
+        return True
+
+    async def add_voice_sample(
+        self, *, speaker_id: uuid.UUID, embedding: list[float], embedding_model: str,
+        audio: bytes, audio_format: str, duration_sec: float,
+        source_task_id: uuid.UUID | None,
+    ) -> VoiceSample:
+        sample = VoiceSample(
+            speaker_id=speaker_id, embedding=embedding, embedding_model=embedding_model,
+            audio=audio, audio_format=audio_format, duration_sec=duration_sec,
+            source_task_id=source_task_id,
+        )
+        self.session.add(sample)
+        await self.session.flush()
+        return sample
+
+    async def list_voice_samples(self, speaker_id: uuid.UUID) -> list[VoiceSample]:
+        # audio stays deferred — never loaded here
+        stmt = (
+            select(VoiceSample)
+            .where(VoiceSample.speaker_id == speaker_id)
+            .order_by(VoiceSample.created_at.asc())
+        )
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_voice_sample(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> VoiceSample | None:
+        stmt = (
+            select(VoiceSample)
+            .join(Speaker, VoiceSample.speaker_id == Speaker.id)
+            .where(VoiceSample.id == sample_id, Speaker.user_id == user_id)
+        )
+        return await self.session.scalar(stmt)
+
+    async def delete_voice_sample(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> bool:
+        sample = await self.get_voice_sample(user_id, sample_id)
+        if sample is None:
+            return False
+        await self.session.delete(sample)
+        await self.session.flush()
+        return True
+
+    async def load_sample_audio(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> tuple[bytes, str] | None:
+        stmt = (
+            select(VoiceSample)
+            .join(Speaker, VoiceSample.speaker_id == Speaker.id)
+            .where(VoiceSample.id == sample_id, Speaker.user_id == user_id)
+            .options(undefer(VoiceSample.audio))
+        )
+        sample = await self.session.scalar(stmt)
+        if sample is None:
+            return None
+        return sample.audio, sample.audio_format
 
     # ------------------------------------------------------------------
     # Per-user step weights (vts-8cm)
