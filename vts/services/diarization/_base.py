@@ -78,6 +78,20 @@ class DiarizationBackend(ABC):
             return []
         return [str(j["job_id"]) for j in jobs if isinstance(j, dict) and "job_id" in j]
 
+    async def embed(self, audio_path: Path) -> list[float]:
+        """Embed a single audio clip via the sidecar's /embed endpoint.
+
+        Read-only: no job id, no polling — the sidecar computes and returns
+        the vector in one request, same upload-scaled timeout as /diarize.
+        """
+        async with self._client(timeout_for_upload(audio_path)) as client:
+            with audio_path.open("rb") as file_obj:
+                files = {"file": (audio_path.name, file_obj, "audio/wav")}
+                response = await client.post(f"{self._url}/embed", files=files)
+        response.raise_for_status()
+        data = response.json()
+        return [float(x) for x in data["embedding"]]
+
     @abstractmethod
     async def diarize(
         self,
@@ -138,7 +152,18 @@ class DiarizationBackend(ABC):
         if not isinstance(num_speakers, int):
             num_speakers = len({segment["speaker"] for segment in segments})
 
-        return {"segments": segments, "embeddings": embeddings, "num_speakers": num_speakers}
+        # Old sidecars predate /embed and omit this field entirely; default to
+        # "" so they degrade gracefully instead of crashing the caller.
+        embedding_model = payload.get("embedding_model")
+        if not isinstance(embedding_model, str):
+            embedding_model = ""
+
+        return {
+            "segments": segments,
+            "embeddings": embeddings,
+            "num_speakers": num_speakers,
+            "embedding_model": embedding_model,
+        }
 
     async def _run_job(
         self,
