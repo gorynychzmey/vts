@@ -35,6 +35,28 @@ async def _seed_task_with_previews(factory, tmp_path, previews: dict, *, user_id
     return task_id
 
 
+async def _seed_task_with_raw_previews_bytes(factory, tmp_path, raw: bytes, *, user_id=_TEST_USER_ID):
+    """Like _seed_task_with_previews but writes arbitrary bytes verbatim,
+    for exercising malformed/non-dict speaker_previews.json content."""
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(user_id),
+            source_url="https://example.com/v",
+            options={"diarize": True},
+            artifact_dir=str(tmp_path),
+        )
+        await session.commit()
+        task_id = task.id
+
+    outputs = tmp_path / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    (outputs / "speaker_previews.json").write_bytes(raw)
+    return task_id
+
+
 @pytest.mark.asyncio
 async def test_get_speaker_preview_audio_200(client, authed_app, tmp_path):
     _app, factory = authed_app
@@ -141,3 +163,23 @@ async def test_get_speaker_preview_path_traversal_refused(client, authed_app, tm
     r = await client.get(f"/api/tasks/{task_id}/speaker-previews/SPEAKER_00/0/audio")
     assert r.status_code in (403, 404)
     assert r.content != b"SECRET_SHOULD_NOT_BE_SERVED"
+
+
+@pytest.mark.asyncio
+async def test_get_speaker_preview_malformed_json_404(client, authed_app, tmp_path):
+    """A corrupt speaker_previews.json (invalid JSON) must 404, not 500."""
+    _app, factory = authed_app
+    task_id = await _seed_task_with_raw_previews_bytes(factory, tmp_path, b"{not json")
+
+    r = await client.get(f"/api/tasks/{task_id}/speaker-previews/SPEAKER_00/0/audio")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_speaker_preview_non_dict_json_404(client, authed_app, tmp_path):
+    """Valid JSON that isn't a dict (e.g. a bare list) must 404, not 500."""
+    _app, factory = authed_app
+    task_id = await _seed_task_with_raw_previews_bytes(factory, tmp_path, b"[]")
+
+    r = await client.get(f"/api/tasks/{task_id}/speaker-previews/SPEAKER_00/0/audio")
+    assert r.status_code == 404

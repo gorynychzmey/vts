@@ -2407,7 +2407,13 @@ def create_app() -> FastAPI:
         if not previews_path.exists():
             raise HTTPException(status_code=404, detail="Speaker previews not found")
 
-        previews = json.loads(previews_path.read_text(encoding="utf-8"))
+        try:
+            previews = json.loads(previews_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+        if not isinstance(previews, dict):
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+
         clips = previews.get(speaker_label)
         if not isinstance(clips, list) or index < 0 or index >= len(clips):
             raise HTTPException(status_code=404, detail="Preview clip not found")
