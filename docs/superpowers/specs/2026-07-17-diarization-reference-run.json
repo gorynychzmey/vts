@@ -1,0 +1,22 @@
+{
+  "source_task": "c31487fb-7667-4f92-8976-7b8de2b677ec",
+  "measured_at": "2026-07-17",
+  "audio_seconds": 2932.6,
+  "num_speakers": 5,
+  "segment_count": 413,
+  "embedding_dim": {
+    "SPEAKER_00": 256,
+    "SPEAKER_01": 256,
+    "SPEAKER_02": 256,
+    "SPEAKER_03": 256,
+    "SPEAKER_04": 256
+  },
+  "embedding_l2_norm": {
+    "SPEAKER_00": 1.9556,
+    "SPEAKER_01": 2.5265,
+    "SPEAKER_02": 3.6793,
+    "SPEAKER_03": 1.9742,
+    "SPEAKER_04": 2.087
+  },
+  "note": "Vectors themselves omitted: biometric data. Dimension 256 (WeSpeaker ResNet), not ECAPA 192."
+}
