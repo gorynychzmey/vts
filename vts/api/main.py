@@ -2389,6 +2389,46 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Speaker matches not found")
         return Response(content=path.read_bytes(), media_type="application/json")
 
+    @app.get("/api/tasks/{task_id}/speaker-previews/{speaker_label}/{index}/audio")
+    async def get_speaker_preview_audio(
+        task_id: uuid.UUID,
+        speaker_label: str,
+        index: int,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> FileResponse:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        outputs_dir = Path(task.artifact_dir) / "outputs"
+        previews_path = outputs_dir / "speaker_previews.json"
+        if not previews_path.exists():
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+
+        previews = json.loads(previews_path.read_text(encoding="utf-8"))
+        clips = previews.get(speaker_label)
+        if not isinstance(clips, list) or index < 0 or index >= len(clips):
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        clip_path_str = clips[index].get("path") if isinstance(clips[index], dict) else None
+        if not clip_path_str:
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        # SECURITY: never trust the resolved path just because it came out of
+        # the json. Confirm it actually resolves to somewhere inside this
+        # task's outputs dir before serving it — defense against a tampered
+        # speaker_previews.json or path-traversal via speaker_label/index.
+        resolved_outputs_dir = outputs_dir.resolve()
+        resolved_clip_path = Path(clip_path_str).resolve()
+        if not resolved_clip_path.is_relative_to(resolved_outputs_dir):
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+        if not resolved_clip_path.is_file():
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        return FileResponse(path=str(resolved_clip_path), media_type="audio/wav")
+
     @app.post("/api/tasks/{task_id}/speakers", response_model=BatchResultOut)
     async def resolve_task_speakers(
         task_id: uuid.UUID,

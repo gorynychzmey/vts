@@ -4002,12 +4002,19 @@ function renderVoiceList() {
     const audio = document.createElement("audio");
     audio.className = "voice-preview-audio";
     audio.controls = true;
-    // No src: no task-preview-audio route exists yet (see report). Rendered
-    // anyway so the row layout is stable and the gap is visible, not silent.
-    body.appendChild(audio);
+    audio.preload = "none";
+    audio.src = `/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`;
     const previewNote = document.createElement("span");
-    previewNote.className = "voice-preview-unavailable";
+    previewNote.className = "voice-preview-unavailable hidden";
     previewNote.textContent = t("voices.row.preview_unavailable");
+    // Graceful fallback: if this row has no preview clip (or the file is
+    // otherwise unreachable) the request 404s harmlessly - swap the player
+    // for the "unavailable" note instead of leaving a broken control.
+    audio.addEventListener("error", () => {
+      audio.classList.add("hidden");
+      previewNote.classList.remove("hidden");
+    });
+    body.appendChild(audio);
     body.appendChild(previewNote);
 
     const select = document.createElement("select");

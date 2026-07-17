@@ -198,6 +198,49 @@ export async function run() {
     const autoNameVisible = await isVisible(page, `${rowSelector("SPEAKER_00")} .voice-new-name`);
     if (autoNameVisible) failures.push("auto row: name input should be hidden while bound to an existing person");
 
+    // --- preview audio element: has a src pointing at the preview route,
+    // URL-encoded label, controls enabled (vts-80i task 14.5) ---
+    const audioInfo = await page.evaluate((sel) => {
+      const el = document.querySelector(sel + " audio.voice-preview-audio");
+      return el ? { src: el.getAttribute("src"), controls: el.controls } : null;
+    }, rowSelector("SPEAKER_00"));
+    if (!audioInfo) {
+      failures.push("SPEAKER_00 row: no audio.voice-preview-audio element found");
+    } else {
+      const expectedSrc = `/api/tasks/${TASK_ID}/speaker-previews/SPEAKER_00/0/audio`;
+      if (audioInfo.src !== expectedSrc) {
+        failures.push(`audio src wrong: got ${JSON.stringify(audioInfo.src)}, expected ${JSON.stringify(expectedSrc)}`);
+      }
+      if (!audioInfo.controls) failures.push("audio element should have controls enabled");
+    }
+
+    // --- graceful fallback: simulate the audio element's own "error" event
+    // (what a real 404 from the preview route fires) directly - the stub
+    // server always answers /api/* GETs with 200 (real backend 404s
+    // instead), so we dispatch the event the browser would raise in that
+    // case rather than rely on the stub's response code. Confirms the
+    // listener wired in app.js actually swaps the elements, with no JS
+    // error thrown in the process. ---
+    await page.evaluate((sel) => {
+      const el = document.querySelector(sel + " audio.voice-preview-audio");
+      el.dispatchEvent(new Event("error"));
+    }, rowSelector("SPEAKER_00"));
+    await page.waitForTimeout(100);
+    const fallbackState = await page.evaluate((sel) => {
+      const audioEl = document.querySelector(sel + " audio.voice-preview-audio");
+      const noteEl = document.querySelector(sel + " .voice-preview-unavailable");
+      return {
+        audioHidden: audioEl ? audioEl.classList.contains("hidden") : null,
+        noteHidden: noteEl ? noteEl.classList.contains("hidden") : null,
+      };
+    }, rowSelector("SPEAKER_00"));
+    if (fallbackState.audioHidden !== true) {
+      failures.push(`error'd audio element should gain .hidden, got ${JSON.stringify(fallbackState)}`);
+    }
+    if (fallbackState.noteHidden !== false) {
+      failures.push(`preview-unavailable note should be shown after error, got ${JSON.stringify(fallbackState)}`);
+    }
+
     await screenshot(page, "voice-resolution-dialog");
 
     // --- Save: POSTs continue_task=false ---
