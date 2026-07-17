@@ -571,6 +571,14 @@ input[type="file"] {
   flex-basis: 100%;
 }
 
+/* Same overflow as the language control above: this pill lands last in the
+   wrapped row, near the dialog's right edge, and its left-anchored tooltip
+   (~256px, from the shared [data-tooltip] rule) still spills past the edge.
+   Give it its own line too. */
+.preset-edit-options > #preset-edit-speaker-no-manual-stop-pill {
+  flex-basis: 100%;
+}
+
 [data-tooltip-below]::after {
   bottom: auto;
   top: calc(100% + 0.35rem);
@@ -1542,6 +1550,95 @@ dialog:not([open]) {
   color: inherit;
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* Voice-resolution dialog ("Доработать"): one row per detected speaker, same
+   open-state pattern as #speaker-registry-dialog (closed <dialog> keeps UA
+   display:none). */
+#voice-resolution-dialog[open] {
+  width: max-content;
+  min-width: min(34rem, calc(100vw - 2rem));
+  max-width: min(70vw, calc(100vw - 2rem));
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.voice-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.voice-row {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.voice-glyph {
+  font-size: 1.3rem;
+  line-height: 1;
+  padding-top: 0.15rem;
+}
+
+.voice-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.voice-row-label {
+  font-weight: 600;
+}
+
+.voice-preview-audio {
+  width: 100%;
+  height: 2.25rem;
+}
+
+.voice-preview-unavailable {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.voice-select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+}
+
+.voice-new-name {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+}
+
+/* :not(.hidden) so the global `.hidden { display: none }` (declared earlier,
+   same specificity) still wins when the row is bound to "add new" — otherwise
+   this later rule would override it and the checkbox would always show. */
+.voice-add-fragment:not(.hidden) {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.voice-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 /* :not(.hidden) so the global `.hidden { display: none }` (declared earlier,

@@ -707,6 +707,7 @@ def serialize_task(
         source_url=task.source_url,
         source_title=task.source_title,
         status=task.status.value,
+        awaiting_step=task.awaiting_step,
         queue_position=queue_position,
         queue=queue,
         capabilities={
@@ -771,6 +772,7 @@ def serialize_task_compact(
         source_url=task.source_url,
         source_title=task.source_title,
         status=task.status.value,
+        awaiting_step=task.awaiting_step,
         queue_position=queue_position,
         queue=queue,
         capabilities={

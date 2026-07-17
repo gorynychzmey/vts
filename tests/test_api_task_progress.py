@@ -41,6 +41,7 @@ def _task(
         source_url="https://example.com/video",
         source_title=None,
         status=TaskStatus.running,
+        awaiting_step=None,
         options=options if options is not None else {"transcript": True, "summary": True},
         transcript_path=None,
         summary_path=None,
