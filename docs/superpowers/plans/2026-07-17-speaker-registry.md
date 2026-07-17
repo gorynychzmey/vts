@@ -952,6 +952,65 @@ git commit -m "feat(diarization): client embed() and model passthrough (vts-80i)
 
 ---
 
+## Task 6.5: Live validation — cluster and fragment embeddings share a space
+
+**Files:**
+- No production code. A throwaway script in `scratchpad/`, findings appended to `docs/superpowers/specs/2026-07-17-diarization-reference-run.json`.
+
+**Why here, not at the end:** matching (Task 4), preview cutting (Task 7), and the
+gate (Task 10) all rest on one unverified premise — that a fragment embedding from
+`/embed` and a cluster embedding from `/diarize` live in the same space, so their
+cosine distance is meaningful. If it does NOT hold, that is a design-level break in
+Tasks 4/7/10, and it is far cheaper to learn it now (with `/embed` just built) than
+after building matching on top. This task GATES Task 7 onward. Dims (256) are already
+confirmed; this is specifically the shared-space check.
+
+**Interfaces:**
+- Consumes: live sidecar `http://ai-node1:9100` (`/diarize`, `/embed`), reference audio
+  `/disk/vts-data/aad7edfee1ca2a5c20bff0dd/c31487fb-7667-4f92-8976-7b8de2b677ec/media/audio_16k_trimmed.wav`,
+  the diarization client `embed()` from Task 6.
+
+- [ ] **Step 1: Cut one clip from a known speaker's segment**
+
+Using the reference `diarization.json` already produced in brainstorm (or re-run
+`/diarize`), pick one speaker's longest segment, cut a 5s wav from its middle with
+ffmpeg (`-ss <mid> -t 5 -ar 16000 -ac 1`).
+
+- [ ] **Step 2: Embed the clip and compare against cluster vectors**
+
+POST the clip to `/embed`. Then compute cosine distance from that fragment vector to
+(a) the SAME speaker's cluster embedding in `diarization.json`, and (b) a DIFFERENT
+speaker's cluster embedding.
+
+```python
+# scratchpad script: load diarization.json embeddings, POST clip to /embed,
+# print cosine(fragment, same_speaker_cluster) and cosine(fragment, other_speaker_cluster)
+def cosine(a, b):
+    import math
+    dot = sum(x*y for x, y in zip(a, b))
+    na = math.sqrt(sum(x*x for x in a)); nb = math.sqrt(sum(y*y for y in b))
+    return 1 - dot / (na * nb)
+```
+
+- [ ] **Step 3: Assert the space holds**
+
+Expected: same-speaker distance clearly SMALLER than different-speaker distance. If it
+is not — STOP and escalate to the human. The hybrid matching premise (cluster-vs-fragment)
+is broken and Tasks 4/7/10 need rethinking before proceeding. Do not paper over it with
+threshold tuning — a systematic offset would masquerade as a threshold problem.
+
+- [ ] **Step 4: Record findings and commit**
+
+Append to `docs/superpowers/specs/2026-07-17-diarization-reference-run.json`: measured
+model id from `/embed`, same/different distances, and a boolean `shared_space_holds`.
+
+```bash
+git add docs/superpowers/specs/2026-07-17-diarization-reference-run.json
+git commit -m "docs(spec): confirm cluster/fragment embeddings share a space (vts-80i)"
+```
+
+---
+
 ## Task 7: DiarizeStep cuts preview fragments
 
 **Files:**
@@ -1542,43 +1601,6 @@ git commit -m "feat(api): speaker registry CRUD, sample audio, voice resolution 
 
 ---
 
-## Task 12: Live validation of the sidecar contract
-
-**Files:**
-- No code; validates Tasks 5–7 against the real sidecar. Records findings.
-
-**Interfaces:**
-- Consumes: live sidecar at `http://ai-node1:9100`, reference audio.
-
-- [ ] **Step 1: Confirm /embed returns 256 dims and record the model id**
-
-Run a clip through `/embed`:
-```bash
-curl -s -X POST http://ai-node1:9100/embed \
-  -F "file=@<a 5s wav clip>" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d['embedding']), d['embedding_model'])"
-```
-Expected: `256 <model-id>`. If dim ≠ 256, STOP — update `Vector(N)` in the model + migration before proceeding, and re-run Tasks 2, 4.
-
-- [ ] **Step 2: Verify cluster and fragment embeddings share a space**
-
-Embed a clip cut from one speaker's segment, and compare its cosine distance to (a) that speaker's cluster embedding from `/diarize` and (b) a different speaker's cluster embedding. Same-speaker distance must be clearly smaller. If not, the hybrid matching premise is broken — record and escalate before building calibration on it.
-```bash
-# script in scratchpad: embed clip, load diarization.json cluster vectors, print both distances
-```
-
-- [ ] **Step 3: Record findings**
-
-Append measured model id + the same/different distances to `docs/superpowers/specs/2026-07-17-diarization-reference-run.json` and note whether the shared-space assumption held.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/superpowers/specs/2026-07-17-diarization-reference-run.json
-git commit -m "docs(spec): record live /embed dims, model id, shared-space check (vts-80i)"
-```
-
----
-
 ## Task 13: Registry dialog UI
 
 **Files:**
@@ -1688,6 +1710,6 @@ git commit -m "chore(release): speaker registry — config docs, version bump (v
 
 ## Self-Review Notes
 
-- **Spec coverage:** models (T2/T9), pgvector parity (T1), CRUD (T3/T11), matching + thresholds (T4), sidecar /embed + model id (T5/T6), preview cutting (T7), awaiting_input + predicates (T8), match_speakers gate + pause (T10), MatchDecision + two-row override (T9), registry dialog (T13), resolution dialog + all-candidates + three buttons + confirmations + no-stop flag (T14), live dim/space validation (T12). Merge (vts-552) and model-change migration (vts-ojb) are explicitly out of scope.
-- **Ordering risk:** T12 (live validation) confirms the 256 dim that T2 hardcodes. If the live run in the brainstorm (already done, 256 confirmed) is trusted, T2 is safe; T12 remains the gate for the shared-space assumption, which is NOT yet verified and blocks calibration, not the build.
+- **Spec coverage:** models (T2/T9), pgvector parity (T1), CRUD (T3/T11), matching + thresholds (T4), sidecar /embed + model id (T5/T6), cluster/fragment shared-space validation (T6.5), preview cutting (T7), awaiting_input + predicates (T8), match_speakers gate + pause (T10), MatchDecision + two-row override (T9), registry dialog (T13), resolution dialog + all-candidates + three buttons + confirmations + no-stop flag (T14). Merge (vts-552) and model-change migration (vts-ojb) are explicitly out of scope.
+- **Ordering:** T2 hardcodes 256, already confirmed live in brainstorm. T6.5 (moved up from the old T12 per user decision 2026-07-17) is the gate for the shared-space assumption — it runs right after the client `embed()` lands and BEFORE Tasks 7/10 build on it, so a broken premise surfaces on day one rather than at the end.
 - **Deferred unknowns flagged inline:** exact pyannote 4.x standalone-embedding load call (T5), exact ffmpeg wav-cut flags (T7), the processor pause-signal reuse (T10) — each notes "validate live / mirror existing pattern" rather than inventing an interface.
