@@ -21,8 +21,110 @@ from pyannote.audio import Pipeline
 
 _log = logging.getLogger("diarization")
 
+# Without this the sidecar's own logs vanish: uvicorn configures its loggers and
+# leaves the root at WARNING, so every _log.info here (which weights loaded,
+# which precision was chosen, how many speakers came back) was silently dropped.
+# The precision line in particular has to reach a foreign deployment's logs —
+# that is the whole point of detecting hardware instead of assuming it.
+logging.basicConfig(
+    level=os.environ.get("DIAR_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 app = FastAPI()
 _pipeline: Pipeline | None = None
+
+
+def _has_bf16_kernels() -> bool:
+    """Whether this CPU has hardware bf16, not just the ability to fake it.
+
+    autocast never refuses: without avx512_bf16 it emulates, and emulation is
+    slower than the fp32 it replaces. That is not theory — ONNX int8 measured
+    0.22x on this same box for exactly that reason. So the flag is the gate.
+    """
+    probe = getattr(torch.cpu, "_is_avx512_bf16_supported", None)
+    if callable(probe):
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 - a probe that raises tells us nothing
+            _log.debug("bf16 probe raised; falling back to /proc/cpuinfo", exc_info=True)
+    try:
+        return "avx512_bf16" in Path("/proc/cpuinfo").read_text()
+    except OSError:
+        return False
+
+
+def _resolve_precision() -> str:
+    """Pick the inference precision: DIAR_PRECISION=auto|bf16|fp32.
+
+    `auto` turns bf16 on only where the hardware kernels are present. Anything
+    beyond that is guessing on someone else's CPU, and guessing wrong here costs
+    more than doing nothing.
+    """
+    requested = os.environ.get("DIAR_PRECISION", "auto").strip().lower()
+    if requested not in {"auto", "bf16", "fp32"}:
+        _log.warning("ignoring unknown DIAR_PRECISION=%r; using auto", requested)
+        requested = "auto"
+
+    has_bf16 = _has_bf16_kernels()
+    if requested == "fp32":
+        _log.info("precision=fp32 (requested)")
+        return "fp32"
+    if requested == "bf16":
+        if not has_bf16:
+            # Honour the override, but say plainly that it will emulate.
+            _log.warning("precision=bf16 forced, but this CPU has no avx512_bf16: expect a SLOWDOWN")
+        else:
+            _log.info("precision=bf16 (requested)")
+        return "bf16"
+    if has_bf16:
+        _log.info("precision=bf16 (auto: avx512_bf16 present)")
+        return "bf16"
+    _log.info("precision=fp32 (auto: no avx512_bf16 on this CPU)")
+    return "fp32"
+
+
+class _Bf16Resnet(torch.nn.Module):
+    """Runs the embedder's ResNet in bf16 and hands fp32 back.
+
+    Scoped to the resnet on purpose. The embedder is ~98% of diarization wall
+    time (segmentation is ~1.9%), so this is the whole prize; and a
+    pipeline-wide autocast breaks outright — pyannote passes the segmentation
+    head's output to .numpy(), which has no bf16 dtype.
+    """
+
+    def __init__(self, inner: torch.nn.Module) -> None:
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            out = self.inner(*args, **kwargs)
+        if isinstance(out, tuple):
+            return tuple(o.float() if torch.is_tensor(o) else o for o in out)
+        return out.float() if torch.is_tensor(out) else out
+
+
+def _apply_precision(pipe: Pipeline) -> None:
+    """Swap the embedder's resnet for a bf16 (and optionally compiled) one."""
+    if _resolve_precision() != "bf16":
+        return
+    try:
+        embedding = pipe._embedding.model_
+        resnet = embedding.resnet
+    except AttributeError:
+        # A pyannote upgrade could rename this path; speed is not worth a crash.
+        _log.warning("embedder resnet not found; leaving precision at fp32", exc_info=True)
+        return
+
+    if os.environ.get("DIAR_COMPILE", "1").strip().lower() not in {"0", "false", "no"}:
+        try:
+            resnet = torch.compile(resnet)
+            _log.info("torch.compile enabled for the embedder")
+        except Exception:  # noqa: BLE001 - compile needs a C++ toolchain; bf16 alone still wins
+            _log.warning("torch.compile unavailable; using bf16 without it", exc_info=True)
+
+    embedding.resnet = _Bf16Resnet(resnet)
 
 
 def pipeline() -> Pipeline:
@@ -40,6 +142,7 @@ def pipeline() -> Pipeline:
             raise RuntimeError(f"pyannote returned no pipeline for {model_dir}")
         _pipeline.to(torch.device(os.environ.get("TORCH_DEVICE", "cpu")))
         _apply_min_duration_off(_pipeline)
+        _apply_precision(_pipeline)
     return _pipeline
 
 

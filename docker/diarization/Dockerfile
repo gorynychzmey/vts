@@ -1,7 +1,10 @@
 FROM python:3.11-slim
 
+# g++ is torch.compile's backend: inductor generates C++ and shells out to a
+# compiler at runtime. Without it compile silently degrades to bf16-only, which
+# costs half the speedup (3.62x -> 1.83x measured on a 49-min meeting).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libsndfile1 \
+        ffmpeg libsndfile1 g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
