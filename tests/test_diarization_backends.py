@@ -301,3 +301,31 @@ def test_timeout_for_upload_scales_with_size(tmp_path):
     big = tmp_path / "b.wav"
     big.write_bytes(b"x" * (100 * 1024 * 1024))
     assert timeout_for_upload(big) > _UPLOAD_MIN_SECONDS  # 100 MB exceeds the floor
+
+
+async def test_list_jobs_returns_ids(tmp_path):
+    def handler(request):
+        if request.url.path == "/jobs":
+            return httpx.Response(200, json={"jobs": [
+                {"job_id": "a", "state": "running"},
+                {"job_id": "b", "state": "done"},
+            ]})
+        return httpx.Response(404)
+
+    ids = await _StubBackend(handler).list_jobs()
+    assert set(ids) == {"a", "b"}
+
+
+async def test_list_jobs_empty_on_unreachable_sidecar(tmp_path):
+    """An old sidecar without /jobs, or one that is down, yields [] not an error."""
+    def handler(request):
+        raise httpx.ConnectError("down")
+
+    assert await _StubBackend(handler).list_jobs() == []
+
+
+async def test_list_jobs_empty_on_garbage(tmp_path):
+    def handler(request):
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    assert await _StubBackend(handler).list_jobs() == []

@@ -22,13 +22,40 @@ from vts.services.upload_session import delete_abandoned_sessions, find_abandone
 from vts.worker.lanes import LaneManager
 
 
-async def recover_pending_tasks(log: logging.Logger) -> None:
+async def recover_pending_tasks(log: logging.Logger) -> list[uuid.UUID]:
     async with SessionLocal() as session:
         repo = Repo(session)
         recovered_running = await repo.requeue_running_tasks()
         await session.commit()
     if recovered_running:
         log.info("recovered running tasks: %s", len(recovered_running))
+    return recovered_running
+
+
+async def reconcile_diarization_jobs(processor: TaskProcessor, log: logging.Logger) -> None:
+    """Cancel every diarization job the sidecar is still holding at startup.
+
+    This runs right after recover_pending_tasks, which has just moved every
+    in-flight task back to `queued`. That leaves no task in a state that owns a
+    running job, so every job the sidecar still lists is orphaned: its result is
+    headed for a task that will be re-run from scratch (or one deleted while the
+    worker was down). The caller runs this before subscribing to the work
+    queue, so no re-attaching run has POSTed a fresh job yet — the job cancelled
+    here is always the pre-restart one.
+
+    The idle TTL would eventually reap these, but that burns up to a full TTL of
+    CPU. Best-effort: an optimisation over the TTL, never a boot blocker, so any
+    failure is logged and swallowed here rather than relying on the callee.
+    """
+    try:
+        job_ids = await processor.diarization.list_jobs()
+        for job_id in job_ids:
+            await processor.diarization.cancel(job_id)
+    except Exception:  # noqa: BLE001 - reconciliation must never break startup
+        log.warning("diarization reconciliation failed", exc_info=True)
+        return
+    if job_ids:
+        log.info("cancelled %d orphaned diarization job(s) on startup", len(job_ids))
 
 
 async def _step_weights_tick(*, min_samples: int) -> None:
@@ -227,6 +254,11 @@ async def worker_loop() -> None:
 
     try:
         await recover_pending_tasks(log)
+        # Before subscribing to the work queue: the requeued tasks have not been
+        # picked up yet, so any job the sidecar still holds is the pre-restart
+        # one and safe to cancel. Doing this after subscription could race a
+        # re-attaching run that has already POSTed a fresh job under the same id.
+        await reconcile_diarization_jobs(processor, log)
 
         pubsub = redis.pubsub()
         await pubsub.subscribe(notify_channel)

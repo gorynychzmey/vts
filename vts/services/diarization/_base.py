@@ -57,6 +57,27 @@ class DiarizationBackend(ABC):
         except httpx.HTTPError:
             _log.warning("could not cancel diarization job %s", job_id, exc_info=True)
 
+    async def list_jobs(self) -> list[str]:
+        """Job ids the sidecar currently knows about.
+
+        Best-effort, like cancel: a sidecar that cannot be reached (down, or an
+        old build without the endpoint) yields an empty list rather than an
+        error, so startup reconciliation degrades to "nothing to reconcile"
+        instead of failing the worker's boot.
+        """
+        try:
+            async with self._client(_CONTROL_TIMEOUT_SECONDS) as client:
+                response = await client.get(f"{self._url}/jobs")
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            _log.warning("could not list diarization jobs for reconciliation", exc_info=True)
+            return []
+        jobs = payload.get("jobs") if isinstance(payload, dict) else None
+        if not isinstance(jobs, list):
+            return []
+        return [str(j["job_id"]) for j in jobs if isinstance(j, dict) and "job_id" in j]
+
     @abstractmethod
     async def diarize(
         self,
