@@ -19,7 +19,11 @@ def diarize_enabled(task_options: dict, default: bool) -> bool:
 
 class DiarizeStep(Step):
     name = "diarize"
-    lane = None
+    # Its own lane, not `gpu`: the sidecar runs pyannote on the CPU, so it
+    # contends with other diarizations rather than with Whisper. Without a lane
+    # the worker's four in-flight tasks could start four of them at once, each
+    # wanting 8 threads — they would finish slower than if they had queued.
+    lane = "diarize"
 
     async def already_done(self, ctx: "PipelineContext", st: StepState) -> bool:
         return (st.dirs["outputs"] / "diarization.json").exists()

@@ -95,6 +95,7 @@ lane:
   network_slots: 1      # concurrent downloads
   ffmpeg_slots: 2       # concurrent ffmpeg jobs
   gpu_slots: 1          # concurrent GPU calls (Whisper+LLM share)
+  diarize_slots: 0      # concurrent diarizations; 0 = cores/8 (each wants 8 threads)
 gpu:
   asr_burst: 3          # max consecutive ASR grants while LLM waits
 event_throttle:

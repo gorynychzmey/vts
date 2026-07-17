@@ -2,15 +2,59 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-_LANES = ("network", "ffmpeg", "gpu")
+_LANES = ("network", "ffmpeg", "gpu", "diarize")
+
+# Diarization saturates ~8 threads (16 measured slower — synchronisation eats
+# the gain), so this is how many fit side by side before they start starving
+# each other rather than finishing sooner.
+_DIARIZE_THREADS = 8
 
 _log = logging.getLogger("vts.worker")
+
+
+def _available_cores() -> int:
+    """Cores this process may actually use, not what the host advertises.
+
+    os.cpu_count() reports the host's CPUs even under a container quota — a
+    `--cpus 2` container still sees 16 — so sizing from it would carve slots out
+    of cores we do not have. The cgroup v2 quota is the honest number where one
+    is set; affinity catches the pinned case; the host count is the last resort.
+    """
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota != "max":
+            return max(int(int(quota) / int(period)), 1)
+    except (OSError, ValueError):
+        pass
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # not on Linux
+        pass
+    return os.cpu_count() or _DIARIZE_THREADS
+
+
+def _diarize_slots(settings: Any) -> int:
+    """How many diarizations may run at once; 0 in config means derive it.
+
+    Each wants ~8 threads, so a 16-core box fits two. Fewer threads each would
+    actually push more tasks through per hour (scaling is sublinear: 2 threads
+    hit 100% efficiency, 8 hit 59%), but it doubles how long any single task
+    takes — 47.8s at 8 threads against 112.4s at 2 on the same clip. The default
+    keeps a lone task fast; a busy deployment that would rather trade latency
+    for throughput can raise this explicitly.
+    """
+    configured = getattr(settings, "lane_diarize_slots", 0)
+    if configured > 0:
+        return configured
+    return max(_available_cores() // _DIARIZE_THREADS, 1)
 
 
 def _default_night_allowed(settings: Any) -> Callable[[], bool]:
@@ -50,6 +94,7 @@ class LaneManager:
             "network": max(settings.lane_network_slots, 1),
             "ffmpeg": max(settings.lane_ffmpeg_slots, 1),
             "gpu": max(settings.lane_gpu_slots, 1),
+            "diarize": _diarize_slots(settings),
         }
         self._active = {name: 0 for name in _LANES}
         self._queues: dict[tuple[str, str], deque[_Waiter]] = {
@@ -57,6 +102,7 @@ class LaneManager:
             ("ffmpeg", "main"): deque(),
             ("gpu", "asr"): deque(),
             ("gpu", "llm"): deque(),
+            ("diarize", "main"): deque(),
         }
         self._asr_streak = 0
         self._burst = max(settings.gpu_asr_burst, 1)
@@ -89,6 +135,7 @@ class LaneManager:
             "ffmpeg": [str(w.task_id) for w in self._queues[("ffmpeg", "main")]],
             "gpu_asr": [str(w.task_id) for w in self._queues[("gpu", "asr")]],
             "gpu_llm": [str(w.task_id) for w in self._queues[("gpu", "llm")]],
+            "diarize": [str(w.task_id) for w in self._queues[("diarize", "main")]],
         }
 
     def poke(self) -> None:

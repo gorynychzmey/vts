@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     lane_network_slots: int = 1
     lane_ffmpeg_slots: int = 2
     lane_gpu_slots: int = 1
+    # 0 = derive from core count. Diarization is CPU-bound and fastest at 8
+    # threads (16 measured slower), so a 16-core box fits two at once; a third
+    # would just make all three slower. Sized from the host because this is a
+    # public project and the deploy machine is not ours to assume.
+    lane_diarize_slots: int = 0
     gpu_asr_burst: int = 3
     event_throttle_hz: int = 4
     services_database_write_throttle_ms: int = 150

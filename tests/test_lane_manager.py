@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from pathlib import Path
 
 import pytest
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ from vts.worker.lanes import LaneManager
 
 def _settings(**over):
     base = dict(worker_max_active_tasks=4, lane_network_slots=1, lane_ffmpeg_slots=2,
-                lane_gpu_slots=1, gpu_asr_burst=3,
+                lane_gpu_slots=1, lane_diarize_slots=2, gpu_asr_burst=3,
                 night_mode_enabled=False, night_mode_start_hour=22, night_mode_end_hour=7)
     base.update(over)
     return SimpleNamespace(**base)
@@ -168,7 +169,7 @@ async def test_on_change_snapshots():
     async with mgr.slot("ffmpeg", uuid.uuid4()):
         pass
     assert snaps  # at least grant + release
-    assert set(snaps[-1].keys()) == {"network", "ffmpeg", "gpu_asr", "gpu_llm"}
+    assert set(snaps[-1].keys()) == {"network", "ffmpeg", "gpu_asr", "gpu_llm", "diarize"}
 
 
 @pytest.mark.asyncio
@@ -203,3 +204,98 @@ async def test_on_change_failure_does_not_wedge_gpu_lane():
             pass
 
     await asyncio.wait_for(acquire_again(), 1)
+
+
+@pytest.mark.asyncio
+async def test_diarize_lane_caps_concurrency():
+    """Two diarizations run side by side; the third waits for a slot.
+
+    Without this cap the worker's four in-flight tasks could start four
+    pyannote runs at once, each wanting 8 threads on a 16-core box — all four
+    then finish slower than if two had simply queued.
+    """
+    mgr = LaneManager(_settings(lane_diarize_slots=2))
+    peak = 0
+    active = 0
+
+    async def hold(tid):
+        nonlocal peak, active
+        async with mgr.slot("diarize", tid):
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+
+    await asyncio.gather(*[hold(uuid.uuid4()) for _ in range(4)])
+    assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_diarize_lane_is_independent_of_gpu():
+    """Diarization must not queue behind Whisper: it runs on the CPU.
+
+    The whole point of vts-bv7 is that the two use different compute, so a
+    busy gpu lane must never hold up a diarization.
+    """
+    mgr = LaneManager(_settings(lane_gpu_slots=1, lane_diarize_slots=1))
+    async with mgr.slot("gpu", uuid.uuid4(), "asr"):
+        # gpu is now fully occupied; diarize must still be grantable at once.
+        async def take_diarize():
+            async with mgr.slot("diarize", uuid.uuid4()):
+                return "granted"
+
+        assert await asyncio.wait_for(take_diarize(), 1) == "granted"
+
+
+@pytest.mark.asyncio
+async def test_diarize_waiters_appear_in_snapshot():
+    """A queued diarization must be visible to the UI's queue position.
+
+    _get_lane_positions maps this key to the public "diarize" queue; if the
+    snapshot omitted waiters, a user would sit in an invisible queue.
+    """
+    mgr = LaneManager(_settings(lane_diarize_slots=1))
+    waiting = uuid.uuid4()
+    async with mgr.slot("diarize", uuid.uuid4()):
+        task = asyncio.create_task(_hold_briefly(mgr, waiting))
+        await asyncio.sleep(0.01)
+        assert mgr.snapshot()["diarize"] == [str(waiting)]
+    await task
+
+
+async def _hold_briefly(mgr, tid):
+    async with mgr.slot("diarize", tid):
+        await asyncio.sleep(0)
+
+
+def test_diarize_slots_derived_from_cores(monkeypatch):
+    """0 means "size it to the host" — this is a public project."""
+    from vts.worker import lanes
+
+    monkeypatch.setattr(lanes, "_available_cores", lambda: 16)
+    assert lanes._diarize_slots(_settings(lane_diarize_slots=0)) == 2
+    monkeypatch.setattr(lanes, "_available_cores", lambda: 4)
+    assert lanes._diarize_slots(_settings(lane_diarize_slots=0)) == 1  # never zero
+    monkeypatch.setattr(lanes, "_available_cores", lambda: 1)
+    assert lanes._diarize_slots(_settings(lane_diarize_slots=0)) == 1
+    # an explicit value always wins over the derivation
+    assert lanes._diarize_slots(_settings(lane_diarize_slots=3)) == 3
+
+
+def test_available_cores_honours_container_quota(monkeypatch, tmp_path):
+    """A --cpus 2 container still sees 16 in os.cpu_count().
+
+    Sizing from the host count there would hand out slots for cores the process
+    cannot use: the quota throttles it instead of hiding the CPUs.
+    """
+    from vts.worker import lanes
+
+    quota = tmp_path / "cpu.max"
+    quota.write_text("200000 100000")  # 2 cores' worth
+    monkeypatch.setattr(lanes, "Path", lambda p: quota if p == "/sys/fs/cgroup/cpu.max" else Path(p))
+    monkeypatch.setattr(lanes.os, "cpu_count", lambda: 16)
+    assert lanes._available_cores() == 2
+
+    quota.write_text("max 100000")  # unlimited: fall through to affinity/host
+    monkeypatch.setattr(lanes.os, "sched_getaffinity", lambda _pid: set(range(16)))
+    assert lanes._available_cores() == 16

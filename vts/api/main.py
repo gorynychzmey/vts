@@ -427,6 +427,7 @@ async def _get_lane_positions(redis: Redis, prefix: str) -> dict[uuid.UUID, tupl
         ("network", ["network"]),
         ("ffmpeg", ["ffmpeg"]),
         ("gpu", ["gpu_asr", "gpu_llm"]),
+        ("diarize", ["diarize"]),
     ]
     for public, keys in groups:
         position = 0
