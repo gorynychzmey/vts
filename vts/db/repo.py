@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -649,6 +649,28 @@ class Repo:
         await self.session.delete(sample)
         await self.session.flush()
         return True
+
+    async def nearest_speakers(
+        self, user_id: uuid.UUID, embedding: list[float], embedding_model: str,
+        limit: int | None = None,
+    ) -> list[tuple[Speaker, float]]:
+        """User's speakers ranked by their nearest fragment (MIN cosine distance).
+
+        Only samples computed by `embedding_model` count: distances across models
+        are meaningless. `<=>` is cosine — smaller is nearer.
+        """
+        dist = func.min(VoiceSample.embedding.cosine_distance(embedding)).label("dist")
+        stmt = (
+            select(Speaker, dist)
+            .join(VoiceSample, VoiceSample.speaker_id == Speaker.id)
+            .where(Speaker.user_id == user_id, VoiceSample.embedding_model == embedding_model)
+            .group_by(Speaker.id)
+            .order_by(dist.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = await self.session.execute(stmt)
+        return [(row[0], float(row[1])) for row in rows.all()]
 
     async def load_sample_audio(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> tuple[bytes, str] | None:
         stmt = (
