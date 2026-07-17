@@ -24,7 +24,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from _db import make_test_engine
+from _db import ensure_pgvector, make_test_engine
 
 # Patch BEFORE any test imports vts modules. Tests must not see the host
 # config.yaml regardless of fixture ordering.
@@ -76,6 +76,7 @@ async def authed_app():
     from vts.services.auth import AuthenticatedUser, require_user
 
     engine = make_test_engine()
+    await ensure_pgvector(engine)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
