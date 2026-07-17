@@ -18,5 +18,28 @@
     "SPEAKER_03": 1.9742,
     "SPEAKER_04": 2.087
   },
-  "note": "Vectors themselves omitted: biometric data. Dimension 256 (WeSpeaker ResNet), not ECAPA 192."
+  "note": "Vectors themselves omitted: biometric data. Dimension 256 (WeSpeaker ResNet), not ECAPA 192.",
+  "embed_endpoint": {
+    "validated_at": "2026-07-17",
+    "sidecar_version": "1.1.0 (local build, /embed live)",
+    "embedding_model": "pyannote-community-1/wespeaker-resnet34-256",
+    "embed_dim": 256,
+    "shared_space_holds": true,
+    "note": "Fragment (/embed) vs cluster (/diarize) cosine-distance matrix is perfectly diagonal: each fragment nearest its own speaker cluster. Same-speaker 0.084-0.191, nearest-other 0.413-0.747, margin +0.235..+0.557.",
+    "same_speaker_distance": {
+      "SPEAKER_00": 0.155,
+      "SPEAKER_01": 0.178,
+      "SPEAKER_02": 0.084,
+      "SPEAKER_03": 0.191,
+      "SPEAKER_04": 0.189
+    },
+    "nearest_other_distance": {
+      "SPEAKER_00": 0.429,
+      "SPEAKER_01": 0.413,
+      "SPEAKER_02": 0.585,
+      "SPEAKER_03": 0.677,
+      "SPEAKER_04": 0.747
+    },
+    "calibration_implication": "Placeholder auto=0.25 catches all true matches (max 0.191) and rejects all false (min other 0.413); candidate=0.55 is a sound grey-zone edge. Confirmed, not guessed."
+  }
 }
