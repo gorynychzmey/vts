@@ -3501,6 +3501,337 @@ promptForm?.addEventListener("submit", async (event) => {
   await loadPrompts();
 });
 
+// ---------- Speaker voice registry dialog ----------
+
+const speakerRegistryDialog = document.getElementById("speaker-registry-dialog");
+const speakerListEl = document.getElementById("speaker-list");
+const speakerSamplesEl = document.getElementById("speaker-samples");
+const speakerSamplesEmptyEl = document.getElementById("speaker-samples-empty");
+const speakerCreateForm = document.getElementById("speaker-create-form");
+const speakerCreateNameInput = document.getElementById("speaker-create-name");
+
+let speakerRegistryCache = [];
+let selectedSpeakerId = "";
+
+function speakerRowById(id) {
+  return speakerListEl?.querySelector(`[data-speaker-id="${CSS.escape(String(id))}"]`);
+}
+
+function renderSpeakers(list) {
+  speakerRegistryCache = Array.isArray(list) ? list : [];
+  if (!speakerListEl) return;
+  speakerListEl.innerHTML = "";
+  if (!speakerRegistryCache.length) {
+    const empty = document.createElement("p");
+    empty.className = "tokens-empty";
+    empty.textContent = t("speakers.registry.empty");
+    speakerListEl.appendChild(empty);
+    return;
+  }
+  for (const speaker of speakerRegistryCache) {
+    const row = document.createElement("li");
+    row.className = "tokens-row speaker-row";
+    row.dataset.speakerId = speaker.id;
+    if (speaker.id === selectedSpeakerId) row.classList.add("selected");
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta speaker-meta";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "tokens-name speaker-name";
+    nameEl.textContent = speaker.name;
+    meta.appendChild(nameEl);
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "speaker-name-input hidden";
+    nameInput.maxLength = 255;
+    nameInput.value = speaker.name;
+    meta.appendChild(nameInput);
+
+    row.appendChild(meta);
+
+    // Row itself selects the speaker; clicking the name/action buttons must
+    // not also trigger selection when entering rename mode.
+    row.addEventListener("click", (event) => {
+      if (row.classList.contains("editing")) return;
+      if (event.target.closest(".speaker-actions")) return;
+      selectSpeaker(speaker.id);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "speaker-actions";
+
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "icon-btn ghost";
+    renameBtn.setAttribute("data-tooltip", t("speakers.registry.rename"));
+    renameBtn.setAttribute("aria-label", t("speakers.registry.rename"));
+    renameBtn.innerHTML = ICON_EDIT;
+    renameBtn.addEventListener("click", () => enterSpeakerRename(row, speaker));
+    actions.appendChild(renameBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-btn ghost danger";
+    delBtn.setAttribute("data-tooltip", t("speakers.registry.delete"));
+    delBtn.setAttribute("aria-label", t("speakers.registry.delete"));
+    delBtn.innerHTML = ICON_DELETE;
+    delBtn.addEventListener("click", () => deleteSpeaker(speaker));
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
+    speakerListEl.appendChild(row);
+  }
+}
+
+function enterSpeakerRename(row, speaker) {
+  const nameEl = row.querySelector(".speaker-name");
+  const nameInput = row.querySelector(".speaker-name-input");
+  if (!nameEl || !nameInput) return;
+  row.classList.add("editing");
+  nameEl.classList.add("hidden");
+  nameInput.classList.remove("hidden");
+  nameInput.value = speaker.name;
+  nameInput.focus();
+  nameInput.select();
+
+  const commit = async () => {
+    nameInput.removeEventListener("keydown", onKeydown);
+    nameInput.removeEventListener("blur", commit);
+    const value = nameInput.value.trim();
+    if (!value || value === speaker.name) {
+      cancel();
+      return;
+    }
+    nameInput.disabled = true;
+    try {
+      await api(`/api/speakers/${encodeURIComponent(speaker.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: value }),
+      });
+      await refreshSpeakerRegistry();
+    } catch (err) {
+      console.error("speaker rename failed", err);
+      cancel();
+    }
+  };
+
+  const cancel = () => {
+    nameInput.removeEventListener("keydown", onKeydown);
+    nameInput.removeEventListener("blur", commit);
+    row.classList.remove("editing");
+    nameEl.classList.remove("hidden");
+    nameInput.classList.add("hidden");
+  };
+
+  function onKeydown(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    }
+  }
+
+  nameInput.addEventListener("keydown", onKeydown);
+  nameInput.addEventListener("blur", commit);
+}
+
+async function deleteSpeaker(speaker) {
+  const count = Number(speaker.sample_count) || 0;
+  const confirmed = window.confirm(
+    t("speakers.registry.delete_confirm", { name: speaker.name, count })
+  );
+  if (!confirmed) return;
+  try {
+    await api(`/api/speakers/${encodeURIComponent(speaker.id)}`, { method: "DELETE" });
+  } catch (err) {
+    console.error("speaker delete failed", err);
+    return;
+  }
+  if (selectedSpeakerId === speaker.id) {
+    selectedSpeakerId = "";
+    renderSamples([]);
+  }
+  await refreshSpeakerRegistry();
+}
+
+async function selectSpeaker(speakerId) {
+  selectedSpeakerId = speakerId;
+  speakerListEl?.querySelectorAll(".speaker-row").forEach((row) => {
+    row.classList.toggle("selected", row.dataset.speakerId === speakerId);
+  });
+  await refreshSpeakerSamples(speakerId);
+}
+
+function renderSamples(samples) {
+  if (!speakerSamplesEl) return;
+  const list = Array.isArray(samples) ? samples : [];
+  speakerSamplesEl.innerHTML = "";
+  const hasSelection = !!selectedSpeakerId;
+  speakerSamplesEmptyEl?.classList.toggle("hidden", hasSelection);
+  speakerSamplesEl.classList.toggle("hidden", !hasSelection);
+  if (!hasSelection) return;
+
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "tokens-empty";
+    empty.textContent = t("speakers.registry.samples_empty");
+    speakerSamplesEl.appendChild(empty);
+    return;
+  }
+
+  for (const sample of list) {
+    const row = document.createElement("li");
+    row.className = "tokens-row speaker-sample-row";
+
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.src = buildPath(`/api/speakers/samples/${encodeURIComponent(sample.id)}/audio`);
+    row.appendChild(audio);
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta speaker-sample-meta";
+
+    const duration = document.createElement("span");
+    duration.className = "speaker-sample-duration";
+    duration.textContent = formatDuration(sample.duration_sec || 0);
+    meta.appendChild(duration);
+
+    const created = document.createElement("span");
+    created.className = "speaker-sample-created";
+    created.textContent = sample.created_at ? new Date(sample.created_at).toLocaleString() : "";
+    meta.appendChild(created);
+
+    const source = document.createElement("span");
+    source.className = "speaker-sample-source";
+    if (sample.source_task_id) {
+      const link = document.createElement("a");
+      link.href = "#";
+      link.className = "speaker-sample-source-link";
+      link.textContent = t("speakers.registry.from_task");
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        jumpToTask(sample.source_task_id);
+      });
+      source.appendChild(link);
+    } else {
+      source.textContent = t("speakers.registry.from_task_gone");
+    }
+    meta.appendChild(source);
+
+    row.appendChild(meta);
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-btn ghost danger";
+    delBtn.setAttribute("data-tooltip", t("speakers.registry.delete_sample"));
+    delBtn.setAttribute("aria-label", t("speakers.registry.delete_sample"));
+    delBtn.innerHTML = ICON_DELETE;
+    delBtn.addEventListener("click", () => deleteSample(sample));
+    row.appendChild(delBtn);
+
+    speakerSamplesEl.appendChild(row);
+  }
+}
+
+async function deleteSample(sample) {
+  const confirmed = window.confirm(t("speakers.registry.delete_sample_confirm"));
+  if (!confirmed) return;
+  try {
+    await api(
+      `/api/speakers/${encodeURIComponent(selectedSpeakerId)}/samples/${encodeURIComponent(sample.id)}`,
+      { method: "DELETE" }
+    );
+  } catch (err) {
+    console.error("speaker sample delete failed", err);
+    return;
+  }
+  await refreshSpeakerSamples(selectedSpeakerId);
+  await refreshSpeakerRegistry({ keepSamples: true });
+}
+
+function jumpToTask(taskId) {
+  const row = findTaskEl(taskId);
+  if (!row) return;
+  speakerRegistryDialog?.close();
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 2000);
+}
+
+async function refreshSpeakerSamples(speakerId) {
+  if (!speakerId) {
+    renderSamples([]);
+    return;
+  }
+  try {
+    const samples = await api(`/api/speakers/${encodeURIComponent(speakerId)}/samples`);
+    renderSamples(samples);
+  } catch (err) {
+    console.error("Failed to load speaker samples", err);
+    renderSamples([]);
+  }
+}
+
+async function refreshSpeakerRegistry(options = {}) {
+  if (!speakerListEl) return;
+  try {
+    const speakers = await api("/api/speakers");
+    renderSpeakers(speakers);
+    if (selectedSpeakerId && !speakers.some((s) => s.id === selectedSpeakerId)) {
+      selectedSpeakerId = "";
+      renderSamples([]);
+    } else if (selectedSpeakerId && !options.keepSamples) {
+      await refreshSpeakerSamples(selectedSpeakerId);
+    }
+  } catch (err) {
+    console.error("Failed to load speakers", err);
+  }
+}
+
+async function openSpeakerRegistry() {
+  if (!speakerRegistryDialog) return;
+  selectedSpeakerId = "";
+  if (speakerCreateNameInput) speakerCreateNameInput.value = "";
+  renderSamples([]);
+  await refreshSpeakerRegistry();
+  if (typeof speakerRegistryDialog.showModal === "function") {
+    speakerRegistryDialog.showModal();
+  } else {
+    speakerRegistryDialog.setAttribute("open", "");
+  }
+}
+
+document.getElementById("speaker-registry-btn")?.addEventListener("click", () => {
+  openSpeakerRegistry();
+});
+
+document.getElementById("speaker-registry-close-btn")?.addEventListener("click", () => {
+  speakerRegistryDialog?.close();
+});
+
+speakerCreateForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = (speakerCreateNameInput?.value || "").trim();
+  if (!name) return;
+  try {
+    const speaker = await api("/api/speakers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (speakerCreateNameInput) speakerCreateNameInput.value = "";
+    await refreshSpeakerRegistry({ keepSamples: true });
+    if (speaker?.id) await selectSpeaker(speaker.id);
+  } catch (err) {
+    console.error("Failed to create speaker", err);
+  }
+});
+
 // ---------- Presets manager dialog ----------
 
 const presetsDialog = document.getElementById("presets-dialog");

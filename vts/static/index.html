@@ -75,6 +75,22 @@
           </button>
           <button
             type="button"
+            id="speaker-registry-btn"
+            class="icon-btn ghost"
+            data-i18n-title="speakers.registry.open"
+            data-i18n-aria-label="speakers.registry.open"
+            title="Manage voices"
+            aria-label="Manage voices"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a4 4 0 0 0-4 4v4a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4z" />
+              <path d="M6 11a6 6 0 0 0 12 0" />
+              <path d="M12 17v4" />
+              <path d="M9 21h6" />
+            </svg>
+          </button>
+          <button
+            type="button"
             id="tokens-btn"
             class="icon-btn ghost"
             data-i18n-title="tokens.open"
@@ -740,6 +756,41 @@
           <tbody class="about-prompt-timings"></tbody>
         </table>
       </section>
+    </dialog>
+
+    <dialog id="speaker-registry-dialog" class="tokens-dialog speaker-registry-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="speakers.registry.title">Voice registry</h2>
+        <button type="button" id="speaker-registry-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="speaker-registry-columns">
+        <div class="speaker-registry-col speaker-registry-col-speakers">
+          <ul id="speaker-list" class="tokens-list speaker-list"></ul>
+
+          <form id="speaker-create-form" class="tokens-create-form">
+            <input type="text" id="speaker-create-name" name="name" required
+                   maxlength="255" autocomplete="off"
+                   data-i18n-placeholder="speakers.registry.name_placeholder"
+                   placeholder="Name" />
+            <button type="submit" class="btn-text primary" data-i18n="speakers.registry.add">Add</button>
+          </form>
+        </div>
+
+        <div class="speaker-registry-col speaker-registry-col-samples">
+          <p id="speaker-samples-empty" class="tokens-help" data-i18n="speakers.registry.select_hint">
+            Select a person on the left to see their voice fragments.
+          </p>
+          <ul id="speaker-samples" class="tokens-list speaker-samples-list hidden"></ul>
+        </div>
+      </div>
     </dialog>
 
     <script src="/static/status-predicates.js?v=__VTS_VERSION__"></script>

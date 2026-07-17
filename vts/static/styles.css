@@ -1432,6 +1432,118 @@ dialog:not([open]) {
   font-size: 0.85rem;
 }
 
+/* Voice registry dialog: two columns (speakers | fragments of the selected
+   speaker). Widens the base .tokens-dialog max-width so both columns have
+   room; sizing follows the same open-state pattern as #restart-final-dialog
+   (a closed <dialog> must keep UA `display:none`). */
+#speaker-registry-dialog[open] {
+  width: max-content;
+  min-width: min(40rem, calc(100vw - 2rem));
+  max-width: min(90vw, calc(100vw - 2rem));
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.speaker-registry-columns {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(18rem, 1.4fr);
+  gap: 1.25rem;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.speaker-registry-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.speaker-registry-col-speakers {
+  border-right: 1px solid var(--ink-soft);
+  padding-right: 1.25rem;
+}
+
+.speaker-list,
+.speaker-samples-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.speaker-row {
+  grid-template-columns: 1fr auto;
+  cursor: pointer;
+}
+
+.speaker-row.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft, #fff2e8);
+}
+
+.speaker-row.editing {
+  cursor: default;
+}
+
+.speaker-meta {
+  min-width: 0;
+}
+
+.speaker-name-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+}
+
+.speaker-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.speaker-actions .icon-btn {
+  width: 2rem;
+  height: 2rem;
+}
+
+.speaker-actions .icon-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.speaker-sample-row {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.speaker-sample-row audio {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 2.25rem;
+}
+
+.speaker-sample-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.speaker-sample-source-link {
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* :not(.hidden) so the global `.hidden { display: none }` (declared earlier,
    same specificity) still wins when the editor is collapsed — otherwise this
    later rule would override it and the input would always show. */
