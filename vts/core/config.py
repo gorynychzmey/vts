@@ -105,8 +105,9 @@ class Settings(BaseSettings):
     diarization_min_speaker_share: float = 0.05
     # Cosine distance thresholds for matching a voice fragment to a known
     # speaker (see nearest_speakers / bucket). Vectors are unnormalised, so
-    # cosine (not L2) is the only sane operator. Placeholders pending
-    # calibration — see spec.
+    # cosine (not L2) is the only sane operator. Calibrated 2026-07-17 against
+    # the reference meeting: 0.25 caught every true match and rejected every
+    # false one on that dataset — see docs/ARCHITECTURE.md "Speaker matching".
     speaker_match_max_distance_auto: float = 0.25      # <= -> auto-bind (conservative start)
     speaker_match_max_distance_candidate: float = 0.55  # > -> not even a candidate
     speaker_preview_count: int = 3
