@@ -21,6 +21,7 @@ from vts.db.repo import Repo
 from vts.services import task_status as _ts
 from vts.pipeline.steps.base import StepState
 from vts.pipeline.steps.registry import resolve_step
+from vts.pipeline.steps.diarization import DiarizationCancelled
 from vts.pipeline.types import build_dag_steps
 from vts.worker.lanes import LaneManager
 from vts.services.task_progress import selected_prompt_refs
@@ -208,6 +209,12 @@ class TaskProcessor:
                 # (vts-d64). The session's aborted transaction is rolled back by
                 # the `async with self.session_factory()` context on exit.
                 logger.info("task %s deleted mid-flight; exiting quietly", task_id)
+                await self.bus.clear_pause_request(task_id)
+            except DiarizationCancelled:
+                # Same as _TaskGone, but noticed from inside the step: only
+                # diarization runs long enough to be worth interrupting rather
+                # than waiting out. The user discarded it, so exit quietly.
+                logger.info("task %s cancelled during diarization; exiting quietly", task_id)
                 await self.bus.clear_pause_request(task_id)
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)

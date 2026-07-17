@@ -9,6 +9,10 @@ if TYPE_CHECKING:
     from vts.pipeline.context import PipelineContext
 
 
+class DiarizationCancelled(Exception):
+    """The task was cancelled while its diarization was still running."""
+
+
 def diarize_enabled(task_options: dict, default: bool) -> bool:
     """Per-task `diarize`, falling back to the configured default."""
     value = task_options.get("diarize")
@@ -45,7 +49,30 @@ class DiarizeStep(Step):
         if not audio_path.exists():
             raise RuntimeError(f"Missing audio for diarization: {audio_path}")
 
-        payload = await ctx.diarization.diarize(audio_path=audio_path)
+        async def report(step: str, completed: int, total: int) -> None:
+            # Cancellation is checked here because this is the only place that
+            # runs during diarization: the processor only tests between steps,
+            # so a task deleted mid-run used to leave the sidecar grinding for
+            # the rest of its 25 minutes with nobody left to want the answer.
+            if await ctx.bus.is_cancel_requested(st.task_id):
+                await ctx.diarization.cancel(str(st.task_id))
+                raise DiarizationCancelled
+            await ctx.bus.publish_event(
+                user_id=st.user_id,
+                task_id=str(st.task_id),
+                event="diarize_progress",
+                data={"step": step, "completed": completed, "total": total},
+                throttle_key="diarize_progress",
+            )
+
+        # The task id doubles as the job id: it is already persistent, so a
+        # worker that restarts mid-run re-attaches to the job still running in
+        # the sidecar instead of paying for the whole diarization twice.
+        payload = await ctx.diarization.diarize(
+            audio_path=audio_path,
+            job_id=str(st.task_id),
+            on_progress=report,
+        )
 
         # We sent audio and got no speakers back. This is NOT what a monologue
         # looks like — a real single-speaker result is one segment spanning the

@@ -9,15 +9,26 @@ its tests depend on that shape, not on pyannote's internals.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import logging
 import os
 import tempfile
+import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pyannote.audio import Pipeline
+
+# How often the SSE stream re-reads job progress. pyannote reports per embedding
+# batch (~1.4s apart on a real meeting), so polling faster only burns wakeups.
+_PROGRESS_POLL_SECONDS = 1.0
+_REAPER_INTERVAL_SECONDS = 30
 
 _log = logging.getLogger("diarization")
 
@@ -199,19 +210,8 @@ def _extract_embeddings(raw: Any, labels: list[str]) -> dict[str, list[float]]:
     return embeddings
 
 
-@app.post("/diarize")
-async def diarize(file: UploadFile = File(...)) -> dict[str, Any]:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-        handle.write(await file.read())
-        audio_path = Path(handle.name)
-    try:
-        output = pipeline()(str(audio_path))
-    except Exception as error:  # noqa: BLE001 - surface the cause to the caller
-        _log.exception("diarization failed")
-        raise HTTPException(status_code=500, detail=f"diarization failed: {error}") from error
-    finally:
-        audio_path.unlink(missing_ok=True)
-
+def _shape_output(output: Any) -> dict[str, Any]:
+    """pyannote's DiarizeOutput -> the wire contract."""
     # pyannote 4.x returns a DiarizeOutput carrying two Annotations and the
     # embeddings; no `return_embeddings` flag is involved.
     #
@@ -235,3 +235,240 @@ async def diarize(file: UploadFile = File(...)) -> dict[str, Any]:
 
     _log.info("diarized: speakers=%d segments=%d", len(labels), len(segments))
     return {"segments": segments, "embeddings": embeddings, "num_speakers": len(labels)}
+
+
+class _Cancelled(Exception):
+    """Raised out of the pyannote hook to unwind a job the caller dropped."""
+
+
+class _Job:
+    """One diarization, addressable by the caller's own id.
+
+    The id comes from the client, not from here: a server-generated one has a
+    window where the job exists but its owner never learned the id — die there
+    and the job is orphaned with nothing to name it. The worker knows its
+    task_id before it asks, so it can always come back and ask about it.
+    """
+
+    __slots__ = ("job_id", "status", "progress", "result", "error", "cancel", "touched_at", "task")
+
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        self.status = "running"
+        self.progress: dict[str, Any] = {"step": "starting", "completed": 0, "total": 0}
+        self.result: dict[str, Any] | None = None
+        self.error: str | None = None
+        self.cancel = False
+        self.touched_at = time.monotonic()
+        self.task: asyncio.Task[None] | None = None
+
+    def touch(self) -> None:
+        self.touched_at = time.monotonic()
+
+
+_jobs: dict[str, _Job] = {}
+
+
+def _job_ttl(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _log.warning("ignoring non-numeric %s=%r; using %ds", name, raw, default)
+        return default
+
+
+def _run_diarization(job: _Job, audio_path: Path) -> dict[str, Any]:
+    """Blocking pyannote call, reporting progress and honouring cancellation.
+
+    Runs in a worker thread: pyannote is synchronous and would otherwise block
+    the event loop, leaving /events and /jobs unable to answer for the whole run.
+    """
+
+    def hook(step: str, artefact: Any = None, file: Any = None, total: int | None = None,
+             completed: int | None = None) -> None:
+        if job.cancel:
+            raise _Cancelled
+        job.touch()
+        # `embeddings` reports per batch and is ~98% of the wall time; the other
+        # steps fire once each, so they read as instant. Reporting all of them
+        # keeps the UI honest about which phase is slow.
+        job.progress = {
+            "step": step,
+            "completed": int(completed) if completed is not None else 0,
+            "total": int(total) if total is not None else 0,
+        }
+
+    return _shape_output(pipeline()(str(audio_path), hook=hook))
+
+
+async def _diarize_job(job: _Job, audio_path: Path) -> None:
+    try:
+        job.result = await asyncio.to_thread(_run_diarization, job, audio_path)
+        job.status = "done"
+    except _Cancelled:
+        job.status = "cancelled"
+        _log.info("job %s cancelled", job.job_id)
+        _jobs.pop(job.job_id, None)
+    except Exception as error:  # noqa: BLE001 - the cause goes back to the caller
+        _log.exception("job %s failed", job.job_id)
+        job.status = "failed"
+        job.error = str(error)
+    finally:
+        job.touch()
+        audio_path.unlink(missing_ok=True)
+
+
+@app.post("/diarize")
+async def diarize(job_id: str = Form(...), file: UploadFile = File(...)) -> dict[str, Any]:
+    """Start a diarization, or re-attach to the one this id already names.
+
+    Returning rather than blocking is what lets the job outlive the worker: a
+    restart mid-run reconnects by id instead of paying for the whole thing twice.
+    """
+    existing = _jobs.get(job_id)
+    if existing is not None:
+        existing.touch()
+        if existing.status == "running":
+            return {"job_id": job_id, "state": "running"}
+        if existing.status == "done":
+            # The worker restarted and came back after we finished. Point it at
+            # the result rather than at a stream that will never say anything.
+            return {"job_id": job_id, "state": "done"}
+        if existing.status == "failed":
+            # Hand the reason over exactly once, then forget it and start
+            # afresh: a retained failure would answer the next retry with
+            # "running" on a dead job and hang it on a silent stream.
+            reason = existing.error
+            _jobs.pop(job_id, None)
+            _log.info("job %s restarting after error: %s", job_id, reason)
+            job = await _start_job(job_id, file)
+            return {"job_id": job.job_id, "state": "running", "retried_after_error": reason}
+
+    job = await _start_job(job_id, file)
+    return {"job_id": job.job_id, "state": "running"}
+
+
+async def _start_job(job_id: str, file: UploadFile) -> _Job:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        handle.write(await file.read())
+        audio_path = Path(handle.name)
+    job = _Job(job_id)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_diarize_job(job, audio_path))
+    _log.info("job %s started", job_id)
+    return job
+
+
+@app.get("/jobs/{job_id}/events")
+async def job_events(job_id: str) -> StreamingResponse:
+    """Progress as SSE. Losing this stream costs the watcher, not the work."""
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+
+    async def stream() -> AsyncIterator[str]:
+        last: str | None = None
+        while True:
+            job = _jobs.get(job_id)
+            if job is None:  # cancelled or evicted out from under us
+                yield f"data: {json.dumps({'state': 'gone'})}\n\n"
+                return
+            job.touch()
+            payload = {"state": job.status, **job.progress}
+            if job.status in ("done", "failed"):
+                if job.status == "failed":
+                    payload["error"] = job.error
+                yield f"data: {json.dumps(payload)}\n\n"
+                return
+            serialised = json.dumps(payload)
+            if serialised != last:  # only speak when something changed
+                yield f"data: {serialised}\n\n"
+                last = serialised
+            await asyncio.sleep(_PROGRESS_POLL_SECONDS)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/jobs/{job_id}/result")
+async def job_result(job_id: str) -> dict[str, Any]:
+    """Collect the result, which also disposes of the job.
+
+    Separate from the stream on purpose: a disconnect on the last event would
+    otherwise lose a result that is already computed and sitting right here.
+    """
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    if job.status == "running":
+        raise HTTPException(status_code=409, detail="job still running")
+    if job.status == "failed":
+        error = job.error
+        _jobs.pop(job_id, None)
+        raise HTTPException(status_code=500, detail=f"diarization failed: {error}")
+    result = job.result or {}
+    _jobs.pop(job_id, None)
+    return result
+
+
+@app.delete("/jobs/{job_id}")
+async def job_cancel(job_id: str) -> dict[str, str]:
+    """Stop a job whose task is gone. The hook unwinds pyannote's own loop."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    job.cancel = True
+    _log.info("job %s cancellation requested", job_id)
+    return {"job_id": job_id, "state": "cancelling"}
+
+
+@app.get("/jobs")
+async def job_list() -> dict[str, Any]:
+    """Every job this process knows about, so a restarted worker can reconcile."""
+    return {
+        "jobs": [
+            {"job_id": j.job_id, "state": j.status, **j.progress}
+            for j in _jobs.values()
+        ]
+    }
+
+
+async def _reap_jobs() -> None:
+    """Evict jobs nobody came back for.
+
+    Two clocks, because the two cases fail differently. A running job whose
+    owner stopped asking is burning 8 threads for a result no one will collect.
+    A finished one is only holding memory, so it can wait much longer for a
+    worker that is slow to return.
+
+    Both measure from the last touch, never from the start: a 25-minute job
+    timed from its start would evict itself mid-run.
+    """
+    run_ttl = _job_ttl("DIAR_JOB_RUN_TTL_SECONDS", 900)
+    keep_ttl = _job_ttl("DIAR_JOB_RESULT_TTL_SECONDS", 3600)
+    while True:
+        await asyncio.sleep(_REAPER_INTERVAL_SECONDS)
+        now = time.monotonic()
+        for job_id, job in list(_jobs.items()):
+            idle = now - job.touched_at
+            if job.status == "running" and idle > run_ttl:
+                _log.warning("job %s: no one asked for %.0fs, cancelling", job_id, idle)
+                job.cancel = True
+            elif job.status in ("done", "failed") and idle > keep_ttl:
+                _log.info("job %s: result uncollected for %.0fs, dropping", job_id, idle)
+                _jobs.pop(job_id, None)
+
+
+@app.on_event("startup")
+async def _start_reaper() -> None:
+    app.state.reaper = asyncio.create_task(_reap_jobs())
+
+
+@app.on_event("shutdown")
+async def _stop_reaper() -> None:
+    reaper = getattr(app.state, "reaper", None)
+    if reaper is not None:
+        reaper.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reaper

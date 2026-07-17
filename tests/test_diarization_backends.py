@@ -140,3 +140,164 @@ def test_normalize_output_silent_when_genuinely_empty(caplog) -> None:
     with caplog.at_level("WARNING"):
         _pyannote().normalize_output({"segments": []})
     assert caplog.text == ""
+
+
+# --- async job protocol ---------------------------------------------------
+
+import json
+import httpx
+import uuid as _uuid
+from pathlib import Path
+
+
+class _StubBackend(PyannoteBackend):
+    """PyannoteBackend whose HTTP goes to a scripted MockTransport."""
+
+    def __init__(self, handler):
+        super().__init__("http://sidecar")
+        self._handler = handler
+
+    def _client(self, timeout):
+        return httpx.AsyncClient(transport=httpx.MockTransport(self._handler), timeout=timeout)
+
+
+def _sse(*events):
+    return "".join(f"data: {json.dumps(e)}\n\n" for e in events)
+
+
+async def test_run_job_happy_path(tmp_path):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/diarize":
+            return httpx.Response(200, json={"job_id": "T", "state": "running"})
+        if request.url.path == "/jobs/T/events":
+            return httpx.Response(200, text=_sse(
+                {"state": "running", "step": "embeddings", "completed": 1, "total": 4},
+                {"state": "running", "step": "embeddings", "completed": 4, "total": 4},
+                {"state": "done"},
+            ), headers={"content-type": "text/event-stream"})
+        if request.url.path == "/jobs/T/result":
+            return httpx.Response(200, json={
+                "segments": [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}],
+                "embeddings": {}, "num_speakers": 1,
+            })
+        return httpx.Response(404)
+
+    async def on_progress(step, completed, total):
+        seen.append((step, completed, total))
+
+    backend = _StubBackend(handler)
+    result = await backend.diarize(audio, job_id="T", on_progress=on_progress)
+
+    assert result["num_speakers"] == 1
+    assert (1, 4) == (seen[0][1], seen[0][2])  # progress was delivered
+    assert seen[-1] == ("embeddings", 4, 4)
+
+
+async def test_run_job_reattaches_when_already_done(tmp_path):
+    """A worker that restarts after the job finished skips the stream."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    streamed = []
+
+    def handler(request):
+        if request.url.path == "/diarize":
+            return httpx.Response(200, json={"job_id": "T", "state": "done"})
+        if request.url.path == "/jobs/T/events":
+            streamed.append(request.url.path)  # must NOT be hit
+            return httpx.Response(200, text=_sse({"state": "done"}))
+        if request.url.path == "/jobs/T/result":
+            return httpx.Response(200, json={"segments": [{"start": 0, "end": 1, "speaker": "A"}],
+                                             "embeddings": {}, "num_speakers": 1})
+        return httpx.Response(404)
+
+    result = await _StubBackend(handler).diarize(audio, job_id="T")
+    assert result["num_speakers"] == 1
+    assert streamed == []  # went straight to /result, no pointless stream
+
+
+async def test_run_job_surfaces_failure(tmp_path):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+
+    def handler(request):
+        if request.url.path == "/diarize":
+            return httpx.Response(200, json={"job_id": "T", "state": "running"})
+        if request.url.path == "/jobs/T/events":
+            return httpx.Response(200, text=_sse({"state": "failed", "error": "OOM"}),
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    with pytest.raises(RuntimeError, match="OOM"):
+        await _StubBackend(handler).diarize(audio, job_id="T")
+
+
+async def test_run_job_reconnects_after_dropped_stream(tmp_path):
+    """A dropped progress stream must be re-attached, not treated as failure."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    attempts = {"events": 0}
+
+    def handler(request):
+        if request.url.path == "/diarize":
+            return httpx.Response(200, json={"job_id": "T", "state": "running"})
+        if request.url.path == "/jobs/T/events":
+            attempts["events"] += 1
+            if attempts["events"] == 1:
+                raise httpx.ReadError("connection dropped")  # mid-watch failure
+            return httpx.Response(200, text=_sse({"state": "done"}),
+                                  headers={"content-type": "text/event-stream"})
+        if request.url.path == "/jobs/T/result":
+            return httpx.Response(200, json={"segments": [{"start": 0, "end": 1, "speaker": "A"}],
+                                             "embeddings": {}, "num_speakers": 1})
+        return httpx.Response(404)
+
+    result = await _StubBackend(handler).diarize(audio, job_id="T")
+    assert result["num_speakers"] == 1
+    assert attempts["events"] == 2  # reconnected once
+
+
+async def test_run_job_records_retry_after_error(tmp_path, caplog):
+    """The sidecar's one-shot error report must be logged, not dropped."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+
+    def handler(request):
+        if request.url.path == "/diarize":
+            return httpx.Response(200, json={"job_id": "T", "state": "running",
+                                             "retried_after_error": "prior OOM"})
+        if request.url.path == "/jobs/T/events":
+            return httpx.Response(200, text=_sse({"state": "done"}),
+                                  headers={"content-type": "text/event-stream"})
+        if request.url.path == "/jobs/T/result":
+            return httpx.Response(200, json={"segments": [{"start": 0, "end": 1, "speaker": "A"}],
+                                             "embeddings": {}, "num_speakers": 1})
+        return httpx.Response(404)
+
+    import logging
+    with caplog.at_level(logging.WARNING):
+        await _StubBackend(handler).diarize(audio, job_id="T")
+    assert any("prior OOM" in r.message for r in caplog.records)
+
+
+async def test_cancel_is_best_effort(tmp_path):
+    """A cancel against an unreachable sidecar must not raise."""
+    def handler(request):
+        raise httpx.ConnectError("sidecar down")
+
+    await _StubBackend(handler).cancel("T")  # must not raise
+
+
+def test_timeout_for_upload_scales_with_size(tmp_path):
+    from vts.services.diarization._base import timeout_for_upload, _UPLOAD_MIN_SECONDS
+
+    small = tmp_path / "s.wav"
+    small.write_bytes(b"x" * 1024)
+    assert timeout_for_upload(small) == _UPLOAD_MIN_SECONDS  # floor holds
+
+    big = tmp_path / "b.wav"
+    big.write_bytes(b"x" * (100 * 1024 * 1024))
+    assert timeout_for_upload(big) > _UPLOAD_MIN_SECONDS  # 100 MB exceeds the floor
