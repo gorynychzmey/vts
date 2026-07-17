@@ -358,6 +358,32 @@ class TaskProcessor:
                 _em = self._ctx.get_emitter(task_id)
                 if _em:
                     _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
+            except TaskAwaitingInput:
+                # Asymmetry fix (vts-80i): unlike TaskPaused (raised BETWEEN
+                # steps, in check_paused), TaskAwaitingInput is raised FROM
+                # INSIDE a step's run() — the step itself declaring it did its
+                # job and now needs a human decision. It must NOT be treated
+                # like a step failure: the step (e.g. MatchSpeakersStep)
+                # already wrote its output (speaker_matches.json) and made a
+                # valid pause decision, so mark it completed, exactly like the
+                # success path above. This is what lets `already_done` (gated
+                # on step.status == completed) short-circuit the step on
+                # resume — otherwise a resumed task with any speaker left
+                # intentionally anonymous would re-run match_speakers,
+                # re-decide to pause, and loop into awaiting_input forever.
+                _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
+                await repo.set_step_status(step, StepStatus.completed)
+                await session.commit()
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="step",
+                    data={"name": step_name, "status": StepStatus.completed.value},
+                )
+                _em = self._ctx.get_emitter(task_id)
+                if _em:
+                    _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
+                raise
             except Exception as exc:
                 _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
                 await repo.set_step_status(step, StepStatus.failed, message=str(exc))

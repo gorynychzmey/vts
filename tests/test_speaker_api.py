@@ -137,6 +137,13 @@ class _FakeRedis:
     async def publish(self, channel, message):
         return 0
 
+    async def delete(self, key):
+        # resolve_task_speakers' continue_task branch calls
+        # bus.clear_pause_request (vts-80i resume-symmetry fix), which is a
+        # bare redis DELETE — no pause key is ever set in this test's flow,
+        # so a no-op stub is sufficient.
+        return 0
+
 
 def _override_diarization_backend(app, backend) -> None:
     from vts.api.deps import get_diarization_backend_dep

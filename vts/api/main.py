@@ -2554,6 +2554,10 @@ def create_app() -> FastAPI:
 
         bus = RedisBus(redis, settings)
         if payload.continue_task:
+            # Symmetric with /api/tasks/resume (vts-80i): clear any stale
+            # pause request before requeuing, so a leftover pause flag can't
+            # survive a resume through this path either.
+            await bus.clear_pause_request(task_id)
             await repo.set_task_status(task, TaskStatus.queued)
 
         await session.commit()
