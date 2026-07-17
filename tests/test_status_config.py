@@ -22,7 +22,7 @@ async def test_status_config_flag_values(client) -> None:
     assert flags["paused"]["can_resume"] is True
 
 
-async def test_status_config_every_status_exposes_all_seven_keys(client) -> None:
+async def test_status_config_every_status_exposes_all_eight_keys(client) -> None:
     response = await client.get("/api/status-config")
 
     flags = response.json()["status_flags"]
@@ -34,6 +34,7 @@ async def test_status_config_every_status_exposes_all_seven_keys(client) -> None
         "can_pause",
         "can_resume",
         "can_archive",
+        "needs_input",
     }
     for status, entry in flags.items():
         assert set(entry) == expected_keys, status

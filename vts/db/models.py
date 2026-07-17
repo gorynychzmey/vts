@@ -38,6 +38,7 @@ class TaskStatus(StrEnum):
     archived = "archived"
     failed = "failed"
     canceled = "canceled"
+    awaiting_input = "awaiting_input"
 
 
 class StepStatus(StrEnum):
@@ -80,6 +81,7 @@ class Task(Base):
     summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    awaiting_step: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
