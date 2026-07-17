@@ -16,6 +16,14 @@ from pathlib import Path
 
 import httpx
 
+# CHANGING THE EMBEDDING MODEL SILENTLY CORRUPTS THE VOICE REGISTRY (vts-ojb).
+# Speaker profiles store embeddings produced by whatever model this file vendors.
+# Vectors from a different model live in a different space, so cosine against the
+# stored registry stops meaning anything. If the new model's width happens to
+# match, nothing errors — matching just starts returning noise, and the first sign
+# is unexplained mismatches weeks later.
+# Before swapping the embedding weights: read vts-ojb, then migrate the registry by
+# recomputing embeddings from the audio each VoiceSample keeps for exactly this.
 _BASE = "https://huggingface.co/pyannote-community/speaker-diarization-community-1/resolve/main"
 
 # config.yaml wires the pipeline together with $model-relative paths, and plda/
