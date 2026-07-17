@@ -333,11 +333,11 @@ canonical `oauth_*` keys (deprecated; scheduled removal in 1.2.x).
 
 | YAML path | Env | Default |
 |-----------|-----|---------|
-| `services.speaker.match_max_distance_auto` | `VTS_SERVICES_SPEAKER_MATCH_MAX_DISTANCE_AUTO` | `0.25` |
-| `services.speaker.match_max_distance_candidate` | `VTS_SERVICES_SPEAKER_MATCH_MAX_DISTANCE_CANDIDATE` | `0.55` |
-| `services.speaker.preview_count` | `VTS_SERVICES_SPEAKER_PREVIEW_COUNT` | `3` |
-| `services.speaker.preview_seconds` | `VTS_SERVICES_SPEAKER_PREVIEW_SECONDS` | `5.0` |
-| `services.speaker.preview_min_segment` | `VTS_SERVICES_SPEAKER_PREVIEW_MIN_SEGMENT` | `2.0` |
+| `services.speaker.match_max_distance_auto` | `VTS_SPEAKER_MATCH_MAX_DISTANCE_AUTO` | `0.25` |
+| `services.speaker.match_max_distance_candidate` | `VTS_SPEAKER_MATCH_MAX_DISTANCE_CANDIDATE` | `0.55` |
+| `services.speaker.preview_count` | `VTS_SPEAKER_PREVIEW_COUNT` | `3` |
+| `services.speaker.preview_seconds` | `VTS_SPEAKER_PREVIEW_SECONDS` | `5.0` |
+| `services.speaker.preview_min_segment` | `VTS_SPEAKER_PREVIEW_MIN_SEGMENT` | `2.0` |
 
 A voice fragment is matched against known speakers by cosine distance
 between embeddings (vectors are unnormalised, so cosine — not L2 — is the
