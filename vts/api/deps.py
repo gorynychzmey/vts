@@ -13,6 +13,20 @@ def get_settings_dep() -> Settings:
     return get_settings()
 
 
+def get_diarization_backend_dep(settings: Settings = Depends(get_settings_dep)):
+    """Build a diarization backend for request-scoped use (e.g. /embed on a
+    saved preview clip during voice resolution).
+
+    Mirrors how TaskProcessor builds one in the worker
+    (vts/pipeline/processor.py). The backend is a thin, stateless wrapper
+    around an httpx client per call, so constructing one per request is
+    cheap — no shared connection pool to manage on app.state.
+    """
+    from vts.services.diarization import create_diarization_backend
+
+    return create_diarization_backend(settings.diarization_url, settings.diarization_backend)
+
+
 def get_redis(request: Request) -> Redis:
     return request.app.state.redis
 

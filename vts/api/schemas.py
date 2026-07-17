@@ -321,3 +321,45 @@ class UploadInitOut(BaseModel):
 class UploadOffsetOut(BaseModel):
     received: int
     total_size: int
+
+
+# ---------------------------------------------------------------------------
+# Speaker registry (vts-80i)
+# ---------------------------------------------------------------------------
+
+
+class SpeakerOut(BaseModel):
+    id: str
+    name: str
+    sample_count: int
+
+
+class SpeakerCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class SpeakerUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class VoiceSampleOut(BaseModel):
+    id: str
+    duration_sec: float
+    source_task_id: str | None = None
+    created_at: datetime
+
+
+class VoiceResolution(BaseModel):
+    speaker_label: str
+    action: str  # "bind_existing" | "bind_new" | "leave_anonymous" | "accept_auto"
+    speaker_id: str | None = None
+    new_name: str | None = None
+    add_fragment: bool = True
+    distance: float | None = None
+    voice_sample_id: str | None = None  # winning fragment for the decision
+    outcome: str  # confirmed | rejected | manual_match | auto_accepted | auto_overridden | left_anonymous
+
+
+class VoiceResolutionRequest(BaseModel):
+    resolutions: list[VoiceResolution]
+    continue_task: bool
