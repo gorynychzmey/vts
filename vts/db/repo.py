@@ -253,6 +253,12 @@ class Repo:
         task.updated_at = utcnow()
         await self.session.flush()
 
+    async def set_awaiting_input(self, task: Task, step: str) -> None:
+        task.status = TaskStatus.awaiting_input
+        task.awaiting_step = step
+        task.updated_at = utcnow()
+        await self.session.flush()
+
     async def set_task_summary_progress(self, task: Task, current: int, total: int) -> None:
         task.summary_progress = {"current": current, "total": total}
         task.updated_at = utcnow()

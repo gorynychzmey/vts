@@ -41,6 +41,19 @@ class TaskPaused(Exception):
     """Raised when the processor detects a pause request mid-step."""
 
 
+class TaskAwaitingInput(Exception):
+    """Raised by a step that needs a human decision before the pipeline can continue.
+
+    Unlike TaskPaused (a pause request from outside), this is the step itself
+    declaring it cannot proceed without input — e.g. MatchSpeakersStep when a
+    detected speaker doesn't auto-resolve against the registry.
+    """
+
+    def __init__(self, step: str) -> None:
+        self.step = step
+        super().__init__(step)
+
+
 class _TaskGone(Exception):
     """The task row vanished mid-flight (deleted/canceled by the API).
 
@@ -202,6 +215,18 @@ class TaskProcessor:
                     task_id=str(task.id),
                     event="task_status",
                     data={"status": "paused"},
+                )
+            except TaskAwaitingInput as e:
+                logger.info("task awaiting input: %s (step=%s)", task.id, e.step)
+                await self._ctx.refresh_task(session, task)
+                if task.status != TaskStatus.awaiting_input:
+                    await repo.set_awaiting_input(task, e.step)
+                    await session.commit()
+                await self.bus.publish_event(
+                    user_id=str(task.user_id),
+                    task_id=str(task.id),
+                    event="task_status",
+                    data={"status": "awaiting_input", "awaiting_step": e.step},
                 )
             except _TaskGone:
                 # Row deleted/canceled mid-flight by the API. The user already
