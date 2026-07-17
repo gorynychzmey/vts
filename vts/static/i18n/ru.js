@@ -189,6 +189,7 @@ window.__VTS_I18N.ru = {
 "steps.segment_audio": "Сегментация аудио",
 "steps.detect_language": "Определение языка",
 "steps.transcribe_segments": "Транскрибация сегментов",
+"steps.diarize": "Определение говорящих",
 "steps.merge_transcript": "Сборка транскрипта",
 "steps.prepare_llama_model": "Подготовка LLM",
 "steps.prepare_summary_chunks": "Подготовка окон сводки",

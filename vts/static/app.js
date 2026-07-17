@@ -1211,6 +1211,13 @@ function createRuntime(task) {
       current: 0,
       total: 0
     },
+    // Only the `embeddings` step of diarization reports a total (it is ~98% of
+    // the wall time); the others fire once with total 0 and read as running.
+    diarize: {
+      step: "",
+      current: 0,
+      total: 0
+    },
     summary: {
       current: summaryProgress.current,
       total: summaryProgress.total
@@ -1303,6 +1310,17 @@ function computeActiveStepLocalProgress(runtime, active) {
       textOverride = `${current}/${runtime.segment.total}`;
     }
     // else: value = 0, indeterminate = false → показываем 0% пока не получен total
+  } else if (active === "diarize") {
+    // A percentage only during the embeddings pass, which dominates the step.
+    // The brief segmentation/counting phases carry no total, so they show as
+    // running rather than snapping the bar back to 0%.
+    if (runtime.diarize.step === "embeddings" && runtime.diarize.total > 0) {
+      const current = Math.max(0, Math.min(runtime.diarize.current, runtime.diarize.total));
+      value = normalizeProgress(current / runtime.diarize.total);
+      textOverride = `${current}/${runtime.diarize.total}`;
+    } else {
+      indeterminate = true;
+    }
   } else if (active === "summarize_windows") {
     if (runtime.summary.total > 1) {
       const totalWindows = runtime.summary.total - 1;
@@ -2875,6 +2893,20 @@ function patchSummaryProgress(taskId, current, total) {
   renderTaskRuntime(taskEl);
 }
 
+function patchDiarizeProgress(taskId, step, current, total) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  // The step matters: only "embeddings" carries a total, so the render branch
+  // reads it to decide between a percentage and a running indicator.
+  runtime.diarize.step = String(step || "");
+  runtime.diarize.current = Number(current) || 0;
+  runtime.diarize.total = Number(total) || 0;
+  renderTaskRuntime(taskEl);
+}
+
 function appendStreamingText(taskId, readyFlag, panelKey, promptKey, text, separator) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
@@ -3013,6 +3045,15 @@ function connectEvents() {
   state.eventSource.addEventListener("summary_progress", (event) => {
     const payload = JSON.parse(event.data);
     patchSummaryProgress(payload.task_id, payload.data.current, payload.data.total);
+  });
+  state.eventSource.addEventListener("diarize_progress", (event) => {
+    const payload = JSON.parse(event.data);
+    patchDiarizeProgress(
+      payload.task_id,
+      payload.data.step,
+      payload.data.completed,
+      payload.data.total
+    );
   });
   state.eventSource.addEventListener("transcript_segment_text", (event) => {
     const payload = JSON.parse(event.data);

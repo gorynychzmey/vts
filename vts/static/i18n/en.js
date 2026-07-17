@@ -189,6 +189,7 @@ window.__VTS_I18N.en = {
 "steps.segment_audio": "Audio segmentation",
 "steps.detect_language": "Language detection",
 "steps.transcribe_segments": "Segment transcription",
+"steps.diarize": "Speaker diarization",
 "steps.merge_transcript": "Transcript merge",
 "steps.prepare_llama_model": "LLM warm-up",
 "steps.prepare_summary_chunks": "Summary chunking",

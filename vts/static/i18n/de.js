@@ -190,6 +190,7 @@ window.__VTS_I18N.de = {
 "steps.segment_audio": "Audio-Segmentierung",
 "steps.detect_language": "Spracherkennung",
 "steps.transcribe_segments": "Segment-Transkription",
+"steps.diarize": "Sprechererkennung",
 "steps.merge_transcript": "Transkript-Zusammenführung",
 "steps.prepare_llama_model": "LLM-Aufwärmen",
 "steps.prepare_summary_chunks": "Summary-Chunking",
