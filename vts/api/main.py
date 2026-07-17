@@ -2453,6 +2453,21 @@ def create_app() -> FastAPI:
                 uuid.UUID(res.voice_sample_id) if res.voice_sample_id else None
             )
 
+            # Rollback: if this label was previously resolved (in an earlier
+            # save of this same awaiting_input dialog) to a DIFFERENT person,
+            # and that prior decision added a fragment, that fragment is now
+            # attributed to the wrong voice — delete it. Only ever touches a
+            # fragment this same task added (source_task_id == task_id is
+            # implicit: record_decision below always writes this task_id as
+            # source_task_id, so any voice_sample_id on a decision scoped to
+            # this task_id was added by this task). Fragments predating this
+            # task are never looked at here.
+            prior = await repo.find_prior_decision_sample(user_id, task_id, res.speaker_label)
+            if prior is not None:
+                prior_speaker_id, prior_voice_sample_id = prior
+                if prior_voice_sample_id is not None and prior_speaker_id != speaker_id:
+                    await repo.delete_voice_sample(user_id, prior_voice_sample_id)
+
             if res.add_fragment and speaker_id is not None:
                 clips = previews.get(res.speaker_label) or []
                 if not clips:

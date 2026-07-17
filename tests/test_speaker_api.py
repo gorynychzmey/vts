@@ -334,3 +334,103 @@ async def test_resolution_is_transactional_all_or_nothing(client, authed_app, tm
         repo = Repo(session)
         speakers = await repo.list_speakers(uuid.UUID(_TEST_USER_ID))
         assert all(s.name != "ShouldNotPersist" for s in speakers)
+
+
+@pytest.mark.asyncio
+async def test_rebinding_speaker_label_deletes_prior_fragment_from_same_task(
+    client, authed_app, tmp_path
+):
+    """Resolve task T binding SPEAKER_00 -> person A (adds fragment F_A with
+    source_task_id=T). Re-resolve the SAME task, same label, to person B.
+    F_A must be deleted (rolled back). A pre-existing fragment of A from a
+    DIFFERENT task must survive untouched. A first-time binding must delete
+    nothing."""
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    from vts.db.repo import Repo
+
+    # Pre-existing fragment for person A from a different (unrelated) task —
+    # must never be touched by the rollback.
+    async with factory() as session:
+        repo = Repo(session)
+        person_a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        person_b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        other_task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/other",
+            options={},
+            artifact_dir=str(tmp_path / "other_task"),
+        )
+        other_task_id = other_task.id
+        old_sample = await repo.add_voice_sample(
+            speaker_id=person_a.id, embedding=[0.05] * 256, embedding_model="ecapa",
+            audio=b"OLD_AUDIO_A", audio_format="wav", duration_sec=2.0,
+            source_task_id=other_task_id,
+        )
+        await session.commit()
+        person_a_id, person_b_id, old_sample_id = str(person_a.id), str(person_b.id), old_sample.id
+
+    # First-time resolution: bind SPEAKER_00 to person A, adding a fragment
+    # from THIS task.
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_existing",
+                    "speaker_id": person_a_id,
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    async with factory() as session:
+        repo = Repo(session)
+        samples_a = await repo.list_voice_samples(uuid.UUID(person_a_id))
+        # old sample (other task) + new sample (this task)
+        assert len(samples_a) == 2
+        new_sample = next(s for s in samples_a if s.id != old_sample_id)
+        assert new_sample.source_task_id == task_id
+        new_sample_id = new_sample.id
+        # Nothing to roll back yet — no prior decision existed before this call.
+        assert any(s.id == old_sample_id for s in samples_a)
+
+    # Re-resolve the SAME task, SAME label, now to person B instead.
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_existing",
+                    "speaker_id": person_b_id,
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    async with factory() as session:
+        repo = Repo(session)
+        samples_a_after = await repo.list_voice_samples(uuid.UUID(person_a_id))
+        samples_b_after = await repo.list_voice_samples(uuid.UUID(person_b_id))
+
+        # The fragment this task added to A is gone.
+        assert all(s.id != new_sample_id for s in samples_a_after)
+        # The pre-existing fragment from a different task is untouched.
+        assert any(s.id == old_sample_id for s in samples_a_after)
+        assert len(samples_a_after) == 1
+
+        # B now has exactly one fragment, from this task.
+        assert len(samples_b_after) == 1
+        assert samples_b_after[0].source_task_id == task_id

@@ -657,6 +657,32 @@ class Repo:
         await self.session.flush()
         return True
 
+    async def find_prior_decision_sample(
+        self, user_id: uuid.UUID, source_task_id: uuid.UUID, speaker_label: str,
+    ) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+        """Most recent decision this user recorded for (source_task_id, speaker_label).
+
+        Returns (speaker_id, voice_sample_id) from that decision, or None if no
+        prior decision exists — used to detect a rebind within the same
+        awaiting_input dialog so the fragment it previously added can be rolled
+        back. Ordered by created_at desc to pick the latest if resolved more
+        than twice.
+        """
+        stmt = (
+            select(MatchDecision.speaker_id, MatchDecision.voice_sample_id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == source_task_id,
+                MatchDecision.speaker_label == speaker_label,
+            )
+            .order_by(MatchDecision.created_at.desc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
     async def record_decision(
         self, *, user_id: uuid.UUID, source_task_id: uuid.UUID | None, speaker_label: str,
         speaker_id: uuid.UUID | None, voice_sample_id: uuid.UUID | None,
