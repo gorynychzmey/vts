@@ -238,6 +238,33 @@ class VoiceSample(Base):
     )
 
 
+class MatchDecision(Base):
+    __tablename__ = "match_decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    speaker_label: Mapped[str] = mapped_column(String, nullable=False)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speakers.id", ondelete="SET NULL"), nullable=True
+    )
+    voice_sample_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("voice_samples.id", ondelete="SET NULL"), nullable=True
+    )
+    distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String, nullable=False)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_match_decisions_user", "user_id"),
+    )
+
+
 class AsrSegment(Base):
     __tablename__ = "asr_segments"
 

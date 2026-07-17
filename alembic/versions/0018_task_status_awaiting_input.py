@@ -1,10 +1,4 @@
-"""Add awaiting_input task status and Task.awaiting_step (vts-80i).
-
-NOTE: down_revision is temporarily pinned to 0016_voice_samples because
-0017_match_decisions (Task 9 of the vts-80i plan) has not landed yet. When
-Task 9 lands, repoint this migration's down_revision to
-"0017_match_decisions" so the chain is: 0016 -> 0017 -> 0018.
-"""
+"""Add awaiting_input task status and Task.awaiting_step (vts-80i)."""
 
 from __future__ import annotations
 
@@ -12,7 +6,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0018_task_status_awaiting_input"
-down_revision = "0016_voice_samples"  # TODO(vts-80i task 9): repoint to 0017_match_decisions
+down_revision = "0017_match_decisions"
 branch_labels = None
 depends_on = None
 

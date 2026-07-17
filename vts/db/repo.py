@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload, undefer
 from vts.db.models import (
     ApiToken,
     AsrSegment,
+    MatchDecision,
     Preset,
     Prompt,
     Speaker,
@@ -649,6 +650,20 @@ class Repo:
         await self.session.delete(sample)
         await self.session.flush()
         return True
+
+    async def record_decision(
+        self, *, user_id: uuid.UUID, source_task_id: uuid.UUID | None, speaker_label: str,
+        speaker_id: uuid.UUID | None, voice_sample_id: uuid.UUID | None,
+        distance: float | None, embedding_model: str, outcome: str,
+    ) -> MatchDecision:
+        row = MatchDecision(
+            user_id=user_id, source_task_id=source_task_id, speaker_label=speaker_label,
+            speaker_id=speaker_id, voice_sample_id=voice_sample_id, distance=distance,
+            embedding_model=embedding_model, outcome=outcome,
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
 
     async def nearest_speakers(
         self, user_id: uuid.UUID, embedding: list[float], embedding_model: str,
