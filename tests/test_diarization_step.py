@@ -1,10 +1,34 @@
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from vts.pipeline.steps.diarization import DiarizeStep
+from vts.pipeline.steps.diarization import DiarizeStep, select_preview_spans
+
+
+def _write_silent_wav(path: Path, seconds: float = 5.0) -> None:
+    # DiarizeStep now cuts speaker preview clips with real ffmpeg after writing
+    # diarization.json (vts-80i), so tests exercising the full run() need a
+    # real, ffmpeg-readable wav rather than a `b"RIFF"` stub.
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=16000:cl=mono",
+            "-t",
+            str(seconds),
+            "-c:a",
+            "pcm_s16le",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 class _FakeBackend:
@@ -63,7 +87,12 @@ def _ctx(backend: _FakeBackend, bus: "_FakeBus | None" = None) -> SimpleNamespac
     return SimpleNamespace(
         diarization=backend,
         transcribe_audio_path=transcribe_audio_path,
-        settings=SimpleNamespace(diarization_enabled_default=False),
+        settings=SimpleNamespace(
+            diarization_enabled_default=False,
+            speaker_preview_count=3,
+            speaker_preview_seconds=5.0,
+            speaker_preview_min_segment=2.0,
+        ),
         bus=bus or _FakeBus(),
     )
 
@@ -94,7 +123,7 @@ async def test_step_skipped_when_diarize_disabled(tmp_path: Path) -> None:
 
 async def test_step_writes_diarization_json(tmp_path: Path) -> None:
     dirs = _dirs(tmp_path)
-    (dirs["media"] / "audio_16k.wav").write_bytes(b"RIFF")
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
     backend = _FakeBackend()
 
     await DiarizeStep().run(_ctx(backend), _state(tmp_path, dirs, {"diarize": True}))
@@ -111,7 +140,7 @@ async def test_step_diarizes_trimmed_audio_when_present(tmp_path: Path) -> None:
     # TrimInitialSilenceStep deletes audio_16k.wav, so the trimmed file is the
     # only one left — diarizing the missing original would crash the task.
     dirs = _dirs(tmp_path)
-    (dirs["media"] / "audio_16k_trimmed.wav").write_bytes(b"RIFF")
+    _write_silent_wav(dirs["media"] / "audio_16k_trimmed.wav")
     backend = _FakeBackend()
 
     await DiarizeStep().run(_ctx(backend), _state(tmp_path, dirs, {"diarize": True}))
@@ -155,6 +184,33 @@ async def test_step_raises_when_no_segments_returned(tmp_path: Path) -> None:
     assert not (dirs["outputs"] / "diarization.json").exists()
 
 
+def test_select_spans_spreads_across_segments() -> None:
+    segments = [
+        {"start": 0.0, "end": 30.0, "speaker": "S0"},   # long
+        {"start": 40.0, "end": 45.0, "speaker": "S0"},  # 5s
+        {"start": 50.0, "end": 51.0, "speaker": "S0"},  # too short (<2)
+        {"start": 60.0, "end": 68.0, "speaker": "S0"},  # 8s
+    ]
+    spans = select_preview_spans(segments, "S0", count=3, clip_seconds=5.0, min_segment=2.0)
+    # Three distinct source segments, longest first, each clip <= 5s, cut from inside.
+    assert len(spans) == 3
+    starts = [round(s["start"], 1) for s in spans]
+    assert len(set(starts)) == 3  # distinct segments
+    for s in spans:
+        assert (s["end"] - s["start"]) <= 5.0 + 1e-6
+        assert s["end"] - s["start"] >= 2.0  # nothing shorter than min survives as a clip
+
+
+def test_select_spans_falls_back_to_one_segment_when_scarce() -> None:
+    segments = [{"start": 0.0, "end": 30.0, "speaker": "S0"}]
+    spans = select_preview_spans(segments, "S0", count=3, clip_seconds=5.0, min_segment=2.0)
+    # Only one usable segment: take multiple non-overlapping clips from it.
+    assert len(spans) == 3
+    intervals = sorted((s["start"], s["end"]) for s in spans)
+    for (s1, e1), (s2, e2) in zip(intervals, intervals[1:]):
+        assert s2 >= e1  # non-overlapping
+
+
 def test_diarize_is_in_the_dag_between_transcription_and_merge() -> None:
     # STEP_REGISTRY only maps names to instances; DAG_HEAD is what a task runs.
     # Without this the step is registered, tested, and never invoked.
@@ -174,7 +230,7 @@ def test_diarize_resolves_from_the_registry() -> None:
 async def test_step_passes_task_id_as_job_id(tmp_path: Path) -> None:
     """The task id becomes the job id so a restart can re-attach."""
     dirs = _dirs(tmp_path)
-    (dirs["media"] / "audio_16k.wav").write_bytes(b"RIFF")
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
     backend = _FakeBackend()
     st = _state(tmp_path, dirs, {"diarize": True})
 
@@ -186,7 +242,7 @@ async def test_step_passes_task_id_as_job_id(tmp_path: Path) -> None:
 async def test_step_publishes_progress(tmp_path: Path) -> None:
     """Progress from the sidecar reaches the bus as diarize_progress."""
     dirs = _dirs(tmp_path)
-    (dirs["media"] / "audio_16k.wav").write_bytes(b"RIFF")
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
     backend = _FakeBackend()
     bus = _FakeBus()
 
