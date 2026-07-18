@@ -694,6 +694,32 @@ class Repo:
         await self.session.flush()
         return sample
 
+    async def merge_speakers(
+        self, user_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,
+    ) -> bool:
+        """Merge source into target: samples + decisions move to target, source deleted.
+
+        Order matters: rewrite decisions BEFORE deleting source, so the source
+        delete's SET NULL finds no decisions pointing at it — names survive in old
+        tasks. Merge asserts 'same person', so rewriting speaker_id does not distort
+        the decisions' calibration (distance/outcome unchanged).
+        """
+        if source_id == target_id:
+            return False
+        source = await self.get_speaker(user_id, source_id)
+        target = await self.get_speaker(user_id, target_id)
+        if source is None or target is None:
+            return False
+        await self.reassign_speaker_samples(user_id, source_id, target_id)
+        await self.session.execute(
+            update(MatchDecision)
+            .where(MatchDecision.user_id == user_id, MatchDecision.speaker_id == source_id)
+            .values(speaker_id=target_id)
+        )
+        await self.session.delete(source)
+        await self.session.flush()
+        return True
+
     async def find_prior_decision_sample(
         self, user_id: uuid.UUID, source_task_id: uuid.UUID, speaker_label: str,
     ) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:

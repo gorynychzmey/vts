@@ -115,3 +115,59 @@ async def test_reassign_speaker_samples_isolation(factory):
         assert await repo.reassign_speaker_samples(_OTHER, a.id, b.id) == 0
         await s.commit()
         assert len(await repo.list_voice_samples(a.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_merge_moves_samples_rewrites_decisions_deletes_source(factory):
+    async with factory() as s:
+        repo = Repo(s)
+        a = await repo.create_speaker(_USER, "Вася-1")
+        b = await repo.create_speaker(_USER, "Вася-2")
+        a_id, b_id = a.id, b.id
+        vs_a = await _mk_sample(repo, a_id)
+        await _mk_sample(repo, b_id)
+        await repo.record_decision(
+            user_id=_USER, source_task_id=None, speaker_label="S0",
+            speaker_id=a_id, voice_sample_id=vs_a.id, distance=0.1,
+            embedding_model="m1", outcome="confirmed",
+        )
+        await s.commit()
+
+        assert await repo.merge_speakers(_USER, a_id, b_id) is True
+        await s.commit()
+
+    async with factory() as s:
+        repo = Repo(s)
+        # source gone
+        assert await repo.get_speaker(_USER, a_id) is None
+        # both fragments now live under the target
+        samples = await repo.list_voice_samples(b_id)
+        assert len(samples) == 2
+        assert {v.speaker_id for v in samples} == {b_id}
+        # decision rewritten a -> b, so the name survives in old tasks
+        dec = (await s.scalars(select(MatchDecision))).one()
+        assert dec.speaker_id == b_id
+
+
+@pytest.mark.asyncio
+async def test_merge_same_speaker_false(factory):
+    async with factory() as s:
+        repo = Repo(s)
+        a = await repo.create_speaker(_USER, "A")
+        await s.commit()
+        assert await repo.merge_speakers(_USER, a.id, a.id) is False
+
+
+@pytest.mark.asyncio
+async def test_merge_isolation(factory):
+    async with factory() as s:
+        repo = Repo(s)
+        a = await repo.create_speaker(_USER, "A")
+        b = await repo.create_speaker(_USER, "B")
+        await s.commit()
+
+        assert await repo.merge_speakers(_OTHER, a.id, b.id) is False
+        await s.commit()
+        # both survive — no cross-user deletion
+        assert await repo.get_speaker(_USER, a.id) is not None
+        assert await repo.get_speaker(_USER, b.id) is not None
