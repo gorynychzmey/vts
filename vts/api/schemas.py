@@ -357,6 +357,15 @@ class MoveVoiceSampleRequest(BaseModel):
     target_speaker_id: UUID
 
 
+class MoveCandidateOut(BaseModel):
+    id: str
+    name: str
+    sample_count: int
+    # None when the candidate has no fragment from the same embedding model,
+    # so the UI can show "—" instead of a fabricated distance.
+    distance: float | None = None
+
+
 class MergeSpeakersRequest(BaseModel):
     target_id: UUID
 

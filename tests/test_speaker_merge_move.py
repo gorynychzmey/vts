@@ -117,6 +117,67 @@ async def test_reassign_speaker_samples_isolation(factory):
         assert len(await repo.list_voice_samples(a.id)) == 1
 
 
+async def _mk_sample_vec(repo, speaker_id, vec, model="m1"):
+    return await repo.add_voice_sample(
+        speaker_id=speaker_id, embedding=vec, embedding_model=model,
+        audio=b"x", audio_format="wav", duration_sec=5.0, source_task_id=None,
+    )
+
+
+def _vec(first: float) -> list[float]:
+    v = [0.0] * 256
+    v[0] = first
+    v[1] = 1.0
+    return v
+
+
+@pytest.mark.asyncio
+async def test_move_candidates_ranks_by_distance_and_excludes_owner(factory):
+    """Candidates for moving a fragment: every OTHER speaker of this user,
+    nearest first. The fragment's current owner must not be offered."""
+    async with factory() as s:
+        repo = Repo(s)
+        owner = await repo.create_speaker(_USER, "Владелец")
+        near = await repo.create_speaker(_USER, "Близкий")
+        far = await repo.create_speaker(_USER, "Далёкий")
+        sample = await _mk_sample_vec(repo, owner.id, _vec(1.0))
+        await _mk_sample_vec(repo, near.id, _vec(0.95))
+        await _mk_sample_vec(repo, far.id, _vec(-1.0))
+        await s.commit()
+
+        ranked = await repo.move_candidates_for_sample(_USER, sample.id)
+        names = [sp.name for sp, _dist in ranked]
+        assert "Владелец" not in names
+        assert names == ["Близкий", "Далёкий"]
+
+
+@pytest.mark.asyncio
+async def test_move_candidates_includes_speakers_without_samples(factory):
+    """A person with no fragments yet still has to be a possible destination,
+    even though distance ranking cannot place them."""
+    async with factory() as s:
+        repo = Repo(s)
+        owner = await repo.create_speaker(_USER, "Владелец")
+        empty = await repo.create_speaker(_USER, "Пустой")
+        sample = await _mk_sample_vec(repo, owner.id, _vec(1.0))
+        await s.commit()
+
+        ranked = await repo.move_candidates_for_sample(_USER, sample.id)
+        assert [sp.name for sp, _d in ranked] == ["Пустой"]
+        # no comparable fragment -> no distance
+        assert ranked[0][1] is None
+
+
+@pytest.mark.asyncio
+async def test_move_candidates_isolation(factory):
+    async with factory() as s:
+        repo = Repo(s)
+        owner = await repo.create_speaker(_USER, "Владелец")
+        sample = await _mk_sample_vec(repo, owner.id, _vec(1.0))
+        await s.commit()
+        assert await repo.move_candidates_for_sample(_OTHER, sample.id) == []
+
+
 @pytest.mark.asyncio
 async def test_merge_moves_samples_rewrites_decisions_deletes_source(factory):
     async with factory() as s:

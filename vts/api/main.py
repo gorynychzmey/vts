@@ -42,6 +42,7 @@ from vts.api.schemas import (
     MeOut,
     MergeSpeakersRequest,
     MessageOut,
+    MoveCandidateOut,
     MoveVoiceSampleRequest,
     PresetCreateRequest,
     PresetOptions,
@@ -2394,6 +2395,39 @@ def create_app() -> FastAPI:
             source_task_id=str(moved.source_task_id) if moved.source_task_id else None,
             created_at=moved.created_at,
         )
+
+    @app.get(
+        "/api/speakers/{speaker_id}/samples/{sample_id}/move-candidates",
+        response_model=list[MoveCandidateOut],
+    )
+    async def move_candidates_endpoint(
+        speaker_id: uuid.UUID,
+        sample_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[MoveCandidateOut]:
+        repo = Repo(session)
+        sample = await repo.get_voice_sample(uuid.UUID(user.id), sample_id)
+        if sample is None or sample.speaker_id != speaker_id:
+            raise HTTPException(status_code=404, detail="Voice sample not found")
+        # Safety bound, not a UX top-N — same cap the match step uses so the
+        # dialog and the pipeline agree on how many candidates are considered.
+        cap = int(getattr(settings, "speaker_match_candidates_cap", 100))
+        ranked = await repo.move_candidates_for_sample(
+            uuid.UUID(user.id), sample_id, limit=cap
+        )
+        out: list[MoveCandidateOut] = []
+        for speaker, distance in ranked:
+            samples = await repo.list_voice_samples(speaker.id)
+            out.append(
+                MoveCandidateOut(
+                    id=str(speaker.id),
+                    name=speaker.name,
+                    sample_count=len(samples),
+                    distance=distance,
+                )
+            )
+        return out
 
     @app.post("/api/speakers/{source_id}/merge", status_code=204)
     async def merge_speakers_endpoint(

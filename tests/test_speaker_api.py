@@ -679,3 +679,63 @@ async def test_merge_unknown_target_404(client):
         f"/api/speakers/{a['id']}/merge", json={"target_id": str(uuid.uuid4())}
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_move_candidates_endpoint(client, authed_app):
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    def _vec(first: float) -> list[float]:
+        v = [0.0] * 256
+        v[0] = first
+        v[1] = 1.0
+        return v
+
+    async with factory() as session:
+        repo = Repo(session)
+        owner = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Владелец")
+        near = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Близкий")
+        far = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Далёкий")
+        sample = await repo.add_voice_sample(
+            speaker_id=owner.id, embedding=_vec(1.0), embedding_model="m",
+            audio=b"A", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await repo.add_voice_sample(
+            speaker_id=near.id, embedding=_vec(0.95), embedding_model="m",
+            audio=b"B", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await repo.add_voice_sample(
+            speaker_id=far.id, embedding=_vec(-1.0), embedding_model="m",
+            audio=b"C", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        owner_id, s_id = str(owner.id), str(sample.id)
+
+    r = await client.get(f"/api/speakers/{owner_id}/samples/{s_id}/move-candidates")
+    assert r.status_code == 200
+    body = r.json()
+    assert [c["name"] for c in body] == ["Близкий", "Далёкий"]
+    # the fragment's own owner is never a destination
+    assert all(c["id"] != owner_id for c in body)
+    assert body[0]["distance"] is not None
+
+
+@pytest.mark.asyncio
+async def test_move_candidates_rejects_mismatched_speaker_id(client, authed_app):
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        sample = await repo.add_voice_sample(
+            speaker_id=a.id, embedding=[0.1] * 256, embedding_model="m",
+            audio=b"A", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        b_id, s_id = str(b.id), str(sample.id)
+
+    r = await client.get(f"/api/speakers/{b_id}/samples/{s_id}/move-candidates")
+    assert r.status_code == 404

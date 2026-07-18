@@ -694,6 +694,44 @@ class Repo:
         await self.session.flush()
         return sample
 
+    async def move_candidates_for_sample(
+        self, user_id: uuid.UUID, sample_id: uuid.UUID, limit: int | None = None,
+    ) -> list[tuple[Speaker, float | None]]:
+        """Destinations for moving `sample_id`, nearest first.
+
+        Every OTHER speaker of this user is a candidate — the current owner is
+        excluded (moving a fragment to where it already is means nothing), and a
+        speaker with no comparable fragment still appears with distance None
+        rather than dropping out: an empty person is a perfectly valid
+        destination, and hiding it would make the fragment unmovable there.
+
+        Distance is MIN cosine over the candidate's fragments computed by the
+        SAME embedding model as this sample — distances across models are
+        meaningless. Ordered NULLS LAST so rankable candidates come first.
+        """
+        sample = await self.get_voice_sample(user_id, sample_id)
+        if sample is None:
+            return []
+        dist = func.min(
+            VoiceSample.embedding.cosine_distance(sample.embedding)
+        ).label("dist")
+        stmt = (
+            select(Speaker, dist)
+            .outerjoin(
+                VoiceSample,
+                (VoiceSample.speaker_id == Speaker.id)
+                & (VoiceSample.embedding_model == sample.embedding_model)
+                & (VoiceSample.id != sample_id),
+            )
+            .where(Speaker.user_id == user_id, Speaker.id != sample.speaker_id)
+            .group_by(Speaker.id)
+            .order_by(dist.asc().nullslast(), Speaker.name.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = await self.session.execute(stmt)
+        return [(row[0], None if row[1] is None else float(row[1])) for row in rows.all()]
+
     async def speaker_names_for_task(
         self, user_id: uuid.UUID, task_id: uuid.UUID,
     ) -> dict[str, str]:
