@@ -1773,3 +1773,57 @@ dialog:not([open]) {
   padding: 0.15rem 0.75rem 0.15rem 0;
   font-size: 0.85rem;
 }
+
+/* Person picker (move fragment / merge persons): a single-column list of
+   candidate people, same open-state pattern as #speaker-registry-dialog
+   (a closed <dialog> must keep UA display:none). */
+#speaker-picker-dialog[open] {
+  width: max-content;
+  min-width: min(28rem, calc(100vw - 2rem));
+  max-width: min(60vw, calc(100vw - 2rem));
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.speaker-picker-sort {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.speaker-picker-sort .btn-text.active {
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.speaker-picker-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.speaker-picker-row {
+  grid-template-columns: 1fr;
+  cursor: pointer;
+}
+
+.speaker-picker-row .tokens-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* "Create new person" is an action, not a candidate — set it apart from the
+   people below it, and it stays pinned first in both sort orders. */
+.speaker-picker-row.speaker-picker-new .tokens-name {
+  font-style: italic;
+}
+
+.speaker-picker-distance {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}

@@ -845,6 +845,38 @@
       </div>
     </dialog>
 
+    <!-- Person picker, shared by "move fragment" and "merge persons". Must stay
+         ABOVE the app.js tag: the script has no defer, so its getElementById
+         calls run before any markup that follows it exists. -->
+    <dialog id="speaker-picker-dialog" class="tokens-dialog speaker-picker-dialog">
+      <div class="tokens-dialog-header">
+        <h2 id="speaker-picker-title">Move fragment to a person</h2>
+        <button type="button" id="speaker-picker-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <div id="speaker-picker-sort" class="speaker-picker-sort hidden">
+        <button type="button" id="speaker-picker-sort-distance" class="btn-text ghost active"
+                data-i18n="speakers.registry.move_sort_distance">By similarity</button>
+        <button type="button" id="speaker-picker-sort-alpha" class="btn-text ghost"
+                data-i18n="speakers.registry.move_sort_alpha">Alphabetically</button>
+      </div>
+
+      <p id="speaker-picker-empty" class="tokens-help hidden"></p>
+      <ul id="speaker-picker-list" class="tokens-list speaker-picker-list"></ul>
+
+      <div class="voice-dialog-actions">
+        <button type="button" id="speaker-picker-cancel" class="btn-text ghost"
+                data-i18n="speakers.registry.move_cancel">Cancel</button>
+      </div>
+    </dialog>
+
     <script src="/static/status-predicates.js?v=__VTS_VERSION__"></script>
     <script src="/static/app.js?v=__VTS_VERSION__"></script>
   </body>

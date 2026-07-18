@@ -1,7 +1,11 @@
 const ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>';
 const ICON_DELETE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
 const ICON_DUPLICATE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-const ICON_MAKE_DEFAULT = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6.5 7 .9-5 4.8 1.3 7L12 17.8 5.4 21.2 6.7 14.2 1.7 9.4l7-.9z"/></svg>';
+// Two arrows converging into one — "merge these people into one person".
+const ICON_MERGE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v4a5 5 0 0 0 5 5h6M6 21v-4a5 5 0 0 1 5-5h6"/><path d="M14 9l3 3-3 3"/></svg>';
+// Arrow leaving a box — "move this fragment somewhere else".
+const ICON_MOVE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/><path d="M14 4h6v6"/><path d="M20 4l-8 8"/></svg>';
+const ICON_MAKE_DEFAULT ='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6.5 7 .9-5 4.8 1.3 7L12 17.8 5.4 21.2 6.7 14.2 1.7 9.4l7-.9z"/></svg>';
 const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
@@ -3556,8 +3560,24 @@ const speakerSamplesEmptyEl = document.getElementById("speaker-samples-empty");
 const speakerCreateForm = document.getElementById("speaker-create-form");
 const speakerCreateNameInput = document.getElementById("speaker-create-name");
 
+const speakerPickerDialog = document.getElementById("speaker-picker-dialog");
+const speakerPickerTitleEl = document.getElementById("speaker-picker-title");
+const speakerPickerListEl = document.getElementById("speaker-picker-list");
+const speakerPickerEmptyEl = document.getElementById("speaker-picker-empty");
+const speakerPickerSortEl = document.getElementById("speaker-picker-sort");
+const speakerPickerSortDistanceBtn = document.getElementById("speaker-picker-sort-distance");
+const speakerPickerSortAlphaBtn = document.getElementById("speaker-picker-sort-alpha");
+const speakerPickerCloseBtn = document.getElementById("speaker-picker-close-btn");
+const speakerPickerCancelBtn = document.getElementById("speaker-picker-cancel");
+
 let speakerRegistryCache = [];
 let selectedSpeakerId = "";
+// Picker state: candidates as loaded, how they are currently ordered, and what
+// to do once one is chosen. Shared by "move fragment" and "merge persons".
+let speakerPickerCandidates = [];
+let speakerPickerSort = "distance";
+let speakerPickerOnPick = null;
+let speakerPickerAllowNew = false;
 
 function speakerRowById(id) {
   return speakerListEl?.querySelector(`[data-speaker-id="${CSS.escape(String(id))}"]`);
@@ -3616,6 +3636,16 @@ function renderSpeakers(list) {
     renameBtn.innerHTML = ICON_EDIT;
     renameBtn.addEventListener("click", () => enterSpeakerRename(row, speaker));
     actions.appendChild(renameBtn);
+
+    // The merge button sits on the SOURCE — the person that will disappear.
+    const mergeBtn = document.createElement("button");
+    mergeBtn.type = "button";
+    mergeBtn.className = "icon-btn ghost speaker-merge-btn";
+    mergeBtn.setAttribute("data-tooltip", t("speakers.registry.merge"));
+    mergeBtn.setAttribute("aria-label", t("speakers.registry.merge"));
+    mergeBtn.innerHTML = ICON_MERGE;
+    mergeBtn.addEventListener("click", () => mergeSpeaker(speaker));
+    actions.appendChild(mergeBtn);
 
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -3771,6 +3801,15 @@ function renderSamples(samples) {
 
     row.appendChild(meta);
 
+    const moveBtn = document.createElement("button");
+    moveBtn.type = "button";
+    moveBtn.className = "icon-btn ghost speaker-sample-move-btn";
+    moveBtn.setAttribute("data-tooltip", t("speakers.registry.move_sample"));
+    moveBtn.setAttribute("aria-label", t("speakers.registry.move_sample"));
+    moveBtn.innerHTML = ICON_MOVE;
+    moveBtn.addEventListener("click", () => moveSample(sample));
+    row.appendChild(moveBtn);
+
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "icon-btn ghost danger";
@@ -3798,6 +3837,206 @@ async function deleteSample(sample) {
   }
   await refreshSpeakerSamples(selectedSpeakerId);
   await refreshSpeakerRegistry({ keepSamples: true });
+}
+
+// ---------- Person picker (move fragment / merge persons) ----------
+
+function closeSpeakerPicker() {
+  speakerPickerOnPick = null;
+  speakerPickerCandidates = [];
+  speakerPickerDialog?.close();
+}
+
+function sortedPickerCandidates() {
+  const list = speakerPickerCandidates.slice();
+  if (speakerPickerSort === "alpha") {
+    list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return list;
+  }
+  // Distance order: the server already ranked these, but a candidate with no
+  // comparable fragment carries distance null and must sink to the bottom
+  // rather than sorting as if it were nearest.
+  list.sort((a, b) => {
+    const da = a.distance === null || a.distance === undefined ? Infinity : Number(a.distance);
+    const db = b.distance === null || b.distance === undefined ? Infinity : Number(b.distance);
+    if (da === db) return String(a.name).localeCompare(String(b.name));
+    return da - db;
+  });
+  return list;
+}
+
+function renderSpeakerPicker() {
+  if (!speakerPickerListEl) return;
+  speakerPickerListEl.innerHTML = "";
+
+  const rows = [];
+  if (speakerPickerAllowNew) {
+    // "Create new" stays first in BOTH orderings — it is an action, not a
+    // candidate, so it must not drift into the middle of the sorted list.
+    rows.push({ id: "", name: t("speakers.registry.move_new_person"), isNew: true });
+  }
+  rows.push(...sortedPickerCandidates());
+
+  const hasCandidates = speakerPickerCandidates.length > 0;
+  speakerPickerEmptyEl?.classList.toggle("hidden", hasCandidates);
+  speakerPickerSortEl?.classList.toggle("hidden", !hasCandidates);
+
+  for (const item of rows) {
+    const row = document.createElement("li");
+    row.className = "tokens-row speaker-picker-row";
+    if (item.isNew) row.classList.add("speaker-picker-new");
+    row.dataset.speakerId = item.id || "";
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "tokens-name";
+    nameEl.textContent = item.name;
+    meta.appendChild(nameEl);
+
+    if (!item.isNew) {
+      const dist = document.createElement("span");
+      dist.className = "speaker-picker-distance";
+      dist.textContent =
+        item.distance === null || item.distance === undefined
+          ? t("speakers.registry.no_distance")
+          : Number(item.distance).toFixed(3);
+      meta.appendChild(dist);
+    }
+
+    row.appendChild(meta);
+    row.addEventListener("click", () => {
+      const handler = speakerPickerOnPick;
+      if (handler) handler(item);
+    });
+    speakerPickerListEl.appendChild(row);
+  }
+}
+
+function openSpeakerPicker({ title, candidates, allowNew, emptyText, onPick }) {
+  speakerPickerCandidates = Array.isArray(candidates) ? candidates : [];
+  speakerPickerAllowNew = !!allowNew;
+  speakerPickerOnPick = onPick;
+  speakerPickerSort = "distance";
+  if (speakerPickerTitleEl) speakerPickerTitleEl.textContent = title;
+  if (speakerPickerEmptyEl) speakerPickerEmptyEl.textContent = emptyText || "";
+  speakerPickerSortDistanceBtn?.classList.add("active");
+  speakerPickerSortAlphaBtn?.classList.remove("active");
+  renderSpeakerPicker();
+  if (speakerPickerDialog && !speakerPickerDialog.open) speakerPickerDialog.showModal();
+}
+
+speakerPickerSortDistanceBtn?.addEventListener("click", () => {
+  speakerPickerSort = "distance";
+  speakerPickerSortDistanceBtn.classList.add("active");
+  speakerPickerSortAlphaBtn?.classList.remove("active");
+  renderSpeakerPicker();
+});
+
+speakerPickerSortAlphaBtn?.addEventListener("click", () => {
+  speakerPickerSort = "alpha";
+  speakerPickerSortAlphaBtn.classList.add("active");
+  speakerPickerSortDistanceBtn?.classList.remove("active");
+  renderSpeakerPicker();
+});
+
+speakerPickerCloseBtn?.addEventListener("click", closeSpeakerPicker);
+speakerPickerCancelBtn?.addEventListener("click", closeSpeakerPicker);
+
+async function moveSample(sample) {
+  let candidates = [];
+  try {
+    candidates = await api(
+      `/api/speakers/${encodeURIComponent(selectedSpeakerId)}/samples/${encodeURIComponent(sample.id)}/move-candidates`
+    );
+  } catch (err) {
+    console.error("Failed to load move candidates", err);
+    return;
+  }
+
+  openSpeakerPicker({
+    title: t("speakers.registry.move_title"),
+    candidates,
+    allowNew: true,
+    emptyText: t("speakers.registry.move_empty"),
+    onPick: async (item) => {
+      let targetId = item.id;
+      let targetName = item.name;
+
+      if (item.isNew) {
+        const name = window.prompt(t("speakers.registry.move_new_name_prompt"));
+        if (!name || !name.trim()) return;
+        try {
+          const created = await api("/api/speakers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name.trim() }),
+          });
+          targetId = created.id;
+          targetName = created.name;
+        } catch (err) {
+          console.error("speaker create failed", err);
+          return;
+        }
+      } else if (!window.confirm(t("speakers.registry.move_confirm", { name: targetName }))) {
+        return;
+      }
+
+      try {
+        await api(
+          `/api/speakers/${encodeURIComponent(selectedSpeakerId)}/samples/${encodeURIComponent(sample.id)}/move`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ target_speaker_id: targetId }),
+          }
+        );
+      } catch (err) {
+        console.error("speaker sample move failed", err);
+        return;
+      }
+      closeSpeakerPicker();
+      // The fragment left this person, so both columns are now stale.
+      await refreshSpeakerSamples(selectedSpeakerId);
+      await refreshSpeakerRegistry({ keepSamples: true });
+    },
+  });
+}
+
+async function mergeSpeaker(source) {
+  const others = speakerRegistryCache.filter((s) => s.id !== source.id);
+  openSpeakerPicker({
+    title: t("speakers.registry.merge_title", { name: source.name }),
+    // Merge targets an EXISTING person: "create new" makes no sense here,
+    // and distance ranking needs a fragment, which a person-level merge has not.
+    candidates: others.map((s) => ({ id: s.id, name: s.name, distance: null })),
+    allowNew: false,
+    emptyText: t("speakers.registry.merge_empty"),
+    onPick: async (item) => {
+      const confirmed = window.confirm(
+        t("speakers.registry.merge_confirm", { source: source.name, target: item.name })
+      );
+      if (!confirmed) return;
+      try {
+        await api(`/api/speakers/${encodeURIComponent(source.id)}/merge`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_id: item.id }),
+        });
+      } catch (err) {
+        console.error("speaker merge failed", err);
+        return;
+      }
+      closeSpeakerPicker();
+      // The source is gone; if it was selected, follow the data to the target.
+      if (selectedSpeakerId === source.id) {
+        selectedSpeakerId = item.id;
+      }
+      await refreshSpeakerRegistry();
+      if (selectedSpeakerId) await refreshSpeakerSamples(selectedSpeakerId);
+    },
+  });
 }
 
 function jumpToTask(taskId) {
