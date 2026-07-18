@@ -110,6 +110,14 @@ class Settings(BaseSettings):
     # false one on that dataset — see docs/ARCHITECTURE.md "Speaker matching".
     speaker_match_max_distance_auto: float = 0.25      # <= -> auto-bind (conservative start)
     speaker_match_max_distance_candidate: float = 0.55  # > -> not even a candidate
+    # Safety bound on nearest_speakers, NOT a UX top-N: the resolution dialog
+    # must show ALL of the user's candidates sorted by distance so a real
+    # match is never hidden behind a cutoff (a hidden match forces the user
+    # into creating a duplicate person, see vts-552). 100 is far above any
+    # expected personal registry size, so "all candidates" behavior holds in
+    # practice — this only guards against a pathological registry with
+    # hundreds/thousands of speakers.
+    speaker_match_candidates_cap: int = 100
     speaker_preview_count: int = 3
     speaker_preview_seconds: float = 5.0
     speaker_preview_min_segment: float = 2.0
@@ -434,6 +442,7 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_diarization_min_speaker_share": "diarization_min_speaker_share",
         "services_speaker_match_max_distance_auto": "speaker_match_max_distance_auto",
         "services_speaker_match_max_distance_candidate": "speaker_match_max_distance_candidate",
+        "services_speaker_match_candidates_cap": "speaker_match_candidates_cap",
         "services_speaker_preview_count": "speaker_preview_count",
         "services_speaker_preview_seconds": "speaker_preview_seconds",
         "services_speaker_preview_min_segment": "speaker_preview_min_segment",

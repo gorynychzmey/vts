@@ -55,8 +55,15 @@ class MatchSpeakersStep(Step):
         matches: dict[str, dict] = {}
         async with ctx.session_factory() as session:
             repo = Repo(session)
+            # limit is a pathology guard (hundreds/thousands of speakers), NOT
+            # a UX top-N: the resolution dialog needs ALL of the user's
+            # candidates sorted by distance, so a real match is never hidden
+            # behind a cutoff. speaker_match_candidates_cap defaults far above
+            # any expected personal registry, so "all candidates" holds in
+            # practice.
+            cap = ctx.settings.speaker_match_candidates_cap
             for label, vector in embeddings.items():
-                ranked = await repo.nearest_speakers(uuid.UUID(st.user_id), vector, model)
+                ranked = await repo.nearest_speakers(uuid.UUID(st.user_id), vector, model, limit=cap)
                 nearest = ranked[0] if ranked else None
                 dist = nearest[1] if nearest else None
                 outcome = bucket(dist, auto=auto, candidate=cand)
