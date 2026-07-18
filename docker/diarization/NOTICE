@@ -1,0 +1,32 @@
+VTS Diarization Sidecar — Third-Party Attribution
+==================================================
+
+This container bundles the pyannote speaker-diarization pipeline and its model
+weights. Attribution is provided here per the terms of the weights' license.
+
+pyannote.audio
+--------------
+Software: pyannote.audio (https://github.com/pyannote/pyannote-audio)
+License:  MIT
+
+Model weights: speaker-diarization-community-1
+--------------------------------------------------
+Source:   https://huggingface.co/pyannote-community/speaker-diarization-community-1
+License:  CC-BY-4.0 (Creative Commons Attribution 4.0 International)
+          https://creativecommons.org/licenses/by/4.0/
+
+The following weight artifacts are vendored into this image at build time
+(fetch_models.py, verified by pinned sha256) and used at runtime offline:
+
+  - config.yaml                     (pipeline wiring)
+  - segmentation/pytorch_model.bin  (speaker segmentation)
+  - embedding/pytorch_model.bin     (speaker embedding, WeSpeaker ResNet, 256-dim)
+  - plda/plda.npz                   (VBx clustering parameters)
+  - plda/xvec_transform.npz         (VBx clustering parameters)
+
+CC-BY-4.0 requires attribution to the original authors. The pyannote authors
+and the speaker-diarization-community-1 model are credited above. No changes
+were made to the weights; they are redistributed unmodified.
+
+If you cite this work academically, cite the pyannote.audio papers as listed on
+the pyannote.audio repository.

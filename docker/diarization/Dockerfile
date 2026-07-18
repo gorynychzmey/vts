@@ -38,5 +38,7 @@ ENV HF_HUB_OFFLINE=1 \
     MODEL_DIR=/models
 
 COPY server.py .
+# CC-BY-4.0 requires attribution to travel with the vendored weights (in /models).
+COPY NOTICE .
 EXPOSE 9100
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9100"]
