@@ -166,14 +166,37 @@ def log_metrics(logger: logging.Logger, metrics: SummarizationMetrics) -> None:
     )
 
 
-def render_prompt_budget_vars(
+def participant_vars(named: list[str], anonymous: list[str]) -> dict[str, str]:
+    """Participant lists as JSON arrays for ${NAMED_SPEAKERS}/${ANONYMOUS_SPEAKERS}.
+
+    Code serializes, the prompt interprets: the prompt file states that either
+    array may be empty, so an undiarized task substitutes "[]" rather than the
+    code inventing wording. ensure_ascii=False keeps "Вася" readable in the
+    prompt instead of escaping it to a \\u sequence the model reads as noise.
+    """
+    return {
+        "NAMED_SPEAKERS": json.dumps(named, ensure_ascii=False),
+        "ANONYMOUS_SPEAKERS": json.dumps(anonymous, ensure_ascii=False),
+    }
+
+
+def render_prompt_vars(
     prompt: str,
     *,
     language: str | None = None,
     input_tokens: int | None = None,
     target_tokens: int | None = None,
     target_ratio: float | None = None,
+    named_speakers: list[str] | None = None,
+    anonymous_speakers: list[str] | None = None,
 ) -> str:
+    """Substitute every prompt template variable: language, budget, participants.
+
+    Renamed from render_prompt_budget_vars once it grew past budget vars. The
+    participant arrays always substitute (defaulting to empty) so a prompt file
+    carrying ${NAMED_SPEAKERS} never leaks the raw placeholder to the model on
+    an undiarized task.
+    """
     if language is not None:
         prompt = render_prompt_with_language(prompt, language)
     prompt = inject_budget_vars(
@@ -182,6 +205,10 @@ def render_prompt_budget_vars(
         target_tokens=target_tokens,
         target_ratio=target_ratio,
     )
+    for key, value in participant_vars(
+        named_speakers or [], anonymous_speakers or []
+    ).items():
+        prompt = prompt.replace(f"${{{key}}}", value)
     return prompt
 
 
@@ -629,7 +656,7 @@ class SummarizeWindowsStep(Step):
                     )
                     window_cfg = uncap_segment_for_input(budget_cfg, input_tokens)
                     target_tokens, min_out, max_out = compute_segment_budget(input_tokens, window_cfg)
-                    budgeted_prompt = render_prompt_budget_vars(
+                    budgeted_prompt = render_prompt_vars(
                         segment_prompt,
                         input_tokens=input_tokens,
                         target_tokens=target_tokens,
@@ -822,7 +849,7 @@ class PackWindowNotesStep(Step):
         budget_cfg = token_budget_config(ctx.settings, await ctx.get_n_ctx(st.task_id, st.logger))
 
         # Load final prompt to measure its token cost
-        final_prompt_text = render_prompt_budget_vars(
+        final_prompt_text = render_prompt_vars(
             render_prompt_with_language(
                 load_prompt(
                     ctx.settings.prompts_dir,
@@ -920,7 +947,7 @@ class PackWindowNotesStep(Step):
                     target_tokens, min_out, max_out = compute_pack_budget(
                         batch_input_tokens, budget_cfg
                     )
-                    pack_system_prompt = render_prompt_budget_vars(
+                    pack_system_prompt = render_prompt_vars(
                         pack_prompt_template,
                         input_tokens=batch_input_tokens,
                         target_tokens=target_tokens,
@@ -1142,7 +1169,7 @@ class FinalizePromptStep(Step):
             timeout_seconds=timeout_seconds,
             tokenizer_path=tokenizer_path(ctx.settings),
         )
-        global_prompt = render_prompt_budget_vars(
+        global_prompt = render_prompt_vars(
             global_prompt_base,
             input_tokens=input_tokens,
             target_tokens=target_tokens,

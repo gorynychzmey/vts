@@ -38,3 +38,6 @@ If you accidentally start writing in another language, immediately rewrite that 
 
 Input:
 - Approx input size: ${INPUT_WORDS} words
+- Названные участники диалога (JSON-массив, может быть пустым): ${NAMED_SPEAKERS}
+- Анонимные участники (JSON-массив, может быть пустым): ${ANONYMOUS_SPEAKERS}
+- Имена участников — это реальные люди из реестра голосов. Используй имя ровно так, как оно указано, и никогда не переводи и не склоняй его в метке реплики.
