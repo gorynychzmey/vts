@@ -657,6 +657,43 @@ class Repo:
         await self.session.flush()
         return True
 
+    async def reassign_speaker_samples(
+        self, user_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,
+    ) -> int:
+        """Move all of source's voice samples to target. Both must be the user's.
+
+        Returns the number of samples reassigned. Does not touch MatchDecision —
+        callers that need decision rewriting (merge) do it separately.
+        """
+        source = await self.get_speaker(user_id, source_id)
+        target = await self.get_speaker(user_id, target_id)
+        if source is None or target is None:
+            return 0
+        result = await self.session.execute(
+            update(VoiceSample)
+            .where(VoiceSample.speaker_id == source_id)
+            .values(speaker_id=target_id)
+        )
+        await self.session.flush()
+        return result.rowcount or 0
+
+    async def move_voice_sample(
+        self, user_id: uuid.UUID, sample_id: uuid.UUID, target_speaker_id: uuid.UUID,
+    ) -> VoiceSample | None:
+        """Reassign one sample to another of the user's speakers. None if not found.
+
+        Deliberately leaves MatchDecision alone: a move says "this fragment was
+        filed under the wrong person", not "that past match was wrong", so the
+        calibration history must keep pointing where it did.
+        """
+        sample = await self.get_voice_sample(user_id, sample_id)
+        target = await self.get_speaker(user_id, target_speaker_id)
+        if sample is None or target is None:
+            return None
+        sample.speaker_id = target_speaker_id
+        await self.session.flush()
+        return sample
+
     async def find_prior_decision_sample(
         self, user_id: uuid.UUID, source_task_id: uuid.UUID, speaker_label: str,
     ) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
