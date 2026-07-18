@@ -2355,6 +2355,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(get_session_dep),
     ) -> Response:
         repo = Repo(session)
+        sample = await repo.get_voice_sample(uuid.UUID(user.id), sample_id)
+        if sample is None or sample.speaker_id != speaker_id:
+            raise HTTPException(status_code=404, detail="Voice sample not found")
         ok = await repo.delete_voice_sample(uuid.UUID(user.id), sample_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Voice sample not found")

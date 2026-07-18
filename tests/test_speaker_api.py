@@ -86,6 +86,42 @@ async def test_list_and_delete_voice_samples(client, authed_app):
 
 
 @pytest.mark.asyncio
+async def test_delete_voice_sample_rejects_mismatched_speaker_id(client, authed_app):
+    """The {speaker_id} path segment must actually own {sample_id} — deleting
+    sample S_A via a URL naming unrelated speaker B must 404 and leave S_A
+    intact, even though S_A belongs to the same (authenticated) user."""
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        speaker_a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        speaker_b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        sample_a = await repo.add_voice_sample(
+            speaker_id=speaker_a.id, embedding=[0.1] * 256, embedding_model="m",
+            audio=b"AUDIO_A", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        a_id, b_id, sa_id = str(speaker_a.id), str(speaker_b.id), str(sample_a.id)
+
+    # Wrong speaker in the URL: must 404, and the sample must survive.
+    r = await client.delete(f"/api/speakers/{b_id}/samples/{sa_id}")
+    assert r.status_code == 404
+
+    r = await client.get(f"/api/speakers/{a_id}/samples")
+    assert r.status_code == 200
+    assert any(s["id"] == sa_id for s in r.json())
+
+    # Correct speaker in the URL: must succeed and actually delete it.
+    r = await client.delete(f"/api/speakers/{a_id}/samples/{sa_id}")
+    assert r.status_code == 204
+
+    r = await client.get(f"/api/speakers/{a_id}/samples")
+    assert r.status_code == 200
+    assert all(s["id"] != sa_id for s in r.json())
+
+
+@pytest.mark.asyncio
 async def test_get_sample_audio(client, authed_app):
     _app, factory = authed_app
     from vts.db.repo import Repo
