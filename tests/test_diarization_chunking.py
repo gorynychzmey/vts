@@ -50,6 +50,48 @@ def test_split_utterances_does_not_split_on_embedded_single_newline() -> None:
     assert result == [text]
 
 
+def test_split_utterances_recognizes_named_labels() -> None:
+    """Registry names replace "Голос N" in the rendered transcript (vts-552),
+    so the splitter must treat "Вася:" as a label or a named dialogue collapses
+    into one undifferentiated blob."""
+    text = "Вася: привет как дела\n\nПетя: нормально а у тебя"
+    assert split_utterances(text) == [
+        "Вася: привет как дела",
+        "Петя: нормально а у тебя",
+    ]
+
+
+def test_split_utterances_mixes_named_and_numbered_labels() -> None:
+    """Only some voices get matched to a registry person, so both label shapes
+    appear in the same transcript."""
+    text = "Вася: привет\n\nГолос 2: кто это\n\nВася: это я"
+    assert split_utterances(text) == ["Вася: привет", "Голос 2: кто это", "Вася: это я"]
+
+
+def test_split_utterances_named_label_with_surname() -> None:
+    text = "Иван Петров: доклад начат\n\nГолос 2: спасибо"
+    assert split_utterances(text) == ["Иван Петров: доклад начат", "Голос 2: спасибо"]
+
+
+def test_split_utterances_does_not_split_on_prose_colon() -> None:
+    """A blank line followed by a sentence that merely contains a colon is not
+    a label — broadening the regex must not fabricate utterance boundaries."""
+    text = (
+        "Голос 1: вот что я думаю\n\n"
+        "Именно поэтому мы решили так: сначала тесты, потом код, и это важно"
+    )
+    # Current behavior (must not regress): a prose block after a blank line is
+    # NOT a label, so it stays attached to the utterance it follows rather than
+    # becoming a fabricated speaker named "Именно поэтому мы решили так".
+    assert split_utterances(text) == [text]
+
+
+def test_split_utterances_named_label_not_split_on_embedded_newline() -> None:
+    """The blank-line boundary rule must hold for named labels too."""
+    text = "он мне сказал\nВася: пока и ушел"
+    assert split_utterances(text) == [text]
+
+
 class _FakeTokenizer:
     """Token == word, which keeps the window arithmetic readable in tests."""
 

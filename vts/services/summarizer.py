@@ -29,7 +29,23 @@ from vts.services.diarization.merge import LABEL_WORDS
 # "Голос" would see an English-language diarized transcript's "Speaker 1: ..."
 # as one undifferentiated blob and silently stop splitting on utterances.
 _LABEL_ALTERNATION = "|".join(re.escape(word) for word in LABEL_WORDS)
-_UTTERANCE_RE = re.compile(rf"(?:^|(?<=\n\n))(?:{_LABEL_ALTERNATION}) \d+: ")
+# Registry person names replace "Голос N" in the rendered transcript (vts-552),
+# so the splitter must also accept a bare "Вася: " / "Иван Петров: " label —
+# otherwise a fully-named dialogue carries no recognisable label and collapses
+# into one undifferentiated blob, silently disabling utterance-aware chunking.
+#
+# A name label is 1-3 whitespace-separated words, each starting with a letter
+# (not a digit, so it cannot shadow the numbered form) and free of sentence
+# punctuation. That word cap is what separates a label from prose that merely
+# opens a block with a colon: "Именно поэтому мы решили так: ..." is 5 words and
+# does not match. A <=3-word prose clause ("Итак: ...") is genuinely ambiguous
+# with a one-word name and does match — accepted deliberately, since the cost is
+# one utterance split in two, versus named dialogues never splitting at all.
+_NAME_WORD = r"[^\W\d_][^\s:,;.!?]*"
+_NAME_LABEL = rf"{_NAME_WORD}(?:[ ]{_NAME_WORD}){{0,2}}"
+_UTTERANCE_RE = re.compile(
+    rf"(?:^|(?<=\n\n))(?:(?:{_LABEL_ALTERNATION}) \d+|{_NAME_LABEL}): "
+)
 
 
 def split_utterances(text: str) -> list[str]:
