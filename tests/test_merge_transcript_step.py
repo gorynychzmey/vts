@@ -56,6 +56,12 @@ class _FakeRepo:
     async def get_task_by_id(self, task_id: uuid.UUID) -> SimpleNamespace:
         return SimpleNamespace(transcript_path=None)
 
+    async def speaker_names_for_task(
+        self, user_id: uuid.UUID, task_id: uuid.UUID
+    ) -> dict[str, str]:
+        # No registry matches in this fixture — the step must render "Голос N".
+        return {}
+
 
 class _DummyBus:
     async def publish_event(self, **kwargs: object) -> None:
@@ -174,8 +180,10 @@ def test_merge_transcript_step_attributes_speakers_correctly_across_a_silent_chu
     )
 
     st = StepState(
+        # The real pipeline always passes str(task.user_id) — a UUID string —
+        # and the step parses it back to look up registry names.
         task_id=uuid.uuid4(),
-        user_id="user-1",
+        user_id=str(uuid.uuid4()),
         dirs=dirs,
         logger=logging.getLogger("test_merge_transcript_step"),
         # Explicit language so the rendered label matches the fixture's actual
@@ -203,3 +211,58 @@ def test_merge_transcript_step_attributes_speakers_correctly_across_a_silent_chu
     assert entries[1]["speaker"] == "SPEAKER_00"
     assert entries[2]["speaker"] == "SPEAKER_01"
     assert payload["text"] == "Голос 1: привет мир как быстро\n\nГолос 2: у дела"
+
+
+def test_merge_transcript_step_renders_registry_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end through the step: a voice matched to a registry person renders
+    as that person's name in transcript.json, while an unmatched voice keeps its
+    numbered label. Covers the step's DB lookup, which the pure-function tests
+    of apply_diarization cannot reach."""
+    dirs = _dirs(tmp_path)
+    segments = _segments_with_one_silent_chunk()
+    ctx = _ctx(monkeypatch, segments)
+
+    # Re-patch Repo so speaker_names_for_task reports a match for SPEAKER_00.
+    class _NamingRepo(_FakeRepo):
+        async def speaker_names_for_task(
+            self, user_id: uuid.UUID, task_id: uuid.UUID
+        ) -> dict[str, str]:
+            return {"SPEAKER_00": "Вася"}
+
+    monkeypatch.setattr(
+        "vts.pipeline.steps.transcription.Repo",
+        lambda session: _NamingRepo(session, segments),
+    )
+
+    diar_path = dirs["outputs"] / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"},
+                    {"start": 6.0, "end": 8.0, "speaker": "SPEAKER_00"},
+                    {"start": 8.0, "end": 9.0, "speaker": "SPEAKER_01"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id=str(uuid.uuid4()),
+        dirs=dirs,
+        logger=logging.getLogger("test_merge_transcript_step"),
+        task_options={"language": "ru"},
+    )
+
+    assert asyncio.run(MergeTranscriptStep().run(ctx, st)) is True
+
+    payload = json.loads((dirs["outputs"] / "transcript.json").read_text(encoding="utf-8"))
+    # Technical tags stay in the entries — substitution is render-time only.
+    assert [e["speaker"] for e in payload["entries"]] == [
+        "SPEAKER_00", "SPEAKER_00", "SPEAKER_01",
+    ]
+    assert payload["text"] == "Вася: привет мир как быстро\n\nГолос 2: у дела"

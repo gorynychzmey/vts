@@ -251,3 +251,57 @@ def test_english_diarized_transcript_still_splits_into_utterances(tmp_path: Path
         "Speaker 2: good morning to you too",
     ]
     assert len(utterances) > 1  # the coupling this test exists to catch
+
+
+def test_apply_diarization_substitutes_registry_names(tmp_path: Path) -> None:
+    """A matched voice renders as the person's name; an unmatched one keeps
+    its numbered label and its position in the numbering."""
+    diar_path = tmp_path / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+                    {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+                ],
+                "embeddings": {},
+                "num_speakers": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    entries = [
+        {"start": 0.0, "end": 4.0, "text": "привет"},
+        {"start": 6.0, "end": 9.0, "text": "здравствуй"},
+    ]
+    result, text, _ = apply_diarization(
+        entries, {}, diar_path, min_words=2, min_seconds=0.8, min_share=0.05,
+        names={"SPEAKER_00": "Вася"},
+    )
+    # Technical tags survive in the data — substitution is render-time only.
+    assert [e["speaker"] for e in result] == ["SPEAKER_00", "SPEAKER_01"]
+    assert text == "Вася: привет\n\nГолос 2: здравствуй"
+
+
+def test_apply_diarization_without_names_is_unchanged(tmp_path: Path) -> None:
+    diar_path = tmp_path / "diarization.json"
+    diar_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+                    {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
+                ],
+                "num_speakers": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    entries = [
+        {"start": 0.0, "end": 4.0, "text": "привет"},
+        {"start": 6.0, "end": 9.0, "text": "здравствуй"},
+    ]
+    _, text, _ = apply_diarization(
+        entries, {}, diar_path, min_words=2, min_seconds=0.8, min_share=0.05,
+    )
+    assert text == "Голос 1: привет\n\nГолос 2: здравствуй"

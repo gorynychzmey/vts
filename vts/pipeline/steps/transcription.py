@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,6 +164,7 @@ def apply_diarization(
     min_seconds: float,
     min_share: float,
     language: str | None = "ru",
+    names: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
     """Attribute entries to speakers, returning the rendered text when diarized.
 
@@ -192,6 +194,12 @@ def apply_diarization(
     practice — DetectLanguageStep raises on every no-language path and runs
     before merge_transcript in the DAG, so a task with no established language
     fails before reaching here.
+
+    `names` maps a technical tag to a registry person's name (resolved by the
+    caller via speaker_names_for_task — this function stays free of DB access).
+    Matched voices render as the bare name, unmatched ones keep "<label> N".
+    Substitution is render-time only: entries[i]["speaker"] keeps its technical
+    tag, so a later rename or merge re-renders correctly from the same data.
     """
     if not diarization_path.exists():
         return entries, None, None
@@ -209,7 +217,7 @@ def apply_diarization(
     merged = merge_entries(entries, raw_json_by_index, diar_segments, min_words, min_seconds)
     trimmed, cleanup_meta = trim_repetitive_entries(merged)
     cleaned = drop_marginal_speakers(trimmed, min_share)
-    mapping = label_map(cleaned, speaker_label_word(language))
+    mapping = label_map(cleaned, speaker_label_word(language), names=names)
     text = render_cleaned_transcript(cleaned, mapping)
     return cleaned, text, cleanup_meta
 
@@ -556,6 +564,12 @@ class MergeTranscriptStep(Step):
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)
 
+            # Registry names for the voices this task already matched. Empty for
+            # an undiarized or unmatched task, which renders "Голос N" as before.
+            speaker_names = await repo.speaker_names_for_task(
+                uuid.UUID(st.user_id), st.task_id
+            )
+
             entries, diarized_text, diarized_cleanup_meta = apply_diarization(
                 entries,
                 raw_json_by_index,
@@ -569,6 +583,7 @@ class MergeTranscriptStep(Step):
                 # will later target — keeping them in lockstep is what fixes
                 # the "output MUST be English" vs "keep Голос 1:" contradiction.
                 language=effective_language(st.task_options, st.dirs),
+                names=speaker_names,
             )
             # The diarized path cleans hallucinations at the entry level (see
             # apply_diarization), which can drop a different number of units than
