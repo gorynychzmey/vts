@@ -694,6 +694,28 @@ class Repo:
         await self.session.flush()
         return sample
 
+    async def speaker_names_for_task(
+        self, user_id: uuid.UUID, task_id: uuid.UUID,
+    ) -> dict[str, str]:
+        """Map speaker_label -> current Speaker.name for this task's matched voices.
+
+        Joining decisions to speakers means a deleted person (speaker_id SET NULL,
+        or the row gone) simply drops out — the caller renders "Голос N" for absent
+        labels. Ordered ascending so the latest decision per label wins; id breaks
+        ties between decisions written in the same transaction.
+        """
+        stmt = (
+            select(MatchDecision.speaker_label, Speaker.name)
+            .join(Speaker, MatchDecision.speaker_id == Speaker.id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == task_id,
+            )
+            .order_by(MatchDecision.created_at.asc(), MatchDecision.id.asc())
+        )
+        rows = await self.session.execute(stmt)
+        return {str(label): str(name) for label, name in rows.all()}
+
     async def merge_speakers(
         self, user_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,
     ) -> bool:
