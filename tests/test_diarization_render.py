@@ -11,6 +11,48 @@ def test_label_map_orders_by_first_appearance() -> None:
     assert label_map(entries) == {"SPEAKER_01": "Голос 1", "SPEAKER_00": "Голос 2"}
 
 
+def test_label_map_substitutes_names_where_present() -> None:
+    entries = [
+        {"start": 0.0, "end": 1.0, "text": "a", "speaker": "SPEAKER_00"},
+        {"start": 1.0, "end": 2.0, "text": "b", "speaker": "SPEAKER_01"},
+        {"start": 2.0, "end": 3.0, "text": "c", "speaker": "SPEAKER_00"},
+    ]
+    m = label_map(entries, "Голос", names={"SPEAKER_00": "Вася"})
+    assert m["SPEAKER_00"] == "Вася"
+    # the unnamed voice keeps its position in the numbering — a named person
+    # still occupies a slot, so numbering does not shift when someone is named
+    assert m["SPEAKER_01"] == "Голос 2"
+
+
+def test_label_map_none_names_is_current_behavior() -> None:
+    entries = [
+        {"start": 0.0, "end": 1.0, "text": "a", "speaker": "SPEAKER_00"},
+        {"start": 1.0, "end": 2.0, "text": "b", "speaker": "SPEAKER_01"},
+    ]
+    assert label_map(entries, "Голос") == {
+        "SPEAKER_00": "Голос 1",
+        "SPEAKER_01": "Голос 2",
+    }
+
+
+def test_label_map_ignores_names_for_absent_labels() -> None:
+    """A name for a speaker who does not appear (e.g. dropped as marginal)
+    must not leak into the map or disturb numbering."""
+    entries = [{"start": 0.0, "end": 1.0, "text": "a", "speaker": "SPEAKER_00"}]
+    m = label_map(entries, "Голос", names={"SPEAKER_07": "Призрак"})
+    assert m == {"SPEAKER_00": "Голос 1"}
+
+
+def test_render_transcript_accepts_names() -> None:
+    entries = [
+        {"start": 0.0, "end": 5.0, "text": "привет", "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 10.0, "text": "здравствуй", "speaker": "SPEAKER_01"},
+    ]
+    text = render_transcript(entries, 0.0, "Голос", names={"SPEAKER_00": "Вася"})
+    assert "Вася:" in text
+    assert "Голос 2:" in text
+
+
 def test_drop_marginal_speakers_removes_noise_speaker() -> None:
     # SPEAKER_09 holds 0.5s of 100.5s (~0.5%) — a phantom from music or echo.
     entries = [

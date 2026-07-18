@@ -547,7 +547,11 @@ def speaker_label_word(language: str | None) -> str:
     return _LABEL_WORDS.get(key, DEFAULT_LABEL_WORD)
 
 
-def label_map(entries: list[dict[str, Any]], label_word: str = "Голос") -> dict[str, str]:
+def label_map(
+    entries: list[dict[str, Any]],
+    label_word: str = "Голос",
+    names: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Technical tags -> "<label_word> N", numbered by first appearance.
 
     "<label_word> 1" is whoever spoke first, which is what a reader expects.
@@ -556,13 +560,21 @@ def label_map(entries: list[dict[str, Any]], label_word: str = "Голос") -> 
     per-language labels (this module's own render_transcript wrapper, and
     tests exercising it directly) — new callers should pass
     speaker_label_word(language) explicitly.
+
+    `names` maps a technical tag to a registry person's name; those tags render
+    as the bare name instead of "<label_word> N". A named speaker still consumes
+    a number, so the unnamed voices keep the numbering they would have had —
+    naming one participant must not renumber the others. Person names are not
+    translated: "Вася:" reads the same in any output language.
     """
+    names = names or {}
     mapping: dict[str, str] = {}
     for entry in entries:
         speaker = entry.get("speaker")
         if speaker is None or speaker in mapping:
             continue
-        mapping[speaker] = f"{label_word} {len(mapping) + 1}"
+        position = len(mapping) + 1
+        mapping[speaker] = names.get(speaker) or f"{label_word} {position}"
     return mapping
 
 
@@ -602,7 +614,12 @@ def render_cleaned_transcript(cleaned: list[dict[str, Any]], mapping: dict[str, 
     return "\n\n".join(blocks)
 
 
-def render_transcript(entries: list[dict[str, Any]], min_share: float, label_word: str = "Голос") -> str:
+def render_transcript(
+    entries: list[dict[str, Any]],
+    min_share: float,
+    label_word: str = "Голос",
+    names: dict[str, str] | None = None,
+) -> str:
     """Flat text for a monologue, labelled turns for a dialogue.
 
     Thin wrapper kept for callers that only need text, not the cleaned entries
@@ -610,8 +627,9 @@ def render_transcript(entries: list[dict[str, Any]], min_share: float, label_wor
     `drop_marginal_speakers` + `render_cleaned_transcript` itself instead, so
     the reassignment happens exactly once and its output is shared.
     `label_word` defaults to "Голос" so existing callers/tests keep their
-    current (Russian) output unchanged.
+    current (Russian) output unchanged. `names` is passed straight to
+    `label_map` — see there for how registry names replace numbered labels.
     """
     cleaned = drop_marginal_speakers(entries, min_share)
-    mapping = label_map(cleaned, label_word)
+    mapping = label_map(cleaned, label_word, names=names)
     return render_cleaned_transcript(cleaned, mapping)
