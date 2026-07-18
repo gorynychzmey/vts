@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:17
+    image: docker.io/tensorchord/vchord-postgres:pg17-v1.1.1
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vts}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vts}

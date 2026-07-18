@@ -1172,6 +1172,7 @@ function createRuntime(task) {
     sourceUrl: String(task.source_url || ""),
     displayName: typeof task.source_title === "string" ? task.source_title.trim() : "",
     baseStatus: String(task.status || ""),
+    awaitingStep: typeof task.awaiting_step === "string" ? task.awaiting_step : "",
     failureCode: parseFailureCode(task.failure_code),
     failureError: parseErrorMessage(task.error_message),
     queuePosition: parseQueuePosition(task.queue_position),
@@ -1567,6 +1568,13 @@ function renderTaskRuntime(taskEl) {
   const canArchive = statusPred.canArchive(runtime.baseStatus);
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
+  if (elements.resolveVoicesBtn) {
+    // Only one awaiting_step dispatches today (match_speakers); a future step
+    // would need its own dialog before this button makes sense for it.
+    const showResolve = statusPred.needsInput(runtime.baseStatus) && runtime.awaitingStep === "match_speakers";
+    elements.resolveVoicesBtn.classList.toggle("hidden", !showResolve);
+    elements.resolveVoicesBtn.disabled = !showResolve;
+  }
   if (elements.restartSummaryBtn) {
     elements.restartSummaryBtn.disabled = !canRestartSummary;
   }
@@ -1666,6 +1674,7 @@ function renderTasks(tasks) {
     const toolbarScroll = root.querySelector(".task-right-bottom");
     const pauseBtn = root.querySelector(".pause-btn");
     const resumeBtn = root.querySelector(".resume-btn");
+    const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
     const restartSummaryBtn = root.querySelector(".restart-summary-btn");
     const restartSummaryMenu = root.querySelector(".restart-summary-menu");
     const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
@@ -1699,6 +1708,10 @@ function renderTasks(tasks) {
     pauseBtn.setAttribute("aria-label", t("action.pause"));
     resumeBtn.setAttribute("data-tooltip", t("action.resume"));
     resumeBtn.setAttribute("aria-label", t("action.resume"));
+    if (resolveVoicesBtn) {
+      resolveVoicesBtn.setAttribute("data-tooltip", t("action.resolve_voices"));
+      resolveVoicesBtn.setAttribute("aria-label", t("action.resolve_voices"));
+    }
     if (restartSummaryBtn) {
       restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
       restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
@@ -1758,6 +1771,9 @@ function renderTasks(tasks) {
     }
     pauseBtn.addEventListener("click", () => pauseTask(task.id));
     resumeBtn.addEventListener("click", () => resumeTask(task.id));
+    if (resolveVoicesBtn) {
+      resolveVoicesBtn.addEventListener("click", () => openVoiceDialog(task.id));
+    }
     if (restartSummaryBtn && restartSummaryMenu) {
       restartSummaryBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1832,6 +1848,7 @@ function renderTasks(tasks) {
       taskRuntimeEl: root.querySelector(".task-runtime"),
       pauseBtn,
       resumeBtn,
+      resolveVoicesBtn,
       restartSummaryBtn,
       restartSummaryMenu,
       restartSummaryFinalBtn,
@@ -2238,6 +2255,7 @@ function currentFormOptions() {
     audio_only: !!form.audio_only.checked,
     transcript: !!form.transcript.checked,
     diarize: !!form.diarize.checked,
+    speaker_no_manual_stop: !!form.speaker_no_manual_stop.checked,
     prompts: getSelectedPrompts(),
   };
 }
@@ -2260,6 +2278,7 @@ function optionsEqual(a, b) {
     !!oa.audio_only === !!ob.audio_only &&
     !!oa.transcript === !!ob.transcript &&
     !!oa.diarize === !!ob.diarize &&
+    !!oa.speaker_no_manual_stop === !!ob.speaker_no_manual_stop &&
     promptRefsEqual(oa.prompts, ob.prompts)
   );
 }
@@ -2284,6 +2303,7 @@ function applyPresetOptions(options) {
   form.audio_only.checked = !!opts.audio_only;
   form.transcript.checked = !!opts.transcript;
   form.diarize.checked = !!opts.diarize;
+  form.speaker_no_manual_stop.checked = !!opts.speaker_no_manual_stop;
   const { filtered, dangling } = filterDanglingPrompts(opts.prompts);
   if (promptSelect) {
     renderPromptMultiselect(promptSelect, promptsCache, filtered);
@@ -2470,6 +2490,8 @@ form.language.addEventListener("change", recomputePresetDirty);
 form.audio_only.addEventListener("change", recomputePresetDirty);
 form.transcript.addEventListener("change", recomputePresetDirty);
 form.diarize.addEventListener("change", recomputePresetDirty);
+form.diarize.addEventListener("change", syncSpeakerNoManualStopToggle);
+form.speaker_no_manual_stop.addEventListener("change", recomputePresetDirty);
 if (promptSelect) {
   promptSelect.addEventListener("change", recomputePresetDirty);
 }
@@ -2542,6 +2564,7 @@ async function createTask(event) {
         audio_only: form.audio_only.checked,
         transcript: form.transcript.checked,
         diarize: form.diarize.checked,
+        speaker_no_manual_stop: form.speaker_no_manual_stop.checked,
         prompts: getSelectedPrompts()
       };
       await api("/api/tasks", {
@@ -2588,6 +2611,7 @@ function syncSummaryToggle() {
     diarizePill.classList.toggle("disabled", disabled);
   }
   form.diarize.disabled = disabled;
+  syncSpeakerNoManualStopToggle();
   if (!promptSelect) {
     return;
   }
@@ -2604,6 +2628,19 @@ function syncSummaryToggle() {
   }
 }
 
+// "Don't stop for review" only means anything when diarize actually runs (the
+// API rejects speaker_no_manual_stop without diarize). Never clear the value
+// on disable — same reasoning as diarize itself (vts-86k): currentFormOptions()
+// reads it directly, so clearing would mark a preset dirty on a mere toggle.
+function syncSpeakerNoManualStopToggle() {
+  const disabled = !form.diarize.checked || form.diarize.disabled;
+  const pill = document.getElementById("speaker-no-manual-stop-pill");
+  if (pill) {
+    pill.classList.toggle("disabled", disabled);
+  }
+  form.speaker_no_manual_stop.disabled = disabled;
+}
+
 function apiBatchPost(url, body, method = "POST") {
   return api(url, {
     method,
@@ -2618,6 +2655,15 @@ async function pauseTask(taskId) {
 }
 
 async function resumeTask(taskId) {
+  // awaiting_input is resumable without the dialog (can_resume stays true —
+  // blocking would only add clicks for a user who wants to bind nothing), but
+  // it carries a consequence: any voice never resolved stays anonymous. That
+  // must be confirmed here, not just inside the dialog's own save&continue.
+  const taskEl = findTaskEl(taskId);
+  const status = taskEl && taskEl._runtime ? taskEl._runtime.baseStatus : "";
+  if (status === "awaiting_input" && !window.confirm(t("confirm.resume_awaiting_input"))) {
+    return;
+  }
   await apiBatchPost("/api/tasks/resume", { task_ids: [taskId] });
   await loadTasks();
 }
@@ -3501,6 +3547,721 @@ promptForm?.addEventListener("submit", async (event) => {
   await loadPrompts();
 });
 
+// ---------- Speaker voice registry dialog ----------
+
+const speakerRegistryDialog = document.getElementById("speaker-registry-dialog");
+const speakerListEl = document.getElementById("speaker-list");
+const speakerSamplesEl = document.getElementById("speaker-samples");
+const speakerSamplesEmptyEl = document.getElementById("speaker-samples-empty");
+const speakerCreateForm = document.getElementById("speaker-create-form");
+const speakerCreateNameInput = document.getElementById("speaker-create-name");
+
+let speakerRegistryCache = [];
+let selectedSpeakerId = "";
+
+function speakerRowById(id) {
+  return speakerListEl?.querySelector(`[data-speaker-id="${CSS.escape(String(id))}"]`);
+}
+
+function renderSpeakers(list) {
+  speakerRegistryCache = Array.isArray(list) ? list : [];
+  if (!speakerListEl) return;
+  speakerListEl.innerHTML = "";
+  if (!speakerRegistryCache.length) {
+    const empty = document.createElement("p");
+    empty.className = "tokens-empty";
+    empty.textContent = t("speakers.registry.empty");
+    speakerListEl.appendChild(empty);
+    return;
+  }
+  for (const speaker of speakerRegistryCache) {
+    const row = document.createElement("li");
+    row.className = "tokens-row speaker-row";
+    row.dataset.speakerId = speaker.id;
+    if (speaker.id === selectedSpeakerId) row.classList.add("selected");
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta speaker-meta";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "tokens-name speaker-name";
+    nameEl.textContent = speaker.name;
+    meta.appendChild(nameEl);
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "speaker-name-input hidden";
+    nameInput.maxLength = 255;
+    nameInput.value = speaker.name;
+    meta.appendChild(nameInput);
+
+    row.appendChild(meta);
+
+    // Row itself selects the speaker; clicking the name/action buttons must
+    // not also trigger selection when entering rename mode.
+    row.addEventListener("click", (event) => {
+      if (row.classList.contains("editing")) return;
+      if (event.target.closest(".speaker-actions")) return;
+      selectSpeaker(speaker.id);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "speaker-actions";
+
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "icon-btn ghost";
+    renameBtn.setAttribute("data-tooltip", t("speakers.registry.rename"));
+    renameBtn.setAttribute("aria-label", t("speakers.registry.rename"));
+    renameBtn.innerHTML = ICON_EDIT;
+    renameBtn.addEventListener("click", () => enterSpeakerRename(row, speaker));
+    actions.appendChild(renameBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-btn ghost danger";
+    delBtn.setAttribute("data-tooltip", t("speakers.registry.delete"));
+    delBtn.setAttribute("aria-label", t("speakers.registry.delete"));
+    delBtn.innerHTML = ICON_DELETE;
+    delBtn.addEventListener("click", () => deleteSpeaker(speaker));
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
+    speakerListEl.appendChild(row);
+  }
+}
+
+function enterSpeakerRename(row, speaker) {
+  const nameEl = row.querySelector(".speaker-name");
+  const nameInput = row.querySelector(".speaker-name-input");
+  if (!nameEl || !nameInput) return;
+  row.classList.add("editing");
+  nameEl.classList.add("hidden");
+  nameInput.classList.remove("hidden");
+  nameInput.value = speaker.name;
+  nameInput.focus();
+  nameInput.select();
+
+  const commit = async () => {
+    nameInput.removeEventListener("keydown", onKeydown);
+    nameInput.removeEventListener("blur", commit);
+    const value = nameInput.value.trim();
+    if (!value || value === speaker.name) {
+      cancel();
+      return;
+    }
+    nameInput.disabled = true;
+    try {
+      await api(`/api/speakers/${encodeURIComponent(speaker.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: value }),
+      });
+      await refreshSpeakerRegistry();
+    } catch (err) {
+      console.error("speaker rename failed", err);
+      cancel();
+    }
+  };
+
+  const cancel = () => {
+    nameInput.removeEventListener("keydown", onKeydown);
+    nameInput.removeEventListener("blur", commit);
+    row.classList.remove("editing");
+    nameEl.classList.remove("hidden");
+    nameInput.classList.add("hidden");
+  };
+
+  function onKeydown(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    }
+  }
+
+  nameInput.addEventListener("keydown", onKeydown);
+  nameInput.addEventListener("blur", commit);
+}
+
+async function deleteSpeaker(speaker) {
+  const count = Number(speaker.sample_count) || 0;
+  const confirmed = window.confirm(
+    t("speakers.registry.delete_confirm", { name: speaker.name, count })
+  );
+  if (!confirmed) return;
+  try {
+    await api(`/api/speakers/${encodeURIComponent(speaker.id)}`, { method: "DELETE" });
+  } catch (err) {
+    console.error("speaker delete failed", err);
+    return;
+  }
+  if (selectedSpeakerId === speaker.id) {
+    selectedSpeakerId = "";
+    renderSamples([]);
+  }
+  await refreshSpeakerRegistry();
+}
+
+async function selectSpeaker(speakerId) {
+  selectedSpeakerId = speakerId;
+  speakerListEl?.querySelectorAll(".speaker-row").forEach((row) => {
+    row.classList.toggle("selected", row.dataset.speakerId === speakerId);
+  });
+  await refreshSpeakerSamples(speakerId);
+}
+
+function renderSamples(samples) {
+  if (!speakerSamplesEl) return;
+  const list = Array.isArray(samples) ? samples : [];
+  speakerSamplesEl.innerHTML = "";
+  const hasSelection = !!selectedSpeakerId;
+  speakerSamplesEmptyEl?.classList.toggle("hidden", hasSelection);
+  speakerSamplesEl.classList.toggle("hidden", !hasSelection);
+  if (!hasSelection) return;
+
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "tokens-empty";
+    empty.textContent = t("speakers.registry.samples_empty");
+    speakerSamplesEl.appendChild(empty);
+    return;
+  }
+
+  for (const sample of list) {
+    const row = document.createElement("li");
+    row.className = "tokens-row speaker-sample-row";
+
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.src = buildPath(`/api/speakers/samples/${encodeURIComponent(sample.id)}/audio`);
+    row.appendChild(audio);
+
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta speaker-sample-meta";
+
+    const duration = document.createElement("span");
+    duration.className = "speaker-sample-duration";
+    duration.textContent = formatDuration(sample.duration_sec || 0);
+    meta.appendChild(duration);
+
+    const created = document.createElement("span");
+    created.className = "speaker-sample-created";
+    created.textContent = sample.created_at ? new Date(sample.created_at).toLocaleString() : "";
+    meta.appendChild(created);
+
+    const source = document.createElement("span");
+    source.className = "speaker-sample-source";
+    if (sample.source_task_id) {
+      const link = document.createElement("a");
+      link.href = "#";
+      link.className = "speaker-sample-source-link";
+      link.textContent = t("speakers.registry.from_task");
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        jumpToTask(sample.source_task_id);
+      });
+      source.appendChild(link);
+    } else {
+      source.textContent = t("speakers.registry.from_task_gone");
+    }
+    meta.appendChild(source);
+
+    row.appendChild(meta);
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-btn ghost danger";
+    delBtn.setAttribute("data-tooltip", t("speakers.registry.delete_sample"));
+    delBtn.setAttribute("aria-label", t("speakers.registry.delete_sample"));
+    delBtn.innerHTML = ICON_DELETE;
+    delBtn.addEventListener("click", () => deleteSample(sample));
+    row.appendChild(delBtn);
+
+    speakerSamplesEl.appendChild(row);
+  }
+}
+
+async function deleteSample(sample) {
+  const confirmed = window.confirm(t("speakers.registry.delete_sample_confirm"));
+  if (!confirmed) return;
+  try {
+    await api(
+      `/api/speakers/${encodeURIComponent(selectedSpeakerId)}/samples/${encodeURIComponent(sample.id)}`,
+      { method: "DELETE" }
+    );
+  } catch (err) {
+    console.error("speaker sample delete failed", err);
+    return;
+  }
+  await refreshSpeakerSamples(selectedSpeakerId);
+  await refreshSpeakerRegistry({ keepSamples: true });
+}
+
+function jumpToTask(taskId) {
+  const row = findTaskEl(taskId);
+  if (!row) return;
+  speakerRegistryDialog?.close();
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 2000);
+}
+
+async function refreshSpeakerSamples(speakerId) {
+  if (!speakerId) {
+    renderSamples([]);
+    return;
+  }
+  try {
+    const samples = await api(`/api/speakers/${encodeURIComponent(speakerId)}/samples`);
+    renderSamples(samples);
+  } catch (err) {
+    console.error("Failed to load speaker samples", err);
+    renderSamples([]);
+  }
+}
+
+async function refreshSpeakerRegistry(options = {}) {
+  if (!speakerListEl) return;
+  try {
+    const speakers = await api("/api/speakers");
+    renderSpeakers(speakers);
+    if (selectedSpeakerId && !speakers.some((s) => s.id === selectedSpeakerId)) {
+      selectedSpeakerId = "";
+      renderSamples([]);
+    } else if (selectedSpeakerId && !options.keepSamples) {
+      await refreshSpeakerSamples(selectedSpeakerId);
+    }
+  } catch (err) {
+    console.error("Failed to load speakers", err);
+  }
+}
+
+async function openSpeakerRegistry() {
+  if (!speakerRegistryDialog) return;
+  selectedSpeakerId = "";
+  if (speakerCreateNameInput) speakerCreateNameInput.value = "";
+  renderSamples([]);
+  await refreshSpeakerRegistry();
+  if (typeof speakerRegistryDialog.showModal === "function") {
+    speakerRegistryDialog.showModal();
+  } else {
+    speakerRegistryDialog.setAttribute("open", "");
+  }
+}
+
+document.getElementById("speaker-registry-btn")?.addEventListener("click", () => {
+  openSpeakerRegistry();
+});
+
+document.getElementById("speaker-registry-close-btn")?.addEventListener("click", () => {
+  speakerRegistryDialog?.close();
+});
+
+speakerCreateForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = (speakerCreateNameInput?.value || "").trim();
+  if (!name) return;
+  try {
+    const speaker = await api("/api/speakers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (speakerCreateNameInput) speakerCreateNameInput.value = "";
+    await refreshSpeakerRegistry({ keepSamples: true });
+    if (speaker?.id) await selectSpeaker(speaker.id);
+  } catch (err) {
+    console.error("Failed to create speaker", err);
+  }
+});
+
+// ---------- Voice-resolution dialog (vts-80i, task 14) ----------
+//
+// Opened by the "Доработать" button on an awaiting_input task. Fetches
+// GET /api/tasks/{id}/speaker-matches (speaker_matches.json) and GET
+// /api/speakers (ALL of the user's speakers, for the dropdown — not just the
+// matched candidates, per spec: truncating to top-N would push a user whose
+// person isn't in the first N into creating a duplicate, feeding vts-552).
+// One row per speaker_label: a status glyph, a preview <audio> (best-effort —
+// no task-preview-audio route exists yet, see report), and ONE <select> that
+// lists every speaker sorted by distance plus "<Add new person>". Saving
+// POSTs all resolutions in one transaction via POST /api/tasks/{id}/speakers.
+//
+// No task preview-audio route exists (checked against vts/api/main.py): the
+// brief explicitly allows shipping without it rather than blocking, so the
+// preview <audio> renders with no src and a "preview unavailable" label.
+
+const voiceDialog = document.getElementById("voice-resolution-dialog");
+const voiceListEl = document.getElementById("voice-list");
+const voiceListEmptyEl = document.getElementById("voice-list-empty");
+const voiceSaveBtn = document.getElementById("voice-save");
+const voiceSaveContinueBtn = document.getElementById("voice-save-continue");
+const voiceCancelBtn = document.getElementById("voice-cancel");
+
+const NEW_PERSON_VALUE = "__new__";
+
+let voiceDialogState = null; // { taskId, rows: [...], dirty }
+
+// One row's mutable UI state, seeded from speaker_matches.json.
+function buildVoiceRow(label, match, allSpeakers) {
+  const outcome = match.outcome === "auto" || match.outcome === "grey" || match.outcome === "miss"
+    ? match.outcome
+    : "miss";
+  const candidates = Array.isArray(match.candidates) ? match.candidates : [];
+  const candidateIds = new Set(candidates.map((c) => String(c.speaker_id)));
+  // Sort ALL speakers by distance: matched candidates first (already ranked
+  // by the matcher), then speakers absent from candidates (no comparable
+  // distance — matching had zero fragments to compare, not "infinitely far"),
+  // by name so the tail is at least stable/scannable.
+  const unmatched = allSpeakers
+    .filter((sp) => !candidateIds.has(String(sp.id)))
+    .slice()
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const ranked = candidates
+    .slice()
+    .sort((a, b) => (Number(a.distance) || 0) - (Number(b.distance) || 0))
+    .map((c) => ({ speaker_id: String(c.speaker_id), name: c.name, distance: c.distance }));
+  const options = ranked.concat(
+    unmatched.map((sp) => ({ speaker_id: String(sp.id), name: sp.name, distance: null }))
+  );
+  // grey/auto preselect the nearest candidate (options[0] if any exist);
+  // miss preselects "add new". Falls back to "add new" if there are no
+  // candidates at all, regardless of outcome.
+  const initialSelection = outcome !== "miss" && options.length > 0
+    ? options[0].speaker_id
+    : NEW_PERSON_VALUE;
+  return {
+    label,
+    outcome,
+    matchedSpeakerId: match.speaker_id ? String(match.speaker_id) : null,
+    matchedDistance: typeof match.distance === "number" ? match.distance : null,
+    options,
+    selection: initialSelection,
+    initialSelection,
+    newName: "",
+    addFragment: outcome !== "miss", // default ON for grey/auto; irrelevant (hidden) for miss's initial "add new"
+    // Set once the user actually changes the dropdown away from a bound
+    // candidate that had a fragment saved by THIS task in a prior save of
+    // this same dialog session — drives the rollback confirm. Real backend
+    // rollback keys off source_task_id; the UI only needs to know whether
+    // the previous save's resolution for this label bound a candidate and
+    // added a fragment, tracked via savedBinding below.
+    savedBinding: null, // { speaker_id, addedFragment: bool } after a "Save" for this label
+  };
+}
+
+function isVoiceRowDirty(row) {
+  if (row.selection !== row.initialSelection) return true;
+  if (row.selection === NEW_PERSON_VALUE && row.newName.trim()) return true;
+  const defaultAddFragment = row.outcome !== "miss";
+  if (row.selection !== NEW_PERSON_VALUE && row.addFragment !== defaultAddFragment) return true;
+  return false;
+}
+
+function isVoiceDialogDirty() {
+  if (!voiceDialogState) return false;
+  return voiceDialogState.rows.some(isVoiceRowDirty);
+}
+
+function glyphForOutcome(outcome) {
+  if (outcome === "auto") return "🟢";
+  if (outcome === "grey") return "🟡";
+  return "🔴";
+}
+
+function renderVoiceList() {
+  if (!voiceListEl || !voiceDialogState) return;
+  voiceListEl.innerHTML = "";
+  const rows = voiceDialogState.rows;
+  voiceListEmptyEl?.classList.toggle("hidden", rows.length > 0);
+  voiceListEl.classList.toggle("hidden", rows.length === 0);
+
+  rows.forEach((row) => {
+    const li = document.createElement("li");
+    li.className = "tokens-row voice-row";
+    li.dataset.speakerLabel = row.label;
+
+    const glyph = document.createElement("span");
+    glyph.className = "voice-glyph";
+    glyph.textContent = glyphForOutcome(row.outcome);
+    glyph.title = t(`voices.status.${row.outcome}`);
+    glyph.setAttribute("aria-label", t(`voices.status.${row.outcome}`));
+    li.appendChild(glyph);
+
+    const body = document.createElement("div");
+    body.className = "voice-row-body";
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "voice-row-label";
+    labelEl.textContent = row.label;
+    body.appendChild(labelEl);
+
+    const audio = document.createElement("audio");
+    audio.className = "voice-preview-audio";
+    audio.controls = true;
+    audio.preload = "none";
+    audio.src = `/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`;
+    const previewNote = document.createElement("span");
+    previewNote.className = "voice-preview-unavailable hidden";
+    previewNote.textContent = t("voices.row.preview_unavailable");
+    // Graceful fallback: if this row has no preview clip (or the file is
+    // otherwise unreachable) the request 404s harmlessly - swap the player
+    // for the "unavailable" note instead of leaving a broken control.
+    audio.addEventListener("error", () => {
+      audio.classList.add("hidden");
+      previewNote.classList.remove("hidden");
+    });
+    body.appendChild(audio);
+    body.appendChild(previewNote);
+
+    const select = document.createElement("select");
+    select.className = "voice-select";
+    const addNewOption = () => {
+      const opt = document.createElement("option");
+      opt.value = NEW_PERSON_VALUE;
+      opt.textContent = t("voices.row.new_person");
+      return opt;
+    };
+    // miss: "<Add new person>" at the TOP (model missed; person list follows
+    // in case the user recognizes the voice by ear anyway).
+    if (row.outcome === "miss") {
+      select.appendChild(addNewOption());
+    }
+    row.options.forEach((opt) => {
+      const el = document.createElement("option");
+      el.value = opt.speaker_id;
+      el.textContent = opt.name;
+      select.appendChild(el);
+    });
+    // grey/auto: "<Add new person>" at the BOTTOM.
+    if (row.outcome !== "miss") {
+      select.appendChild(addNewOption());
+    }
+    select.value = row.selection;
+    body.appendChild(select);
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "voice-new-name";
+    nameInput.maxLength = 255;
+    nameInput.placeholder = t("voices.row.name_placeholder");
+    nameInput.value = row.newName;
+    nameInput.classList.toggle("hidden", row.selection !== NEW_PERSON_VALUE);
+    body.appendChild(nameInput);
+
+    const fragmentLabel = document.createElement("label");
+    fragmentLabel.className = "voice-add-fragment";
+    const fragmentCheckbox = document.createElement("input");
+    fragmentCheckbox.type = "checkbox";
+    fragmentCheckbox.checked = row.addFragment;
+    fragmentLabel.appendChild(fragmentCheckbox);
+    fragmentLabel.appendChild(document.createTextNode(t("voices.row.add_fragment")));
+    // Only meaningful when binding to an existing candidate (grey/auto path);
+    // hidden while "add new" is selected (fragment is implied there — a
+    // brand-new person's first fragment isn't optional the way an addition
+    // to an existing person's registry is).
+    fragmentLabel.classList.toggle("hidden", row.selection === NEW_PERSON_VALUE);
+    body.appendChild(fragmentLabel);
+
+    select.addEventListener("change", () => {
+      const previousSelection = row.selection;
+      onVoiceRowRebind(row, select.value, previousSelection);
+      nameInput.classList.toggle("hidden", row.selection !== NEW_PERSON_VALUE);
+      fragmentLabel.classList.toggle("hidden", row.selection === NEW_PERSON_VALUE);
+      if (row.selection === NEW_PERSON_VALUE) {
+        nameInput.focus();
+      }
+    });
+    nameInput.addEventListener("input", () => {
+      row.newName = nameInput.value;
+    });
+    fragmentCheckbox.addEventListener("change", () => {
+      row.addFragment = fragmentCheckbox.checked;
+    });
+
+    li.appendChild(body);
+    voiceListEl.appendChild(li);
+  });
+}
+
+// Rebind-with-fragment-rollback confirm (spec "Откат фрагмента при
+// перепривязке"): fires only when overriding a binding that THIS dialog
+// session already saved with a fragment for this task. The actual rollback
+// (deleting the VoiceSample whose source_task_id == this task) happens
+// server-side keyed off source_task_id; this is only the UI confirmation.
+function onVoiceRowRebind(row, newValue, previousValue) {
+  if (
+    row.savedBinding &&
+    row.savedBinding.addedFragment &&
+    row.savedBinding.speaker_id === previousValue &&
+    newValue !== previousValue
+  ) {
+    const prevName = (row.options.find((o) => o.speaker_id === previousValue) || {}).name || previousValue;
+    if (!window.confirm(t("voices.confirm.rollback", { name: prevName }))) {
+      // Revert the <select> back to its previous value without applying the change.
+      const selectEl = voiceListEl?.querySelector(
+        `[data-speaker-label="${CSS.escape(row.label)}"] .voice-select`
+      );
+      if (selectEl) selectEl.value = previousValue;
+      return;
+    }
+  }
+  row.selection = newValue;
+}
+
+// Maps outcome + prior/current binding to the MatchDecision.outcome the
+// backend expects (see the spec's "Исходы" table). Mirrors it exactly so the
+// calibration data the backend accumulates is meaningful.
+function resolveOutcomeCode(row) {
+  const boundExisting = row.selection !== NEW_PERSON_VALUE;
+  if (row.outcome === "miss") {
+    return boundExisting ? "manual_match" : "left_anonymous";
+  }
+  if (row.outcome === "auto") {
+    // matchedSpeakerId is the auto-bound candidate; unchanged selection = accepted.
+    return boundExisting && row.selection === row.matchedSpeakerId ? "auto_accepted" : "auto_overridden";
+  }
+  // grey
+  if (!boundExisting) return "left_anonymous";
+  return row.selection === row.options[0]?.speaker_id ? "confirmed" : "rejected";
+}
+
+function buildResolutions() {
+  return voiceDialogState.rows.map((row) => {
+    const bindingNew = row.selection === NEW_PERSON_VALUE;
+    const outcomeCode = resolveOutcomeCode(row);
+    const distance = row.options.find((o) => o.speaker_id === row.selection);
+    const base = {
+      speaker_label: row.label,
+      outcome: outcomeCode,
+      distance: distance && typeof distance.distance === "number" ? distance.distance : row.matchedDistance,
+    };
+    if (bindingNew) {
+      if (row.newName.trim()) {
+        return { ...base, action: "bind_new", new_name: row.newName.trim(), add_fragment: true };
+      }
+      return { ...base, action: "leave_anonymous", add_fragment: false };
+    }
+    if (row.outcome === "auto" && row.selection === row.matchedSpeakerId) {
+      return { ...base, action: "accept_auto", speaker_id: row.selection, add_fragment: row.addFragment };
+    }
+    return { ...base, action: "bind_existing", speaker_id: row.selection, add_fragment: row.addFragment };
+  });
+}
+
+function anyVoiceLeftAnonymous() {
+  return voiceDialogState.rows.some(
+    (row) => row.selection === NEW_PERSON_VALUE && !row.newName.trim()
+  );
+}
+
+// Edit-after-summarization confirm (spec "Правка после начала суммаризации"):
+// fires only if the task's summary has already started/finished. Reuses the
+// same task list the main render loop already fetched rather than a fresh
+// request — the dialog is opened from a rendered task row.
+function taskSummaryStarted(taskId) {
+  const taskEl = findTaskEl(taskId);
+  const runtime = taskEl && taskEl._runtime;
+  if (!runtime) return false;
+  if (runtime.summaryReady) return true;
+  const currentStep = String(runtime.currentStepName || "");
+  return currentStep.startsWith("summarize") || currentStep.startsWith("finalize");
+}
+
+async function submitVoiceResolutions(continueTask) {
+  if (!voiceDialogState) return;
+  if (continueTask && anyVoiceLeftAnonymous()) {
+    if (!window.confirm(t("voices.confirm.anonymous"))) return;
+  }
+  // Only warn about post-summarization edits when this dialog is reopened on
+  // a task that already has a saved binding from a prior visit (i.e. this is
+  // truly an edit, not the first-time resolution before anything downstream ran).
+  const hadPriorSave = voiceDialogState.rows.some((row) => row.savedBinding !== null);
+  if (hadPriorSave && taskSummaryStarted(voiceDialogState.taskId)) {
+    if (!window.confirm(t("voices.confirm.edit_after_summary"))) return;
+  }
+  const resolutions = buildResolutions();
+  try {
+    await api(`/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speakers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolutions, continue_task: continueTask }),
+    });
+  } catch (err) {
+    console.error("Failed to save voice resolutions", err);
+    return;
+  }
+  // Record what was just saved so a later rebind in the same session (dialog
+  // reopened without a page reload) can detect the rollback case, and reset
+  // dirty tracking to the just-saved state.
+  voiceDialogState.rows.forEach((row) => {
+    row.savedBinding = row.selection !== NEW_PERSON_VALUE
+      ? { speaker_id: row.selection, addedFragment: row.addFragment }
+      : null;
+    row.initialSelection = row.selection;
+  });
+  closeVoiceDialog({ skipConfirm: true });
+  await loadTasks();
+}
+
+function closeVoiceDialog(opts = {}) {
+  if (!opts.skipConfirm && isVoiceDialogDirty()) {
+    if (!window.confirm(t("voices.confirm.discard"))) return;
+  }
+  voiceDialogState = null;
+  if (voiceDialog?.open) voiceDialog.close();
+}
+
+async function openVoiceDialog(taskId) {
+  if (!voiceDialog) return;
+  let matches;
+  let speakers;
+  try {
+    [matches, speakers] = await Promise.all([
+      api(`/api/tasks/${encodeURIComponent(taskId)}/speaker-matches`),
+      api("/api/speakers"),
+    ]);
+  } catch (err) {
+    console.error("Failed to load voice matches", err);
+    return;
+  }
+  const allSpeakers = Array.isArray(speakers) ? speakers : [];
+  const labels = Object.keys(matches || {}).sort();
+  voiceDialogState = {
+    taskId,
+    rows: labels.map((label) => buildVoiceRow(label, matches[label] || {}, allSpeakers)),
+  };
+  renderVoiceList();
+  if (typeof voiceDialog.showModal === "function") {
+    voiceDialog.showModal();
+  } else {
+    voiceDialog.setAttribute("open", "");
+  }
+}
+
+voiceSaveBtn?.addEventListener("click", () => {
+  void submitVoiceResolutions(false);
+});
+voiceSaveContinueBtn?.addEventListener("click", () => {
+  void submitVoiceResolutions(true);
+});
+voiceCancelBtn?.addEventListener("click", () => {
+  closeVoiceDialog();
+});
+document.getElementById("voice-close-btn")?.addEventListener("click", () => {
+  closeVoiceDialog();
+});
+voiceDialog?.addEventListener("cancel", (event) => {
+  // Esc fires the native `cancel` event before closing; intercept so the
+  // dirty-check confirm runs (backdrop click and the close button already go
+  // through closeVoiceDialog via their own handlers, but Esc bypasses those).
+  event.preventDefault();
+  closeVoiceDialog();
+});
+
 // ---------- Presets manager dialog ----------
 
 const presetsDialog = document.getElementById("presets-dialog");
@@ -3512,6 +4273,7 @@ const presetEditLanguage = document.getElementById("preset-edit-language");
 const presetEditAudioOnly = document.getElementById("preset-edit-audio_only");
 const presetEditTranscript = document.getElementById("preset-edit-transcript");
 const presetEditDiarize = document.getElementById("preset-edit-diarize");
+const presetEditSpeakerNoManualStop = document.getElementById("preset-edit-speaker_no_manual_stop");
 const presetEditPrompts = document.getElementById("preset-edit-prompts");
 const presetSubmitBtn = document.getElementById("preset-submit-btn");
 const presetCancelBtn = document.getElementById("preset-cancel-btn");
@@ -3532,12 +4294,25 @@ function setPresetFormMode(editId) {
   if (presetCancelBtn) presetCancelBtn.classList.toggle("hidden", !editId);
 }
 
+// Same dependency as the create form's pill (syncSpeakerNoManualStopToggle):
+// meaningless without diarize, never cleared on disable (only dimmed) so a
+// stray toggle doesn't mark the preset dirty.
+function syncPresetSpeakerNoManualStopToggle() {
+  if (!presetEditSpeakerNoManualStop) return;
+  const disabled = !(presetEditDiarize && presetEditDiarize.checked);
+  presetEditSpeakerNoManualStop.disabled = disabled;
+  const pill = document.getElementById("preset-edit-speaker-no-manual-stop-pill");
+  if (pill) pill.classList.toggle("disabled", disabled);
+}
+
 function resetPresetForm() {
   if (presetNameInput) presetNameInput.value = "";
   if (presetEditLanguage) presetEditLanguage.value = "";
   if (presetEditAudioOnly) presetEditAudioOnly.checked = false;
   if (presetEditTranscript) presetEditTranscript.checked = true;
   if (presetEditDiarize) presetEditDiarize.checked = false;
+  if (presetEditSpeakerNoManualStop) presetEditSpeakerNoManualStop.checked = false;
+  syncPresetSpeakerNoManualStopToggle();
   if (presetEditPrompts) {
     renderPromptMultiselect(
       presetEditPrompts,
@@ -3557,6 +4332,8 @@ function fillPresetForm(preset) {
   if (presetEditAudioOnly) presetEditAudioOnly.checked = !!opts.audio_only;
   if (presetEditTranscript) presetEditTranscript.checked = !!opts.transcript;
   if (presetEditDiarize) presetEditDiarize.checked = !!opts.diarize;
+  if (presetEditSpeakerNoManualStop) presetEditSpeakerNoManualStop.checked = !!opts.speaker_no_manual_stop;
+  syncPresetSpeakerNoManualStopToggle();
   if (presetEditPrompts) {
     const { filtered } = filterDanglingPrompts(opts.prompts);
     renderPromptMultiselect(presetEditPrompts, promptsCache, filtered, {
@@ -3732,6 +4509,8 @@ presetCancelBtn?.addEventListener("click", () => {
   resetPresetForm();
 });
 
+presetEditDiarize?.addEventListener("change", syncPresetSpeakerNoManualStopToggle);
+
 presetForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const editId = presetEditIdInput?.value || "";
@@ -3742,6 +4521,7 @@ presetForm?.addEventListener("submit", async (event) => {
     audio_only: !!(presetEditAudioOnly && presetEditAudioOnly.checked),
     transcript: !!(presetEditTranscript && presetEditTranscript.checked),
     diarize: !!(presetEditDiarize && presetEditDiarize.checked),
+    speaker_no_manual_stop: !!(presetEditSpeakerNoManualStop && presetEditSpeakerNoManualStop.checked),
     prompts: getSelectedFrom(presetEditPrompts),
   };
   try {

@@ -20,15 +20,25 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pyannote.audio import Pipeline
+
+# torch and pyannote.audio are NOT imported here. They live only in the built
+# container image (~2.7GB of weights and CUDA/CPU kernels) and are imported
+# lazily inside the functions that need them. This keeps `import server`
+# working in a plain environment (e.g. under test, with only fastapi
+# installed) and matches the pipeline() / _embedding_model() lazy-loading
+# philosophy: an import-time failure must never mask the reason /health
+# cannot answer.
 
 # How often the SSE stream re-reads job progress. pyannote reports per embedding
 # batch (~1.4s apart on a real meeting), so polling faster only burns wakeups.
 _PROGRESS_POLL_SECONDS = 1.0
 _REAPER_INTERVAL_SECONDS = 30
+
+# The embedding model identity the app reads from /health, /diarize, and
+# /embed responses. Single source of truth for what produced the vectors.
+EMBEDDING_MODEL_ID = "pyannote-community-1/wespeaker-resnet34-256"
 
 _log = logging.getLogger("diarization")
 
@@ -53,6 +63,8 @@ def _has_bf16_kernels() -> bool:
     slower than the fp32 it replaces. That is not theory — ONNX int8 measured
     0.22x on this same box for exactly that reason. So the flag is the gate.
     """
+    import torch
+
     probe = getattr(torch.cpu, "_is_avx512_bf16_supported", None)
     if callable(probe):
         try:
@@ -95,29 +107,30 @@ def _resolve_precision() -> str:
     return "fp32"
 
 
-class _Bf16Resnet(torch.nn.Module):
-    """Runs the embedder's ResNet in bf16 and hands fp32 back.
-
-    Scoped to the resnet on purpose. The embedder is ~98% of diarization wall
-    time (segmentation is ~1.9%), so this is the whole prize; and a
-    pipeline-wide autocast breaks outright — pyannote passes the segmentation
-    head's output to .numpy(), which has no bf16 dtype.
-    """
-
-    def __init__(self, inner: torch.nn.Module) -> None:
-        super().__init__()
-        self.inner = inner
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        with torch.autocast("cpu", dtype=torch.bfloat16):
-            out = self.inner(*args, **kwargs)
-        if isinstance(out, tuple):
-            return tuple(o.float() if torch.is_tensor(o) else o for o in out)
-        return out.float() if torch.is_tensor(out) else out
-
-
 def _apply_precision(pipe: Pipeline) -> None:
     """Swap the embedder's resnet for a bf16 (and optionally compiled) one."""
+    import torch
+
+    class _Bf16Resnet(torch.nn.Module):
+        """Runs the embedder's ResNet in bf16 and hands fp32 back.
+
+        Scoped to the resnet on purpose. The embedder is ~98% of diarization wall
+        time (segmentation is ~1.9%), so this is the whole prize; and a
+        pipeline-wide autocast breaks outright — pyannote passes the segmentation
+        head's output to .numpy(), which has no bf16 dtype.
+        """
+
+        def __init__(self, inner: torch.nn.Module) -> None:
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            with torch.autocast("cpu", dtype=torch.bfloat16):
+                out = self.inner(*args, **kwargs)
+            if isinstance(out, tuple):
+                return tuple(o.float() if torch.is_tensor(o) else o for o in out)
+            return out.float() if torch.is_tensor(out) else out
+
     if _resolve_precision() != "bf16":
         return
     try:
@@ -144,6 +157,9 @@ def pipeline() -> Pipeline:
     Loading is lazy so the container answers /health while the first model load
     is still in flight, and so an import-time failure cannot mask the reason.
     """
+    import torch
+    from pyannote.audio import Pipeline
+
     global _pipeline
     if _pipeline is None:
         model_dir = os.environ.get("MODEL_DIR", "/models")
@@ -185,7 +201,62 @@ def _apply_min_duration_off(pipe: Pipeline) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "embedding_model": EMBEDDING_MODEL_ID}
+
+
+_embedding: "Model | None" = None
+
+
+def _embedding_model():
+    """The standalone speaker-embedding model, loaded once from vendored weights.
+
+    NOTE: the exact pyannote 4.x load call below is unverified against the real
+    model layout — validated live in Task 6.5. Unit tests never reach this
+    function; they mock _embed_wav instead.
+    """
+    import torch
+    from pyannote.audio import Model
+
+    global _embedding
+    if _embedding is None:
+        model_dir = os.environ.get("MODEL_DIR", "/models")
+        _embedding = Model.from_pretrained(Path(model_dir) / "embedding" / "pytorch_model.bin")
+        _embedding.to(torch.device(os.environ.get("TORCH_DEVICE", "cpu")))
+        _embedding.eval()
+    return _embedding
+
+
+def _embed_wav(audio_path: str) -> list[float]:
+    """Embed a single wav clip with the pipeline's embedding model.
+
+    Reuses the model already loaded for diarization; no extra weights.
+
+    NOTE: the exact pyannote 4.x call shape here is unverified — validated
+    live in Task 6.5. Unit tests mock this function entirely.
+    """
+    import torch
+    import torchaudio
+
+    model = _embedding_model()  # lazy singleton
+    waveform, sample_rate = torchaudio.load(audio_path)
+    with torch.no_grad():
+        emb = model(waveform.unsqueeze(0) if waveform.dim() == 2 else waveform)
+    return [float(x) for x in emb.reshape(-1).tolist()]
+
+
+@app.post("/embed")
+async def embed(file: UploadFile = File(...)) -> dict[str, Any]:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        handle.write(await file.read())
+        audio_path = Path(handle.name)
+    try:
+        vector = _embed_wav(str(audio_path))
+    except Exception as error:  # noqa: BLE001
+        _log.exception("embedding failed")
+        raise HTTPException(status_code=500, detail=f"embedding failed: {error}") from error
+    finally:
+        audio_path.unlink(missing_ok=True)
+    return {"embedding": vector, "embedding_model": EMBEDDING_MODEL_ID}
 
 
 def _extract_embeddings(raw: Any, labels: list[str]) -> dict[str, list[float]]:
@@ -234,7 +305,12 @@ def _shape_output(output: Any) -> dict[str, Any]:
     )
 
     _log.info("diarized: speakers=%d segments=%d", len(labels), len(segments))
-    return {"segments": segments, "embeddings": embeddings, "num_speakers": len(labels)}
+    return {
+        "segments": segments,
+        "embeddings": embeddings,
+        "num_speakers": len(labels),
+        "embedding_model": EMBEDDING_MODEL_ID,
+    }
 
 
 class _Cancelled(Exception):

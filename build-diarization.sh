@@ -87,7 +87,7 @@ req = urllib.request.Request(
     "http://localhost:9100/diarize", data=body,
     headers={"Content-Type": "multipart/form-data; boundary=%s" % b})
 r = json.load(urllib.request.urlopen(req, timeout=600))
-assert set(r.keys()) == {"segments", "embeddings", "num_speakers"}, r.keys()
+assert {"segments", "embeddings", "num_speakers"} <= set(r.keys()), r.keys()
 assert isinstance(r["num_speakers"], int) and r["num_speakers"] >= 1, r["num_speakers"]
 print("smoke ok: speakers=%d segments=%d" % (r["num_speakers"], len(r["segments"])))
 '

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DATABASE_URL = os.environ.get(
@@ -21,3 +22,10 @@ TEST_DATABASE_URL = os.environ.get(
 def make_test_engine():
     """Create an async engine pointed at the test Postgres URL."""
     return create_async_engine(TEST_DATABASE_URL, echo=False)
+
+
+async def ensure_pgvector(engine) -> None:
+    """CREATE EXTENSION vector before create_all — Vector columns need it, and
+    tests build the schema with create_all rather than running migrations."""
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))

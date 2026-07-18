@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     diarization_min_seconds: float = 0.8
     # Speakers below this share of total speech are phantoms from music or echo.
     diarization_min_speaker_share: float = 0.05
+    # Cosine distance thresholds for matching a voice fragment to a known
+    # speaker (see nearest_speakers / bucket). Vectors are unnormalised, so
+    # cosine (not L2) is the only sane operator. Calibrated 2026-07-17 against
+    # the reference meeting: 0.25 caught every true match and rejected every
+    # false one on that dataset — see docs/ARCHITECTURE.md "Speaker matching".
+    speaker_match_max_distance_auto: float = 0.25      # <= -> auto-bind (conservative start)
+    speaker_match_max_distance_candidate: float = 0.55  # > -> not even a candidate
+    speaker_preview_count: int = 3
+    speaker_preview_seconds: float = 5.0
+    speaker_preview_min_segment: float = 2.0
     llm_url: str = "http://llama:8000/v1"
     llm_api_key: str | None = None
     llm_model: str = "Qwen2.5-7B-Instruct-Q4"
@@ -422,6 +432,11 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_diarization_min_words": "diarization_min_words",
         "services_diarization_min_seconds": "diarization_min_seconds",
         "services_diarization_min_speaker_share": "diarization_min_speaker_share",
+        "services_speaker_match_max_distance_auto": "speaker_match_max_distance_auto",
+        "services_speaker_match_max_distance_candidate": "speaker_match_max_distance_candidate",
+        "services_speaker_preview_count": "speaker_preview_count",
+        "services_speaker_preview_seconds": "speaker_preview_seconds",
+        "services_speaker_preview_min_segment": "speaker_preview_min_segment",
         "services_llm_url": "llm_url",
         "services_llm_api_key": "llm_api_key",
         "services_llm_model": "llm_model",

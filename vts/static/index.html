@@ -75,6 +75,22 @@
           </button>
           <button
             type="button"
+            id="speaker-registry-btn"
+            class="icon-btn ghost"
+            data-i18n-title="speakers.registry.open"
+            data-i18n-aria-label="speakers.registry.open"
+            title="Manage voices"
+            aria-label="Manage voices"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a4 4 0 0 0-4 4v4a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4z" />
+              <path d="M6 11a6 6 0 0 0 12 0" />
+              <path d="M12 17v4" />
+              <path d="M9 21h6" />
+            </svg>
+          </button>
+          <button
+            type="button"
             id="tokens-btn"
             class="icon-btn ghost"
             data-i18n-title="tokens.open"
@@ -239,6 +255,15 @@
               <input id="diarize" name="diarize" type="checkbox" />
               <span data-i18n="new_task.diarize">Speakers</span>
             </label>
+            <label
+              class="option-pill"
+              id="speaker-no-manual-stop-pill"
+              title="Don't pause for manual voice review. Unrecognized voices stay anonymous (Voice 1, Voice 2, ...) instead of asking you to resolve them."
+              data-i18n-title="new_task.speaker_no_manual_stop_tooltip"
+            >
+              <input id="speaker_no_manual_stop" name="speaker_no_manual_stop" type="checkbox" disabled />
+              <span data-i18n="new_task.speaker_no_manual_stop">Don't stop for review</span>
+            </label>
             <div class="prompt-select-field">
               <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
               <div class="prompt-select" id="prompt-select"></div>
@@ -362,6 +387,20 @@
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m8 6 10 6-10 6z" />
+                </svg>
+              </button>
+              <button
+                class="icon-btn ghost resolve-voices-btn hidden"
+                type="button"
+                title="Resolve voices"
+                aria-label="Resolve voices"
+                data-i18n-title="action.resolve_voices"
+                data-i18n-aria-label="action.resolve_voices"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3a3 3 0 0 1 3 3v4a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z" />
+                  <path d="M6 11a6 6 0 0 0 12 0" />
+                  <path d="M12 17v4" />
                 </svg>
               </button>
               <div class="btn-menu-wrapper">
@@ -619,6 +658,10 @@
             <input id="preset-edit-diarize" type="checkbox" />
             <span data-i18n="new_task.diarize">Speakers</span>
           </label>
+          <label class="option-pill" id="preset-edit-speaker-no-manual-stop-pill" data-i18n-title="new_task.speaker_no_manual_stop_tooltip">
+            <input id="preset-edit-speaker_no_manual_stop" type="checkbox" disabled />
+            <span data-i18n="new_task.speaker_no_manual_stop">Don't stop for review</span>
+          </label>
           <label class="language-control" data-i18n-title="new_task.language_tooltip">
             <span data-i18n="new_task.language">Language</span>
             <select id="preset-edit-language">
@@ -740,6 +783,66 @@
           <tbody class="about-prompt-timings"></tbody>
         </table>
       </section>
+    </dialog>
+
+    <dialog id="speaker-registry-dialog" class="tokens-dialog speaker-registry-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="speakers.registry.title">Voice registry</h2>
+        <button type="button" id="speaker-registry-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="speaker-registry-columns">
+        <div class="speaker-registry-col speaker-registry-col-speakers">
+          <ul id="speaker-list" class="tokens-list speaker-list"></ul>
+
+          <form id="speaker-create-form" class="tokens-create-form">
+            <input type="text" id="speaker-create-name" name="name" required
+                   maxlength="255" autocomplete="off"
+                   data-i18n-placeholder="speakers.registry.name_placeholder"
+                   placeholder="Name" />
+            <button type="submit" class="btn-text primary" data-i18n="speakers.registry.add">Add</button>
+          </form>
+        </div>
+
+        <div class="speaker-registry-col speaker-registry-col-samples">
+          <p id="speaker-samples-empty" class="tokens-help" data-i18n="speakers.registry.select_hint">
+            Select a person on the left to see their voice fragments.
+          </p>
+          <ul id="speaker-samples" class="tokens-list speaker-samples-list hidden"></ul>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="voice-resolution-dialog" class="tokens-dialog voice-resolution-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="voices.dialog.title">Resolve voices</h2>
+        <button type="button" id="voice-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <p id="voice-list-empty" class="tokens-help hidden" data-i18n="voices.dialog.empty">
+        No speaker matches found for this task.
+      </p>
+      <ul id="voice-list" class="tokens-list voice-list"></ul>
+
+      <div class="voice-dialog-actions">
+        <button type="button" id="voice-cancel" class="btn-text ghost" data-i18n="voices.dialog.cancel">Cancel</button>
+        <button type="button" id="voice-save" class="btn-text" data-i18n="voices.dialog.save">Save</button>
+        <button type="button" id="voice-save-continue" class="btn-text primary" data-i18n="voices.dialog.save_continue">Save &amp; continue</button>
+      </div>
     </dialog>
 
     <script src="/static/status-predicates.js?v=__VTS_VERSION__"></script>

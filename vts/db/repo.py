@@ -3,11 +3,25 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, undefer
 
-from vts.db.models import ApiToken, AsrSegment, Preset, Prompt, Step, StepStatus, Task, TaskStatus, User, UserStepWeights
+from vts.db.models import (
+    ApiToken,
+    AsrSegment,
+    MatchDecision,
+    Preset,
+    Prompt,
+    Speaker,
+    Step,
+    StepStatus,
+    Task,
+    TaskStatus,
+    User,
+    UserStepWeights,
+    VoiceSample,
+)
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 
@@ -236,6 +250,12 @@ class Repo:
     ) -> None:
         task.status = status
         task.error_message = error_message
+        task.updated_at = utcnow()
+        await self.session.flush()
+
+    async def set_awaiting_input(self, task: Task, step: str) -> None:
+        task.status = TaskStatus.awaiting_input
+        task.awaiting_step = step
         task.updated_at = utcnow()
         await self.session.flush()
 
@@ -561,6 +581,155 @@ class Repo:
         await self.session.delete(preset)
         await self.session.flush()
         return True
+
+    # ------------------------------------------------------------------
+    # Speaker registry CRUD
+    # ------------------------------------------------------------------
+
+    async def create_speaker(self, user_id: uuid.UUID, name: str) -> Speaker:
+        speaker = Speaker(user_id=user_id, name=name)
+        self.session.add(speaker)
+        await self.session.flush()
+        return speaker
+
+    async def list_speakers(self, user_id: uuid.UUID) -> list[Speaker]:
+        stmt = select(Speaker).where(Speaker.user_id == user_id).order_by(Speaker.name.asc())
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID) -> Speaker | None:
+        stmt = select(Speaker).where(Speaker.id == speaker_id, Speaker.user_id == user_id)
+        return await self.session.scalar(stmt)
+
+    async def rename_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID, name: str) -> Speaker | None:
+        speaker = await self.get_speaker(user_id, speaker_id)
+        if speaker is None:
+            return None
+        speaker.name = name
+        await self.session.flush()
+        return speaker
+
+    async def delete_speaker(self, user_id: uuid.UUID, speaker_id: uuid.UUID) -> bool:
+        speaker = await self.get_speaker(user_id, speaker_id)
+        if speaker is None:
+            return False
+        await self.session.delete(speaker)
+        await self.session.flush()
+        return True
+
+    async def add_voice_sample(
+        self, *, speaker_id: uuid.UUID, embedding: list[float], embedding_model: str,
+        audio: bytes, audio_format: str, duration_sec: float,
+        source_task_id: uuid.UUID | None,
+    ) -> VoiceSample:
+        sample = VoiceSample(
+            speaker_id=speaker_id, embedding=embedding, embedding_model=embedding_model,
+            audio=audio, audio_format=audio_format, duration_sec=duration_sec,
+            source_task_id=source_task_id,
+        )
+        self.session.add(sample)
+        await self.session.flush()
+        return sample
+
+    async def list_voice_samples(self, speaker_id: uuid.UUID) -> list[VoiceSample]:
+        # audio stays deferred — never loaded here
+        stmt = (
+            select(VoiceSample)
+            .where(VoiceSample.speaker_id == speaker_id)
+            .order_by(VoiceSample.created_at.asc())
+        )
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def get_voice_sample(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> VoiceSample | None:
+        stmt = (
+            select(VoiceSample)
+            .join(Speaker, VoiceSample.speaker_id == Speaker.id)
+            .where(VoiceSample.id == sample_id, Speaker.user_id == user_id)
+        )
+        return await self.session.scalar(stmt)
+
+    async def delete_voice_sample(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> bool:
+        sample = await self.get_voice_sample(user_id, sample_id)
+        if sample is None:
+            return False
+        await self.session.delete(sample)
+        await self.session.flush()
+        return True
+
+    async def find_prior_decision_sample(
+        self, user_id: uuid.UUID, source_task_id: uuid.UUID, speaker_label: str,
+    ) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+        """Most recent decision this user recorded for (source_task_id, speaker_label).
+
+        Returns (speaker_id, voice_sample_id) from that decision, or None if no
+        prior decision exists — used to detect a rebind within the same
+        awaiting_input dialog so the fragment it previously added can be rolled
+        back. Ordered by created_at desc to pick the latest if resolved more
+        than twice.
+        """
+        stmt = (
+            select(MatchDecision.speaker_id, MatchDecision.voice_sample_id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == source_task_id,
+                MatchDecision.speaker_label == speaker_label,
+            )
+            .order_by(MatchDecision.created_at.desc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            return None
+        return (row[0], row[1])
+
+    async def record_decision(
+        self, *, user_id: uuid.UUID, source_task_id: uuid.UUID | None, speaker_label: str,
+        speaker_id: uuid.UUID | None, voice_sample_id: uuid.UUID | None,
+        distance: float | None, embedding_model: str, outcome: str,
+    ) -> MatchDecision:
+        row = MatchDecision(
+            user_id=user_id, source_task_id=source_task_id, speaker_label=speaker_label,
+            speaker_id=speaker_id, voice_sample_id=voice_sample_id, distance=distance,
+            embedding_model=embedding_model, outcome=outcome,
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def nearest_speakers(
+        self, user_id: uuid.UUID, embedding: list[float], embedding_model: str,
+        limit: int | None = None,
+    ) -> list[tuple[Speaker, float]]:
+        """User's speakers ranked by their nearest fragment (MIN cosine distance).
+
+        Only samples computed by `embedding_model` count: distances across models
+        are meaningless. `<=>` is cosine — smaller is nearer.
+        """
+        dist = func.min(VoiceSample.embedding.cosine_distance(embedding)).label("dist")
+        stmt = (
+            select(Speaker, dist)
+            .join(VoiceSample, VoiceSample.speaker_id == Speaker.id)
+            .where(Speaker.user_id == user_id, VoiceSample.embedding_model == embedding_model)
+            .group_by(Speaker.id)
+            .order_by(dist.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = await self.session.execute(stmt)
+        return [(row[0], float(row[1])) for row in rows.all()]
+
+    async def load_sample_audio(self, user_id: uuid.UUID, sample_id: uuid.UUID) -> tuple[bytes, str] | None:
+        stmt = (
+            select(VoiceSample)
+            .join(Speaker, VoiceSample.speaker_id == Speaker.id)
+            .where(VoiceSample.id == sample_id, Speaker.user_id == user_id)
+            .options(undefer(VoiceSample.audio))
+        )
+        sample = await self.session.scalar(stmt)
+        if sample is None:
+            return None
+        return sample.audio, sample.audio_format
 
     # ------------------------------------------------------------------
     # Per-user step weights (vts-8cm)

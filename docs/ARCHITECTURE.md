@@ -77,6 +77,15 @@ Install/deploy these separately:
 - llama.cpp OpenAI-compatible server:
   - Image: `ghcr.io/ggerganov/llama.cpp:server`
   - Docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
+- Diarization sidecar (own image, `diar-build-X.Y.Z` tag): required for
+  `diarize=true`. **Speaker registry matching additionally requires sidecar
+  1.1.0+** — the version that serves `POST /embed` and reports
+  `embedding_model` on its responses. Older sidecars omit both; matching
+  degrades to "no signal" rather than erroring (`embedding_model` defaults
+  to `""` when absent — see `DiarizationBackend.normalize_output` in
+  [`vts/services/diarization/_base.py`](../vts/services/diarization/_base.py)),
+  so a prod deploy of the speaker registry needs at least a
+  `diar-build-1.1.0` sidecar release.
 
 ## Pipeline stages
 
@@ -320,6 +329,40 @@ canonical `oauth_*` keys (deprecated; scheduled removal in 1.2.x).
 | `night_mode.end_hour` | `VTS_NIGHT_MODE_END_HOUR` | `7` |
 | `media_ttl.hours` | `VTS_MEDIA_TTL_HOURS` | `72` |
 
+**Speaker matching (voice registry):**
+
+| YAML path | Env | Default |
+|-----------|-----|---------|
+| `services.speaker.match_max_distance_auto` | `VTS_SPEAKER_MATCH_MAX_DISTANCE_AUTO` | `0.25` |
+| `services.speaker.match_max_distance_candidate` | `VTS_SPEAKER_MATCH_MAX_DISTANCE_CANDIDATE` | `0.55` |
+| `services.speaker.preview_count` | `VTS_SPEAKER_PREVIEW_COUNT` | `3` |
+| `services.speaker.preview_seconds` | `VTS_SPEAKER_PREVIEW_SECONDS` | `5.0` |
+| `services.speaker.preview_min_segment` | `VTS_SPEAKER_PREVIEW_MIN_SEGMENT` | `2.0` |
+
+A voice fragment is matched against known speakers by cosine distance
+between embeddings (vectors are unnormalised, so cosine — not L2 — is the
+only sane operator):
+
+- distance `<= match_max_distance_auto` → auto-bind the fragment to that
+  registry person, no user action needed.
+- distance `> match_max_distance_candidate` → not even offered as a
+  candidate; too far to be a plausible match.
+- in between → grey zone: offered as a candidate for the user to confirm
+  or reject during manual review, not auto-bound.
+
+`preview_count`/`preview_seconds`/`preview_min_segment` control how the
+short audio clips played back in the resolution dialog are cut: how many
+clips per speaker, the target clip length, and the minimum source-segment
+length eligible for cutting a clip from.
+
+These thresholds are deliberately plain config, not constants, because
+they are calibrated from real data and expected to move without a
+rebuild. A live measurement against the reference meeting (2026-07-17)
+confirmed the `0.25` auto threshold catches every true speaker match and
+rejects every false one on that dataset — treat it as a starting
+calibration, not a proof for all corpora; revisit if false
+auto-binds/misses show up in production.
+
 **Summarization (adaptive token budgeting):**
 
 | YAML path | Env | Default |
@@ -562,6 +605,11 @@ All progress events that fire at high rates are throttled by `event_throttle_hz`
 - `transcript` (`true` by default): run transcription pipeline; if `false`, pipeline stops after download.
 - `summary` (`true` by default): run summarization pipeline; requires `transcript=true`.
 - `language` (`auto`/`ru`/`de`/`en` via UI; free string in API).
+- `speaker_no_manual_stop` (`false` by default; requires `diarize=true`):
+  skip the pipeline's manual-review pause for speaker resolution. Any
+  fragment that didn't auto-bind to a registry person (see *Speaker
+  matching* under Configuration reference) is left anonymous instead of
+  blocking the task on user input.
 
 Naming note:
 - In the detailed contract, `do_transcribe` = `transcript`, `do_summary` = `summary`.

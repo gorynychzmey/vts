@@ -28,6 +28,7 @@ from vts.api.csrf import require_same_site
 from vts.api.deps import (
     get_current_user,
     get_current_user_session_only,
+    get_diarization_backend_dep,
     get_redis,
     get_session_dep,
     get_settings_dep,
@@ -50,6 +51,9 @@ from vts.api.schemas import (
     PromptDetailOut,
     PromptOut,
     PromptUpdateRequest,
+    SpeakerCreateRequest,
+    SpeakerOut,
+    SpeakerUpdateRequest,
     SystemPromptTextOut,
     TaskCompactOut,
     TextSliceOut,
@@ -66,6 +70,8 @@ from vts.api.schemas import (
     UploadInitOut,
     UploadInitRequest,
     UploadOffsetOut,
+    VoiceResolutionRequest,
+    VoiceSampleOut,
 )
 from vts.metrics.step_weights import SEED_FINAL_SUMMARY_FALLBACK, SEED_STEP_WEIGHTS
 from vts.core.config import Settings
@@ -701,6 +707,7 @@ def serialize_task(
         source_url=task.source_url,
         source_title=task.source_title,
         status=task.status.value,
+        awaiting_step=task.awaiting_step,
         queue_position=queue_position,
         queue=queue,
         capabilities={
@@ -765,6 +772,7 @@ def serialize_task_compact(
         source_url=task.source_url,
         source_title=task.source_title,
         status=task.status.value,
+        awaiting_step=task.awaiting_step,
         queue_position=queue_position,
         queue=queue,
         capabilities={
@@ -2261,6 +2269,303 @@ def create_app() -> FastAPI:
                 await pubsub.close()
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    # ------------------------------------------------------------------
+    # Speaker registry (vts-80i)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/speakers", response_model=list[SpeakerOut])
+    async def list_speakers_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[SpeakerOut]:
+        repo = Repo(session)
+        speakers = await repo.list_speakers(uuid.UUID(user.id))
+        out: list[SpeakerOut] = []
+        for sp in speakers:
+            samples = await repo.list_voice_samples(sp.id)
+            out.append(SpeakerOut(id=str(sp.id), name=sp.name, sample_count=len(samples)))
+        return out
+
+    @app.post("/api/speakers", response_model=SpeakerOut)
+    async def create_speaker_endpoint(
+        payload: SpeakerCreateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> SpeakerOut:
+        repo = Repo(session)
+        sp = await repo.create_speaker(uuid.UUID(user.id), payload.name.strip())
+        await session.commit()
+        return SpeakerOut(id=str(sp.id), name=sp.name, sample_count=0)
+
+    @app.patch("/api/speakers/{speaker_id}", response_model=SpeakerOut)
+    async def rename_speaker_endpoint(
+        speaker_id: uuid.UUID,
+        payload: SpeakerUpdateRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> SpeakerOut:
+        repo = Repo(session)
+        sp = await repo.rename_speaker(uuid.UUID(user.id), speaker_id, payload.name.strip())
+        if sp is None:
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        await session.commit()
+        samples = await repo.list_voice_samples(sp.id)
+        return SpeakerOut(id=str(sp.id), name=sp.name, sample_count=len(samples))
+
+    @app.delete("/api/speakers/{speaker_id}", status_code=204)
+    async def delete_speaker_endpoint(
+        speaker_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        ok = await repo.delete_speaker(uuid.UUID(user.id), speaker_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/speakers/{speaker_id}/samples", response_model=list[VoiceSampleOut])
+    async def list_voice_samples_endpoint(
+        speaker_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[VoiceSampleOut]:
+        repo = Repo(session)
+        sp = await repo.get_speaker(uuid.UUID(user.id), speaker_id)
+        if sp is None:
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        samples = await repo.list_voice_samples(speaker_id)
+        return [
+            VoiceSampleOut(
+                id=str(s.id),
+                duration_sec=s.duration_sec,
+                source_task_id=str(s.source_task_id) if s.source_task_id else None,
+                created_at=s.created_at,
+            )
+            for s in samples
+        ]
+
+    @app.delete("/api/speakers/{speaker_id}/samples/{sample_id}", status_code=204)
+    async def delete_voice_sample_endpoint(
+        speaker_id: uuid.UUID,
+        sample_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        ok = await repo.delete_voice_sample(uuid.UUID(user.id), sample_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Voice sample not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/speakers/samples/{sample_id}/audio")
+    async def get_sample_audio(
+        sample_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        loaded = await repo.load_sample_audio(uuid.UUID(user.id), sample_id)
+        if loaded is None:
+            raise HTTPException(status_code=404, detail="Sample not found")
+        audio, fmt = loaded
+        return Response(content=audio, media_type=f"audio/{fmt}")
+
+    @app.get("/api/tasks/{task_id}/speaker-matches")
+    async def get_speaker_matches(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        path = Path(task.artifact_dir) / "outputs" / "speaker_matches.json"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Speaker matches not found")
+        return Response(content=path.read_bytes(), media_type="application/json")
+
+    @app.get("/api/tasks/{task_id}/speaker-previews/{speaker_label}/{index}/audio")
+    async def get_speaker_preview_audio(
+        task_id: uuid.UUID,
+        speaker_label: str,
+        index: int,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> FileResponse:
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        outputs_dir = Path(task.artifact_dir) / "outputs"
+        previews_path = outputs_dir / "speaker_previews.json"
+        if not previews_path.exists():
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+
+        try:
+            previews = json.loads(previews_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+        if not isinstance(previews, dict):
+            raise HTTPException(status_code=404, detail="Speaker previews not found")
+
+        clips = previews.get(speaker_label)
+        if not isinstance(clips, list) or index < 0 or index >= len(clips):
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        clip_path_str = clips[index].get("path") if isinstance(clips[index], dict) else None
+        if not clip_path_str:
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        # SECURITY: never trust the resolved path just because it came out of
+        # the json. Confirm it actually resolves to somewhere inside this
+        # task's outputs dir before serving it — defense against a tampered
+        # speaker_previews.json or path-traversal via speaker_label/index.
+        resolved_outputs_dir = outputs_dir.resolve()
+        resolved_clip_path = Path(clip_path_str).resolve()
+        if not resolved_clip_path.is_relative_to(resolved_outputs_dir):
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+        if not resolved_clip_path.is_file():
+            raise HTTPException(status_code=404, detail="Preview clip not found")
+
+        return FileResponse(path=str(resolved_clip_path), media_type="audio/wav")
+
+    @app.post("/api/tasks/{task_id}/speakers", response_model=BatchResultOut)
+    async def resolve_task_speakers(
+        task_id: uuid.UUID,
+        payload: VoiceResolutionRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+        settings: Settings = Depends(get_settings_dep),
+        diarization=Depends(get_diarization_backend_dep),
+    ) -> BatchResultOut:
+        repo = Repo(session)
+        user_id = uuid.UUID(user.id)
+        task = await repo.get_task_for_user(user_id, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        artifact_dir = Path(task.artifact_dir)
+        diar_path = artifact_dir / "outputs" / "diarization.json"
+        embedding_model = ""
+        if diar_path.exists():
+            diar = json.loads(diar_path.read_text(encoding="utf-8"))
+            embedding_model = diar.get("embedding_model", "") or ""
+
+        previews_path = artifact_dir / "outputs" / "speaker_previews.json"
+        previews: dict[str, list[dict]] = {}
+        if previews_path.exists():
+            previews = json.loads(previews_path.read_text(encoding="utf-8"))
+
+        # Everything below runs on the ONE request-scoped `session` and is
+        # committed exactly once at the end (or not at all, on error) — a
+        # partial write here would leave the registry with a speaker missing
+        # its fragment, or a fragment attributed to the wrong voice.
+        results: dict[str, str] = {}
+        for res in payload.resolutions:
+            speaker_id: uuid.UUID | None = None
+
+            if res.action == "bind_new":
+                if not res.new_name or not res.new_name.strip():
+                    raise HTTPException(status_code=422, detail="new_name is required for bind_new")
+                sp = await repo.create_speaker(user_id, res.new_name.strip())
+                speaker_id = sp.id
+            elif res.action == "bind_existing":
+                if not res.speaker_id:
+                    raise HTTPException(status_code=422, detail="speaker_id is required for bind_existing")
+                sp = await repo.get_speaker(user_id, uuid.UUID(res.speaker_id))
+                if sp is None:
+                    raise HTTPException(status_code=404, detail=f"Speaker not found: {res.speaker_id}")
+                speaker_id = sp.id
+            elif res.action == "accept_auto":
+                if not res.speaker_id:
+                    raise HTTPException(status_code=422, detail="speaker_id is required for accept_auto")
+                sp = await repo.get_speaker(user_id, uuid.UUID(res.speaker_id))
+                if sp is None:
+                    raise HTTPException(status_code=404, detail=f"Speaker not found: {res.speaker_id}")
+                speaker_id = sp.id
+            elif res.action == "leave_anonymous":
+                speaker_id = None
+            else:
+                raise HTTPException(status_code=422, detail=f"Unknown action: {res.action}")
+
+            voice_sample_id: uuid.UUID | None = (
+                uuid.UUID(res.voice_sample_id) if res.voice_sample_id else None
+            )
+
+            # Rollback: if this label was previously resolved (in an earlier
+            # save of this same awaiting_input dialog) to a DIFFERENT person,
+            # and that prior decision added a fragment, that fragment is now
+            # attributed to the wrong voice — delete it. Only ever touches a
+            # fragment this same task added (source_task_id == task_id is
+            # implicit: record_decision below always writes this task_id as
+            # source_task_id, so any voice_sample_id on a decision scoped to
+            # this task_id was added by this task). Fragments predating this
+            # task are never looked at here.
+            prior = await repo.find_prior_decision_sample(user_id, task_id, res.speaker_label)
+            if prior is not None:
+                prior_speaker_id, prior_voice_sample_id = prior
+                if prior_voice_sample_id is not None and prior_speaker_id != speaker_id:
+                    await repo.delete_voice_sample(user_id, prior_voice_sample_id)
+
+            if res.add_fragment and speaker_id is not None:
+                clips = previews.get(res.speaker_label) or []
+                if not clips:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"No preview fragment available for speaker_label {res.speaker_label!r}",
+                    )
+                clip_path = Path(clips[0]["path"])
+                if not clip_path.exists():
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Preview fragment file missing: {clip_path}",
+                    )
+                embedding = await diarization.embed(clip_path)
+                duration_sec = float(clips[0]["end"]) - float(clips[0]["start"])
+                sample = await repo.add_voice_sample(
+                    speaker_id=speaker_id,
+                    embedding=embedding,
+                    embedding_model=embedding_model,
+                    audio=clip_path.read_bytes(),
+                    audio_format="wav",
+                    duration_sec=duration_sec,
+                    source_task_id=task_id,
+                )
+                voice_sample_id = sample.id
+
+            await repo.record_decision(
+                user_id=user_id,
+                source_task_id=task_id,
+                speaker_label=res.speaker_label,
+                speaker_id=speaker_id,
+                voice_sample_id=voice_sample_id,
+                distance=res.distance,
+                embedding_model=embedding_model,
+                outcome=res.outcome,
+            )
+            results[res.speaker_label] = "resolved"
+
+        bus = RedisBus(redis, settings)
+        if payload.continue_task:
+            # Symmetric with /api/tasks/resume (vts-80i): clear any stale
+            # pause request before requeuing, so a leftover pause flag can't
+            # survive a resume through this path either.
+            await bus.clear_pause_request(task_id)
+            await repo.set_task_status(task, TaskStatus.queued)
+
+        await session.commit()
+
+        if payload.continue_task:
+            await bus.notify_queued()
+
+        return BatchResultOut(results=results)
 
     return app
 

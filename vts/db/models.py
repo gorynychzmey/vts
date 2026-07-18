@@ -13,12 +13,14 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from vts.db.base import Base
 
@@ -36,6 +38,7 @@ class TaskStatus(StrEnum):
     archived = "archived"
     failed = "failed"
     canceled = "canceled"
+    awaiting_input = "awaiting_input"
 
 
 class StepStatus(StrEnum):
@@ -78,6 +81,7 @@ class Task(Base):
     summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    awaiting_step: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
@@ -191,6 +195,73 @@ class Preset(Base):
 
     __table_args__ = (
         Index("ix_presets_user_created", "user_id", "created_at"),
+    )
+
+
+class Speaker(Base):
+    __tablename__ = "speakers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_speakers_user", "user_id"),
+    )
+
+
+class VoiceSample(Base):
+    __tablename__ = "voice_samples"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    speaker_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speakers.id", ondelete="CASCADE"), nullable=False
+    )
+    embedding: Mapped[list[float]] = mapped_column(Vector(256), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    audio: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    audio_format: Mapped[str] = mapped_column(String(32), nullable=False, default="wav")
+    duration_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_voice_samples_speaker", "speaker_id"),
+    )
+
+
+class MatchDecision(Base):
+    __tablename__ = "match_decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    speaker_label: Mapped[str] = mapped_column(String, nullable=False)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speakers.id", ondelete="SET NULL"), nullable=True
+    )
+    voice_sample_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("voice_samples.id", ondelete="SET NULL"), nullable=True
+    )
+    distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String, nullable=False)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_match_decisions_user", "user_id"),
     )
 
 

@@ -17,6 +17,7 @@
     canPause: (s) => flag(s, "can_pause"),
     canResume: (s) => flag(s, "can_resume"),
     canArchive: (s) => flag(s, "can_archive"),
+    needsInput: (s) => flag(s, "needs_input"),
     canRestartSummary: (rt) => Boolean(rt && rt.capabilities && rt.capabilities.can_restart_summary),
     canRestartFinalSummary: (rt) => Boolean(rt && rt.capabilities && rt.capabilities.can_restart_final_summary),
   };

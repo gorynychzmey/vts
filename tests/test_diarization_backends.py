@@ -33,7 +33,7 @@ def test_normalize_output_extracts_segments_and_embeddings() -> None:
 
 def test_normalize_output_defaults_when_fields_missing() -> None:
     result = _pyannote().normalize_output({})
-    assert result == {"segments": [], "embeddings": {}, "num_speakers": 0}
+    assert result == {"segments": [], "embeddings": {}, "num_speakers": 0, "embedding_model": ""}
 
 
 def test_normalize_output_drops_malformed_segments() -> None:
@@ -140,6 +140,23 @@ def test_normalize_output_silent_when_genuinely_empty(caplog) -> None:
     with caplog.at_level("WARNING"):
         _pyannote().normalize_output({"segments": []})
     assert caplog.text == ""
+
+
+def test_normalize_output_carries_embedding_model_through() -> None:
+    payload = {
+        "segments": [{"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"}],
+        "embeddings": {"SPEAKER_00": [0.1, 0.2]},
+        "num_speakers": 1,
+        "embedding_model": "m-test",
+    }
+    result = _pyannote().normalize_output(payload)
+    assert result["embedding_model"] == "m-test"
+
+
+def test_normalize_output_defaults_embedding_model_when_absent() -> None:
+    # Old sidecars without the field must degrade, not crash.
+    result = _pyannote().normalize_output({})
+    assert result["embedding_model"] == ""
 
 
 # --- async job protocol ---------------------------------------------------
@@ -329,3 +346,19 @@ async def test_list_jobs_empty_on_garbage(tmp_path):
         return httpx.Response(200, json={"unexpected": "shape"})
 
     assert await _StubBackend(handler).list_jobs() == []
+
+
+async def test_embed_posts_and_returns_vector(tmp_path):
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+
+    def handler(request):
+        if request.url.path == "/embed":
+            return httpx.Response(
+                200, json={"embedding": [0.25] * 256, "embedding_model": "m-test"}
+            )
+        return httpx.Response(404)
+
+    vec = await _StubBackend(handler).embed(audio)
+    assert len(vec) == 256
+    assert vec[0] == 0.25

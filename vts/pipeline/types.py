@@ -17,6 +17,9 @@ DAG_HEAD: Final[list[str]] = [
     "diarize",
     "merge_transcript",
     "prepare_llama_model",
+    # Matches diarized speaker clusters against the registry; pauses into
+    # awaiting_input when a speaker doesn't auto-resolve (unless opted out).
+    "match_speakers",
     "prepare_summary_chunks",
     "summarize_windows",
     "pack_window_notes",

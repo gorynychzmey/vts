@@ -139,6 +139,13 @@ Requires `DIARIZATION_IMAGE` in `/opt/vts/config/vts.env` (see
 reference and restarts this unit, so the unit must exist before the first
 diarization deploy — otherwise the deploy fails fast on a missing unit.
 
+**Speaker registry requires sidecar 1.1.0+.** The voice registry (matching
+a diarized fragment to a known speaker) calls the sidecar's `POST /embed`
+endpoint and reads `embedding_model` off its responses; both were added in
+`diar-build-1.1.0`. Against an older sidecar, matching has no signal to
+work with — deploy at least `diar-build-1.1.0` before relying on the
+speaker registry in production.
+
 ## 7. Verify deployment
 
 ```bash

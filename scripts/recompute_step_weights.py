@@ -33,6 +33,7 @@ _PRINT_ORDER = [
     "diarize",
     "merge_transcript",
     "prepare_llama_model",
+    "match_speakers",
     "prepare_summary_chunks",
     "summarize_windows",
     "pack_window_notes",

@@ -105,6 +105,10 @@ class TaskCreateRequest(BaseModel):
     audio_only: bool = False
     transcript: bool = Field(default=True, validation_alias=AliasChoices("transcript", "do_transcribe"))
     diarize: bool = False
+    # Skips the awaiting_input pause in MatchSpeakersStep: read via
+    # ctx.task_flag(task_options, "speaker_no_manual_stop", ...) (vts-80i).
+    # Meaningless without diarize, same dependency shape as diarize/transcript.
+    speaker_no_manual_stop: bool = False
     prompts: list[PromptRef] = Field(default_factory=_default_prompts)
 
     @model_validator(mode="after")
@@ -113,6 +117,8 @@ class TaskCreateRequest(BaseModel):
             raise ValueError("prompts require transcript")
         if self.diarize and not self.transcript:
             raise ValueError("diarize requires transcript")
+        if self.speaker_no_manual_stop and not self.diarize:
+            raise ValueError("speaker_no_manual_stop requires diarize")
         return self
 
 
@@ -161,6 +167,10 @@ class TaskOut(BaseModel):
     source_url: str
     source_title: str | None = None
     status: str
+    # Which manual-input step a `awaiting_input` task is paused on (currently
+    # only "match_speakers"); null otherwise. Drives which dialog "Доработать"
+    # opens (vts-80i).
+    awaiting_step: str | None = None
     queue_position: int | None = Field(default=None, ge=1)
     queue: str | None = None
     capabilities: TaskCapabilities = Field(default_factory=TaskCapabilities)
@@ -189,6 +199,7 @@ class TaskCompactOut(BaseModel):
     source_url: str
     source_title: str | None = None
     status: str
+    awaiting_step: str | None = None
     queue_position: int | None = Field(default=None, ge=1)
     queue: str | None = None
     capabilities: TaskCapabilities = Field(default_factory=TaskCapabilities)
@@ -321,3 +332,45 @@ class UploadInitOut(BaseModel):
 class UploadOffsetOut(BaseModel):
     received: int
     total_size: int
+
+
+# ---------------------------------------------------------------------------
+# Speaker registry (vts-80i)
+# ---------------------------------------------------------------------------
+
+
+class SpeakerOut(BaseModel):
+    id: str
+    name: str
+    sample_count: int
+
+
+class SpeakerCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class SpeakerUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class VoiceSampleOut(BaseModel):
+    id: str
+    duration_sec: float
+    source_task_id: str | None = None
+    created_at: datetime
+
+
+class VoiceResolution(BaseModel):
+    speaker_label: str
+    action: str  # "bind_existing" | "bind_new" | "leave_anonymous" | "accept_auto"
+    speaker_id: str | None = None
+    new_name: str | None = None
+    add_fragment: bool = True
+    distance: float | None = None
+    voice_sample_id: str | None = None  # winning fragment for the decision
+    outcome: str  # confirmed | rejected | manual_match | auto_accepted | auto_overridden | left_anonymous
+
+
+class VoiceResolutionRequest(BaseModel):
+    resolutions: list[VoiceResolution]
+    continue_task: bool

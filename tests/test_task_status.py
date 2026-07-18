@@ -24,10 +24,12 @@ def test_can_pause_matches_legacy_set():
     assert {s for s in ALL if ts.can_pause(s)} == {TaskStatus.queued, TaskStatus.running, TaskStatus.waiting}
 
 def test_can_resume_matches_legacy_set():
-    assert {s for s in ALL if ts.can_resume(s)} == {TaskStatus.paused, TaskStatus.failed}
+    assert {s for s in ALL if ts.can_resume(s)} == {
+        TaskStatus.paused, TaskStatus.failed, TaskStatus.awaiting_input}
 
 def test_can_archive_matches_legacy_set():
-    assert {s for s in ALL if ts.can_archive(s)} == {TaskStatus.completed, TaskStatus.failed}
+    assert {s for s in ALL if ts.can_archive(s)} == {
+        TaskStatus.completed, TaskStatus.failed, TaskStatus.awaiting_input}
 
 def test_shows_progress_set():
     assert {s for s in ALL if ts.shows_progress(s)} == {
@@ -62,5 +64,17 @@ def test_status_flags_covers_all_statuses_and_matches_predicates():
             "is_active": ts.is_active(s), "is_pending": ts.is_pending(s),
             "is_finished": ts.is_finished(s), "shows_progress": ts.shows_progress(s),
             "can_pause": ts.can_pause(s), "can_resume": ts.can_resume(s),
-            "can_archive": ts.can_archive(s),
+            "can_archive": ts.can_archive(s), "needs_input": ts.needs_input(s),
         }
+
+
+def test_awaiting_input_predicates():
+    s = TaskStatus.awaiting_input
+    assert ts.is_active(s) is False
+    assert ts.is_finished(s) is False
+    assert ts.can_pause(s) is False
+    assert ts.can_resume(s) is True
+    assert ts.can_archive(s) is True
+    assert ts.needs_input(s) is True
+    # No other status needs input.
+    assert ts.needs_input(TaskStatus.running) is False

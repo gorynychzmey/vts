@@ -8,6 +8,7 @@ from vts.pipeline.steps.media import (
     SegmentAudioStep,
     TrimInitialSilenceStep,
 )
+from vts.pipeline.steps.speaker_match import MatchSpeakersStep
 from vts.pipeline.steps.summarization import (
     FinalizePromptStep,
     PackWindowNotesStep,
@@ -32,6 +33,7 @@ STEP_REGISTRY: dict[str, Step] = {
     DiarizeStep.name: DiarizeStep(),
     MergeTranscriptStep.name: MergeTranscriptStep(),
     PrepareLlamaModelStep.name: PrepareLlamaModelStep(),
+    MatchSpeakersStep.name: MatchSpeakersStep(),
     PrepareSummaryChunksStep.name: PrepareSummaryChunksStep(),
     SummarizeWindowsStep.name: SummarizeWindowsStep(),
     PackWindowNotesStep.name: PackWindowNotesStep(),
