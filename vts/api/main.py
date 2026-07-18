@@ -2355,6 +2355,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(get_session_dep),
     ) -> Response:
         repo = Repo(session)
+        sample = await repo.get_voice_sample(uuid.UUID(user.id), sample_id)
+        if sample is None or sample.speaker_id != speaker_id:
+            raise HTTPException(status_code=404, detail="Voice sample not found")
         ok = await repo.delete_voice_sample(uuid.UUID(user.id), sample_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Voice sample not found")
@@ -2515,6 +2518,14 @@ def create_app() -> FastAPI:
                     await repo.delete_voice_sample(user_id, prior_voice_sample_id)
 
             if res.add_fragment and speaker_id is not None:
+                if not embedding_model:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "cannot add voice fragment: task has no embedding model "
+                            "(diarization.json missing or incomplete)"
+                        ),
+                    )
                 clips = previews.get(res.speaker_label) or []
                 if not clips:
                     raise HTTPException(

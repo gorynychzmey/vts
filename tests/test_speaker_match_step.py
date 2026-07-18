@@ -79,7 +79,7 @@ def _state(dirs: dict[str, Path], options: dict) -> SimpleNamespace:
     )
 
 
-def _ctx(repo: _FakeRepo, *, auto=0.25, candidate=0.55) -> SimpleNamespace:
+def _ctx(repo: _FakeRepo, *, auto=0.25, candidate=0.55, candidates_cap=100) -> SimpleNamespace:
     def task_flag(options, key, *, default):
         value = options.get(key, default)
         return bool(value)
@@ -89,6 +89,7 @@ def _ctx(repo: _FakeRepo, *, auto=0.25, candidate=0.55) -> SimpleNamespace:
             diarization_enabled_default=False,
             speaker_match_max_distance_auto=auto,
             speaker_match_max_distance_candidate=candidate,
+            speaker_match_candidates_cap=candidates_cap,
         ),
         session_factory=_FakeSessionFactory(),
         task_flag=task_flag,
@@ -140,6 +141,31 @@ async def test_run_writes_speaker_matches_json_all_auto(tmp_path: Path) -> None:
     assert payload["SPEAKER_00"]["candidates"] == [
         {"speaker_id": str(sp.id), "name": "Alice", "distance": 0.1}
     ]
+
+
+async def test_run_passes_candidates_cap_as_limit_to_nearest_speakers(tmp_path: Path) -> None:
+    """The step must pass settings.speaker_match_candidates_cap as `limit` to
+    nearest_speakers — a generous pathology guard, not a UX top-N (the
+    dropdown needs ALL candidates; see docs/superpowers/specs/
+    2026-07-17-speaker-registry-design.md, "Диалог голосов задачи")."""
+    dirs = _dirs(tmp_path)
+    write_diar = {
+        "embedding_model": "ecapa",
+        "embeddings": {"SPEAKER_00": [0.0, 0.0]},
+    }
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(write_diar), encoding="utf-8")
+
+    sp = _FakeSpeaker(uuid.uuid4(), "Alice")
+    repo = _FakeRepo({(0.0, 0.0): [(sp, 0.1)]})
+    ctx = _ctx(repo, candidates_cap=42)
+    _wire_repo_override(ctx, repo)
+    st = _state(dirs, {"diarize": True})
+
+    await MatchSpeakersStep().run(ctx, st)
+
+    assert len(repo.calls) == 1
+    _user_id, _embedding, _model, limit = repo.calls[0]
+    assert limit == 42
 
 
 async def test_run_pauses_when_grey_and_stops_allowed(tmp_path: Path) -> None:
