@@ -363,6 +363,57 @@ rejects every false one on that dataset — treat it as a starting
 calibration, not a proof for all corpora; revisit if false
 auto-binds/misses show up in production.
 
+**Merging and moving voice profiles (vts-552):**
+
+Diarization regularly splits one person into two clusters, so the registry
+accumulates duplicates. Two operations fix that, and they differ in exactly
+one respect — what they do to `match_decisions`:
+
+- **Move a fragment** (`POST /api/speakers/{id}/samples/{sid}/move`) —
+  reassigns one `VoiceSample` to another person. It **never** touches
+  `match_decisions`: a move says "this fragment was filed under the wrong
+  person", not "that past match was wrong", so the calibration history must
+  keep pointing where it did.
+- **Merge two persons** (`POST /api/speakers/{source}/merge`) — moves every
+  fragment to the target, rewrites `match_decisions.speaker_id`
+  source→target, then deletes the source. The rewrite happens **before** the
+  delete, so the FK's `SET NULL` finds nothing pointing at the source and
+  person names survive in already-completed tasks. Merge asserts "same
+  person", so rewriting `speaker_id` does not distort the decisions'
+  calibration — distance and outcome are unchanged.
+
+Both are a single transaction, both are user-scoped, and `source_task_id` is
+preserved on moved fragments (it records origin, not ownership). Fragments
+are never deduplicated on merge: a duplicate fragment only improves matching,
+since distance aggregates with MIN.
+
+`GET /api/speakers/{id}/samples/{sid}/move-candidates` ranks the possible
+destinations by embedding distance to that fragment (capped by
+`speaker_match_candidates_cap`). A person with no comparable fragment still
+appears, with a null distance ordered last — an empty person is a valid
+destination, and hiding it would make the fragment unmovable there.
+
+**Person names in transcripts and summaries:**
+
+Once a voice is matched to a registry person, that person's name replaces
+"Голос N" wherever the transcript is rendered:
+
+- The **raw transcript** substitutes names at render time
+  (`MergeTranscriptStep`). Technical `SPEAKER_NN` tags stay in
+  `transcript.json`'s entries, so a later rename or merge re-renders
+  correctly from the same data.
+- **Summaries** receive the participant list through two prompt template
+  variables, `${NAMED_SPEAKERS}` and `${ANONYMOUS_SPEAKERS}`, each a JSON
+  array (either may be empty). Code serializes; the prompt wording lives in
+  `prompts/segment_prompt.md` and `prompts/global_prompt.md`.
+
+An unmatched voice, or one whose person was deleted, renders "Голос N"
+exactly as before — substitution is purely additive, and undiarized tasks are
+unchanged. Person names are never translated: "Вася:" reads the same in any
+output language. Because names resolve at render time, a rename or merge is
+reflected the next time the artifact is built, not retroactively in one
+already produced.
+
 **Summarization (adaptive token budgeting):**
 
 | YAML path | Env | Default |
