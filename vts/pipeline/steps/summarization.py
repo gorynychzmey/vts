@@ -26,7 +26,7 @@ from vts.pipeline.token_budget import (
     uncap_segment_for_input,
     whole_transcript_possible,
 )
-from vts.services.diarization.merge import speaker_label_word
+from vts.services.diarization.merge import label_map, speaker_label_word
 from vts.services.prompt_registry import list_system_prompts
 from vts.services.summarizer import (
     inject_budget_vars,
@@ -178,6 +178,60 @@ def participant_vars(named: list[str], anonymous: list[str]) -> dict[str, str]:
         "NAMED_SPEAKERS": json.dumps(named, ensure_ascii=False),
         "ANONYMOUS_SPEAKERS": json.dumps(anonymous, ensure_ascii=False),
     }
+
+
+def split_participants(
+    entries: list[dict[str, Any]],
+    names: dict[str, str],
+    label_word: str,
+) -> tuple[list[str], list[str]]:
+    """Participants of this recording, split into named and anonymous.
+
+    Derives both lists from label_map so the anonymous entries are exactly the
+    labels the transcript renders ("Голос 2"), not a separately-invented
+    numbering — listing a participant the text never mentions would be worse
+    than listing none. Undiarized entries (no "speaker" key) yield two empty
+    lists, which the prompt renders as empty JSON arrays.
+    """
+    mapping = label_map(entries, label_word, names=names)
+    named: list[str] = []
+    anonymous: list[str] = []
+    for tag, rendered in mapping.items():
+        if tag in names:
+            named.append(rendered)
+        else:
+            anonymous.append(rendered)
+    return named, anonymous
+
+
+async def _participants_for_task(
+    ctx: "PipelineContext", st: StepState, language: str | None,
+) -> tuple[list[str], list[str]]:
+    """Named and anonymous participants of this task, for the prompt vars.
+
+    Reads the technical speaker tags back from transcript.json and resolves the
+    named ones through the voice registry, so a person renamed or merged after
+    transcription is reflected the next time a summary is built. Used by both
+    the window and final-summary steps, since both prompts carry the lists.
+
+    Degrades to empty lists on any missing/unreadable input — an absent
+    participant list must never fail summarization.
+    """
+    transcript_json = st.dirs["outputs"] / "transcript.json"
+    if not transcript_json.exists():
+        return [], []
+    try:
+        payload = json.loads(transcript_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return [], []
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return [], []
+    async with ctx.session_factory() as session:
+        names = await Repo(session).speaker_names_for_task(
+            uuid.UUID(st.user_id), st.task_id
+        )
+    return split_participants(entries, names, speaker_label_word(language))
 
 
 def render_prompt_vars(
@@ -544,6 +598,14 @@ class SummarizeWindowsStep(Step):
             output_language,
         )
 
+        # Who is in this recording, for ${NAMED_SPEAKERS}/${ANONYMOUS_SPEAKERS}.
+        # Empty for an undiarized task, which renders as empty JSON arrays. The
+        # overflow re-chunk path loops back through the same render below, so
+        # this one resolution covers both segmentation routes.
+        named_speakers, anonymous_speakers = await _participants_for_task(
+            ctx, st, output_language
+        )
+
         windows_by_index: dict[int, dict[str, Any]] = {}
         if output.exists():
             try:
@@ -661,6 +723,8 @@ class SummarizeWindowsStep(Step):
                         input_tokens=input_tokens,
                         target_tokens=target_tokens,
                         target_ratio=window_cfg.segment_ratio,
+                        named_speakers=named_speakers,
+                        anonymous_speakers=anonymous_speakers,
                     )
                     st.logger.info(
                         "window %s/%s token_budget input=%d target=%d min=%d max=%d",
@@ -1169,11 +1233,16 @@ class FinalizePromptStep(Step):
             timeout_seconds=timeout_seconds,
             tokenizer_path=tokenizer_path(ctx.settings),
         )
+        # global_prompt.md carries the participant lists too, so they must be
+        # substituted here as well or the placeholder reaches the model raw.
+        final_named, final_anonymous = await _participants_for_task(ctx, st, output_language)
         global_prompt = render_prompt_vars(
             global_prompt_base,
             input_tokens=input_tokens,
             target_tokens=target_tokens,
             target_ratio=budget_cfg.final_ratio,
+            named_speakers=final_named,
+            anonymous_speakers=final_anonymous,
         )
         st.logger.info(
             "final summary token_budget input=%d target=%d min=%d max=%d",

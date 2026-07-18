@@ -348,3 +348,115 @@ def test_windows_non_overflow_error_propagates_unchanged(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="connection refused"):
         _run_windows(processor, dirs)
     assert llm.chunk_calls == []
+
+
+# ---------------------------------------------------------------------------
+# participant list wiring (vts-552)
+# ---------------------------------------------------------------------------
+
+
+class _FakeNameRepo:
+    """Stand-in for Repo exposing only speaker_names_for_task."""
+
+    def __init__(self, session: object, names: dict[str, str]) -> None:
+        self._names = names
+
+    async def speaker_names_for_task(self, user_id, task_id) -> dict[str, str]:
+        return self._names
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+def _wire_registry(monkeypatch: pytest.MonkeyPatch, ctx, names: dict[str, str]) -> None:
+    ctx.session_factory = lambda: _FakeSession()
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.Repo",
+        lambda session: _FakeNameRepo(session, names),
+    )
+
+
+def _write_diarized_transcript(dirs: dict[str, Path]) -> None:
+    """A two-speaker transcript with technical tags in entries, as
+    MergeTranscriptStep writes it."""
+    (dirs["outputs"] / "transcript.json").write_text(
+        json.dumps(
+            {
+                "text": "Вася: привет мир\n\nГолос 2: и тебе привет",
+                "entries": [
+                    {"start": 0.0, "end": 2.0, "text": "привет мир", "speaker": "SPEAKER_00"},
+                    {"start": 2.0, "end": 4.0, "text": "и тебе привет", "speaker": "SPEAKER_01"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_participant_wiring_puts_names_in_the_window_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window prompt must carry the registry name of a matched voice and
+    the rendered label of an unmatched one — end to end through the step."""
+    dirs = _make_dirs(tmp_path)
+    ctx, llm = _make_processor(tmp_path, monkeypatch, n_ctx=4096, segmentation="auto")
+    _wire_registry(monkeypatch, ctx, {"SPEAKER_00": "Вася"})
+    _write_diarized_transcript(dirs)
+
+    # a prompt template that surfaces both participant vars
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.load_prompt",
+        lambda *a, **k: "NAMED=${NAMED_SPEAKERS} ANON=${ANONYMOUS_SPEAKERS}",
+    )
+
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id=str(uuid.uuid4()),
+        dirs=dirs,
+        logger=logging.getLogger("test_participants"),
+        task_options={"language": "ru"},
+    )
+    assert asyncio.run(PrepareSummaryChunksStep().run(ctx, st)) is True
+    assert asyncio.run(SummarizeWindowsStep().run(ctx, st)) is True
+
+    prompts = [str(c.get("system_prompt", "")) for c in llm.chat_calls]
+    assert prompts, "no chat call recorded"
+    assert any('NAMED=["Вася"]' in p for p in prompts), prompts[:1]
+    assert any('ANON=["Голос 2"]' in p for p in prompts), prompts[:1]
+    # no placeholder may leak to the model
+    assert all("${NAMED_SPEAKERS}" not in p for p in prompts)
+
+
+def test_participant_wiring_empty_for_undiarized_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An undiarized transcript (no entries) substitutes empty arrays rather
+    than leaking the raw placeholder."""
+    dirs = _make_dirs(tmp_path)
+    ctx, llm = _make_processor(tmp_path, monkeypatch, n_ctx=4096, segmentation="auto")
+    _wire_registry(monkeypatch, ctx, {})
+    _write_transcript(dirs, 50)
+
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.load_prompt",
+        lambda *a, **k: "NAMED=${NAMED_SPEAKERS} ANON=${ANONYMOUS_SPEAKERS}",
+    )
+
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id=str(uuid.uuid4()),
+        dirs=dirs,
+        logger=logging.getLogger("test_participants"),
+        task_options={"language": "ru"},
+    )
+    assert asyncio.run(PrepareSummaryChunksStep().run(ctx, st)) is True
+    assert asyncio.run(SummarizeWindowsStep().run(ctx, st)) is True
+
+    prompts = [str(c.get("system_prompt", "")) for c in llm.chat_calls]
+    assert prompts
+    assert any("NAMED=[] ANON=[]" in p for p in prompts), prompts[:1]

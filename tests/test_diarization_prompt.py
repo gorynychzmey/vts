@@ -106,3 +106,49 @@ def test_shipped_prompts_participant_vars_are_substituted() -> None:
         assert "${NAMED_SPEAKERS}" not in out, name
         assert "${ANONYMOUS_SPEAKERS}" not in out, name
         assert '["Вася"]' in out, name
+
+
+def test_split_participants_named_and_anonymous() -> None:
+    from vts.pipeline.steps.summarization import split_participants
+
+    entries = [
+        {"speaker": "SPEAKER_00"},
+        {"speaker": "SPEAKER_01"},
+        {"speaker": "SPEAKER_00"},
+    ]
+    named, anon = split_participants(entries, {"SPEAKER_00": "Вася"}, "Голос")
+    assert named == ["Вася"]
+    # the unnamed voice is listed by the exact label the transcript renders,
+    # so the model can tie the list to the labels it actually sees
+    assert anon == ["Голос 2"]
+
+
+def test_split_participants_undiarized_is_empty() -> None:
+    from vts.pipeline.steps.summarization import split_participants
+
+    named, anon = split_participants([{"text": "no speaker key"}], {}, "Голос")
+    assert named == []
+    assert anon == []
+
+
+def test_split_participants_all_anonymous() -> None:
+    from vts.pipeline.steps.summarization import split_participants
+
+    entries = [{"speaker": "SPEAKER_00"}, {"speaker": "SPEAKER_01"}]
+    named, anon = split_participants(entries, {}, "Голос")
+    assert named == []
+    assert anon == ["Голос 1", "Голос 2"]
+
+
+def test_split_participants_matches_label_map_numbering() -> None:
+    """The anonymous labels must equal what label_map renders, or the prompt
+    lists a participant the transcript never mentions."""
+    from vts.services.diarization.merge import label_map
+    from vts.pipeline.steps.summarization import split_participants
+
+    entries = [{"speaker": "SPEAKER_00"}, {"speaker": "SPEAKER_01"}, {"speaker": "SPEAKER_02"}]
+    names = {"SPEAKER_01": "Петя"}
+    mapping = label_map(entries, "Голос", names=names)
+    named, anon = split_participants(entries, names, "Голос")
+    assert named == ["Петя"]
+    assert anon == [mapping["SPEAKER_00"], mapping["SPEAKER_02"]]
