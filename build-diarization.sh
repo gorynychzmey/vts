@@ -61,7 +61,7 @@ smoke_test() {
   fi
 
   "${ENGINE}" exec "${name}" python -c '
-import io, json, math, struct, urllib.request, uuid, wave
+import io, json, math, struct, time, urllib.error, urllib.request, uuid, wave
 
 sr = 16000
 def tone(f0, dur):
@@ -76,8 +76,18 @@ w.writeframes(b"".join(struct.pack("<h", int(max(-1, min(1, s)) * 32767)) for s 
 w.close()
 audio = buf.getvalue()
 
+job_id = uuid.uuid4().hex
 b = uuid.uuid4().hex
+
+def form_field(name, value):
+    return (
+        ("--%s\r\n" % b).encode()
+        + ("Content-Disposition: form-data; name=\"%s\"\r\n\r\n" % name).encode()
+        + value.encode() + b"\r\n"
+    )
+
 body = b"".join([
+    form_field("job_id", job_id),
     ("--%s\r\n" % b).encode(),
     b"Content-Disposition: form-data; name=\"file\"; filename=\"t.wav\"\r\n",
     b"Content-Type: audio/wav\r\n\r\n", audio, b"\r\n",
@@ -87,9 +97,36 @@ req = urllib.request.Request(
     "http://localhost:9100/diarize", data=body,
     headers={"Content-Type": "multipart/form-data; boundary=%s" % b})
 r = json.load(urllib.request.urlopen(req, timeout=600))
-assert {"segments", "embeddings", "num_speakers"} <= set(r.keys()), r.keys()
-assert isinstance(r["num_speakers"], int) and r["num_speakers"] >= 1, r["num_speakers"]
-print("smoke ok: speakers=%d segments=%d" % (r["num_speakers"], len(r["segments"])))
+assert r.get("job_id") == job_id, r
+assert r.get("state") in ("running", "done"), r
+
+# /jobs/{id}/result returns 409 while the job is still running (not 404), and
+# disposes the job once collected -- poll it directly rather than parsing SSE.
+deadline = time.monotonic() + 600
+result = None
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(
+            "http://localhost:9100/jobs/%s/result" % job_id, timeout=30
+        ) as resp:
+            result = json.load(resp)
+        break
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            time.sleep(2)
+            continue
+        if exc.code == 500:
+            detail = json.load(exc)
+            print("smoke FAILED: job reported failure: %s" % detail)
+            raise SystemExit(1)
+        raise
+else:
+    print("smoke FAILED: job did not finish within timeout")
+    raise SystemExit(1)
+
+assert {"segments", "embeddings", "num_speakers"} <= set(result.keys()), result.keys()
+assert isinstance(result["num_speakers"], int) and result["num_speakers"] >= 1, result["num_speakers"]
+print("smoke ok: speakers=%d segments=%d" % (result["num_speakers"], len(result["segments"])))
 '
 }
 
