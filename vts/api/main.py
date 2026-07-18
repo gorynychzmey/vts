@@ -40,7 +40,9 @@ from vts.api.schemas import (
     ApiTokenOut,
     BatchResultOut,
     MeOut,
+    MergeSpeakersRequest,
     MessageOut,
+    MoveVoiceSampleRequest,
     PresetCreateRequest,
     PresetOptions,
     PresetOut,
@@ -2361,6 +2363,51 @@ def create_app() -> FastAPI:
         ok = await repo.delete_voice_sample(uuid.UUID(user.id), sample_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Voice sample not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    @app.post(
+        "/api/speakers/{speaker_id}/samples/{sample_id}/move",
+        response_model=VoiceSampleOut,
+    )
+    async def move_voice_sample_endpoint(
+        speaker_id: uuid.UUID,
+        sample_id: uuid.UUID,
+        payload: MoveVoiceSampleRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> VoiceSampleOut:
+        repo = Repo(session)
+        # the {speaker_id} segment must actually own {sample_id} — same guard as delete
+        sample = await repo.get_voice_sample(uuid.UUID(user.id), sample_id)
+        if sample is None or sample.speaker_id != speaker_id:
+            raise HTTPException(status_code=404, detail="Voice sample not found")
+        moved = await repo.move_voice_sample(
+            uuid.UUID(user.id), sample_id, payload.target_speaker_id
+        )
+        if moved is None:
+            raise HTTPException(status_code=404, detail="Target speaker not found")
+        await session.commit()
+        return VoiceSampleOut(
+            id=str(moved.id),
+            duration_sec=moved.duration_sec,
+            source_task_id=str(moved.source_task_id) if moved.source_task_id else None,
+            created_at=moved.created_at,
+        )
+
+    @app.post("/api/speakers/{source_id}/merge", status_code=204)
+    async def merge_speakers_endpoint(
+        source_id: uuid.UUID,
+        payload: MergeSpeakersRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        if source_id == payload.target_id:
+            raise HTTPException(status_code=409, detail="Cannot merge a speaker into itself")
+        repo = Repo(session)
+        ok = await repo.merge_speakers(uuid.UUID(user.id), source_id, payload.target_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Speaker not found")
         await session.commit()
         return Response(status_code=204)
 

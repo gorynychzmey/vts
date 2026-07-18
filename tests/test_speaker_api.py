@@ -576,3 +576,106 @@ async def test_rebinding_speaker_label_deletes_prior_fragment_from_same_task(
         # B now has exactly one fragment, from this task.
         assert len(samples_b_after) == 1
         assert samples_b_after[0].source_task_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_move_sample_via_api(client, authed_app):
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        sample = await repo.add_voice_sample(
+            speaker_id=a.id, embedding=[0.1] * 256, embedding_model="m",
+            audio=b"AUDIO", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        a_id, b_id, s_id = str(a.id), str(b.id), str(sample.id)
+
+    r = await client.post(
+        f"/api/speakers/{a_id}/samples/{s_id}/move", json={"target_speaker_id": b_id}
+    )
+    assert r.status_code == 200
+    assert r.json()["id"] == s_id
+
+    assert (await client.get(f"/api/speakers/{a_id}/samples")).json() == []
+    moved = (await client.get(f"/api/speakers/{b_id}/samples")).json()
+    assert [s["id"] for s in moved] == [s_id]
+
+
+@pytest.mark.asyncio
+async def test_move_sample_rejects_mismatched_speaker_id(client, authed_app):
+    """The {speaker_id} path segment must own {sample_id}, as for delete."""
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        sample = await repo.add_voice_sample(
+            speaker_id=a.id, embedding=[0.1] * 256, embedding_model="m",
+            audio=b"AUDIO", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        a_id, b_id, s_id = str(a.id), str(b.id), str(sample.id)
+
+    # sample belongs to A, but the URL names B
+    r = await client.post(
+        f"/api/speakers/{b_id}/samples/{s_id}/move", json={"target_speaker_id": b_id}
+    )
+    assert r.status_code == 404
+    assert len((await client.get(f"/api/speakers/{a_id}/samples")).json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_move_sample_unknown_target_404(client, authed_app):
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        sample = await repo.add_voice_sample(
+            speaker_id=a.id, embedding=[0.1] * 256, embedding_model="m",
+            audio=b"AUDIO", audio_format="wav", duration_sec=4.5, source_task_id=None,
+        )
+        await session.commit()
+        a_id, s_id = str(a.id), str(sample.id)
+
+    r = await client.post(
+        f"/api/speakers/{a_id}/samples/{s_id}/move",
+        json={"target_speaker_id": str(uuid.uuid4())},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_merge_via_api(client):
+    a = (await client.post("/api/speakers", json={"name": "Вася-1"})).json()
+    b = (await client.post("/api/speakers", json={"name": "Вася-2"})).json()
+
+    r = await client.post(f"/api/speakers/{a['id']}/merge", json={"target_id": b["id"]})
+    assert r.status_code == 204
+
+    names = [s["name"] for s in (await client.get("/api/speakers")).json()]
+    assert "Вася-1" not in names
+    assert "Вася-2" in names
+
+
+@pytest.mark.asyncio
+async def test_merge_same_speaker_409(client):
+    a = (await client.post("/api/speakers", json={"name": "A"})).json()
+    r = await client.post(f"/api/speakers/{a['id']}/merge", json={"target_id": a["id"]})
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_merge_unknown_target_404(client):
+    a = (await client.post("/api/speakers", json={"name": "A"})).json()
+    r = await client.post(
+        f"/api/speakers/{a['id']}/merge", json={"target_id": str(uuid.uuid4())}
+    )
+    assert r.status_code == 404

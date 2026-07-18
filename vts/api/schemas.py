@@ -353,6 +353,14 @@ class SpeakerUpdateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class MoveVoiceSampleRequest(BaseModel):
+    target_speaker_id: UUID
+
+
+class MergeSpeakersRequest(BaseModel):
+    target_id: UUID
+
+
 class VoiceSampleOut(BaseModel):
     id: str
     duration_sec: float
