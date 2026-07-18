@@ -379,6 +379,105 @@ async def test_resolution_is_transactional_all_or_nothing(client, authed_app, tm
         assert all(s.name != "ShouldNotPersist" for s in speakers)
 
 
+async def _seed_task_without_diarization(factory, tmp_path, *, status="awaiting_input"):
+    """Seed a task row with NO outputs/diarization.json (and no previews) —
+    reproduces a malformed/incomplete awaiting_input task where embedding_model
+    would resolve to "" in resolve_task_speakers."""
+    from vts.db.models import TaskStatus
+    from vts.db.repo import Repo
+
+    task_id = uuid.uuid4()
+    outputs = tmp_path / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+
+    # No diarization.json written. Still provide a preview so add_fragment
+    # can reach the embedding_model check rather than failing earlier on a
+    # missing-preview 422.
+    clip_path = outputs / "preview_SPEAKER_00_0.wav"
+    clip_path.write_bytes(b"RIFFCLIPBYTES")
+    previews = {"SPEAKER_00": [{"path": str(clip_path), "start": 0.0, "end": 3.0}]}
+    (outputs / "speaker_previews.json").write_text(json.dumps(previews), encoding="utf-8")
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/v",
+            options={"diarize": True},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        await repo.set_task_status(task, TaskStatus[status])
+        await session.commit()
+    return task_id, clip_path
+
+
+@pytest.mark.asyncio
+async def test_resolution_add_fragment_without_embedding_model_422s(client, authed_app, tmp_path):
+    """A resolution that ADDS A FRAGMENT on a task with no diarization.json
+    (empty embedding_model) must 422 before any write, rather than silently
+    persisting a fragment that can never match (embedding_model == "")."""
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_without_diarization(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        speaker = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "NoModel")
+        await session.commit()
+        speaker_id = str(speaker.id)
+
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_existing",
+                    "speaker_id": speaker_id,
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 422
+
+    async with factory() as session:
+        repo = Repo(session)
+        samples = await repo.list_voice_samples(uuid.UUID(speaker_id))
+        assert samples == []
+
+
+@pytest.mark.asyncio
+async def test_resolution_leave_anonymous_succeeds_without_embedding_model(client, authed_app, tmp_path):
+    """A resolution that does NOT add a fragment (leave_anonymous) must still
+    succeed on a task with no diarization.json — the empty embedding_model
+    guard must be scoped to add_fragment only."""
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_without_diarization(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "leave_anonymous",
+                    "add_fragment": False,
+                    "outcome": "left_anonymous",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
 @pytest.mark.asyncio
 async def test_rebinding_speaker_label_deletes_prior_fragment_from_same_task(
     client, authed_app, tmp_path

@@ -2518,6 +2518,14 @@ def create_app() -> FastAPI:
                     await repo.delete_voice_sample(user_id, prior_voice_sample_id)
 
             if res.add_fragment and speaker_id is not None:
+                if not embedding_model:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "cannot add voice fragment: task has no embedding model "
+                            "(diarization.json missing or incomplete)"
+                        ),
+                    )
                 clips = previews.get(res.speaker_label) or []
                 if not clips:
                     raise HTTPException(
