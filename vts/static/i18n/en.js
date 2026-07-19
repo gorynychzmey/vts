@@ -197,6 +197,7 @@ window.__VTS_I18N.en = {
 "status.running": "running",
 "status.queued": "queued",
 "status.paused": "paused",
+"status.awaiting_input": "needs review",
 "status.completed": "completed",
 "status.archived": "archived",
 "status.failed": "failed",

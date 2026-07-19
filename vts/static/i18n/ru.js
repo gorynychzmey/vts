@@ -197,6 +197,7 @@ window.__VTS_I18N.ru = {
 "status.running": "выполняется",
 "status.queued": "в очереди",
 "status.paused": "пауза",
+"status.awaiting_input": "нужна доработка",
 "status.completed": "завершено",
 "status.archived": "в архиве",
 "status.failed": "ошибка",

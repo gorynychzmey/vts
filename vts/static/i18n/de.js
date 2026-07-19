@@ -197,6 +197,7 @@ window.__VTS_I18N.de = {
 "status.running": "läuft",
 "status.queued": "in warteschlange",
 "status.paused": "pausiert",
+"status.awaiting_input": "Prüfung nötig",
 "status.completed": "abgeschlossen",
 "status.archived": "archiviert",
 "status.failed": "fehlgeschlagen",

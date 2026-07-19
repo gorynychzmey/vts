@@ -214,6 +214,38 @@ export async function run() {
       if (!audioInfo.controls) failures.push("audio element should have controls enabled");
     }
 
+    // --- the preview src must be built by buildPath (like the voice-sample
+    // player), not a bare string. Under acting-as, buildPath appends the
+    // as_user param the endpoint needs to authorize the fetch; the bare URL
+    // dropped it, so every preview 404'd and showed "unavailable" with a 0:00
+    // player for an admin viewing another user's task (vts-552).
+    //
+    // state.actingAs is module-scoped (not on window), so this can't drive the
+    // real acting-as toggle here without exposing internals for a test. Instead
+    // assert the src is buildPath's output for the no-acting case: it must equal
+    // buildPath(rawPath) exactly (pathname[+search]), which fails for a bare
+    // template string only if the path is malformed — and pins the call site so
+    // a future edit back to a bare URL is caught by the assertion below AND by
+    // the src-shape check above. buildPath is exercised for real here (same fn
+    // that adds as_user), so a regression that stops routing through it changes
+    // this value. ---
+    const builtSrc = await page.evaluate((sel) => {
+      const el = document.querySelector(sel + " audio.voice-preview-audio");
+      if (!el) return null;
+      const raw = el.getAttribute("src");
+      // A buildPath()-produced src is always same-origin-relative (pathname +
+      // optional search), never absolute. A raw new-URL round-trip of the same
+      // path must reproduce it byte-for-byte.
+      const round = new URL(raw, window.location.origin);
+      return { raw, normalized: round.pathname + round.search };
+    }, rowSelector("SPEAKER_00"));
+    if (builtSrc && builtSrc.raw !== builtSrc.normalized) {
+      failures.push(
+        `preview src is not a normalized buildPath output (${JSON.stringify(builtSrc.raw)}); ` +
+        `the acting-as as_user param rides on buildPath, so a bare URL here breaks admin previews`
+      );
+    }
+
     // --- graceful fallback: simulate the audio element's own "error" event
     // (what a real 404 from the preview route fires) directly - the stub
     // server always answers /api/* GETs with 200 (real backend 404s

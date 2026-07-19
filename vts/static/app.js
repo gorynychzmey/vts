@@ -1376,6 +1376,15 @@ function computeLocalStepProgress(runtime) {
     return { value: 0, indeterminate: false, text: t("progress.queued") };
   }
 
+  // awaiting_input is a real STOP, not an active step: shows_progress is false
+  // server-side. Rendering the indeterminate "working" runner (the !active
+  // fallback below) made a paused-for-review task look like it was still
+  // processing (vts-552). Show a steady, non-animated bar with the status label
+  // instead — the work that ran is done; it is now waiting on the human.
+  if (statusPred.needsInput(runtime.baseStatus)) {
+    return { value: 0, indeterminate: false, text: t("status.awaiting_input") };
+  }
+
   const active = resolveActiveStep(runtime);
   // `waiting` = partially processed, the active step is queued in a lane for a
   // slot. Show real progress (completed steps count) with a "waiting: <lane>"
@@ -2741,13 +2750,23 @@ function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
 
-function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", queue = undefined) {
+function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", queue = undefined, awaitingStep = undefined) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
     return;
   }
   const runtime = taskEl._runtime;
   runtime.baseStatus = String(status || "");
+  // The backend emits awaiting_step alongside the status when a task pauses for
+  // review (processor.py). Without copying it here, runtime.awaitingStep kept
+  // its stale value from the last full load, so the resolve-voices button's
+  // gate (awaitingStep === "match_speakers") stayed false and the button never
+  // appeared until a page reload (vts-552). Only overwrite when the event
+  // actually carries the field, so a plain status event (running, completed)
+  // does not blank a value a prior awaiting_input event set.
+  if (awaitingStep !== undefined) {
+    runtime.awaitingStep = typeof awaitingStep === "string" ? awaitingStep : "";
+  }
   if (queue !== undefined) {
     runtime.queue = queue || null;
   }
@@ -3073,7 +3092,7 @@ function connectEvents() {
   });
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
-    patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code, payload.data.queue);
+    patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code, payload.data.queue, payload.data.awaiting_step);
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);
@@ -4245,7 +4264,13 @@ function renderVoiceList() {
     audio.className = "voice-preview-audio";
     audio.controls = true;
     audio.preload = "none";
-    audio.src = `/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`;
+    // buildPath, not a bare URL: an admin viewing another user's task has
+    // state.actingAs set, and buildPath carries the as_user param the endpoint
+    // needs to authorize the fetch. Without it the request resolves to the
+    // admin's own (nonexistent) task and 404s, so every preview showed
+    // "preview unavailable" with a 0:00 player — exactly the sibling
+    // voice-sample player's contract at buildPath(/api/speakers/...) (vts-552).
+    audio.src = buildPath(`/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`);
     const previewNote = document.createElement("span");
     previewNote.className = "voice-preview-unavailable hidden";
     previewNote.textContent = t("voices.row.preview_unavailable");
