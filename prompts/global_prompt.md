@@ -28,6 +28,6 @@ If you accidentally start writing in another language, immediately rewrite that 
 Input:
 - Approx input size: ${INPUT_WORDS} words
 - Target output size: ~${TARGET_WORDS} words (~${TARGET_RATIO}% of input)
-- Названные участники диалога (JSON-массив, может быть пустым): ${NAMED_SPEAKERS}
-- Анонимные участники (JSON-массив, может быть пустым): ${ANONYMOUS_SPEAKERS}
-- Имена участников — это реальные люди из реестра голосов. Используй имя ровно так, как оно указано, и никогда не переводи его.
+- Named participants (JSON array, may be empty): ${NAMED_SPEAKERS}
+- Anonymous participants (JSON array, may be empty): ${ANONYMOUS_SPEAKERS}
+- Participant names are real people from the voice registry. Use each name exactly as given and never translate it, whatever the output language.
