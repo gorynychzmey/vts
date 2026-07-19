@@ -1100,6 +1100,9 @@ function renderTaskAboutDialog(task) {
   q(".about-language").textContent = options.language || t("about.language_auto");
   setAboutBool(q(".about-audio-only"), Boolean(options.audio_only));
   setAboutBool(q(".about-transcript"), options.transcript !== false);
+  // Unlike transcript (default on), diarize defaults off — a task predating the
+  // flag, or one whose options never carried it, did not diarize.
+  setAboutBool(q(".about-diarize"), Boolean(options.diarize));
   q(".about-prompts").textContent = aboutPromptNames(options).join(", ") || "—";
 
   const completed = String(task.status || "") === "completed";

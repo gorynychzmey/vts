@@ -182,6 +182,7 @@ window.__VTS_I18N.en = {
 "about.language_auto": "auto",
 "about.audio_only": "Audio only",
 "about.transcript": "Transcript",
+"about.diarize": "Speakers",
 "about.prompts": "Prompts",
 "about.yes": "yes",
 "about.no": "no",

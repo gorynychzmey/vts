@@ -1568,6 +1568,7 @@ def create_app() -> FastAPI:
         # it. Rejecting would break them for a flag that never did anything here.
         audio_only: bool = Form(default=False),  # noqa: ARG001
         transcript: bool = Form(default=True),
+        diarize: bool = Form(default=False),
         prompts: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
@@ -1577,6 +1578,8 @@ def create_app() -> FastAPI:
         normalized_prompts = _normalize_prompts_json(prompts)
         if normalized_prompts and not transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
+        if diarize and not transcript:
+            raise HTTPException(status_code=422, detail="diarize requires transcript")
         original_filename = file.filename or "upload"
         suffix = Path(original_filename).suffix.lower()
         if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
@@ -1602,6 +1605,10 @@ def create_app() -> FastAPI:
             # yt-dlp audio_only hint is normalized away rather than trusted.
             "audio_only": False,
             "transcript": transcript,
+            # Persist explicitly, even when false: diarize_enabled() treats a
+            # missing key as "unset" and falls back to the server default, so
+            # dropping it here silently overrode the user's choice (vts-552).
+            "diarize": diarize,
             "prompts": normalized_prompts,
         }
         task = await repo.create_task(
@@ -1643,6 +1650,8 @@ def create_app() -> FastAPI:
         normalized_prompts = _normalize_prompts_json(payload.prompts)
         if normalized_prompts and not payload.transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
+        if payload.diarize and not payload.transcript:
+            raise HTTPException(status_code=422, detail="diarize requires transcript")
         upload_id = uuid.uuid4()
         options = {
             "language": payload.language or None,
@@ -1651,6 +1660,9 @@ def create_app() -> FastAPI:
             # client's word for it — a stray true would only mislead the UI.
             "audio_only": False,
             "transcript": payload.transcript,
+            # Explicit even when false — see /api/tasks/upload for why a missing
+            # key is not the same as false here (vts-552).
+            "diarize": payload.diarize,
             "prompts": normalized_prompts,
         }
         UploadSession.init(

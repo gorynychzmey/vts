@@ -182,6 +182,7 @@ window.__VTS_I18N.ru = {
 "about.language_auto": "авто",
 "about.audio_only": "Только аудио",
 "about.transcript": "Транскрипт",
+"about.diarize": "Спикеры",
 "about.prompts": "Промпты",
 "about.yes": "да",
 "about.no": "нет",

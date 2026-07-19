@@ -182,6 +182,7 @@ window.__VTS_I18N.de = {
 "about.language_auto": "automatisch",
 "about.audio_only": "Nur Audio",
 "about.transcript": "Transkript",
+"about.diarize": "Sprecher",
 "about.prompts": "Prompts",
 "about.yes": "ja",
 "about.no": "nein",

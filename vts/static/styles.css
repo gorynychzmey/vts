@@ -651,7 +651,13 @@ input[type="file"] {
 .task {
   border: 1px solid var(--line);
   border-radius: 12px;
-  overflow: hidden;
+  /* Deliberately NOT `overflow: hidden`. The card is full of tooltip triggers
+     (every task action button: data-i18n-title becomes an absolutely-positioned
+     data-tooltip bubble at runtime), and a clipping ancestor cut every bubble
+     off at the card's edge — the tooltips read as truncated (vts-552).
+     The corners are kept by rounding the only children that paint to the edge
+     (the tinted header row below, and the last child) instead of clipping the
+     whole card. */
   background: #fff;
 }
 
@@ -661,6 +667,17 @@ input[type="file"] {
   gap: 0.7rem;
   padding: 0.75rem 0.8rem;
   background: #fff8e8;
+  /* Was clipped by the parent's overflow before; now rounds itself so the
+     tinted background still follows the card's top corners. */
+  border-top-left-radius: 11px;
+  border-top-right-radius: 11px;
+}
+
+/* Same reasoning for the bottom edge: whichever block ends the card must not
+   paint square corners over the parent's rounded border. */
+.task > :last-child {
+  border-bottom-left-radius: 11px;
+  border-bottom-right-radius: 11px;
 }
 
 .task-main {
@@ -1069,6 +1086,18 @@ input[type="file"] {
 
   .task-right-bottom::-webkit-scrollbar {
     display: none;
+  }
+
+  /* The mobile toolbar is a horizontal scroller (and .task-right clips), so a
+     bubble anchored above a button is cut off no matter what the card does.
+     Anchoring to the row's own right edge keeps a long label inside the
+     viewport instead of pushing the scroller wider. */
+  .task-right-bottom [data-tooltip]::after,
+  .task-actions-inline [data-tooltip]::after {
+    left: auto;
+    right: 0;
+    transform: none;
+    text-align: left;
   }
 
   .url-row {

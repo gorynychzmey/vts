@@ -99,6 +99,49 @@ async def test_single_shot_upload_forces_audio_only_false(client):
     assert r.json()["options"]["audio_only"] is False
 
 
+async def test_chunked_upload_preserves_diarize(client):
+    # The client posts diarize on both upload paths, but neither endpoint used
+    # to copy it into the persisted options: UploadInitRequest accepted the
+    # field and dropped it on the floor. diarize_enabled() then saw no key at
+    # all and fell back to the config default (false), so a task queued with
+    # the Speakers checkbox ticked logged "diarization skipped: disabled for
+    # this task" and silently ran without diarization.
+    r = await client.post(
+        "/api/uploads/init",
+        json={"filename": "clip.mp4", "total_size": 6, "transcript": True, "diarize": True},
+    )
+    assert r.status_code == 200, r.text
+    uid = r.json()["upload_id"]
+    await client.patch(f"/api/uploads/{uid}?offset=0", content=b"abcdef")
+    fin = await client.post(f"/api/uploads/{uid}/finalize")
+    assert fin.status_code == 200, fin.text
+    assert fin.json()["options"]["diarize"] is True
+
+
+async def test_single_shot_upload_preserves_diarize(client):
+    # Same defect on the single-shot path, one step earlier: upload_task never
+    # declared diarize as a Form field, so FastAPI discarded the multipart part
+    # before the handler ever saw it.
+    files = {"file": ("clip.mp4", b"abcdef", "video/mp4")}
+    r = await client.post(
+        "/api/tasks/upload",
+        files=files,
+        data={"transcript": "true", "diarize": "true"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["options"]["diarize"] is True
+
+
+async def test_upload_diarize_defaults_false(client):
+    # Absent flag must persist an explicit false rather than no key, so the
+    # About dialog and diarize_enabled() agree on what the task will do.
+    uid = await _init(client)
+    await client.patch(f"/api/uploads/{uid}?offset=0", content=b"abcdef")
+    fin = await client.post(f"/api/uploads/{uid}/finalize")
+    assert fin.status_code == 200, fin.text
+    assert fin.json()["options"]["diarize"] is False
+
+
 async def test_offset_endpoint_supports_resume(client):
     uid = await _init(client)
     await client.patch(f"/api/uploads/{uid}?offset=0", content=b"ab")
