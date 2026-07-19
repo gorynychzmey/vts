@@ -28,5 +28,15 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'vts_db')\gexec
 SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'vts_db', :'vts_user')\gexec
 SQL
 
+# The pgvector extension must be installed by a superuser: migration
+# 0014_pgvector_extension runs `CREATE EXTENSION IF NOT EXISTS vector` as the
+# application role, which is not a superuser and would fail with
+# "permission denied to create extension". Doing it here (as the admin user)
+# makes that migration a no-op.
+echo "Installing pgvector extension (requires superuser)..."
+"${ENGINE}" compose exec -T "${DB_SERVICE}" psql -U "${DB_ADMIN_USER}" -d "${VTS_DB_NAME}" \
+  -v ON_ERROR_STOP=1 \
+  -c "CREATE EXTENSION IF NOT EXISTS vector"
+
 echo "PostgreSQL setup complete: user=${VTS_DB_USER}, db=${VTS_DB_NAME}"
 

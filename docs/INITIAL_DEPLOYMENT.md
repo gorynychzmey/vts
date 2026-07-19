@@ -67,7 +67,36 @@ podman compose up -d postgres redis
 CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 ```
 
-`scripts/setup_postgres.sh` is idempotent and creates/updates role/database (defaults: `vts` / `vts`).
+`scripts/setup_postgres.sh` is idempotent and creates/updates role/database (defaults: `vts` / `vts`),
+and installs the `vector` extension.
+
+The Postgres image must ship pgvector — the deployment uses
+`tensorchord/vchord-postgres`, which bundles both `vector` and `vchord`. A stock
+`postgres:17` image does not have it and the extension step will fail.
+
+**The `vector` extension must be created by a superuser.** Migration
+`0014_pgvector_extension` runs `CREATE EXTENSION IF NOT EXISTS vector`, but it
+connects as the application role (`vts`), which is not a superuser. If the
+extension is missing, every startup fails with:
+
+```
+asyncpg.exceptions.InsufficientPrivilegeError: permission denied to create extension "vector"
+HINT:  Must be superuser to create this extension.
+```
+
+The webapi then crash-loops and a reverse proxy in front of it (Traefik) returns
+`502 Bad gateway`, since there is no healthy backend.
+
+`setup_postgres.sh` avoids this by creating the extension as the admin user, so
+the migration finds it already present. If you provision the database by other
+means (managed Postgres, an existing server, a shared instance), run this once
+as a superuser before the first start:
+
+```bash
+psql -U postgres -d vts -c 'CREATE EXTENSION IF NOT EXISTS vector'
+```
+
+Verify with `\dx` — `vector` should be listed alongside `plpgsql`.
 
 ## 4. Image source
 
@@ -111,6 +140,12 @@ docker compose run --rm -v "$(pwd)":/app webapi sh -lc "pip install pytest==8.4.
 
 `webapi` service uses the common image with `VTS_ROLE=webapi` and runs `alembic upgrade head` before starting `uvicorn`.
 No separate migration container is required.
+
+Migrations run as the application role (`vts`), not as a superuser, so anything
+needing superuser rights must be done out of band — see section 8 for the
+versions where that applies. A failing migration aborts startup, and systemd
+restarts the unit, so a migration that cannot succeed turns into a crash loop
+(and `502 Bad gateway` behind a reverse proxy) rather than a one-off error.
 
 ## 6. Install and start systemd units
 
@@ -164,7 +199,59 @@ curl -fsS http://127.0.0.1:9100/health
 
 Open UI via reverse proxy that injects `X-Forwarded-User`.
 
-## 8. Next releases
+## 8. Upgrade notes (manual steps)
+
+Most releases need nothing beyond a new image tag — migrations run at startup.
+The versions below are exceptions that require a manual step first.
+
+### 1.3 → 1.4 — pgvector extension (speaker registry)
+
+1.4 introduces the speaker registry (`vts-80i`), which stores voice embeddings
+in `vector` columns. Migration `0014_pgvector_extension` enables the extension,
+but it runs as the application role (`vts`), which is not a superuser, so on an
+existing 1.3 database it fails and **the webapi crash-loops on every start**:
+
+```
+asyncpg.exceptions.InsufficientPrivilegeError: permission denied to create extension "vector"
+HINT:  Must be superuser to create this extension.
+```
+
+While it crash-loops there is no healthy backend, so Traefik answers
+`502 Bad gateway` for every request.
+
+**Before deploying 1.4, run once as a superuser against the vts database:**
+
+```bash
+# Containerised Postgres (peer auth inside the container):
+podman exec -u postgres <postgres-container> psql -d vts \
+  -c 'CREATE EXTENSION IF NOT EXISTS vector'
+
+# Or over the network as a superuser role:
+psql -h <db-host> -U postgres -d vts -c 'CREATE EXTENSION IF NOT EXISTS vector'
+```
+
+Verify, then deploy — the migration becomes a no-op via `IF NOT EXISTS`:
+
+```bash
+psql -h <db-host> -U vts -d vts -c '\dx'   # expect: vector
+```
+
+Two related prerequisites:
+
+- The Postgres image must ship pgvector (`tensorchord/vchord-postgres`); a
+  stock `postgres:17` cannot install it at all.
+- The diarization sidecar must be `diar-build-1.1.0`+ (see section 6).
+
+Fresh installs are not affected: `scripts/setup_postgres.sh` already creates the
+extension as the admin user.
+
+If the services are already crash-looping, create the extension and restart:
+
+```bash
+sudo systemctl restart vts-webapi.service vts-worker.service
+```
+
+## 9. Next releases
 
 For commit/deploy rules and release sequence, follow:
 
