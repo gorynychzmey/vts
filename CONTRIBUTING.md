@@ -34,11 +34,35 @@ docker compose --profile asr-whisper --profile llm-llamacpp up -d
 
 See the [README](README.md) Quick Start for the model-download step.
 
+### Database roles (why your app role is not a superuser)
+
+The compose Postgres bootstraps as superuser `postgres` and creates the
+application role (`vts`) **without** superuser via
+`scripts/pg-init-app-role.sh`, which also installs the `vector` extension.
+This mirrors production, where `vts` is unprivileged.
+
+Keep it that way. When the app role was a superuser locally, migration 0014's
+`CREATE EXTENSION vector` passed on every dev machine and in CI while being
+impossible in production — which took prod down with a crash loop and a 502.
+Superuser-only DDL belongs in the init script, never in a migration.
+
+That provisioning runs only on **first** cluster init. If you have a volume
+from before this change, `vts` is still a superuser there and will not catch
+this class of bug. To re-provision (destroys local DB data):
+
+```bash
+docker compose down -v && docker compose up -d postgres
+```
+
 ## Running tests
 
 ```bash
 python -m pytest -q
 ```
+
+Tests need a Postgres with `vector` installed and expect to connect as a
+non-superuser; `docker compose up -d postgres` provides both. Override the
+target with `VTS_TEST_DATABASE_URL`.
 
 There is no separate lint config yet; the codebase generally follows
 `ruff format` defaults.

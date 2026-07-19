@@ -66,15 +66,24 @@ services:
 
   postgres:
     image: docker.io/tensorchord/vchord-postgres:pg17-v1.1.1
+    # The cluster superuser is `postgres`; the application role (`vts`) is
+    # created unprivileged by docker-entrypoint-initdb.d/10-app-role.sh. This
+    # mirrors production, where `vts` is not a superuser — keeping the app role
+    # a superuser here hid the pgvector privilege failure until it reached
+    # prod (vts-e1p).
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-vts}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vts}
-      POSTGRES_DB: ${POSTGRES_DB:-vts}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+      VTS_DB_USER: ${POSTGRES_USER:-vts}
+      VTS_DB_PASSWORD: ${POSTGRES_PASSWORD:-vts}
+      VTS_DB_NAME: ${POSTGRES_DB:-vts}
     command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_size=2GB"]
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ./scripts/pg-init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vts} -d ${POSTGRES_DB:-vts}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-vts}"]
       interval: 5s
       timeout: 3s
       retries: 20

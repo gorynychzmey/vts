@@ -15,16 +15,19 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # The cluster superuser is `postgres`; the `vts` role tests connect as is
+      # created unprivileged in the "Provision test database" step below, so CI
+      # has the same privilege shape as production (vts-e1p).
       postgres:
         image: tensorchord/vchord-postgres:pg17-v1.1.1
         env:
-          POSTGRES_USER: vts
-          POSTGRES_PASSWORD: vts
-          POSTGRES_DB: vts_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U vts"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
@@ -47,6 +50,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
+
+      # Mirrors scripts/pg-init-app-role.sh: an unprivileged app role plus
+      # superuser-installed extensions. Tests must not be able to CREATE
+      # EXTENSION themselves — that privilege gap is what this guards.
+      - name: Provision test database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE vts LOGIN PASSWORD 'vts'" \
+            -c "CREATE DATABASE vts_test OWNER vts"
+          psql -h localhost -U postgres -d vts_test -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector"
+          psql -h localhost -U postgres -d vts_test -tAc \
+            "SELECT rolsuper FROM pg_roles WHERE rolname = 'vts'" | grep -qx f \
+            || { echo "app role 'vts' must not be a superuser"; exit 1; }
 
       - name: Run tests
         env:

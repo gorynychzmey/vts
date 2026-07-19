@@ -25,7 +25,24 @@ def make_test_engine():
 
 
 async def ensure_pgvector(engine) -> None:
-    """CREATE EXTENSION vector before create_all — Vector columns need it, and
-    tests build the schema with create_all rather than running migrations."""
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    """Verify the vector extension is present before create_all — Vector columns
+    need it, and tests build the schema with create_all rather than migrations.
+
+    This checks instead of creating. The test role is deliberately not a
+    superuser (matching production), so it *cannot* create the extension; the
+    test database provisions it as superuser at init time. Creating it here was
+    what let the pgvector privilege bug pass locally and in CI while being
+    impossible in prod (vts-e1p).
+    """
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+        )
+        if result.first() is None:
+            raise RuntimeError(
+                "The 'vector' extension is missing from the test database.\n"
+                "It must be created by a superuser before running tests:\n"
+                "  psql -U postgres -d vts_test -c 'CREATE EXTENSION vector'\n"
+                "docker-compose provisions this automatically via "
+                "scripts/pg-init-app-role.sh."
+            )
