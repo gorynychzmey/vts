@@ -195,3 +195,71 @@ async def test_has_decisions_for_task_distinguishes_all_clear_from_none(factory)
         assert await repo.has_decisions_for_task(_USER, task_id) is True
         # ...while the noise set is still empty.
         assert await repo.noise_labels_from_decisions(_USER, task_id) == set()
+
+
+@pytest.mark.asyncio
+async def test_decisions_for_task_returns_latest_binding_and_noise(factory):
+    # Bug #1 (vts-552): the dialog seeds from the LATEST decision per label.
+    from vts.db.models import Speaker
+    from vts.db.repo import Repo
+    task_id = uuid.uuid4()
+    async with factory() as s:
+        s.add(Task(id=task_id, user_id=_USER, source_url="x", artifact_dir="/tmp/x",
+                   options={}, status=TaskStatus.completed))
+        await s.flush()
+        repo = Repo(s)
+        person = Speaker(user_id=_USER, name="Вася")
+        s.add(person)
+        await s.flush()
+        # First bind SPEAKER_00 -> Вася; then a LATER decision marks it noise,
+        # anonymous. Latest wins.
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_00",
+            speaker_id=person.id, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="manual_match", is_noise=False,
+        )
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_01",
+            speaker_id=None, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="left_anonymous", is_noise=True,
+        )
+        await s.commit()
+        decs = await repo.decisions_for_task(_USER, task_id)
+        assert decs["SPEAKER_00"]["speaker_id"] == str(person.id)
+        assert decs["SPEAKER_00"]["name"] == "Вася"
+        assert decs["SPEAKER_00"]["is_noise"] is False
+        # left_anonymous decision still appears (distinguishes "decided
+        # anonymous" from "no decision") with a null speaker_id.
+        assert decs["SPEAKER_01"]["speaker_id"] is None
+        assert decs["SPEAKER_01"]["is_noise"] is True
+
+
+@pytest.mark.asyncio
+async def test_decisions_for_task_deleted_person_reads_as_unbound(factory):
+    # A person deleted after binding (speaker_id SET NULL / row gone) must read
+    # as unbound, not crash or show a stale name (vts-552).
+    from vts.db.models import Speaker
+    from vts.db.repo import Repo
+    from sqlalchemy import delete as sa_delete
+    task_id = uuid.uuid4()
+    async with factory() as s:
+        s.add(Task(id=task_id, user_id=_USER, source_url="x", artifact_dir="/tmp/x",
+                   options={}, status=TaskStatus.completed))
+        await s.flush()
+        repo = Repo(s)
+        person = Speaker(user_id=_USER, name="Гость")
+        s.add(person)
+        await s.flush()
+        pid = person.id
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_00",
+            speaker_id=pid, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="manual_match", is_noise=False,
+        )
+        await s.commit()
+        # Delete the person (FK ON DELETE SET NULL on match_decisions.speaker_id).
+        await s.execute(sa_delete(Speaker).where(Speaker.id == pid))
+        await s.commit()
+        decs = await repo.decisions_for_task(_USER, task_id)
+        assert decs["SPEAKER_00"]["speaker_id"] is None
+        assert decs["SPEAKER_00"]["name"] is None

@@ -338,6 +338,39 @@ def _find_step_status(task: Task, step_name: str) -> StepStatus | None:
     return None
 
 
+def _speaker_ordering_entries(outputs: Path, matches: dict) -> list[dict]:
+    """Entries in first-appearance order for label_map, so the dialog's
+    display_label matches the transcript's "Голос N" numbering (bug #2).
+
+    Prefer diarization.json segments — they cover EVERY speaker in first-spoke
+    order, including ones the transcript dropped as noise, so a noise speaker
+    still gets a stable number. Fall back to transcript.json entries, then to
+    the matches keys (so a label always gets some ordering). label_map only
+    reads each item's "speaker", so a bare {"speaker": label} list suffices.
+    """
+    diar_path = outputs / "diarization.json"
+    if diar_path.exists():
+        try:
+            diar = json.loads(diar_path.read_text(encoding="utf-8"))
+            segments = diar.get("segments") if isinstance(diar, dict) else None
+            if isinstance(segments, list) and segments:
+                return [{"speaker": s.get("speaker")} for s in segments
+                        if isinstance(s, dict) and s.get("speaker") is not None]
+        except (OSError, json.JSONDecodeError):
+            pass
+    transcript_path = outputs / "transcript.json"
+    if transcript_path.exists():
+        try:
+            payload = json.loads(transcript_path.read_text(encoding="utf-8"))
+            entries = payload.get("entries") if isinstance(payload, dict) else None
+            if isinstance(entries, list) and entries:
+                return [{"speaker": e.get("speaker")} for e in entries
+                        if isinstance(e, dict) and e.get("speaker") is not None]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return [{"speaker": label} for label in matches]
+
+
 
 def _processing_seconds_for_task(task: Task) -> int | None:
     started = [step.started_at for step in task.steps if step.started_at is not None]
@@ -2503,10 +2536,49 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        path = Path(task.artifact_dir) / "outputs" / "speaker_matches.json"
+        outputs = Path(task.artifact_dir) / "outputs"
+        path = outputs / "speaker_matches.json"
         if not path.exists():
             raise HTTPException(status_code=404, detail="Speaker matches not found")
-        return Response(content=path.read_bytes(), media_type="application/json")
+        try:
+            matches = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(status_code=404, detail="Speaker matches not found")
+        if not isinstance(matches, dict):
+            raise HTTPException(status_code=404, detail="Speaker matches not found")
+
+        # Enrich each match with (a) the operator's LATEST saved decision, so a
+        # reopened dialog shows the real binding rather than the stale auto-match
+        # (bug #1), and (b) a display_label numbered exactly like the transcript
+        # ("Голос N" by first appearance over the FULL diarization, incl. noise),
+        # so the dialog and the transcript agree (bug #2). Both are additive —
+        # existing fields are untouched.
+        from vts.services.diarization.merge import label_map, speaker_label_word
+
+        decisions = await repo.decisions_for_task(uuid.UUID(user.id), task_id)
+
+        # Display labels: number by first appearance across the diarization
+        # segments (every speaker, including noise), so a speaker excluded from
+        # the transcript text still has a stable "Голос N". Fall back to the
+        # transcript entries, then to the matches keys, if diarization.json is
+        # unreadable.
+        language = effective_language(
+            task.options if isinstance(task.options, dict) else {},
+            {"outputs": outputs},
+        )
+        ordering_entries = _speaker_ordering_entries(outputs, matches)
+        display = label_map(ordering_entries, speaker_label_word(language))
+
+        for label, entry in matches.items():
+            if not isinstance(entry, dict):
+                continue
+            decision = decisions.get(label)
+            entry["decided_speaker_id"] = decision["speaker_id"] if decision else None
+            entry["decided_name"] = decision["name"] if decision else None
+            entry["decided_is_noise"] = decision["is_noise"] if decision else None
+            entry["display_label"] = display.get(label, label)
+
+        return JSONResponse(matches)
 
     @app.get("/api/tasks/{task_id}/speaker-previews/{speaker_label}/{index}/audio")
     async def get_speaker_preview_audio(

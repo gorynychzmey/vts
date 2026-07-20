@@ -881,3 +881,81 @@ async def test_resolve_on_completed_does_not_requeue(client, authed_app, tmp_pat
 
     # transcript re-rendered: transcript.txt exists and reflects current entries
     assert (outputs / "transcript.txt").read_text(encoding="utf-8").strip() == "SOME_LINE"
+
+
+@pytest.mark.asyncio
+async def test_speaker_matches_enriched_with_decisions_and_display_labels(
+    client, authed_app, tmp_path
+):
+    # Bugs #1/#2 (vts-552 fast-follow): reopening the voice dialog must show the
+    # operator's saved binding (not the stale auto-match) AND a display label
+    # that matches the transcript ("Голос N" by first appearance), not the raw
+    # SPEAKER_NN tag. get_speaker_matches must therefore merge in MatchDecision
+    # state and a label_map-derived display_label.
+    import json as _json
+    from vts.db.models import StepStatus, TaskStatus
+    from vts.db.repo import Repo
+
+    app, factory = authed_app
+    _ = app
+    task_id = uuid.uuid4()
+    outputs = tmp_path / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+
+    # speaker_matches.json: two speakers, keyed SPEAKER_00 / SPEAKER_01.
+    matches = {
+        "SPEAKER_00": {"outcome": "miss", "speaker_id": None, "distance": None,
+                       "share": 0.6, "seconds": 60.0, "noise": False, "candidates": []},
+        "SPEAKER_01": {"outcome": "miss", "speaker_id": None, "distance": None,
+                       "share": 0.4, "seconds": 40.0, "noise": False, "candidates": []},
+    }
+    (outputs / "speaker_matches.json").write_text(_json.dumps(matches), encoding="utf-8")
+
+    # transcript.json: SPEAKER_01 speaks FIRST, so its display label is "Голос 1"
+    # and SPEAKER_00 is "Голос 2" — proving the label comes from appearance
+    # order, NOT the technical tag order.
+    transcript = {
+        "entries": [
+            {"speaker": "SPEAKER_01", "text": "первый", "start": 0.0, "end": 1.0},
+            {"speaker": "SPEAKER_00", "text": "второй", "start": 1.0, "end": 2.0},
+        ],
+        "text": "",
+    }
+    (outputs / "transcript.json").write_text(_json.dumps(transcript), encoding="utf-8")
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/enrich",
+            options={"diarize": True, "language": "ru"},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        step = await repo.upsert_step(task_id, "match_speakers")
+        await repo.set_step_status(step, StepStatus.completed)
+        await repo.set_task_status(task, TaskStatus.completed)
+        # Operator bound SPEAKER_00 to a real person.
+        person = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Виктор")
+        await repo.record_decision(
+            user_id=uuid.UUID(_TEST_USER_ID), source_task_id=task_id,
+            speaker_label="SPEAKER_00", speaker_id=person.id, voice_sample_id=None,
+            distance=None, embedding_model="ecapa", outcome="manual_match",
+            is_noise=False,
+        )
+        await session.commit()
+        person_id = str(person.id)
+
+    r = await client.get(f"/api/tasks/{task_id}/speaker-matches")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Bug #1: the saved binding is reflected.
+    assert body["SPEAKER_00"]["decided_speaker_id"] == person_id
+    assert body["SPEAKER_00"]["decided_name"] == "Виктор"
+    # SPEAKER_01 has no decision.
+    assert body["SPEAKER_01"]["decided_speaker_id"] is None
+
+    # Bug #2: display labels number by appearance in the transcript.
+    assert body["SPEAKER_01"]["display_label"] == "Голос 1"
+    assert body["SPEAKER_00"]["display_label"] == "Голос 2"

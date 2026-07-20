@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -753,6 +754,45 @@ class Repo:
         )
         rows = await self.session.execute(stmt)
         return {str(label): str(name) for label, name in rows.all()}
+
+    async def decisions_for_task(
+        self, user_id: uuid.UUID, task_id: uuid.UUID,
+    ) -> dict[str, dict[str, Any]]:
+        """Per-label LATEST decision for this task: bound speaker_id, that
+        speaker's current name, and is_noise.
+
+        Used to seed the reopened voice-resolution dialog with what the operator
+        actually saved, not the stale auto-match in speaker_matches.json (bug #1,
+        vts-552). LEFT join to Speaker so a decision that left the label anonymous
+        (speaker_id NULL) or whose person was deleted still appears — the caller
+        needs to distinguish "decided anonymous" from "no decision at all". Latest
+        wins per label via ascending order (mirrors speaker_names_for_task).
+        """
+        stmt = (
+            select(
+                MatchDecision.speaker_label,
+                MatchDecision.speaker_id,
+                Speaker.name,
+                MatchDecision.is_noise,
+            )
+            .outerjoin(Speaker, MatchDecision.speaker_id == Speaker.id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == task_id,
+            )
+            .order_by(MatchDecision.created_at.asc(), MatchDecision.id.asc())
+        )
+        rows = await self.session.execute(stmt)
+        latest: dict[str, dict[str, Any]] = {}
+        for label, speaker_id, name, is_noise in rows.all():
+            latest[str(label)] = {
+                # A bound person whose row was deleted (speaker_id set but name
+                # None via the LEFT join) reads as unbound — the person is gone.
+                "speaker_id": str(speaker_id) if (speaker_id and name is not None) else None,
+                "name": str(name) if name is not None else None,
+                "is_noise": bool(is_noise),
+            }
+        return latest
 
     async def noise_labels_from_decisions(
         self, user_id: uuid.UUID, task_id: uuid.UUID,
