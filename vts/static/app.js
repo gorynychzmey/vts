@@ -1585,9 +1585,13 @@ function renderTaskRuntime(taskEl) {
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   if (elements.resolveVoicesBtn) {
-    // Only one awaiting_step dispatches today (match_speakers); a future step
-    // would need its own dialog before this button makes sense for it.
-    const showResolve = statusPred.needsInput(runtime.baseStatus) && runtime.awaitingStep === "match_speakers";
+    // Show when the task is paused at match_speakers awaiting input, OR when the
+    // backend reports the task can (re)resolve speakers regardless of status —
+    // e.g. editing bindings on a completed task (vts-552). Only one awaiting_step
+    // dispatches today (match_speakers); a future step would need its own dialog.
+    const paused = statusPred.needsInput(runtime.baseStatus) && runtime.awaitingStep === "match_speakers";
+    const canResolve = Boolean(runtime.capabilities && runtime.capabilities.can_resolve_speakers);
+    const showResolve = paused || canResolve;
     elements.resolveVoicesBtn.classList.toggle("hidden", !showResolve);
     elements.resolveVoicesBtn.disabled = !showResolve;
   }
@@ -1788,7 +1792,14 @@ function renderTasks(tasks) {
     pauseBtn.addEventListener("click", () => pauseTask(task.id));
     resumeBtn.addEventListener("click", () => resumeTask(task.id));
     if (resolveVoicesBtn) {
-      resolveVoicesBtn.addEventListener("click", () => openVoiceDialog(task.id));
+      resolveVoicesBtn.addEventListener("click", () => {
+        // Read live runtime at click time: paused === awaiting_input (drives
+        // "Save & continue" visibility), mediaSeconds feeds the share display.
+        const rt = root._runtime;
+        const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
+        const mediaSeconds = rt && rt.stats ? rt.stats.mediaSeconds : undefined;
+        openVoiceDialog(task.id, paused, mediaSeconds);
+      });
     }
     if (restartSummaryBtn && restartSummaryMenu) {
       restartSummaryBtn.addEventListener("click", (e) => {
@@ -4211,6 +4222,13 @@ function buildVoiceRow(label, match, allSpeakers) {
     // the previous save's resolution for this label bound a candidate and
     // added a fragment, tracked via savedBinding below.
     savedBinding: null, // { speaker_id, addedFragment: bool } after a "Save" for this label
+    // Noise flag (vts-552): pre-filled from the matcher's auto-detection.
+    // noiseAuto records whether the matcher set it (drives the "auto" hint);
+    // noiseInitial is the dirty-tracking baseline; noise is the live value.
+    noise: Boolean(match.noise),
+    noiseInitial: Boolean(match.noise),
+    noiseAuto: Boolean(match.noise),
+    share: typeof match.share === "number" ? match.share : 0,
   };
 }
 
@@ -4219,6 +4237,7 @@ function isVoiceRowDirty(row) {
   if (row.selection === NEW_PERSON_VALUE && row.newName.trim()) return true;
   const defaultAddFragment = row.outcome !== "miss";
   if (row.selection !== NEW_PERSON_VALUE && row.addFragment !== defaultAddFragment) return true;
+  if (row.noise !== row.noiseInitial) return true;
   return false;
 }
 
@@ -4349,6 +4368,43 @@ function renderVoiceList() {
       row.addFragment = fragmentCheckbox.checked;
     });
 
+    // Share display (vts-552): "13% · 2:29" when total media seconds are known
+    // (passed into openVoiceDialog from runtime.stats.mediaSeconds), else the
+    // percent alone. share is a 0..1 fraction of total speaking time.
+    const shareEl = document.createElement("span");
+    shareEl.className = "voice-row-share";
+    const percent = Math.round(row.share * 100);
+    const totalSeconds = voiceDialogState.totalSeconds || 0;
+    shareEl.textContent = totalSeconds > 0
+      ? t("voices.row.share", { percent, duration: formatDuration(row.share * totalSeconds) })
+      : t("voices.row.share_percent_only", { percent });
+    body.appendChild(shareEl);
+
+    // Noise checkbox (vts-552): pre-filled from the matcher; checked -> the row
+    // is dimmed (voice-row-noise) and the resolution carries is_noise=true.
+    const noiseWrap = document.createElement("label");
+    noiseWrap.className = "voice-row-noise-toggle";
+    const noiseBox = document.createElement("input");
+    noiseBox.type = "checkbox";
+    noiseBox.checked = row.noise;
+    noiseBox.addEventListener("change", () => {
+      row.noise = noiseBox.checked;
+      li.classList.toggle("voice-row-noise", row.noise);
+    });
+    const noiseText = document.createElement("span");
+    noiseText.textContent = t("voices.row.noise");
+    noiseWrap.append(noiseBox, noiseText);
+    body.appendChild(noiseWrap);
+    li.classList.toggle("voice-row-noise", row.noise);
+
+    // Auto-detected-noise hint: only shown when the matcher set the flag.
+    if (row.noiseAuto) {
+      const hint = document.createElement("span");
+      hint.className = "voice-row-noise-hint";
+      hint.textContent = t("voices.row.noise_auto_hint");
+      body.appendChild(hint);
+    }
+
     li.appendChild(body);
     voiceListEl.appendChild(li);
   });
@@ -4405,6 +4461,7 @@ function buildResolutions() {
       speaker_label: row.label,
       outcome: outcomeCode,
       distance: distance && typeof distance.distance === "number" ? distance.distance : row.matchedDistance,
+      is_noise: row.noise,
     };
     if (bindingNew) {
       if (row.newName.trim()) {
@@ -4440,6 +4497,9 @@ function taskSummaryStarted(taskId) {
 
 async function submitVoiceResolutions(continueTask) {
   if (!voiceDialogState) return;
+  // Capture before closeVoiceDialog nulls voiceDialogState — used to re-fetch
+  // the transcript tab after the save so renamed/noise speakers re-render.
+  const voiceTaskId = voiceDialogState.taskId;
   if (continueTask && anyVoiceLeftAnonymous()) {
     if (!window.confirm(t("voices.confirm.anonymous"))) return;
   }
@@ -4472,6 +4532,13 @@ async function submitVoiceResolutions(continueTask) {
   });
   closeVoiceDialog({ skipConfirm: true });
   await loadTasks();
+  // Re-render the raw transcript for this task if it's the active tab, so the
+  // just-saved speaker names / noise flags take effect without a manual reload
+  // (vts-552). loadTasks() rebuilds the task element, so re-find it.
+  const taskEl = findTaskEl(voiceTaskId);
+  if (taskEl && getActiveTabName(taskEl) === "transcript") {
+    await loadTabContent(taskEl, voiceTaskId, "transcript");
+  }
 }
 
 function closeVoiceDialog(opts = {}) {
@@ -4482,7 +4549,7 @@ function closeVoiceDialog(opts = {}) {
   if (voiceDialog?.open) voiceDialog.close();
 }
 
-async function openVoiceDialog(taskId) {
+async function openVoiceDialog(taskId, paused, mediaSeconds) {
   if (!voiceDialog) return;
   let matches;
   let speakers;
@@ -4499,13 +4566,25 @@ async function openVoiceDialog(taskId) {
   const labels = Object.keys(matches || {}).sort();
   voiceDialogState = {
     taskId,
-    rows: labels.map((label) => buildVoiceRow(label, matches[label] || {}, allSpeakers)),
+    paused: Boolean(paused),
+    // Total media seconds for the "X% · M:SS" share display; 0/unknown falls
+    // back to percent-only in renderVoiceList (vts-552).
+    totalSeconds: typeof mediaSeconds === "number" && mediaSeconds > 0 ? mediaSeconds : 0,
+    // Rows sorted by speaking share, loudest first (vts-552).
+    rows: labels
+      .map((label) => buildVoiceRow(label, matches[label] || {}, allSpeakers))
+      .sort((a, b) => b.share - a.share),
   };
   renderVoiceList();
   if (typeof voiceDialog.showModal === "function") {
     voiceDialog.showModal();
   } else {
     voiceDialog.setAttribute("open", "");
+  }
+  // "Save & continue" only makes sense on a paused (awaiting_input) task —
+  // hide it when resolving/editing on a task that isn't waiting (vts-552).
+  if (voiceSaveContinueBtn) {
+    voiceSaveContinueBtn.classList.toggle("hidden", !voiceDialogState.paused);
   }
 }
 

@@ -1439,6 +1439,15 @@ dialog:not([open]) {
   cursor: not-allowed;
 }
 
+/* .btn-text sets display:inline-flex and is declared AFTER the global
+   `.hidden { display: none }`, so at equal specificity it would win and a
+   `.btn-text.hidden` button would still show. Re-assert hidden here so
+   toggling `.hidden` on a text button (e.g. #voice-save-continue) works
+   (vts-552). */
+.btn-text.hidden {
+  display: none;
+}
+
 .tokens-created {
   border: 2px solid #b25c00;
   background: #fff7ed;
@@ -1631,6 +1640,29 @@ dialog:not([open]) {
   font-size: 0.75rem;
   color: var(--ink-soft);
   font-style: italic;
+}
+
+/* Noise flag (vts-552): a row marked as noise is dimmed; share + auto-hint
+   are muted secondary text. */
+.voice-row.voice-row-noise {
+  opacity: 0.5;
+}
+
+.voice-row-noise-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.voice-row-noise-hint {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.voice-row-share {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
 }
 
 .voice-select {

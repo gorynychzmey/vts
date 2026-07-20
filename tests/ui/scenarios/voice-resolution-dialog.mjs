@@ -41,14 +41,19 @@ const AWAITING_TASK = {
   ],
   capabilities: { can_restart_summary: false, can_restart_final_summary: false },
   created_at: "2026-07-17T10:00:00Z", updated_at: "2026-07-17T10:01:00Z",
-  progress: {}, stats: {},
+  progress: {}, stats: { media_seconds: 600 },
 };
 
+// share/noise (vts-552): shares are deliberately NOT in DOM order to prove the
+// dialog re-sorts by share desc (SPEAKER_01 0.5 > SPEAKER_00 0.3 > SPEAKER_02
+// 0.05); SPEAKER_02 carries noise:true (auto-detected).
 const SPEAKER_MATCHES = {
   SPEAKER_00: {
     outcome: "auto",
     speaker_id: "sp-auto",
     distance: 0.12,
+    share: 0.3,
+    noise: false,
     candidates: [
       { speaker_id: "sp-auto", name: "Vasya", distance: 0.12 },
       { speaker_id: "sp-far", name: "Zoya", distance: 0.55 },
@@ -58,6 +63,8 @@ const SPEAKER_MATCHES = {
     outcome: "grey",
     speaker_id: null,
     distance: 0.32,
+    share: 0.5,
+    noise: false,
     candidates: [
       { speaker_id: "sp-near", name: "Petya", distance: 0.32 },
       { speaker_id: "sp-far", name: "Zoya", distance: 0.55 },
@@ -67,6 +74,8 @@ const SPEAKER_MATCHES = {
     outcome: "miss",
     speaker_id: null,
     distance: null,
+    share: 0.05,
+    noise: true,
     candidates: [],
   },
 };
@@ -273,9 +282,75 @@ export async function run() {
       failures.push(`preview-unavailable note should be shown after error, got ${JSON.stringify(fallbackState)}`);
     }
 
+    // --- noise checkbox: present on every row, checked only where noise:true
+    // (SPEAKER_02); the checked row carries the dimming class (vts-552) ---
+    const noiseState = await page.evaluate((sels) => {
+      const out = {};
+      for (const [label, sel] of Object.entries(sels)) {
+        const row = document.querySelector(sel);
+        const box = row ? row.querySelector(".voice-row-noise-toggle input[type=checkbox]") : null;
+        out[label] = box
+          ? { present: true, checked: box.checked, dimmed: row.classList.contains("voice-row-noise") }
+          : { present: false };
+      }
+      return out;
+    }, {
+      SPEAKER_00: rowSelector("SPEAKER_00"),
+      SPEAKER_01: rowSelector("SPEAKER_01"),
+      SPEAKER_02: rowSelector("SPEAKER_02"),
+    });
+    for (const label of ["SPEAKER_00", "SPEAKER_01", "SPEAKER_02"]) {
+      if (!noiseState[label].present) failures.push(`${label}: noise checkbox missing`);
+    }
+    if (noiseState.SPEAKER_02 && !noiseState.SPEAKER_02.checked) {
+      failures.push("SPEAKER_02 (noise:true): noise checkbox should be checked");
+    }
+    if (noiseState.SPEAKER_02 && !noiseState.SPEAKER_02.dimmed) {
+      failures.push("SPEAKER_02 (noise:true): row should carry .voice-row-noise dimming class");
+    }
+    if (noiseState.SPEAKER_00 && noiseState.SPEAKER_00.checked) {
+      failures.push("SPEAKER_00 (noise:false): noise checkbox should be unchecked");
+    }
+    if (noiseState.SPEAKER_00 && noiseState.SPEAKER_00.dimmed) {
+      failures.push("SPEAKER_00 (noise:false): row should NOT be dimmed");
+    }
+
+    // --- rows sorted by share desc: SPEAKER_01 (0.5) > SPEAKER_00 (0.3) >
+    // SPEAKER_02 (0.05), regardless of the label sort order from the API ---
+    const domOrder = await page.$$eval("#voice-list .voice-row", (els) =>
+      els.map((e) => e.dataset.speakerLabel)
+    );
+    const expectedOrder = ["SPEAKER_01", "SPEAKER_00", "SPEAKER_02"];
+    if (JSON.stringify(domOrder) !== JSON.stringify(expectedOrder)) {
+      failures.push(`rows not sorted by share desc: got ${JSON.stringify(domOrder)}, expected ${JSON.stringify(expectedOrder)}`);
+    }
+
+    // --- share display: "X% · M:SS" using media_seconds=600 (SPEAKER_01 0.5 ->
+    // "50% · 5:00") ---
+    const shareText = await page.$eval(
+      `${rowSelector("SPEAKER_01")} .voice-row-share`,
+      (el) => el.textContent
+    );
+    if (!/50%/.test(shareText) || !/5:00/.test(shareText)) {
+      failures.push(`share display wrong for SPEAKER_01 (50%, 5:00 expected): ${JSON.stringify(shareText)}`);
+    }
+
     await screenshot(page, "voice-resolution-dialog");
 
-    // --- Save: POSTs continue_task=false ---
+    // --- toggling a noise checkbox makes the dialog dirty (Cancel now
+    // confirms discard) then restore it so the Save assertions below are clean ---
+    await clickReal(page, `${rowSelector("SPEAKER_00")} .voice-row-noise-toggle input[type=checkbox]`);
+    await page.waitForTimeout(80);
+    const dirtyAfterToggle = await page.evaluate(() => {
+      const row = document.querySelector('#voice-list .voice-row[data-speaker-label="SPEAKER_00"]');
+      const box = row.querySelector(".voice-row-noise-toggle input[type=checkbox]");
+      return { checked: box.checked, dimmed: row.classList.contains("voice-row-noise") };
+    });
+    if (!dirtyAfterToggle.checked || !dirtyAfterToggle.dimmed) {
+      failures.push(`toggling noise on SPEAKER_00 did not check+dim the row: ${JSON.stringify(dirtyAfterToggle)}`);
+    }
+
+    // --- Save: POSTs continue_task=false, and each resolution carries is_noise ---
     const [saveReq] = await Promise.all([
       page.waitForRequest(
         (r) => r.url().includes(`/api/tasks/${TASK_ID}/speakers`) && r.method() === "POST"
@@ -288,6 +363,17 @@ export async function run() {
     }
     if (!Array.isArray(saveBody.resolutions) || saveBody.resolutions.length !== 3) {
       failures.push(`Save resolutions malformed: ${JSON.stringify(saveBody.resolutions)}`);
+    } else {
+      const byLabel = Object.fromEntries(saveBody.resolutions.map((r) => [r.speaker_label, r]));
+      if (byLabel.SPEAKER_00 && byLabel.SPEAKER_00.is_noise !== true) {
+        failures.push(`SPEAKER_00 resolution should carry is_noise=true after toggle, got ${JSON.stringify(byLabel.SPEAKER_00 && byLabel.SPEAKER_00.is_noise)}`);
+      }
+      if (byLabel.SPEAKER_02 && byLabel.SPEAKER_02.is_noise !== true) {
+        failures.push(`SPEAKER_02 (noise:true) resolution should carry is_noise=true, got ${JSON.stringify(byLabel.SPEAKER_02 && byLabel.SPEAKER_02.is_noise)}`);
+      }
+      if (byLabel.SPEAKER_01 && byLabel.SPEAKER_01.is_noise !== false) {
+        failures.push(`SPEAKER_01 (noise:false, untouched) resolution should carry is_noise=false, got ${JSON.stringify(byLabel.SPEAKER_01 && byLabel.SPEAKER_01.is_noise)}`);
+      }
     }
     await page.waitForTimeout(200);
     if (await dialogOpen(page, "voice-resolution-dialog")) {
