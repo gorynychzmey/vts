@@ -4,19 +4,33 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Environment=CONT_NAME=vts
+Environment=VTS_ROLE=worker
 EnvironmentFile=/opt/vts/config/vts.env
+ExecStartPre=/bin/rm -f %t/%N.pid
 ExecStartPre=/usr/bin/podman pull ${VTS_IMAGE}
-ExecStart=/usr/bin/podman run --rm --name vts-worker \
-  --env-file /opt/vts/config/vts.env \
-  -e VTS_ROLE=worker \
-  -v /opt/vts/config:/opt/vts/config:ro \
-  -v /opt/vts/prompts:/opt/vts/prompts:ro \
-  -v /srv/vts-data:/srv/vts-data \
-  ${VTS_IMAGE}
-ExecStop=/usr/bin/podman stop -t 20 vts-worker
-Restart=always
+ExecStart=/usr/bin/podman run \
+    -d --replace --rm \
+    --restart=no \
+    --network-alias=${CONT_NAME}-${VTS_ROLE}.dns.podman \
+    --name=${CONT_NAME}-${VTS_ROLE} \
+    --sdnotify=conmon \
+    --cgroups=disabled \
+    --conmon-pidfile %t/%N.pid \
+    -e VTS_ROLE=${VTS_ROLE} \
+    --env-file /opt/vts/config/vts.env \
+    -v /opt/vts:/opt/vts \
+    -v /disk/vts-data:/srv/vts-data \
+    ${VTS_IMAGE}
+ExecStop=/usr/bin/podman stop --ignore -t 20 ${CONT_NAME}-${VTS_ROLE}
+ExecStopPost=-/usr/bin/podman rm --ignore  -f ${CONT_NAME}-${VTS_ROLE}
+Restart=on-failure
 RestartSec=5
+PIDFile=%t/%N.pid
+Type=notify
+NotifyAccess=all
+TimeoutStopSec=30
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

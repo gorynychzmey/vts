@@ -5,30 +5,29 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Calibrated defaults, overridable from the env file below. Without these the
-# unit would pass an empty -e when a var is unset, and the server would log
-# "ignoring non-numeric" and silently fall back to the model default —
-# i.e. uncalibrated, over-fragmented segmentation, with nothing failing.
-Environment=DIAR_MIN_DURATION_OFF=0.5
-# VBx acoustic scaling. The model ships Fa=0.07, at which a short interjection
-# nested inside a longer turn is smeared into that turn's speaker (task
-# b07f7491: 0 of 4 marked interjections separated). Fa=0.15 recovers 3 of 4 for
-# the cost of two extra speaker labels (4 -> 6 on that 20-min meeting), which the
-# resolve UI can map back onto one person — cheaper than a lost interjection.
-# Fa=0.2 barely improves separation (still 3/4) but jumps to 9 speakers, so 0.15
-# is the balance point.
-Environment=DIAR_CLUSTERING_FA=0.15
-EnvironmentFile=/opt/vts/config/vts.env
+# Diarization config lives in its OWN env file (diar.env), never vts.env: the
+# sidecar must stay free of app secrets (VTS_OAUTH_*, etc.). diar.env carries
+# DIARIZATION_IMAGE (for the ${...} substitutions in this unit) plus the DIAR_*
+# tuning knobs, and is passed whole into the container via --env-file so the
+# sidecar reads them. DIAR_CLUSTERING_FA=0.15 there raises VBx acoustic scaling
+# off the model's 0.07 so short interjections nested in a longer turn separate
+# instead of being smeared into the host speaker (task b07f7491 / vts-55o).
+# Same CONT_NAME/VTS_ROLE convention as vts-worker/vts-webapi, so the
+# container name and its DNS alias are derived the same way.
+Environment=CONT_NAME=vts
+Environment=VTS_ROLE=diarization
+EnvironmentFile=/opt/vts/config/diar.env
 ExecStartPre=/usr/bin/podman pull ${DIARIZATION_IMAGE}
 # No prompts/state/data mounts: the sidecar only takes audio over HTTP and
 # returns speaker segments. Its weights are baked into the image, so it needs
 # no volumes and no network access beyond serving the API.
-ExecStart=/usr/bin/podman run --rm --name vts-diarization \
-  -e DIAR_MIN_DURATION_OFF=${DIAR_MIN_DURATION_OFF} \
-  -e DIAR_CLUSTERING_FA=${DIAR_CLUSTERING_FA} \
+ExecStart=/usr/bin/podman run --rm \
+  --network-alias=${CONT_NAME}-${VTS_ROLE}.dns.podman \
+  --name=${CONT_NAME}-${VTS_ROLE} \
+  --env-file=/opt/vts/config/diar.env \
   -p 9100:9100 \
   ${DIARIZATION_IMAGE}
-ExecStop=/usr/bin/podman stop -t 20 vts-diarization
+ExecStop=/usr/bin/podman stop -t 20 ${CONT_NAME}-${VTS_ROLE}
 Restart=always
 RestartSec=5
 
