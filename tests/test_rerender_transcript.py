@@ -120,6 +120,63 @@ async def test_rerender_transcript_excludes_noise_and_is_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_rerender_respects_explicit_all_clear_over_auto_suggestion(
+    authed_app, tmp_path, caplog
+):
+    # vts-552 minor: the auto-suggestion in speaker_matches.json marks SPEAKER_01
+    # as noise, but the operator resolved the task and explicitly marked BOTH
+    # speakers NOT noise (unchecked the auto suggestion). Decisions exist, so
+    # they are the source of truth — SPEAKER_01 must survive, NOT be dropped by
+    # the stale auto-suggestion. Before the fix, has_decisions=bool(decision_noise)
+    # was False here (no noise decisions), so it fell back to the auto-suggestion
+    # and wrongly dropped SPEAKER_01.
+    from tests.conftest import _TEST_USER_ID
+    from vts.db.models import TaskStatus
+    from vts.db.repo import Repo
+
+    app, factory = authed_app
+    _ = app
+
+    outputs = _seed_outputs(tmp_path)  # speaker_matches.json: SPEAKER_01 noise=True
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/allclear",
+            options={},
+            artifact_dir=str(tmp_path),
+        )
+        await repo.set_task_status(task, TaskStatus.awaiting_input)
+        # Operator resolved BOTH speakers as NOT noise (explicit all-clear).
+        for label in ("SPEAKER_00", "SPEAKER_01"):
+            await repo.record_decision(
+                user_id=uuid.UUID(_TEST_USER_ID),
+                source_task_id=task.id,
+                speaker_label=label,
+                speaker_id=None,
+                voice_sample_id=None,
+                distance=None,
+                embedding_model="ecapa",
+                outcome="left_anonymous",
+                is_noise=False,
+            )
+        await session.commit()
+        task_id = task.id
+
+    async with factory() as session:
+        task_row = await Repo(session).get_task_by_id(task_id)
+        await rerender_transcript(task_row, session, language="ru")
+
+    payload = json.loads((outputs / "transcript.json").read_text(encoding="utf-8"))
+    speakers = {e["speaker"] for e in payload["entries"]}
+    # Both survive: the operator's all-clear wins over the auto-suggestion.
+    assert speakers == {"SPEAKER_00", "SPEAKER_01"}
+    txt = (outputs / "transcript.txt").read_text(encoding="utf-8")
+    assert "шум" in txt  # SPEAKER_01's text is kept
+
+
+@pytest.mark.asyncio
 async def test_rerender_transcript_empty_guard_renders_all_and_warns(
     authed_app, tmp_path, caplog
 ):

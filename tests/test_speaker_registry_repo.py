@@ -164,3 +164,34 @@ async def test_noise_labels_empty_when_no_decisions(factory):
         repo = Repo(s)
         labels = await repo.noise_labels_from_decisions(_USER, uuid.uuid4())
         assert labels == set()
+
+
+@pytest.mark.asyncio
+async def test_has_decisions_for_task_distinguishes_all_clear_from_none(factory):
+    # vts-552: has_decisions must tell "no decisions" (False) from "decisions
+    # exist, none noise" (True) — noise_labels_from_decisions returns an empty
+    # set for BOTH, so it cannot make that distinction alone.
+    from vts.db.repo import Repo
+    task_id = uuid.uuid4()
+    async with factory() as s:
+        repo = Repo(s)
+        # No decisions yet.
+        assert await repo.has_decisions_for_task(_USER, task_id) is False
+
+        s.add(
+            Task(
+                id=task_id, user_id=_USER, source_url="x", artifact_dir="/tmp/x",
+                options={}, status=TaskStatus.completed,
+            )
+        )
+        await s.flush()
+        # An explicit all-clear: a decision exists, but it is NOT noise.
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_00",
+            speaker_id=None, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="left_anonymous", is_noise=False,
+        )
+        await s.commit()
+        assert await repo.has_decisions_for_task(_USER, task_id) is True
+        # ...while the noise set is still empty.
+        assert await repo.noise_labels_from_decisions(_USER, task_id) == set()

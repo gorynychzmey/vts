@@ -759,10 +759,12 @@ class Repo:
     ) -> set[str]:
         """Labels whose LATEST decision for this task is is_noise=True.
 
-        Empty when no decisions exist for the task — the caller then falls back
-        to the auto-suggestion in speaker_matches.json (auto mode). Latest wins
-        per label: ordered so the last decision in a re-save overrides earlier
-        ones, mirroring speaker_names_for_task.
+        An empty result does NOT mean "no decisions" — it can equally mean
+        "decisions exist and the operator marked nobody as noise". Callers that
+        must distinguish those cases (to decide whether to honour an explicit
+        all-clear over the auto-suggestion) use `has_decisions_for_task`
+        separately (vts-552). Latest wins per label: ordered so the last decision
+        in a re-save overrides earlier ones, mirroring speaker_names_for_task.
         """
         stmt = (
             select(MatchDecision.speaker_label, MatchDecision.is_noise)
@@ -777,6 +779,26 @@ class Repo:
         for label, is_noise in rows.all():
             latest[str(label)] = bool(is_noise)
         return {label for label, is_noise in latest.items() if is_noise}
+
+    async def has_decisions_for_task(
+        self, user_id: uuid.UUID, task_id: uuid.UUID,
+    ) -> bool:
+        """Whether the operator has saved ANY resolution for this task.
+
+        The noise resolver needs this to tell "no decisions yet" (auto mode ->
+        trust speaker_matches.json) from "decisions exist, none are noise" (the
+        operator's explicit all-clear -> honour it, ignore the auto-suggestion).
+        `noise_labels_from_decisions` alone cannot distinguish them (vts-552).
+        """
+        stmt = (
+            select(MatchDecision.id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == task_id,
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).first() is not None
 
     async def merge_speakers(
         self, user_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,

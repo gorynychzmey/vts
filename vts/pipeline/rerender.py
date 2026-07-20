@@ -44,6 +44,11 @@ async def rerender_transcript(task, session, *, language: str | None) -> None:
     repo = Repo(session)
     names = await repo.speaker_names_for_task(task.user_id, task.id)
     decision_noise = await repo.noise_labels_from_decisions(task.user_id, task.id)
+    # "Any decision saved" is NOT the same as "any noise decision": an operator
+    # who resolved the task and marked nobody as noise (or unchecked an auto
+    # suggestion) leaves decision_noise empty but has_decisions True. That
+    # explicit all-clear must win over the stale auto-suggestion (vts-552).
+    has_decisions = await repo.has_decisions_for_task(task.user_id, task.id)
 
     matches: dict[str, Any] = {}
     matches_path = outputs / "speaker_matches.json"
@@ -55,7 +60,7 @@ async def rerender_transcript(task, session, *, language: str | None) -> None:
         except (OSError, json.JSONDecodeError):
             matches = {}
 
-    noise = resolve_noise_labels(matches, decision_noise, has_decisions=bool(decision_noise))
+    noise = resolve_noise_labels(matches, decision_noise, has_decisions=has_decisions)
 
     kept = [e for e in entries if str(e.get("speaker")) not in noise]
     if not kept:
