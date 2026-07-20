@@ -387,6 +387,7 @@ class VoiceResolution(BaseModel):
     distance: float | None = None
     voice_sample_id: str | None = None  # winning fragment for the decision
     outcome: str  # confirmed | rejected | manual_match | auto_accepted | auto_overridden | left_anonymous
+    is_noise: bool = False
 
 
 class VoiceResolutionRequest(BaseModel):

@@ -82,6 +82,8 @@ from vts.core.failures import classify_failure_code
 from vts.core.logging import configure_logging
 from vts.db.models import StepStatus, Task, TaskStatus
 from vts.db.repo import Repo
+from vts.pipeline.rerender import rerender_transcript
+from vts.pipeline.steps.transcription import effective_language
 from vts.services.auth import AuthenticatedUser
 from vts.services.media import probe_duration
 from vts.services.media_kind import media_content_type, media_kind
@@ -2559,6 +2561,8 @@ def create_app() -> FastAPI:
         task = await repo.get_task_for_user(user_id, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
+        if not can_resolve_speakers_task(task):
+            raise HTTPException(status_code=409, detail="cannot_resolve_speakers")
 
         artifact_dir = Path(task.artifact_dir)
         diar_path = artifact_dir / "outputs" / "diarization.json"
@@ -2666,8 +2670,15 @@ def create_app() -> FastAPI:
                 distance=res.distance,
                 embedding_model=embedding_model,
                 outcome=res.outcome,
+                is_noise=res.is_noise,
             )
             results[res.speaker_label] = "resolved"
+
+        language = effective_language(
+            task.options if isinstance(task.options, dict) else {},
+            {"outputs": Path(task.artifact_dir) / "outputs"},
+        )
+        await rerender_transcript(task, session, language=language)
 
         bus = RedisBus(redis, settings)
         if payload.continue_task:

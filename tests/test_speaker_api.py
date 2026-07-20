@@ -194,8 +194,13 @@ def _override_diarization_backend(app, backend) -> None:
 
 async def _seed_task_with_preview(factory, tmp_path, *, status="awaiting_input"):
     """Seed a task row + outputs/diarization.json + outputs/preview_*.wav,
-    matching what DiarizeStep/MatchSpeakersStep would have produced."""
-    from vts.db.models import TaskStatus
+    matching what DiarizeStep/MatchSpeakersStep would have produced.
+
+    Includes a completed `match_speakers` step: `can_resolve_speakers_task`
+    (vts-552) gates the resolve endpoint on that step being completed, and
+    every resolve test in this module exercises a task past that point.
+    """
+    from vts.db.models import StepStatus, TaskStatus
     from vts.db.repo import Repo
 
     task_id = uuid.uuid4()
@@ -219,6 +224,8 @@ async def _seed_task_with_preview(factory, tmp_path, *, status="awaiting_input")
             artifact_dir=str(tmp_path),
             task_id=task_id,
         )
+        step = await repo.upsert_step(task_id, "match_speakers")
+        await repo.set_step_status(step, StepStatus.completed)
         await repo.set_task_status(task, TaskStatus[status])
         await session.commit()
     return task_id, clip_path
@@ -382,8 +389,14 @@ async def test_resolution_is_transactional_all_or_nothing(client, authed_app, tm
 async def _seed_task_without_diarization(factory, tmp_path, *, status="awaiting_input"):
     """Seed a task row with NO outputs/diarization.json (and no previews) —
     reproduces a malformed/incomplete awaiting_input task where embedding_model
-    would resolve to "" in resolve_task_speakers."""
-    from vts.db.models import TaskStatus
+    would resolve to "" in resolve_task_speakers.
+
+    Still includes a completed `match_speakers` step (see
+    `_seed_task_with_preview`) so `can_resolve_speakers_task` (vts-552) admits
+    it — this helper is about a missing diarization.json, not an unresolved
+    capability gate.
+    """
+    from vts.db.models import StepStatus, TaskStatus
     from vts.db.repo import Repo
 
     task_id = uuid.uuid4()
@@ -407,6 +420,8 @@ async def _seed_task_without_diarization(factory, tmp_path, *, status="awaiting_
             artifact_dir=str(tmp_path),
             task_id=task_id,
         )
+        step = await repo.upsert_step(task_id, "match_speakers")
+        await repo.set_step_status(step, StepStatus.completed)
         await repo.set_task_status(task, TaskStatus[status])
         await session.commit()
     return task_id, clip_path
@@ -763,3 +778,106 @@ def test_can_resolve_speakers_false_when_archived():
     task = Task(status=TaskStatus.archived, options={}, source_url="u", artifact_dir="/x")
     task.steps = [Step(name="match_speakers", status=StepStatus.completed)]
     assert can_resolve_speakers_task(task) is False
+
+
+# ---------------------------------------------------------------------------
+# is_noise persistence + transcript re-render on resolve (vts-552 task 10)
+# ---------------------------------------------------------------------------
+
+
+def _write_transcript_json(outputs, entries):
+    (outputs / "transcript.json").write_text(
+        json.dumps({"entries": entries, "text": ""}), encoding="utf-8"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_persists_is_noise_and_rerenders(client, authed_app, tmp_path):
+    """Resolving SPEAKER_00 as noise must persist a MatchDecision with
+    is_noise=True AND re-render transcript.txt to drop that speaker's lines,
+    leaving the other speaker's text intact."""
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    outputs = tmp_path / "outputs"
+    _write_transcript_json(
+        outputs,
+        [
+            {"speaker": "SPEAKER_00", "text": "NOISE_TEXT_SHOULD_BE_DROPPED", "start": 0.0, "end": 1.0},
+            {"speaker": "SPEAKER_01", "text": "KEEP_THIS_TEXT", "start": 1.0, "end": 2.0},
+        ],
+    )
+
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "leave_anonymous",
+                    "add_fragment": False,
+                    "outcome": "left_anonymous",
+                    "is_noise": True,
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        labels = await repo.noise_labels_from_decisions(uuid.UUID(_TEST_USER_ID), task_id)
+        assert "SPEAKER_00" in labels
+
+    rendered = (outputs / "transcript.txt").read_text(encoding="utf-8")
+    assert "NOISE_TEXT_SHOULD_BE_DROPPED" not in rendered
+    assert "KEEP_THIS_TEXT" in rendered
+
+
+@pytest.mark.asyncio
+async def test_resolve_on_completed_does_not_requeue(client, authed_app, tmp_path):
+    """A completed task past match_speakers can still be resolved (editing
+    after the fact). continue_task=false must leave status=completed (no
+    re-queue) while still re-rendering the transcript."""
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path, status="completed")
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    outputs = tmp_path / "outputs"
+    _write_transcript_json(
+        outputs,
+        [
+            {"speaker": "SPEAKER_00", "text": "SOME_LINE", "start": 0.0, "end": 1.0},
+        ],
+    )
+
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "leave_anonymous",
+                    "add_fragment": False,
+                    "outcome": "left_anonymous",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    from vts.db.models import TaskStatus
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.get_task_by_id(task_id)
+        assert task.status == TaskStatus.completed
+
+    # transcript re-rendered: transcript.txt exists and reflects current entries
+    assert (outputs / "transcript.txt").read_text(encoding="utf-8").strip() == "SOME_LINE"
