@@ -505,6 +505,25 @@ def test_speaker_shares_empty():
     assert speaker_shares([]) == {}
 
 
+def test_speaker_seconds_by_diarization_time():
+    from vts.services.diarization.merge import speaker_seconds
+    segs = [
+        {"start": 0.0, "end": 10.0, "speaker": "A"},
+        {"start": 10.0, "end": 12.0, "speaker": "B"},
+        {"start": 12.0, "end": 20.0, "speaker": "A"},
+    ]
+    secs = speaker_seconds(segs)
+    # A = 18s of actual speech, B = 2s — real diarized seconds, NOT scaled by
+    # media length (which includes silence). This is what the UI shows.
+    assert abs(secs["A"] - 18.0) < 1e-9
+    assert abs(secs["B"] - 2.0) < 1e-9
+
+
+def test_speaker_seconds_empty():
+    from vts.services.diarization.merge import speaker_seconds
+    assert speaker_seconds([]) == {}
+
+
 def test_auto_noise_close_and_small_is_noise():
     shares = {"A": 0.95, "B": 0.05}
     # B is tiny AND its embedding is identical to A -> echo -> noise

@@ -245,6 +245,21 @@ def nearest_speaker(
     return nearest
 
 
+def speaker_seconds(diar_segments: list[dict[str, Any]]) -> dict[str, float]:
+    """Per-speaker DIARIZED speaking time in seconds.
+
+    Sum of a speaker's diarization-segment durations — real speech time, with
+    no silence, NOT scaled by media length. The resolution UI shows this so the
+    per-speaker duration is honest (media length includes pauses, so share *
+    media over-states how long a speaker actually talked, vts-552).
+    """
+    totals: dict[str, float] = {}
+    for seg in diar_segments:
+        speaker = str(seg["speaker"])
+        totals[speaker] = totals.get(speaker, 0.0) + (float(seg["end"]) - float(seg["start"]))
+    return totals
+
+
 def speaker_shares(diar_segments: list[dict[str, Any]]) -> dict[str, float]:
     """Per-speaker share of total DIARIZED time (0..1).
 
@@ -253,10 +268,7 @@ def speaker_shares(diar_segments: list[dict[str, Any]]) -> dict[str, float]:
     the fix for vts-0ws (drop_marginal folded a real 13% speaker it measured as
     3% by ASR-entry span).
     """
-    totals: dict[str, float] = {}
-    for seg in diar_segments:
-        speaker = str(seg["speaker"])
-        totals[speaker] = totals.get(speaker, 0.0) + (float(seg["end"]) - float(seg["start"]))
+    totals = speaker_seconds(diar_segments)
     overall = sum(totals.values())
     if overall <= 0:
         return {}

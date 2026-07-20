@@ -53,6 +53,7 @@ const SPEAKER_MATCHES = {
     speaker_id: "sp-auto",
     distance: 0.12,
     share: 0.3,
+    seconds: 182,
     noise: false,
     candidates: [
       { speaker_id: "sp-auto", name: "Vasya", distance: 0.12 },
@@ -64,6 +65,7 @@ const SPEAKER_MATCHES = {
     speaker_id: null,
     distance: 0.32,
     share: 0.5,
+    seconds: 305,
     noise: false,
     candidates: [
       { speaker_id: "sp-near", name: "Petya", distance: 0.32 },
@@ -75,6 +77,7 @@ const SPEAKER_MATCHES = {
     speaker_id: null,
     distance: null,
     share: 0.05,
+    seconds: 31,
     noise: true,
     candidates: [],
   },
@@ -325,14 +328,17 @@ export async function run() {
       failures.push(`rows not sorted by share desc: got ${JSON.stringify(domOrder)}, expected ${JSON.stringify(expectedOrder)}`);
     }
 
-    // --- share display: "X% · M:SS" using media_seconds=600 (SPEAKER_01 0.5 ->
-    // "50% · 5:00") ---
+    // --- share display: "X% · M:SS" — percent from share, duration from the
+    // row's OWN diarized seconds (vts-552). SPEAKER_01 has share 0.5 and
+    // seconds 305 -> "50% · 5:05". 305 is deliberately NOT share*media_seconds
+    // (0.5*600 = 300 -> "5:00"), so a pass proves the duration comes from
+    // `seconds`, not the old share*media formula. ---
     const shareText = await page.$eval(
       `${rowSelector("SPEAKER_01")} .voice-row-share`,
       (el) => el.textContent
     );
-    if (!/50%/.test(shareText) || !/5:00/.test(shareText)) {
-      failures.push(`share display wrong for SPEAKER_01 (50%, 5:00 expected): ${JSON.stringify(shareText)}`);
+    if (!/50%/.test(shareText) || !/5:05/.test(shareText)) {
+      failures.push(`share display wrong for SPEAKER_01 (50%, 5:05 expected): ${JSON.stringify(shareText)}`);
     }
 
     await screenshot(page, "voice-resolution-dialog");

@@ -325,3 +325,8 @@ async def test_run_writes_noise_and_share_into_speaker_matches(tmp_path: Path) -
     assert matches["SPEAKER_00"]["share"] == pytest.approx(100.0 / 121.0)
     assert matches["SPEAKER_ECHO"]["share"] == pytest.approx(1.0 / 121.0)
     assert matches["SPEAKER_01"]["share"] == pytest.approx(20.0 / 121.0)
+    # seconds = raw diarized speaking time (vts-552), the honest per-speaker
+    # duration the UI shows — NOT share * media length.
+    assert matches["SPEAKER_00"]["seconds"] == pytest.approx(100.0)
+    assert matches["SPEAKER_ECHO"]["seconds"] == pytest.approx(1.0)
+    assert matches["SPEAKER_01"]["seconds"] == pytest.approx(20.0)

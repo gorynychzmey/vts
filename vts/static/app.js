@@ -1793,12 +1793,12 @@ function renderTasks(tasks) {
     resumeBtn.addEventListener("click", () => resumeTask(task.id));
     if (resolveVoicesBtn) {
       resolveVoicesBtn.addEventListener("click", () => {
-        // Read live runtime at click time: paused === awaiting_input (drives
-        // "Save & continue" visibility), mediaSeconds feeds the share display.
+        // Read live runtime at click time: paused === awaiting_input drives
+        // "Save & continue" visibility. (Per-speaker duration now comes from
+        // each row's own diarized seconds, not media length — vts-552.)
         const rt = root._runtime;
         const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
-        const mediaSeconds = rt && rt.stats ? rt.stats.mediaSeconds : undefined;
-        openVoiceDialog(task.id, paused, mediaSeconds);
+        openVoiceDialog(task.id, paused);
       });
     }
     if (restartSummaryBtn && restartSummaryMenu) {
@@ -4229,6 +4229,7 @@ function buildVoiceRow(label, match, allSpeakers) {
     noiseInitial: Boolean(match.noise),
     noiseAuto: Boolean(match.noise),
     share: typeof match.share === "number" ? match.share : 0,
+    seconds: typeof match.seconds === "number" ? match.seconds : 0,
   };
 }
 
@@ -4368,15 +4369,15 @@ function renderVoiceList() {
       row.addFragment = fragmentCheckbox.checked;
     });
 
-    // Share display (vts-552): "13% · 2:29" when total media seconds are known
-    // (passed into openVoiceDialog from runtime.stats.mediaSeconds), else the
-    // percent alone. share is a 0..1 fraction of total speaking time.
+    // Share display (vts-552): "13% · 2:05". row.seconds is the speaker's REAL
+    // diarized speaking time from speaker_matches.json — not share * media
+    // length, which over-states it because media includes silence. Falls back
+    // to percent alone when seconds are unavailable (older tasks).
     const shareEl = document.createElement("span");
     shareEl.className = "voice-row-share";
     const percent = Math.round(row.share * 100);
-    const totalSeconds = voiceDialogState.totalSeconds || 0;
-    shareEl.textContent = totalSeconds > 0
-      ? t("voices.row.share", { percent, duration: formatDuration(row.share * totalSeconds) })
+    shareEl.textContent = row.seconds > 0
+      ? t("voices.row.share", { percent, duration: formatDuration(row.seconds) })
       : t("voices.row.share_percent_only", { percent });
     body.appendChild(shareEl);
 
@@ -4549,7 +4550,7 @@ function closeVoiceDialog(opts = {}) {
   if (voiceDialog?.open) voiceDialog.close();
 }
 
-async function openVoiceDialog(taskId, paused, mediaSeconds) {
+async function openVoiceDialog(taskId, paused) {
   if (!voiceDialog) return;
   let matches;
   let speakers;
@@ -4567,9 +4568,6 @@ async function openVoiceDialog(taskId, paused, mediaSeconds) {
   voiceDialogState = {
     taskId,
     paused: Boolean(paused),
-    // Total media seconds for the "X% · M:SS" share display; 0/unknown falls
-    // back to percent-only in renderVoiceList (vts-552).
-    totalSeconds: typeof mediaSeconds === "number" && mediaSeconds > 0 ? mediaSeconds : 0,
     // Rows sorted by speaking share, loudest first (vts-552).
     rows: labels
       .map((label) => buildVoiceRow(label, matches[label] || {}, allSpeakers))
