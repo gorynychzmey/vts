@@ -754,6 +754,30 @@ class Repo:
         rows = await self.session.execute(stmt)
         return {str(label): str(name) for label, name in rows.all()}
 
+    async def noise_labels_from_decisions(
+        self, user_id: uuid.UUID, task_id: uuid.UUID,
+    ) -> set[str]:
+        """Labels whose LATEST decision for this task is is_noise=True.
+
+        Empty when no decisions exist for the task — the caller then falls back
+        to the auto-suggestion in speaker_matches.json (auto mode). Latest wins
+        per label: ordered so the last decision in a re-save overrides earlier
+        ones, mirroring speaker_names_for_task.
+        """
+        stmt = (
+            select(MatchDecision.speaker_label, MatchDecision.is_noise)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id == task_id,
+            )
+            .order_by(MatchDecision.created_at.asc(), MatchDecision.id.asc())
+        )
+        rows = await self.session.execute(stmt)
+        latest: dict[str, bool] = {}
+        for label, is_noise in rows.all():
+            latest[str(label)] = bool(is_noise)
+        return {label for label, is_noise in latest.items() if is_noise}
+
     async def merge_speakers(
         self, user_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,
     ) -> bool:

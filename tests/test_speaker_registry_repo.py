@@ -5,7 +5,7 @@ from sqlalchemy import select
 from vts.db.models import Speaker, VoiceSample
 from tests._db import make_test_engine, ensure_pgvector
 from vts.db.base import Base
-from vts.db.models import User
+from vts.db.models import Task, TaskStatus, User
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 _USER = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -127,3 +127,40 @@ async def test_record_decision_persists_is_noise(factory):
             is_noise=True,
         )
         assert row.is_noise is True
+
+
+@pytest.mark.asyncio
+async def test_noise_labels_from_decisions(factory):
+    from vts.db.repo import Repo
+    task_id = uuid.uuid4()
+    async with factory() as s:
+        s.add(
+            Task(
+                id=task_id, user_id=_USER, source_url="x", artifact_dir="/tmp/x",
+                options={}, status=TaskStatus.completed,
+            )
+        )
+        await s.flush()
+        repo = Repo(s)
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_00",
+            speaker_id=None, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="left_anonymous", is_noise=False,
+        )
+        await repo.record_decision(
+            user_id=_USER, source_task_id=task_id, speaker_label="SPEAKER_01",
+            speaker_id=None, voice_sample_id=None, distance=None,
+            embedding_model="m", outcome="left_anonymous", is_noise=True,
+        )
+        await s.commit()
+        labels = await repo.noise_labels_from_decisions(_USER, task_id)
+        assert labels == {"SPEAKER_01"}
+
+
+@pytest.mark.asyncio
+async def test_noise_labels_empty_when_no_decisions(factory):
+    from vts.db.repo import Repo
+    async with factory() as s:
+        repo = Repo(s)
+        labels = await repo.noise_labels_from_decisions(_USER, uuid.uuid4())
+        assert labels == set()
