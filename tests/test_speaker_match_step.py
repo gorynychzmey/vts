@@ -23,6 +23,42 @@ def test_no_stop_flag_never_pauses():
     assert decide_pause(matches, no_stop=True) is False
 
 
+def test_noise_speaker_alone_does_not_pause():
+    # A speaker flagged as noise (e.g. no transcript entries — overlapping voices
+    # Whisper never transcribed) has nothing to resolve, so it must not hold the
+    # task at awaiting_input on its own even with a non-auto outcome.
+    matches = {"S0": {"outcome": "auto"}, "S1": {"outcome": "miss", "noise": True}}
+    assert decide_pause(matches, no_stop=False) is False
+
+
+def test_real_unresolved_speaker_still_pauses_alongside_noise():
+    # Noise speakers are ignored, but a genuine non-auto speaker still pauses.
+    matches = {
+        "S0": {"outcome": "miss", "noise": True},
+        "S1": {"outcome": "grey", "noise": False},
+    }
+    assert decide_pause(matches, no_stop=False) is True
+
+
+def test_labels_without_entries_flags_silent_clusters():
+    from vts.pipeline.steps.speaker_match import labels_without_entries
+    diar_labels = {"SPEAKER_00", "SPEAKER_01", "SPEAKER_02"}
+    entries = [
+        {"speaker": "SPEAKER_00", "text": "привет"},
+        {"speaker": "SPEAKER_02", "text": "и тебе"},
+        {"speaker": None, "text": "undiarized bit"},
+    ]
+    # SPEAKER_01 has a diarization cluster but not a single transcript entry.
+    assert labels_without_entries(diar_labels, entries) == {"SPEAKER_01"}
+
+
+def test_labels_without_entries_empty_when_all_spoke():
+    from vts.pipeline.steps.speaker_match import labels_without_entries
+    diar_labels = {"SPEAKER_00", "SPEAKER_01"}
+    entries = [{"speaker": "SPEAKER_00"}, {"speaker": "SPEAKER_01"}]
+    assert labels_without_entries(diar_labels, entries) == set()
+
+
 # --- MatchSpeakersStep.run, stubbed repo/ctx ---------------------------------
 
 
@@ -330,3 +366,47 @@ async def test_run_writes_noise_and_share_into_speaker_matches(tmp_path: Path) -
     assert matches["SPEAKER_00"]["seconds"] == pytest.approx(100.0)
     assert matches["SPEAKER_ECHO"]["seconds"] == pytest.approx(1.0)
     assert matches["SPEAKER_01"]["seconds"] == pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_run_flags_speaker_without_transcript_entries_as_noise(tmp_path: Path) -> None:
+    """SPEAKER_SILENT has a diarization cluster but no transcript entry — several
+    voices landed in one interval and Whisper produced no words for it. It must be
+    auto-flagged noise (nothing to resolve) regardless of acoustic distance, and
+    must not hold the task at awaiting_input."""
+    dirs = _dirs(tmp_path)
+    write_diar = {
+        "embedding_model": "ecapa",
+        "segments": [
+            {"start": 0.0, "end": 100.0, "speaker": "SPEAKER_00"},
+            {"start": 100.0, "end": 105.0, "speaker": "SPEAKER_SILENT"},
+        ],
+        "embeddings": {
+            # Acoustically distinct, so auto_noise_labels would NOT flag it —
+            # only the no-entry rule can.
+            "SPEAKER_00": [1.0, 0.0],
+            "SPEAKER_SILENT": [0.0, 1.0],
+        },
+    }
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(write_diar), encoding="utf-8")
+    # transcript.json carries entries for SPEAKER_00 only; SPEAKER_SILENT never spoke.
+    transcript = {
+        "entries": [
+            {"start": 0.0, "end": 100.0, "text": "весь разговор", "speaker": "SPEAKER_00"},
+        ]
+    }
+    (dirs["outputs"] / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
+
+    sp0 = _FakeSpeaker(uuid.uuid4(), "Alice")
+    repo = _FakeRepo({(1.0, 0.0): [(sp0, 0.1)], (0.0, 1.0): []})
+    ctx = _ctx(repo)
+    _wire_repo_override(ctx, repo)
+    st = _state(dirs, {"diarize": True})
+
+    result = await MatchSpeakersStep().run(ctx, st)
+
+    # No non-auto, non-noise speaker remains -> task completes, no pause raised.
+    assert result is True
+    matches = json.loads((dirs["outputs"] / "speaker_matches.json").read_text(encoding="utf-8"))
+    assert matches["SPEAKER_SILENT"]["noise"] is True
+    assert matches["SPEAKER_00"]["noise"] is False

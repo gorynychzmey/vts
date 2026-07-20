@@ -16,10 +16,33 @@ if TYPE_CHECKING:
 
 
 def decide_pause(matches: dict, no_stop: bool) -> bool:
-    """Pause iff a human is needed: any speaker not auto-resolved and stops allowed."""
+    """Pause iff a human is needed: any speaker not auto-resolved and stops allowed.
+
+    Noise speakers are skipped: a cluster flagged noise (echo, or no transcript
+    entries at all) has nothing for a human to resolve, so it must not hold the
+    task at awaiting_input on its own.
+    """
     if no_stop:
         return False
-    return any(m["outcome"] != MatchOutcome.auto for m in matches.values())
+    return any(
+        m["outcome"] != MatchOutcome.auto and not m.get("noise", False)
+        for m in matches.values()
+    )
+
+
+def labels_without_entries(
+    diar_labels: set[str], entries: list[dict[str, object]]
+) -> set[str]:
+    """Diarization labels that produced no transcript entry at all.
+
+    Several voices can land in one short interval where Whisper transcribes
+    nothing, leaving a diarization cluster with real speaking time but zero words
+    in the transcript. There is nothing to attribute to such a label, so it is
+    noise for resolution purposes. Entries with a None speaker (undiarized audio)
+    contribute to no label and are ignored.
+    """
+    spoke = {str(e.get("speaker")) for e in entries if e.get("speaker") is not None}
+    return {label for label in diar_labels if label not in spoke}
 
 
 class MatchSpeakersStep(Step):
@@ -60,6 +83,21 @@ class MatchSpeakersStep(Step):
             min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
             max_distance=float(getattr(ctx.settings, "diarization_noise_max_distance", 0.25)),
         )
+        # merge_transcript ran before this step, so transcript.json exists and its
+        # entries already carry the final speaker attribution. A diarization label
+        # with real speaking time but no entry at all (overlapping voices Whisper
+        # never transcribed) is noise for resolution — there is nothing to bind.
+        # This is orthogonal to auto_noise_labels' echo test, so union the two.
+        diar_labels = {str(segment["speaker"]) for segment in segments if segment.get("speaker")}
+        transcript_path = st.dirs["outputs"] / "transcript.json"
+        if transcript_path.exists():
+            try:
+                payload = json.loads(transcript_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                payload = {}
+            entries = payload.get("entries") if isinstance(payload, dict) else None
+            if isinstance(entries, list):
+                noise_labels = noise_labels | labels_without_entries(diar_labels, entries)
 
         auto = ctx.settings.speaker_match_max_distance_auto
         cand = ctx.settings.speaker_match_max_distance_candidate
