@@ -218,10 +218,17 @@ def can_resolve_speakers_task(task) -> bool:
   capability holds:** `needsInput(status) && awaitingStep === "match_speakers"`
   (first-time resolution at the pause) OR `capabilities.can_resolve_speakers`
   (any time after match_speakers, until archived/canceled).
-- **Primary button label depends on whether the task will continue:** if the
-  task is `awaiting_input` it reads "Save & continue" and sends
-  `continue_task=true`; otherwise (running/completed/failed) it reads "Save",
-  sends `continue_task=false`, and never re-queues — the pipeline is untouched.
+- **Two buttons already exist** (`#voice-save` → `continue_task=false`,
+  `#voice-save-continue` → `continue_task=true`). No relabeling, no new i18n —
+  just toggle visibility of `#voice-save-continue`:
+  - `awaiting_input` (paused): BOTH buttons shown. "Save" records+re-renders but
+    leaves the task paused; "Save & continue" additionally re-queues the DAG.
+  - any other status (running/completed/failed, via `can_resolve_speakers`):
+    HIDE "Save & continue" — there is nothing to continue; only "Save"
+    (records + re-renders, `continue_task=false`, pipeline untouched).
+- `openVoiceDialog(taskId)` currently gets only the id; pass the task's paused
+  flag (or status) so it can toggle `#voice-save-continue`. The caller (the
+  resolve-button handler) already holds the task runtime.
 - **Noise checkbox** per speaker row, pre-filled from `row.noise`. Checked →
   row dimmed (its turns won't reach the output); binding controls stay usable
   (a person can still be bound; unchecking restores). Included in the row's
@@ -310,9 +317,10 @@ Frontend (verifier-web):
    share; share shown; toggling changes dirty state and the resolve payload.
 10. Resolve-voices button visible whenever `capabilities.can_resolve_speakers`
     is set (running/completed stub) AND at the pause; hidden for
-    archived/canceled and before match_speakers. On a non-paused task the primary
-    button reads "Save" and sends `continue_task=false`; at the pause it reads
-    "Save & continue" with `continue_task=true`.
+    archived/canceled and before match_speakers.
+10b. Dialog buttons: on `awaiting_input` BOTH "Save" and "Save & continue" are
+     visible; on a non-paused task "Save & continue" is HIDDEN and only "Save"
+     shows (sends `continue_task=false`).
 11. After a resolve save, the transcript tab is re-fetched (the stub serves a
     changed transcript on the second GET; the panel shows the new text without a
     page reload).
