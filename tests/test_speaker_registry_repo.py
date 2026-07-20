@@ -108,3 +108,22 @@ async def test_load_sample_audio_and_delete(factory):
         assert audio == b"AUDIOBYTES" and fmt == "wav"
         assert await repo.delete_voice_sample(_USER, vs.id) is True
         assert await repo.load_sample_audio(_USER, vs.id) is None
+
+
+@pytest.mark.asyncio
+async def test_record_decision_persists_is_noise(factory):
+    from vts.db.repo import Repo
+    async with factory() as s:
+        repo = Repo(s)
+        row = await repo.record_decision(
+            user_id=_USER,
+            source_task_id=None,
+            speaker_label="SPEAKER_01",
+            speaker_id=None,
+            voice_sample_id=None,
+            distance=None,
+            embedding_model="m",
+            outcome="left_anonymous",
+            is_noise=True,
+        )
+        assert row.is_noise is True

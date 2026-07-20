@@ -810,11 +810,12 @@ class Repo:
         self, *, user_id: uuid.UUID, source_task_id: uuid.UUID | None, speaker_label: str,
         speaker_id: uuid.UUID | None, voice_sample_id: uuid.UUID | None,
         distance: float | None, embedding_model: str, outcome: str,
+        is_noise: bool = False,
     ) -> MatchDecision:
         row = MatchDecision(
             user_id=user_id, source_task_id=source_task_id, speaker_label=speaker_label,
             speaker_id=speaker_id, voice_sample_id=voice_sample_id, distance=distance,
-            embedding_model=embedding_model, outcome=outcome,
+            embedding_model=embedding_model, outcome=outcome, is_noise=is_noise,
         )
         self.session.add(row)
         await self.session.flush()
