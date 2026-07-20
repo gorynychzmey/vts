@@ -4,10 +4,12 @@ small response budgets (GPT Actions ~30KB)."""
 from __future__ import annotations
 
 import json
+import uuid
 
 import pytest
 from starlette.requests import Request
 
+from tests.conftest import _TEST_USER_ID
 from vts.api.main import _MAX_TEXT_SLICE_CHARS, _parse_range_header, _serve_text
 
 
@@ -145,3 +147,35 @@ def test_serve_text_safety_cap_on_slice_length():
     payload = json.loads(resp.body)
     assert payload["length"] == _MAX_TEXT_SLICE_CHARS
     assert payload["is_end"] is False
+
+
+# ---------------------------------------------------------- endpoint header
+
+@pytest.mark.asyncio
+async def test_transcript_endpoint_sends_no_cache(authed_app, client, tmp_path):
+    """GET /api/tasks/{id}/transcript is served via _serve_text and must
+    carry Cache-Control: no-cache — the transcript can be edited by a
+    resolve-save (vts-552 re-render), so intermediate caches must not
+    serve a stale body."""
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    transcript_file = tmp_path / "transcript.txt"
+    transcript_file.write_text("hello world", encoding="utf-8")
+
+    task_id = uuid.uuid4()
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/v",
+            options={"transcript": True},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        task.transcript_path = str(transcript_file)
+        await session.commit()
+
+    r = await client.get(f"/api/tasks/{task_id}/transcript")
+    assert r.status_code == 200, r.text
+    assert r.headers.get("cache-control") == "no-cache"

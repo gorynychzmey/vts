@@ -619,6 +619,7 @@ def _serve_text(
                 headers={
                     "Content-Range": f"bytes {start}-{start + length - 1}/{total}",
                     "Accept-Ranges": "bytes",
+                    "Cache-Control": "no-cache",
                 },
             )
 
@@ -640,10 +641,17 @@ def _serve_text(
             total_length=total,
             is_end=(off + len(slice_text)) >= total,
         )
-        return JSONResponse(payload.model_dump(), headers={"Accept-Ranges": "bytes"})
+        return JSONResponse(
+            payload.model_dump(),
+            headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"},
+        )
 
     # Default: full plain text, as before.
-    return Response(content=text, media_type=plain_media_type, headers={"Accept-Ranges": "bytes"})
+    return Response(
+        content=text,
+        media_type=plain_media_type,
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"},
+    )
 
 
 def _find_media_file(artifact_dir: str | None) -> Path | None:
