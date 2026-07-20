@@ -55,6 +55,12 @@ const SPEAKER_MATCHES = {
     share: 0.3,
     seconds: 182,
     noise: false,
+    // bug #2: dialog shows this transcript-consistent label, not "SPEAKER_00".
+    display_label: "Голос 2",
+    // no saved decision -> auto-match preselect (sp-auto) stands.
+    decided_speaker_id: null,
+    decided_name: null,
+    decided_is_noise: null,
     candidates: [
       { speaker_id: "sp-auto", name: "Vasya", distance: 0.12 },
       { speaker_id: "sp-far", name: "Zoya", distance: 0.55 },
@@ -67,6 +73,13 @@ const SPEAKER_MATCHES = {
     share: 0.5,
     seconds: 305,
     noise: false,
+    display_label: "Голос 1",
+    // bug #1: operator previously bound this to Zoya (sp-far), which is NOT
+    // the grey nearest candidate (sp-near/Petya). The reopened dialog must
+    // preselect the SAVED decision, proving it's not the auto-candidate rule.
+    decided_speaker_id: "sp-far",
+    decided_name: "Zoya",
+    decided_is_noise: false,
     candidates: [
       { speaker_id: "sp-near", name: "Petya", distance: 0.32 },
       { speaker_id: "sp-far", name: "Zoya", distance: 0.55 },
@@ -79,6 +92,10 @@ const SPEAKER_MATCHES = {
     share: 0.05,
     seconds: 31,
     noise: true,
+    display_label: "Голос 3",
+    decided_speaker_id: null,
+    decided_name: null,
+    decided_is_noise: null,
     candidates: [],
   },
 };
@@ -150,6 +167,28 @@ export async function run() {
     if (glyphs.SPEAKER_01 !== "🟡") failures.push(`grey row glyph wrong: ${glyphs.SPEAKER_01}`);
     if (glyphs.SPEAKER_02 !== "🔴") failures.push(`miss row glyph wrong: ${glyphs.SPEAKER_02}`);
 
+    // --- bug #2: each row shows the transcript-consistent "Голос N" display
+    // label, NOT the raw technical SPEAKER_NN tag ---
+    const labels = await page.evaluate((sels) => {
+      const out = {};
+      for (const [key, sel] of Object.entries(sels)) {
+        const el = document.querySelector(sel + " .voice-row-label");
+        out[key] = el ? el.textContent : null;
+      }
+      return out;
+    }, {
+      SPEAKER_00: rowSelector("SPEAKER_00"),
+      SPEAKER_01: rowSelector("SPEAKER_01"),
+      SPEAKER_02: rowSelector("SPEAKER_02"),
+    });
+    if (labels.SPEAKER_00 !== "Голос 2") failures.push(`SPEAKER_00 label should be "Голос 2" (display_label), got ${JSON.stringify(labels.SPEAKER_00)}`);
+    if (labels.SPEAKER_01 !== "Голос 1") failures.push(`SPEAKER_01 label should be "Голос 1", got ${JSON.stringify(labels.SPEAKER_01)}`);
+    if (/SPEAKER_/.test(labels.SPEAKER_00 || "") || /SPEAKER_/.test(labels.SPEAKER_01 || "")) {
+      failures.push(`raw technical tag leaked into a row label: ${JSON.stringify(labels)}`);
+    }
+    // (bug #1 — the saved decision overriding the grey auto-rule — is asserted
+    // in the preselect block below, where SPEAKER_01's dropdown value is checked.)
+
     // --- dropdown lists ALL speakers, sorted by distance, add-new positioned per outcome ---
     const autoOptions = await page.$$eval(`${rowSelector("SPEAKER_00")} .voice-select option`, (els) =>
       els.map((e) => ({ value: e.value, text: e.textContent }))
@@ -184,8 +223,12 @@ export async function run() {
       SPEAKER_01: rowSelector("SPEAKER_01"),
       SPEAKER_02: rowSelector("SPEAKER_02"),
     });
+    // SPEAKER_00 (auto, no decision) -> nearest candidate sp-auto.
     if (preselects.SPEAKER_00 !== "sp-auto") failures.push(`auto row preselect wrong: ${preselects.SPEAKER_00}`);
-    if (preselects.SPEAKER_01 !== "sp-near") failures.push(`grey row preselect wrong: ${preselects.SPEAKER_01}`);
+    // SPEAKER_01 has a SAVED decision (sp-far/Zoya) that overrides the grey
+    // nearest-candidate rule (which would pick sp-near) — bug #1 (vts-552).
+    if (preselects.SPEAKER_01 !== "sp-far") failures.push(`grey row should preselect saved decision sp-far, got: ${preselects.SPEAKER_01}`);
+    // SPEAKER_02 (miss, no decision) -> add-new.
     if (preselects.SPEAKER_02 !== "__new__") failures.push(`miss row preselect wrong: ${preselects.SPEAKER_02}`);
 
     // --- grey/auto rows show the add-fragment checkbox, default ON ---

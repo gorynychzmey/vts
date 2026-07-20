@@ -4199,15 +4199,35 @@ function buildVoiceRow(label, match, allSpeakers) {
   const options = ranked.concat(
     unmatched.map((sp) => ({ speaker_id: String(sp.id), name: sp.name, distance: null }))
   );
-  // grey/auto preselect the nearest candidate (options[0] if any exist);
-  // miss preselects "add new". Falls back to "add new" if there are no
-  // candidates at all, regardless of outcome.
-  const initialSelection = outcome !== "miss" && options.length > 0
-    ? options[0].speaker_id
-    : NEW_PERSON_VALUE;
+  // A saved decision wins over the auto-match: reopening the dialog shows what
+  // the operator bound (bug #1, vts-552). decided_speaker_id is the person they
+  // chose; if it's still a selectable option, preselect it. A decision that
+  // left the label anonymous (decided_speaker_id null but a decision exists) is
+  // NOT auto-preselected to a candidate — the operator's "anonymous" stands, so
+  // it falls through to "add new". Otherwise fall back to the auto-match rule.
+  const decidedSpeakerId = match.decided_speaker_id ? String(match.decided_speaker_id) : null;
+  const hasDecision = match.decided_is_noise !== null && match.decided_is_noise !== undefined;
+  const decidedIsSelectable = decidedSpeakerId && options.some((o) => o.speaker_id === decidedSpeakerId);
+  let initialSelection;
+  if (decidedIsSelectable) {
+    initialSelection = decidedSpeakerId;
+  } else if (hasDecision) {
+    // Decided anonymous (or the bound person was deleted) -> leave as "add new".
+    initialSelection = NEW_PERSON_VALUE;
+  } else {
+    initialSelection = outcome !== "miss" && options.length > 0
+      ? options[0].speaker_id
+      : NEW_PERSON_VALUE;
+  }
   return {
     label,
     outcome,
+    // The transcript-consistent "Голос N" / name label shown to the operator,
+    // instead of the raw SPEAKER_NN tag (bug #2, vts-552). Falls back to the
+    // technical tag if the backend didn't supply one.
+    displayLabel: typeof match.display_label === "string" && match.display_label
+      ? match.display_label
+      : label,
     matchedSpeakerId: match.speaker_id ? String(match.speaker_id) : null,
     matchedDistance: typeof match.distance === "number" ? match.distance : null,
     options,
@@ -4222,11 +4242,13 @@ function buildVoiceRow(label, match, allSpeakers) {
     // the previous save's resolution for this label bound a candidate and
     // added a fragment, tracked via savedBinding below.
     savedBinding: null, // { speaker_id, addedFragment: bool } after a "Save" for this label
-    // Noise flag (vts-552): pre-filled from the matcher's auto-detection.
-    // noiseAuto records whether the matcher set it (drives the "auto" hint);
-    // noiseInitial is the dirty-tracking baseline; noise is the live value.
-    noise: Boolean(match.noise),
-    noiseInitial: Boolean(match.noise),
+    // Noise flag (vts-552): the operator's saved decision wins over the
+    // matcher's auto-detection when a decision exists (bug #1), so a reopened
+    // dialog reflects what they chose. noiseAuto still records the MATCHER's
+    // suggestion (drives the "auto" hint); noiseInitial is the dirty baseline;
+    // noise is the live value.
+    noise: hasDecision ? Boolean(match.decided_is_noise) : Boolean(match.noise),
+    noiseInitial: hasDecision ? Boolean(match.decided_is_noise) : Boolean(match.noise),
     noiseAuto: Boolean(match.noise),
     share: typeof match.share === "number" ? match.share : 0,
     seconds: typeof match.seconds === "number" ? match.seconds : 0,
@@ -4277,7 +4299,9 @@ function renderVoiceList() {
 
     const labelEl = document.createElement("div");
     labelEl.className = "voice-row-label";
-    labelEl.textContent = row.label;
+    // Show the transcript-consistent "Голос N" / name label, not the raw
+    // technical SPEAKER_NN tag (bug #2, vts-552).
+    labelEl.textContent = row.displayLabel;
     body.appendChild(labelEl);
 
     const audio = document.createElement("audio");
