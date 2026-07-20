@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     diarization_min_seconds: float = 0.8
     # Speakers below this share of total speech are phantoms from music or echo.
     diarization_min_speaker_share: float = 0.05
+    # Cosine distance below which a low-share speaker is auto-flagged as noise
+    # (echo / a real speaker's own voice cut on a pause), if it is also close to
+    # some LARGER-share speaker. Separate from speaker_match_max_distance_auto:
+    # that answers "same voice in the registry", this answers "echo of another
+    # speaker in THIS recording". Never folds a speaker with no embedding, and
+    # never folds a large-share speaker no matter how close (vts-552 / vts-0ws).
+    diarization_noise_max_distance: float = 0.25
     # Cosine distance thresholds for matching a voice fragment to a known
     # speaker (see nearest_speakers / bucket). Vectors are unnormalised, so
     # cosine (not L2) is the only sane operator. Calibrated 2026-07-17 against
@@ -440,6 +447,7 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_diarization_min_words": "diarization_min_words",
         "services_diarization_min_seconds": "diarization_min_seconds",
         "services_diarization_min_speaker_share": "diarization_min_speaker_share",
+        "services_diarization_noise_max_distance": "diarization_noise_max_distance",
         "services_speaker_match_max_distance_auto": "speaker_match_max_distance_auto",
         "services_speaker_match_max_distance_candidate": "speaker_match_max_distance_candidate",
         "services_speaker_match_candidates_cap": "speaker_match_candidates_cap",
