@@ -169,6 +169,7 @@ def pipeline() -> Pipeline:
             raise RuntimeError(f"pyannote returned no pipeline for {model_dir}")
         _pipeline.to(torch.device(os.environ.get("TORCH_DEVICE", "cpu")))
         _apply_min_duration_off(_pipeline)
+        _apply_clustering_params(_pipeline)
         _apply_precision(_pipeline)
     return _pipeline
 
@@ -197,6 +198,54 @@ def _apply_min_duration_off(pipe: Pipeline) -> None:
     params["segmentation"]["min_duration_off"] = value
     pipe.instantiate(params)
     _log.info("segmentation.min_duration_off set to %.2f", value)
+
+
+# The VBx clustering knobs the community-1 pipeline exposes, mapped to their env
+# overrides. Fa (acoustic scaling) is the one that matters for short interjected
+# turns: at the shipped Fa=0.07 a brief interjection nested inside a longer turn
+# is smeared into that turn's speaker, because the frame-level acoustic evidence
+# is scaled down too far to pull those frames onto the interjector. Raising Fa
+# lets those frames re-cluster onto the right voice. Measured on a real
+# 20-minute 4-speaker meeting (task b07f7491): at Fa=0.07, 0 of 4 marked
+# interjections separated; at Fa=0.15 that becomes 3 of 4 for the cost of a
+# single extra speaker (4 -> 5) — and an extra speaker is recoverable, since the
+# resolve UI can map several diarization labels onto one person, whereas a
+# smeared interjection is lost text. Higher Fa keeps buying little (still 3/4 up
+# to 0.3) while inflating the speaker count (7 at 0.3, 8 at 0.4), so this is
+# opt-in and left at the model default unless a deployment sets it. threshold
+# had no effect on interjections in that sweep; Fb was not moved off 0.8.
+_CLUSTERING_ENV = {
+    "DIAR_CLUSTERING_FA": "Fa",
+    "DIAR_CLUSTERING_FB": "Fb",
+    "DIAR_CLUSTERING_THRESHOLD": "threshold",
+}
+
+
+def _apply_clustering_params(pipe: Pipeline) -> None:
+    """Override VBx clustering params (Fa/Fb/threshold) from the environment.
+
+    Each is independent and opt-in: an unset or non-numeric var leaves that
+    param at the model default. Applied together in one re-instantiation so a
+    deployment can tune more than one without them clobbering each other.
+    """
+    overrides: dict[str, float] = {}
+    for env_name, param_name in _CLUSTERING_ENV.items():
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        try:
+            overrides[param_name] = float(raw)
+        except ValueError:
+            _log.warning("ignoring non-numeric %s=%r", env_name, raw)
+    if not overrides:
+        return
+    params = pipe.parameters(instantiated=True)
+    if "clustering" not in params:
+        _log.warning("pipeline has no clustering params; clustering overrides ignored")
+        return
+    params["clustering"].update(overrides)
+    pipe.instantiate(params)
+    _log.info("clustering params overridden: %s", overrides)
 
 
 @app.get("/health")

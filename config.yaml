@@ -24,10 +24,12 @@ services:
     min_seconds: 0.8
     # Speakers below this share of speech are noise, not people.
     min_speaker_share: 0.05
-    # Note: the diarization model's own min_duration_off (which fills a speaker's
-    # short breathing pauses) is a CONTAINER parameter, not an app one — set it
-    # via DIAR_MIN_DURATION_OFF on the diarization service (docker-compose.yml),
-    # calibrated to 0.5.
+    # Note: the diarization model's own tuning knobs are CONTAINER parameters,
+    # not app ones — set them on the diarization service (docker-compose.yml /
+    # systemd unit):
+    #   DIAR_MIN_DURATION_OFF (fills short breathing pauses, calibrated to 0.5)
+    #   DIAR_CLUSTERING_FA    (VBx acoustic scaling, 0.15 — separates short
+    #                          interjections that Fa=0.07 smears into the host)
   llm:
     # Default targets the llama.cpp container in docker-compose.yml
     # (--profile llm-llamacpp). The shipped prompts in ./prompts/ are tuned
