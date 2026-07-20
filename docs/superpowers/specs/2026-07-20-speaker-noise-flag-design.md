@@ -56,9 +56,16 @@ phantoms with one click) instead of a silent over-merge.
   manually.
 - **Auto mode (`speaker_no_manual_stop`, no operator):** render reads noise from
   the auto-suggestion in `speaker_matches.json` (no decisions exist).
-- **Editing bindings/noise on a COMPLETED task is in scope.** The voice-resolution
-  dialog opens on `completed` (not only `awaiting_input`), and saving re-renders
-  the raw transcript immediately.
+- **The dialog is available from when match_speakers first ran, for the rest of
+  the task's life** (except archived/canceled) — not tied to a specific status.
+  Gating is a task-DEPENDENT capability `can_resolve_speakers` (reads
+  `task.steps`), NOT a pure-status predicate: the dialog needs
+  `speaker_matches.json` (written by `match_speakers`), so a pure status set
+  cannot express the real precondition. This lets the operator bind speakers
+  while the task is still running (e.g. summarizing) without waiting for it to
+  finish. See "Button availability".
+- **Editing bindings/noise on a COMPLETED task is in scope** as one case of the
+  above. Saving re-renders the raw transcript immediately.
 - **Re-render is triggered by the resolve SAVE, not by DAG traversal.** A shared
   render function is called from the `resolve` endpoint, so it works identically
   for a paused task (continue) and a completed task (edit-in-place).
@@ -175,19 +182,46 @@ completed task from the same call site.
 - `record_decision(...)`: add `is_noise` param → persisted on the row.
 - `resolve` endpoint: after committing decisions, call `rerender_transcript`.
   Remove/relax any implicit assumption that the task is `awaiting_input` — a
-  `completed` task saving edits must succeed with `continue_task=false` and
-  NOT be re-queued (it stays `completed`; only the raw transcript changes).
-- `GET /speaker-matches` must work on a `completed` task (it already reads the
-  static `speaker_matches.json`, so no status gate to add — just verify).
+  non-paused task (running/completed/failed) saving edits must succeed with
+  `continue_task=false` and NOT be re-queued (status unchanged; only the raw
+  transcript changes). Reject the save only when `can_resolve_speakers_task` is
+  false (archived/canceled, or match_speakers not yet completed).
+- `serialize_task` / `serialize_task_compact`: add
+  `can_resolve_speakers: can_resolve_speakers_task(task)` to `capabilities`.
+- `GET /speaker-matches` must work on any non-archived task past match_speakers
+  (it already reads the static `speaker_matches.json`, so no status gate to add
+  — just verify).
 - No new endpoints.
 
-### 5. Frontend (voice-resolution dialog, `app.js`)
+### 5. Button availability — `can_resolve_speakers` capability
 
-- **Show the resolve-voices button on `completed` too.** Currently gated on
-  `needsInput(status) && awaitingStep === "match_speakers"`. Extend to also show
-  when `status === "completed"` AND diarization ran (speaker-matches available).
-  On a completed task the primary button reads "Save" (not "Save & continue")
-  and sends `continue_task=false`.
+New task-DEPENDENT capability, computed server-side alongside
+`can_restart_summary` and shipped in `capabilities`:
+
+```
+def can_resolve_speakers_task(task) -> bool:
+    if task.status in {archived, canceled}:
+        return False
+    return _find_step_status(task, "match_speakers") == StepStatus.completed
+```
+
+- True once `match_speakers` completed, and stays true for every later status
+  (running, waiting, completed, failed-after-diarization), until archived/canceled.
+- The paused case (`awaiting_input`) is unaffected: there `match_speakers` is
+  not yet `completed`, so the existing `needsInput && awaitingStep ===
+  "match_speakers"` path drives the button. `can_resolve_speakers` covers
+  everything AFTER.
+
+### 6. Frontend (voice-resolution dialog, `app.js`)
+
+- **Show the resolve-voices button when EITHER the paused path OR the new
+  capability holds:** `needsInput(status) && awaitingStep === "match_speakers"`
+  (first-time resolution at the pause) OR `capabilities.can_resolve_speakers`
+  (any time after match_speakers, until archived/canceled).
+- **Primary button label depends on whether the task will continue:** if the
+  task is `awaiting_input` it reads "Save & continue" and sends
+  `continue_task=true`; otherwise (running/completed/failed) it reads "Save",
+  sends `continue_task=false`, and never re-queues — the pipeline is untouched.
 - **Noise checkbox** per speaker row, pre-filled from `row.noise`. Checked →
   row dimmed (its turns won't reach the output); binding controls stay usable
   (a person can still be bound; unchecking restores). Included in the row's
@@ -208,7 +242,7 @@ completed task from the same call site.
   the affected task's active tab (don't rely on the DOM rebuild). Combined with
   the server header below, the user always sees the just-rendered transcript.
 
-### 6. Transcript cache invalidation
+### 7. Transcript cache invalidation
 
 The raw transcript used to be immutable once written; it is now mutable (every
 resolve save can change it). Two layers keep the client from showing a stale
@@ -231,6 +265,16 @@ copy:
   guard and fall back to rendering all (log a warning) rather than emit an
   empty transcript.
 - Missing `speaker_matches.json` on the noise resolver → treat as no noise.
+- **Concurrency (re-render vs pipeline):** `transcript.json` is written by the
+  pipeline ONLY in `merge_transcript`, which runs BEFORE `match_speakers`.
+  `can_resolve_speakers` is true only AFTER `match_speakers` completed, so a
+  resolve-triggered re-render can never collide with the pipeline writing the
+  same file — the pipeline is done with it by then. The one residual case is two
+  overlapping resolve saves (double-click / two tabs). Make `rerender_transcript`
+  write atomically (tmp file + `os.replace`) so a torn read is impossible;
+  last-writer-wins on the decisions is acceptable (they are idempotent per
+  label). Note: current `write_json` is a direct `write_text` (not atomic) — the
+  re-render path must use an atomic write helper.
 
 ## Testing
 
@@ -251,6 +295,11 @@ Backend (pytest, real Postgres):
    `continue_task=false` persists new decisions, re-renders the raw transcript,
    leaves status `completed`, and does NOT re-queue. `speaker-matches` returns
    `noise`+`share` for a completed task.
+7b. **`can_resolve_speakers_task`:** true after match_speakers completed for
+    running/waiting/completed/failed; false for archived/canceled and before
+    match_speakers. `resolve` rejected when the capability is false.
+7c. **Atomic re-render:** `rerender_transcript` writes via tmp+`os.replace`; a
+    concurrent read never sees a partial file.
 
 8. **Transcript endpoint sends `Cache-Control: no-cache`** (and the shared
    summary/redacted endpoints too).
@@ -259,8 +308,11 @@ Frontend (verifier-web):
 
 9. Noise checkbox present, pre-filled from stub `noise:true`; rows sorted by
    share; share shown; toggling changes dirty state and the resolve payload.
-10. Resolve-voices button visible on a `completed` diarized task; primary button
-    reads "Save" and sends `continue_task=false`.
+10. Resolve-voices button visible whenever `capabilities.can_resolve_speakers`
+    is set (running/completed stub) AND at the pause; hidden for
+    archived/canceled and before match_speakers. On a non-paused task the primary
+    button reads "Save" and sends `continue_task=false`; at the pause it reads
+    "Save & continue" with `continue_task=true`.
 11. After a resolve save, the transcript tab is re-fetched (the stub serves a
     changed transcript on the second GET; the panel shows the new text without a
     page reload).
