@@ -535,16 +535,27 @@ def merge_entries(
     for index, entry in enumerate(entries):
         raw = raw_json_by_index.get(index)
         words = usable_words(raw) if isinstance(raw, dict) else None
-        entry_words = (
+        # Whisper reports word timings LOCAL to the transcribed segment (0-based),
+        # but the entry's start/end and the diarization turns are in the
+        # recording's ABSOLUTE frame. Shift the words onto the entry offset so all
+        # three share one clock — without this, every segment past the first
+        # (whose offset is 0) has all its words fall outside the entry window,
+        # none survive the filter below, and the whole entry collapses onto one
+        # fallback speaker instead of splitting on real turn changes.
+        offset = float(entry["start"])
+        shifted = (
             [
-                word
+                {**word, "start": float(word["start"]) + offset, "end": float(word["end"]) + offset}
                 for word in words
-                if float(word["end"]) > float(entry["start"])
-                and float(word["start"]) < float(entry["end"])
             ]
             if words
             else []
         )
+        entry_words = [
+            word
+            for word in shifted
+            if word["end"] > offset and word["start"] < float(entry["end"])
+        ]
         merged.extend(
             split_entry_by_speaker(entry, entry_words, diar_segments, min_words, min_seconds)
         )

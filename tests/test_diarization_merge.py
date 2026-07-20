@@ -335,6 +335,43 @@ def test_merge_entries_empty_diarization_leaves_speaker_none() -> None:
     assert result[0]["speaker"] is None
 
 
+def test_merge_entries_splits_entry_at_nonzero_offset() -> None:
+    # A segment past the first one starts at an absolute offset (here 100s), but
+    # Whisper reports its word timings LOCAL to that segment (0-based). Diarization
+    # turns are in the recording's ABSOLUTE frame. merge_entries must reconcile the
+    # two by shifting the words onto the entry's start before matching — otherwise
+    # every word falls outside the entry's absolute window, none survive the
+    # filter, and the whole entry collapses onto one fallback speaker (the bug:
+    # only the first, offset-0, segment ever split; every later segment did not).
+    entries = [{"start": 100.0, "end": 109.0, "text": "да согласен а ты что думаешь"}]
+    raw_by_index = {
+        0: {
+            "segments": [
+                {
+                    "words": [
+                        {"word": "да", "start": 0.0, "end": 2.0},
+                        {"word": "согласен", "start": 2.0, "end": 4.0},
+                        {"word": "а", "start": 5.0, "end": 6.0},
+                        {"word": "ты", "start": 6.0, "end": 7.0},
+                        {"word": "что", "start": 7.0, "end": 8.0},
+                        {"word": "думаешь", "start": 8.0, "end": 9.0},
+                    ]
+                }
+            ]
+        }
+    }
+    diar = [
+        {"start": 100.0, "end": 105.0, "speaker": "SPEAKER_00"},
+        {"start": 105.0, "end": 110.0, "speaker": "SPEAKER_01"},
+    ]
+    result = merge_entries(entries, raw_by_index, diar, min_words=2, min_seconds=0.8)
+    assert [e["speaker"] for e in result] == ["SPEAKER_00", "SPEAKER_01"]
+    # The split lands on the acoustic boundary: "да согласен" (0-4s local -> the
+    # SPEAKER_00 turn) then "а ты что думаешь" (5-9s local -> SPEAKER_01).
+    assert result[0]["text"] == "да согласен"
+    assert result[1]["text"] == "а ты что думаешь"
+
+
 # --- Finding 1: sentence-granularity trimming on the entry list -------------
 #
 # Production entries are ~300s ASR chunks (segment_target_seconds), each one

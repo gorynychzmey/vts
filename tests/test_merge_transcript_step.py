@@ -100,7 +100,12 @@ def _segments_with_one_silent_chunk() -> list[_FakeSegment]:
     entries, not one — so the two code paths produce observably different
     entry counts and speakers.
     """
-    chunk0_raw = {
+    # Whisper reports word timings LOCAL to each chunk (0-based). merge_entries
+    # shifts them by the chunk's start_sec to reach the recording's absolute
+    # frame, where the diarization turns live. The absolute spans below are the
+    # same as before (chunk0 6.0..9.0 etc.); only the on-the-wire timings are
+    # local, matching what a real Whisper payload carries.
+    chunk0_raw = {  # start_sec 0.0 -> local == absolute
         "segments": [
             {
                 "words": [
@@ -110,26 +115,26 @@ def _segments_with_one_silent_chunk() -> list[_FakeSegment]:
             }
         ]
     }
-    # Silent chunk's own (unused-by-correct-code) words, well outside entries[1]'s
-    # time range — if wrongly attributed to entries[1], they contribute nothing
-    # inside its window, forcing the whole-entry fallback path.
-    chunk1_raw = {
+    # Silent chunk's own (unused-by-correct-code) words. Local 0.0-4.0 -> absolute
+    # 2.0-6.0, still entirely outside entries[1]'s [6.0, 9.0] window — if wrongly
+    # attributed to entries[1] they contribute nothing there, forcing fallback.
+    chunk1_raw = {  # start_sec 2.0
         "segments": [
             {
                 "words": [
-                    {"word": "шум", "start": 2.0, "end": 6.0},
+                    {"word": "шум", "start": 0.0, "end": 4.0},
                 ]
             }
         ]
     }
-    chunk2_raw = {
+    chunk2_raw = {  # start_sec 6.0 -> local +6.0 == absolute 6.0..9.0
         "segments": [
             {
                 "words": [
-                    {"word": "как", "start": 6.0, "end": 6.5},
-                    {"word": "быстро", "start": 6.5, "end": 7.0},
-                    {"word": "у", "start": 8.0, "end": 8.5},
-                    {"word": "дела", "start": 8.5, "end": 9.0},
+                    {"word": "как", "start": 0.0, "end": 0.5},
+                    {"word": "быстро", "start": 0.5, "end": 1.0},
+                    {"word": "у", "start": 2.0, "end": 2.5},
+                    {"word": "дела", "start": 2.5, "end": 3.0},
                 ]
             }
         ]
