@@ -266,3 +266,88 @@ def test_merge_transcript_step_renders_registry_names(
         "SPEAKER_00", "SPEAKER_00", "SPEAKER_01",
     ]
     assert payload["text"] == "Вася: привет мир как быстро\n\nГолос 2: у дела"
+
+
+def _segments_for_marginal_speaker_regression() -> list[_FakeSegment]:
+    """Three ASR entries, none carrying word-level timestamps (empty raw_json),
+    so every entry is attributed to a speaker by whole-entry maximum overlap
+    (`speaker_at`) rather than a word-level split — the same fallback path
+    `drop_marginal_speakers` measures "share" over via each entry's own
+    `end - start` span.
+
+    entries[0] spans the SPEAKER_00 diarization block (0.0-87.0s, 87s).
+    entries[1] and entries[2] are two short 1.5s entries that each fully
+    overlap one of SPEAKER_03's diarization turns, so both get attributed to
+    SPEAKER_03. Their combined ASR-entry span is 3.0s out of 90.0s total entry
+    span (~3.3%) — well under the default 5% `diarization_min_speaker_share`.
+
+    Reproduces vts-0ws: SPEAKER_03 genuinely holds 13% of DIARIZED time (see
+    `_diarization_for_marginal_speaker_regression`), but the ASR chunker only
+    produced short, recognizable-word entries for two of SPEAKER_03's turns —
+    it produced no entry at all for the 88.5-89.0s gap or the long
+    90.5-100.0s tail where SPEAKER_03 kept talking without ASR text landing on
+    it. Measuring "share" over ASR-entry span (3.3%) instead of diarized time
+    (13%) is exactly the discrepancy `drop_marginal_speakers` used to
+    mismeasure, folding a real speaker into the dominant one.
+    """
+    return [
+        _FakeSegment(segment_index=1, start_sec=0.0, end_sec=87.0, text="привет как дела у тебя", raw_json={}),
+        _FakeSegment(segment_index=2, start_sec=87.0, end_sec=88.5, text="ага", raw_json={}),
+        _FakeSegment(segment_index=3, start_sec=89.0, end_sec=90.5, text="угу", raw_json={}),
+    ]
+
+
+def _diarization_for_marginal_speaker_regression() -> dict:
+    """SPEAKER_00 holds 87.0s (87%) of diarized time; SPEAKER_03 holds 13.0s
+    (13%), spread across four turns — two of which (87.0-88.5 and 89.0-90.5)
+    line up with the short ASR entries above, and two of which (88.5-89.0,
+    90.5-100.0) fall in the gaps where the ASR chunker produced no entry at
+    all. `drop_marginal_speakers` never sees diarization segments directly —
+    only the entries — so these gap turns are exactly what the ASR-entry-span
+    measurement misses.
+    """
+    return {
+        "segments": [
+            {"start": 0.0, "end": 87.0, "speaker": "SPEAKER_00"},
+            {"start": 87.0, "end": 88.5, "speaker": "SPEAKER_03"},
+            {"start": 88.5, "end": 89.0, "speaker": "SPEAKER_03"},
+            {"start": 89.0, "end": 90.5, "speaker": "SPEAKER_03"},
+            {"start": 90.5, "end": 100.0, "speaker": "SPEAKER_03"},
+        ]
+    }
+
+
+def test_merge_transcript_step_does_not_fold_a_marginal_by_asr_span_speaker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for vts-0ws: SPEAKER_03 holds 13% of DIARIZED time but its
+    turns land in short ASR entries summing to only ~3.3% of ASR-entry span.
+    `drop_marginal_speakers` measured share over entry span, so it used to
+    fold SPEAKER_03 into the dominant SPEAKER_00 even though SPEAKER_03 is a
+    real, substantial speaker. The live merge path now calls
+    `apply_diarization` with `min_share=0.0`, making the fold a no-op — both
+    speakers must survive in the rendered transcript.json entries."""
+    dirs = _dirs(tmp_path)
+    segments = _segments_for_marginal_speaker_regression()
+    ctx = _ctx(monkeypatch, segments)
+
+    diar_path = dirs["outputs"] / "diarization.json"
+    diar_path.write_text(
+        json.dumps(_diarization_for_marginal_speaker_regression()),
+        encoding="utf-8",
+    )
+
+    st = StepState(
+        task_id=uuid.uuid4(),
+        user_id=str(uuid.uuid4()),
+        dirs=dirs,
+        logger=logging.getLogger("test_merge_transcript_step"),
+        task_options={"language": "ru"},
+    )
+
+    assert asyncio.run(MergeTranscriptStep().run(ctx, st)) is True
+
+    payload = json.loads((dirs["outputs"] / "transcript.json").read_text(encoding="utf-8"))
+    speakers = {e.get("speaker") for e in payload["entries"]}
+    assert "SPEAKER_00" in speakers
+    assert "SPEAKER_03" in speakers  # the 13%-real speaker must NOT be folded

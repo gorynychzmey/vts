@@ -576,7 +576,12 @@ class MergeTranscriptStep(Step):
                 st.dirs["outputs"] / "diarization.json",
                 min_words=int(getattr(ctx.settings, "diarization_min_words", 2)),
                 min_seconds=float(getattr(ctx.settings, "diarization_min_seconds", 0.8)),
-                min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
+                # Disabled on the live path (vts-552 / vts-0ws): folding low-share
+                # speakers is now a reversible per-speaker "noise" flag decided at
+                # match_speakers + the resolve dialog, not an irreversible merge
+                # here. 0.0 makes drop_marginal_speakers a no-op (nothing is below
+                # 0% share). The function + its unit tests stay for possible reuse.
+                min_share=0.0,
                 # The label word must match the recording's language: this is
                 # the same effective_language() the ASR step used to transcribe,
                 # and the same value segment_prompt.md's ${LANG} instruction
