@@ -79,7 +79,15 @@ def _state(dirs: dict[str, Path], options: dict) -> SimpleNamespace:
     )
 
 
-def _ctx(repo: _FakeRepo, *, auto=0.25, candidate=0.55, candidates_cap=100) -> SimpleNamespace:
+def _ctx(
+    repo: _FakeRepo,
+    *,
+    auto=0.25,
+    candidate=0.55,
+    candidates_cap=100,
+    min_speaker_share=0.05,
+    noise_max_distance=0.25,
+) -> SimpleNamespace:
     def task_flag(options, key, *, default):
         value = options.get(key, default)
         return bool(value)
@@ -90,6 +98,8 @@ def _ctx(repo: _FakeRepo, *, auto=0.25, candidate=0.55, candidates_cap=100) -> S
             speaker_match_max_distance_auto=auto,
             speaker_match_max_distance_candidate=candidate,
             speaker_match_candidates_cap=candidates_cap,
+            diarization_min_speaker_share=min_speaker_share,
+            diarization_noise_max_distance=noise_max_distance,
         ),
         session_factory=_FakeSessionFactory(),
         task_flag=task_flag,
@@ -264,3 +274,54 @@ def test_match_speakers_resolves_from_the_registry() -> None:
     from vts.pipeline.steps.registry import resolve_step
 
     assert isinstance(resolve_step("match_speakers"), MatchSpeakersStep)
+
+
+async def test_run_writes_noise_and_share_into_speaker_matches(tmp_path: Path) -> None:
+    """SPEAKER_ECHO is a tiny sliver (1s out of 101s) whose embedding is
+    identical to the dominant SPEAKER_00 -> auto-flagged as noise (echo of the
+    dominant speaker). SPEAKER_01 is a real, acoustically distinct third
+    speaker with a healthy share -> never noise. SPEAKER_00 dominates the
+    recording -> never noise either, regardless of share/distance math."""
+    dirs = _dirs(tmp_path)
+    write_diar = {
+        "embedding_model": "ecapa",
+        "segments": [
+            {"start": 0.0, "end": 100.0, "speaker": "SPEAKER_00"},
+            {"start": 100.0, "end": 101.0, "speaker": "SPEAKER_ECHO"},
+            {"start": 101.0, "end": 121.0, "speaker": "SPEAKER_01"},
+        ],
+        "embeddings": {
+            "SPEAKER_00": [1.0, 0.0],
+            "SPEAKER_ECHO": [1.0, 0.0],
+            "SPEAKER_01": [0.0, 1.0],
+        },
+    }
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(write_diar), encoding="utf-8")
+
+    sp0 = _FakeSpeaker(uuid.uuid4(), "Alice")
+    sp1 = _FakeSpeaker(uuid.uuid4(), "Bob")
+    repo = _FakeRepo(
+        {
+            (1.0, 0.0): [(sp0, 0.1)],
+            (0.0, 1.0): [(sp1, 0.1)],
+        }
+    )
+    ctx = _ctx(repo)
+    _wire_repo_override(ctx, repo)
+    st = _state(dirs, {"diarize": True, "speaker_no_manual_stop": True})
+
+    result = await MatchSpeakersStep().run(ctx, st)
+
+    assert result is True
+    matches = json.loads((dirs["outputs"] / "speaker_matches.json").read_text(encoding="utf-8"))
+    assert "share" in matches["SPEAKER_00"]
+    assert "noise" in matches["SPEAKER_00"]
+    # tiny speaker whose embedding echoes the dominant one is auto-noise
+    assert matches["SPEAKER_ECHO"]["noise"] is True
+    # dominant speaker is never noise
+    assert matches["SPEAKER_00"]["noise"] is False
+    # real, distinct, non-marginal speaker is never noise
+    assert matches["SPEAKER_01"]["noise"] is False
+    assert matches["SPEAKER_00"]["share"] == pytest.approx(100.0 / 121.0)
+    assert matches["SPEAKER_ECHO"]["share"] == pytest.approx(1.0 / 121.0)
+    assert matches["SPEAKER_01"]["share"] == pytest.approx(20.0 / 121.0)

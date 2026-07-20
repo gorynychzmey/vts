@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from vts.db.repo import Repo
 from vts.pipeline.steps.base import Step, StepState
 from vts.pipeline.steps.diarization import diarize_enabled
+from vts.services.diarization.merge import auto_noise_labels, speaker_shares
 from vts.services.speaker_registry import MatchOutcome, bucket
 from vts.services.storage import write_json
 
@@ -49,6 +50,15 @@ class MatchSpeakersStep(Step):
         diar = json.loads(diar_path.read_text(encoding="utf-8"))
         model = diar.get("embedding_model", "")
         embeddings = diar.get("embeddings", {})
+        segments = diar.get("segments", []) or []
+
+        shares = speaker_shares(segments)
+        noise_labels = auto_noise_labels(
+            shares,
+            embeddings,
+            min_share=float(getattr(ctx.settings, "diarization_min_speaker_share", 0.05)),
+            max_distance=float(getattr(ctx.settings, "diarization_noise_max_distance", 0.25)),
+        )
 
         auto = ctx.settings.speaker_match_max_distance_auto
         cand = ctx.settings.speaker_match_max_distance_candidate
@@ -71,6 +81,8 @@ class MatchSpeakersStep(Step):
                     "outcome": str(outcome),
                     "speaker_id": str(nearest[0].id) if (nearest and outcome == MatchOutcome.auto) else None,
                     "distance": dist,
+                    "share": shares.get(label, 0.0),
+                    "noise": label in noise_labels,
                     "candidates": [
                         {"speaker_id": str(sp.id), "name": sp.name, "distance": d}
                         for sp, d in ranked
