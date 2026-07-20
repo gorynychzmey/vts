@@ -196,9 +196,11 @@ async def _seed_task_with_preview(factory, tmp_path, *, status="awaiting_input")
     """Seed a task row + outputs/diarization.json + outputs/preview_*.wav,
     matching what DiarizeStep/MatchSpeakersStep would have produced.
 
-    Includes a completed `match_speakers` step: `can_resolve_speakers_task`
-    (vts-552) gates the resolve endpoint on that step being completed, and
-    every resolve test in this module exercises a task past that point.
+    Writes speaker_matches.json too: `can_resolve_speakers_task` (vts-552) gates
+    the resolve endpoint on that artifact existing (the file only the diarized
+    match_speakers path writes), and every resolve test in this module exercises
+    a task past that point. A completed `match_speakers` step is still seeded to
+    mirror a real diarized task, but the file — not the step status — is the gate.
     """
     from vts.db.models import StepStatus, TaskStatus
     from vts.db.repo import Repo
@@ -209,6 +211,9 @@ async def _seed_task_with_preview(factory, tmp_path, *, status="awaiting_input")
 
     diar = {"embedding_model": "ecapa", "embeddings": {"SPEAKER_00": [0.0] * 256}}
     (outputs / "diarization.json").write_text(json.dumps(diar), encoding="utf-8")
+
+    matches = {"SPEAKER_00": {"outcome": "candidate", "speaker_id": None, "candidates": []}}
+    (outputs / "speaker_matches.json").write_text(json.dumps(matches), encoding="utf-8")
 
     clip_path = outputs / "preview_SPEAKER_00_0.wav"
     clip_path.write_bytes(b"RIFFCLIPBYTES")
@@ -391,10 +396,9 @@ async def _seed_task_without_diarization(factory, tmp_path, *, status="awaiting_
     reproduces a malformed/incomplete awaiting_input task where embedding_model
     would resolve to "" in resolve_task_speakers.
 
-    Still includes a completed `match_speakers` step (see
-    `_seed_task_with_preview`) so `can_resolve_speakers_task` (vts-552) admits
-    it — this helper is about a missing diarization.json, not an unresolved
-    capability gate.
+    Still writes speaker_matches.json (see `_seed_task_with_preview`) so
+    `can_resolve_speakers_task` (vts-552) admits it — this helper is about a
+    missing diarization.json, not an unresolved capability gate.
     """
     from vts.db.models import StepStatus, TaskStatus
     from vts.db.repo import Repo
@@ -403,9 +407,14 @@ async def _seed_task_without_diarization(factory, tmp_path, *, status="awaiting_
     outputs = tmp_path / "outputs"
     outputs.mkdir(parents=True, exist_ok=True)
 
-    # No diarization.json written. Still provide a preview so add_fragment
-    # can reach the embedding_model check rather than failing earlier on a
-    # missing-preview 422.
+    # No diarization.json written. speaker_matches.json IS written — it is the
+    # capability gate, and its presence without diarization.json is exactly the
+    # "embedding_model resolves to ''" case this helper reproduces.
+    matches = {"SPEAKER_00": {"outcome": "candidate", "speaker_id": None, "candidates": []}}
+    (outputs / "speaker_matches.json").write_text(json.dumps(matches), encoding="utf-8")
+
+    # Still provide a preview so add_fragment can reach the embedding_model check
+    # rather than failing earlier on a missing-preview 422.
     clip_path = outputs / "preview_SPEAKER_00_0.wav"
     clip_path.write_bytes(b"RIFFCLIPBYTES")
     previews = {"SPEAKER_00": [{"path": str(clip_path), "start": 0.0, "end": 3.0}]}
@@ -756,27 +765,43 @@ async def test_move_candidates_rejects_mismatched_speaker_id(client, authed_app)
     assert r.status_code == 404
 
 
-def test_can_resolve_speakers_true_after_match_speakers():
+def _task_with_matches(tmp_path, *, status, write_matches):
+    """A Task whose artifact_dir optionally holds speaker_matches.json.
+
+    can_resolve_speakers_task keys off the PRESENCE of that artifact (the file
+    the diarized match_speakers path writes), not the step's status — a
+    non-diarized task's match_speakers still completes but writes no file.
+    """
+    from vts.db.models import Task
+    outputs = tmp_path / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    if write_matches:
+        (outputs / "speaker_matches.json").write_text("{}", encoding="utf-8")
+    return Task(status=status, options={}, source_url="u", artifact_dir=str(tmp_path))
+
+
+def test_can_resolve_speakers_true_when_matches_written(tmp_path):
     from vts.api.main import can_resolve_speakers_task
-    from vts.db.models import Task, Step, TaskStatus, StepStatus
-    task = Task(status=TaskStatus.completed, options={}, source_url="u", artifact_dir="/x")
-    task.steps = [Step(name="match_speakers", status=StepStatus.completed)]
+    from vts.db.models import TaskStatus
+    task = _task_with_matches(tmp_path, status=TaskStatus.completed, write_matches=True)
     assert can_resolve_speakers_task(task) is True
 
 
-def test_can_resolve_speakers_false_before_match_speakers():
+def test_can_resolve_speakers_false_without_matches_file(tmp_path):
     from vts.api.main import can_resolve_speakers_task
-    from vts.db.models import Task, Step, TaskStatus, StepStatus
-    task = Task(status=TaskStatus.running, options={}, source_url="u", artifact_dir="/x")
-    task.steps = [Step(name="diarize", status=StepStatus.completed)]
+    from vts.db.models import TaskStatus
+    # A non-diarized task: match_speakers completed but wrote no speaker_matches.json,
+    # so there is nothing to resolve and the dialog must stay hidden. This is the
+    # bug — the button showed for such tasks because the old check keyed off the
+    # step's completed status instead of the artifact the diarized path writes.
+    task = _task_with_matches(tmp_path, status=TaskStatus.completed, write_matches=False)
     assert can_resolve_speakers_task(task) is False
 
 
-def test_can_resolve_speakers_false_when_archived():
+def test_can_resolve_speakers_false_when_archived(tmp_path):
     from vts.api.main import can_resolve_speakers_task
-    from vts.db.models import Task, Step, TaskStatus, StepStatus
-    task = Task(status=TaskStatus.archived, options={}, source_url="u", artifact_dir="/x")
-    task.steps = [Step(name="match_speakers", status=StepStatus.completed)]
+    from vts.db.models import TaskStatus
+    task = _task_with_matches(tmp_path, status=TaskStatus.archived, write_matches=True)
     assert can_resolve_speakers_task(task) is False
 
 

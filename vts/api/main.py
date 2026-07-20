@@ -156,12 +156,20 @@ def can_restart_final_summary_task(task: Task) -> bool:
 def can_resolve_speakers_task(task: Task) -> bool:
     """The voice-resolution dialog is available once match_speakers has produced
     speaker_matches.json, for the rest of the task's life except archived/canceled.
-    A task-DEPENDENT capability (reads task.steps), NOT a pure-status predicate:
-    the real precondition is data availability, which a status set can't express.
+    A task-DEPENDENT capability keyed on data availability, which a status set
+    can't express.
+
+    Keys off the PRESENCE of speaker_matches.json, NOT the match_speakers step
+    status: that step completes for a NON-diarized task too (it early-returns
+    without writing the file), so a step-status check would wrongly offer the
+    dialog for a task that has no speakers to resolve (the button did nothing).
+    The diarized path is the only one that writes the artifact, so its existence
+    is the exact precondition — the same file MatchSpeakersStep.already_done and
+    the resolve endpoint both read.
     """
     if task.status in {TaskStatus.archived, TaskStatus.canceled}:
         return False
-    return _find_step_status(task, "match_speakers") == StepStatus.completed
+    return (Path(task.artifact_dir) / "outputs" / "speaker_matches.json").exists()
 
 
 ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
