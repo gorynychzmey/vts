@@ -201,6 +201,27 @@ completed task from the same call site.
 - After a save on a completed task, the summary is now stale w.r.t. the new
   bindings/noise; the existing "restart summary" button remains the way to
   regenerate it. (No new UI; just document the flow.)
+- **Fetch the re-rendered transcript after save.** `submitVoiceResolutions`
+  already calls `loadTasks()`, which rebuilds the task DOM and re-fetches the
+  active tab — but that is an implicit dependency on `renderTasks` behaviour.
+  Make it explicit: after a successful save, force-reload the transcript for
+  the affected task's active tab (don't rely on the DOM rebuild). Combined with
+  the server header below, the user always sees the just-rendered transcript.
+
+### 6. Transcript cache invalidation
+
+The raw transcript used to be immutable once written; it is now mutable (every
+resolve save can change it). Two layers keep the client from showing a stale
+copy:
+
+- **Server:** the transcript endpoint (`GET /api/tasks/{id}/transcript`, via
+  `_serve_text`) sends `Cache-Control: no-cache` so the browser always
+  revalidates rather than serving a heuristically-cached body. (Today it sends
+  only `Accept-Ranges`.) Apply the same to the summary/redacted text endpoints
+  that share `_serve_text`, since they are equally mutable after a restart.
+- **Client:** after a resolve save, explicitly re-fetch the active tab's content
+  for that task (see the frontend note above), not merely via the incidental
+  `loadTasks` rebuild.
 
 ## Error handling / edge cases
 
@@ -231,12 +252,18 @@ Backend (pytest, real Postgres):
    leaves status `completed`, and does NOT re-queue. `speaker-matches` returns
    `noise`+`share` for a completed task.
 
+8. **Transcript endpoint sends `Cache-Control: no-cache`** (and the shared
+   summary/redacted endpoints too).
+
 Frontend (verifier-web):
 
-8. Noise checkbox present, pre-filled from stub `noise:true`; rows sorted by
+9. Noise checkbox present, pre-filled from stub `noise:true`; rows sorted by
    share; share shown; toggling changes dirty state and the resolve payload.
-9. Resolve-voices button visible on a `completed` diarized task; primary button
-   reads "Save" and sends `continue_task=false`.
+10. Resolve-voices button visible on a `completed` diarized task; primary button
+    reads "Save" and sends `continue_task=false`.
+11. After a resolve save, the transcript tab is re-fetched (the stub serves a
+    changed transcript on the second GET; the panel shows the new text without a
+    page reload).
 
 ## Out of scope
 
