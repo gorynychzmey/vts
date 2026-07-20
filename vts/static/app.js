@@ -2761,6 +2761,35 @@ function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
 
+// Refresh ONE task's runtime from the server and re-render it in place, WITHOUT
+// rebuilding the task list. loadTasks() does `taskList.innerHTML = ""`, which
+// recreates every card collapsed and loses the open transcript tab; this keeps
+// the card's expanded/tab state intact (bug #3, vts-552). Mirrors the in-place
+// patch patchTaskStatus already does for completed/failed tasks.
+async function refreshTaskInPlace(taskId) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) return;
+  let task;
+  try {
+    task = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  } catch {
+    return;
+  }
+  const runtime = taskEl._runtime;
+  if (taskEl._runtime !== runtime || !task) return;
+  runtime.baseStatus = String(task.status || runtime.baseStatus);
+  runtime.awaitingStep = typeof task.awaiting_step === "string" ? task.awaiting_step : "";
+  if (task.capabilities) runtime.capabilities = task.capabilities;
+  if (task.stats) runtime.stats = parseTaskStats(task);
+  runtime.mediaReady = Boolean(task.media_path);
+  runtime.transcriptReady = Boolean(task.transcript_path);
+  runtime.summaryReady = Boolean(task.summary_path);
+  if (task.options && Array.isArray(task.options.prompt_results)) {
+    runtime.promptResults = task.options.prompt_results;
+  }
+  renderTaskRuntime(taskEl);
+}
+
 function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", queue = undefined, awaitingStep = undefined) {
   const taskEl = findTaskEl(taskId);
   if (!taskEl || !taskEl._runtime) {
@@ -4556,10 +4585,12 @@ async function submitVoiceResolutions(continueTask) {
     row.initialSelection = row.selection;
   });
   closeVoiceDialog({ skipConfirm: true });
-  await loadTasks();
+  // Refresh this task IN PLACE (not loadTasks(), which rebuilds the whole list
+  // and collapses the card — bug #3, vts-552). Preserves the expanded card and
+  // its active tab.
+  await refreshTaskInPlace(voiceTaskId);
   // Re-render the raw transcript for this task if it's the active tab, so the
-  // just-saved speaker names / noise flags take effect without a manual reload
-  // (vts-552). loadTasks() rebuilds the task element, so re-find it.
+  // just-saved speaker names / noise flags take effect without a manual reload.
   const taskEl = findTaskEl(voiceTaskId);
   if (taskEl && getActiveTabName(taskEl) === "transcript") {
     await loadTabContent(taskEl, voiceTaskId, "transcript");
