@@ -739,3 +739,27 @@ async def test_move_candidates_rejects_mismatched_speaker_id(client, authed_app)
 
     r = await client.get(f"/api/speakers/{b_id}/samples/{s_id}/move-candidates")
     assert r.status_code == 404
+
+
+def test_can_resolve_speakers_true_after_match_speakers():
+    from vts.api.main import can_resolve_speakers_task
+    from vts.db.models import Task, Step, TaskStatus, StepStatus
+    task = Task(status=TaskStatus.completed, options={}, source_url="u", artifact_dir="/x")
+    task.steps = [Step(name="match_speakers", status=StepStatus.completed)]
+    assert can_resolve_speakers_task(task) is True
+
+
+def test_can_resolve_speakers_false_before_match_speakers():
+    from vts.api.main import can_resolve_speakers_task
+    from vts.db.models import Task, Step, TaskStatus, StepStatus
+    task = Task(status=TaskStatus.running, options={}, source_url="u", artifact_dir="/x")
+    task.steps = [Step(name="diarize", status=StepStatus.completed)]
+    assert can_resolve_speakers_task(task) is False
+
+
+def test_can_resolve_speakers_false_when_archived():
+    from vts.api.main import can_resolve_speakers_task
+    from vts.db.models import Task, Step, TaskStatus, StepStatus
+    task = Task(status=TaskStatus.archived, options={}, source_url="u", artifact_dir="/x")
+    task.steps = [Step(name="match_speakers", status=StepStatus.completed)]
+    assert can_resolve_speakers_task(task) is False

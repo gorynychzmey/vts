@@ -160,6 +160,7 @@ class TaskCapabilities(BaseModel):
     are delivered once via GET /api/status-config."""
     can_restart_summary: bool = False
     can_restart_final_summary: bool = False
+    can_resolve_speakers: bool = False
 
 
 class TaskOut(BaseModel):

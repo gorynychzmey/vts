@@ -151,6 +151,17 @@ def can_restart_final_summary_task(task: Task) -> bool:
     return _find_step_status(task, "summarize_final") == StepStatus.failed
 
 
+def can_resolve_speakers_task(task: Task) -> bool:
+    """The voice-resolution dialog is available once match_speakers has produced
+    speaker_matches.json, for the rest of the task's life except archived/canceled.
+    A task-DEPENDENT capability (reads task.steps), NOT a pure-status predicate:
+    the real precondition is data availability, which a status set can't express.
+    """
+    if task.status in {TaskStatus.archived, TaskStatus.canceled}:
+        return False
+    return _find_step_status(task, "match_speakers") == StepStatus.completed
+
+
 ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
 
 
@@ -716,6 +727,7 @@ def serialize_task(
         capabilities={
             "can_restart_summary": can_restart_summary_task(task),
             "can_restart_final_summary": can_restart_final_summary_task(task),
+            "can_resolve_speakers": can_resolve_speakers_task(task),
         },
         options=task.options,
         transcript_path=task.transcript_path,
@@ -781,6 +793,7 @@ def serialize_task_compact(
         capabilities={
             "can_restart_summary": can_restart_summary_task(task),
             "can_restart_final_summary": can_restart_final_summary_task(task),
+            "can_resolve_speakers": can_resolve_speakers_task(task),
         },
         failure_code=classify_failure_code(task.error_message),
         created_at=task.created_at,
