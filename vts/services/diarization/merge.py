@@ -245,6 +245,65 @@ def nearest_speaker(
     return nearest
 
 
+def speaker_shares(diar_segments: list[dict[str, Any]]) -> dict[str, float]:
+    """Per-speaker share of total DIARIZED time (0..1).
+
+    Uses diarization segment durations, NOT merged ASR-entry spans — a speaker
+    whose turns are many short interjections keeps its true share here, which is
+    the fix for vts-0ws (drop_marginal folded a real 13% speaker it measured as
+    3% by ASR-entry span).
+    """
+    totals: dict[str, float] = {}
+    for seg in diar_segments:
+        speaker = str(seg["speaker"])
+        totals[speaker] = totals.get(speaker, 0.0) + (float(seg["end"]) - float(seg["start"]))
+    overall = sum(totals.values())
+    if overall <= 0:
+        return {}
+    return {speaker: total / overall for speaker, total in totals.items()}
+
+
+def _cosine_distance(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 1.0
+    return 1.0 - dot / (na * nb)
+
+
+def auto_noise_labels(
+    shares: dict[str, float],
+    embeddings: dict[str, list[float]],
+    min_share: float,
+    max_distance: float,
+) -> set[str]:
+    """Labels auto-flagged as noise: low share AND acoustically close to a
+    LARGER-share speaker (echo / a real speaker's own cut voice).
+
+    A speaker with no embedding is never flagged (cannot prove it is noise); a
+    large-share speaker is never flagged no matter how close. "Larger" = strictly
+    greater share, so two equal-share speakers never fold into each other.
+    """
+    noise: set[str] = set()
+    for label, share in shares.items():
+        if share >= min_share:
+            continue
+        emb = embeddings.get(label)
+        if not emb:
+            continue
+        for other, other_share in shares.items():
+            if other == label or other_share <= share:
+                continue
+            other_emb = embeddings.get(other)
+            if not other_emb:
+                continue
+            if _cosine_distance(emb, other_emb) <= max_distance:
+                noise.add(label)
+                break
+    return noise
+
+
 def _glue_subwords(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Join subword tokens into whole words.
 

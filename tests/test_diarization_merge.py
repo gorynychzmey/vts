@@ -1,8 +1,10 @@
 from vts.pipeline.steps.transcription import trim_repetitive_edges
 from vts.services.diarization.merge import (
+    auto_noise_labels,
     merge_entries,
     nearest_speaker,
     speaker_at,
+    speaker_shares,
     split_entry_by_speaker,
     trim_repetitive_entries,
     usable_words,
@@ -485,3 +487,45 @@ def test_trim_repetitive_entries_no_repeats_is_noop() -> None:
     assert kept == entries
     assert meta["removed_head_sentences"] == 0
     assert meta["removed_tail_sentences"] == 0
+
+
+def test_speaker_shares_by_diarization_time():
+    segs = [
+        {"start": 0.0, "end": 10.0, "speaker": "A"},
+        {"start": 10.0, "end": 12.0, "speaker": "B"},
+        {"start": 12.0, "end": 20.0, "speaker": "A"},
+    ]
+    shares = speaker_shares(segs)
+    # A = 18s, B = 2s, total 20s
+    assert abs(shares["A"] - 0.9) < 1e-9
+    assert abs(shares["B"] - 0.1) < 1e-9
+
+
+def test_speaker_shares_empty():
+    assert speaker_shares([]) == {}
+
+
+def test_auto_noise_close_and_small_is_noise():
+    shares = {"A": 0.95, "B": 0.05}
+    # B is tiny AND its embedding is identical to A -> echo -> noise
+    emb = {"A": [1.0, 0.0], "B": [1.0, 0.0]}
+    assert auto_noise_labels(shares, emb, min_share=0.10, max_distance=0.25) == {"B"}
+
+
+def test_auto_noise_far_and_small_is_not_noise():
+    shares = {"A": 0.95, "B": 0.05}
+    # B is tiny but acoustically distinct from A (orthogonal -> cosine dist 1.0)
+    emb = {"A": [1.0, 0.0], "B": [0.0, 1.0]}
+    assert auto_noise_labels(shares, emb, min_share=0.10, max_distance=0.25) == set()
+
+
+def test_auto_noise_large_speaker_never_noise():
+    shares = {"A": 0.60, "B": 0.40}
+    emb = {"A": [1.0, 0.0], "B": [1.0, 0.0]}  # identical, but B is large-share
+    assert auto_noise_labels(shares, emb, min_share=0.10, max_distance=0.25) == set()
+
+
+def test_auto_noise_no_embedding_never_noise():
+    shares = {"A": 0.95, "B": 0.05}
+    emb = {"A": [1.0, 0.0]}  # B has no embedding
+    assert auto_noise_labels(shares, emb, min_share=0.10, max_distance=0.25) == set()
