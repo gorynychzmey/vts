@@ -56,23 +56,49 @@ phantoms with one click) instead of a silent over-merge.
   manually.
 - **Auto mode (`speaker_no_manual_stop`, no operator):** render reads noise from
   the auto-suggestion in `speaker_matches.json` (no decisions exist).
+- **Editing bindings/noise on a COMPLETED task is in scope.** The voice-resolution
+  dialog opens on `completed` (not only `awaiting_input`), and saving re-renders
+  the raw transcript immediately.
+- **Re-render is triggered by the resolve SAVE, not by DAG traversal.** A shared
+  render function is called from the `resolve` endpoint, so it works identically
+  for a paused task (continue) and a completed task (edit-in-place).
+- **Summary is refreshed manually** via the existing "restart summary" button —
+  saving bindings/noise does NOT auto-restart the summary (no unprompted LLM
+  cost). `can_restart_summary_task` already permits `completed`, and the summary
+  path already reads bindings live; it gains the noise filter.
 
 ## Architecture
 
-DAG (unchanged head; one new step after `match_speakers`):
+The DAG is unchanged. Re-rendering is **event-driven** (triggered by the resolve
+save), not a pipeline step — that is the only way it can serve BOTH a paused
+task and an already-completed task with one mechanism.
 
 ```
-diarize → merge_transcript → prepare_llama_model → match_speakers
-        → render_named_transcript → prepare_summary_chunks → summarize...
+diarize → merge_transcript → prepare_llama_model → match_speakers → summarize...
+                (renders all speakers, no fold)         (pauses for dialog)
+
+resolve save (endpoint)  ──►  rerender_transcript(task)   [always, sync]
+                         ──►  re-queue pipeline           [only if continue_task]
 ```
 
 Two rendering moments consume noise, via one shared source-of-truth resolver:
 
-- **Raw transcript** — rendered by `merge_transcript` BEFORE the dialog (all
-  speakers, no fold), then re-rendered by the new `render_named_transcript`
-  step AFTER `match_speakers` to drop noise labels and substitute bound names.
-- **Summary** — `summarization` already reads `speaker_names_for_task` live,
-  after resolution; it also reads noise there and filters entries.
+- **Raw transcript** — first rendered by `merge_transcript` BEFORE the dialog
+  (all speakers, no fold). Then `rerender_transcript(task)` — called from the
+  `resolve` endpoint on EVERY save — re-renders it, dropping noise labels and
+  substituting bound names. This runs whether the task is `awaiting_input`
+  (then continues down the DAG) or `completed` (edit-in-place; no re-queue).
+- **Summary** — `summarization` already reads `speaker_names_for_task` live and
+  gains the noise filter. It is regenerated only when the user hits "restart
+  summary" (not automatically on save), so saved bindings/noise reach the
+  summary on the next explicit restart.
+
+### Re-render trigger by task status
+
+| Task status at save | `continue_task` | rerender_transcript | re-queue DAG | summary |
+|---|---|---|---|---|
+| `awaiting_input` | true | yes (sync) | yes | rebuilt as DAG continues |
+| `completed` | false | yes (sync) | no | stale until manual "restart summary" |
 
 ### Noise source resolver
 
@@ -87,7 +113,7 @@ noise_labels_for_task(task_id) -> set[str]:
       return {label for label where speaker_matches.json[label].noise}
 ```
 
-Both `render_named_transcript` and the summary path call this, so raw and
+Both `rerender_transcript` and the summary path call this, so raw and
 summary never disagree.
 
 ## Components
@@ -124,28 +150,44 @@ pairwise distance ≥0.54 (>0.25) → nothing folds. Bug fixed structurally.
 passes `min_share=0.0` (with which the function is a no-op). The function and
 its unit tests remain for possible reuse.
 
-### 3. New step `render_named_transcript`
+### 3. Re-render function `rerender_transcript(task, session)`
 
-- Runs after `match_speakers`.
+A plain function (NOT a DAG step), so it can run both mid-pipeline and on a
+completed task from the same call site.
+
 - Reads `transcript.json` entries (they already carry per-entry `speaker`),
   `speaker_names_for_task`, and `noise_labels_for_task`.
 - Re-renders `transcript.json` + `transcript.txt` excluding noise-labelled
   entries and substituting registry names (via `render_cleaned_transcript` /
   `label_map`, the same renderer merge uses).
-- `already_done`: the current render already reflects the current
-  names+noise decisions (track via a small marker or a decisions/render hash),
-  so a resume that changes nothing is a no-op. Closes the existing gap where
-  bound names never reached the RAW transcript tab.
+- Idempotent — safe to call on every save; the same inputs produce the same
+  output. No `already_done` bookkeeping needed since it is called explicitly,
+  not scheduled.
+- Called from the `resolve` endpoint after decisions are committed.
+- Empty-guard: if every speaker is noise, fall back to rendering all and log a
+  warning rather than emit an empty transcript.
+- Closes the existing gap where bound names never reached the RAW transcript tab.
 
 ### 4. API
 
 - `SpeakerMatchOut`: add `noise: bool`, `share: float`.
 - `VoiceResolution`: add `is_noise: bool = False`.
 - `record_decision(...)`: add `is_noise` param → persisted on the row.
+- `resolve` endpoint: after committing decisions, call `rerender_transcript`.
+  Remove/relax any implicit assumption that the task is `awaiting_input` — a
+  `completed` task saving edits must succeed with `continue_task=false` and
+  NOT be re-queued (it stays `completed`; only the raw transcript changes).
+- `GET /speaker-matches` must work on a `completed` task (it already reads the
+  static `speaker_matches.json`, so no status gate to add — just verify).
 - No new endpoints.
 
 ### 5. Frontend (voice-resolution dialog, `app.js`)
 
+- **Show the resolve-voices button on `completed` too.** Currently gated on
+  `needsInput(status) && awaitingStep === "match_speakers"`. Extend to also show
+  when `status === "completed"` AND diarization ran (speaker-matches available).
+  On a completed task the primary button reads "Save" (not "Save & continue")
+  and sends `continue_task=false`.
 - **Noise checkbox** per speaker row, pre-filled from `row.noise`. Checked →
   row dimmed (its turns won't reach the output); binding controls stay usable
   (a person can still be bound; unchecking restores). Included in the row's
@@ -156,6 +198,9 @@ its unit tests remain for possible reuse.
   operator sees the basis for a noise suggestion.
 - **Auto hint:** when `noise` was auto-set, a small "auto: looks like
   noise/echo" note. New i18n keys in en/ru/de.
+- After a save on a completed task, the summary is now stale w.r.t. the new
+  bindings/noise; the existing "restart summary" button remains the way to
+  regenerate it. (No new UI; just document the flow.)
 
 ## Error handling / edge cases
 
@@ -175,16 +220,23 @@ Backend (pytest, real Postgres):
 2. **Auto-noise unit:** close+small→noise; far+small→not; close+large→not;
    no-embedding→not.
 3. **Share unit:** computed from diarization segments, not ASR-entry spans.
-4. **`render_named_transcript`:** excludes noise labels, substitutes names,
-   `already_done` correct, empty-guard fallback.
+4. **`rerender_transcript`:** excludes noise labels, substitutes names,
+   idempotent (second call same output), empty-guard fallback.
 5. **Summary excludes noise:** noise-speaker entries never reach the chunks.
-6. **API:** `resolve` with `is_noise=true` persists the decision;
-   `speaker-matches` returns `noise`+`share`.
+6. **API — resolve/paused:** `resolve` on `awaiting_input` with `is_noise=true`
+   persists the decision, re-renders the raw transcript (noise dropped), and
+   re-queues.
+7. **API — resolve/completed:** `resolve` on a `completed` task with
+   `continue_task=false` persists new decisions, re-renders the raw transcript,
+   leaves status `completed`, and does NOT re-queue. `speaker-matches` returns
+   `noise`+`share` for a completed task.
 
 Frontend (verifier-web):
 
-7. Noise checkbox present, pre-filled from stub `noise:true`; rows sorted by
+8. Noise checkbox present, pre-filled from stub `noise:true`; rows sorted by
    share; share shown; toggling changes dirty state and the resolve payload.
+9. Resolve-voices button visible on a `completed` diarized task; primary button
+   reads "Save" and sends `continue_task=false`.
 
 ## Out of scope
 
