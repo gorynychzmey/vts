@@ -984,3 +984,61 @@ async def test_speaker_matches_enriched_with_decisions_and_display_labels(
     # Bug #2: display labels number by appearance in the transcript.
     assert body["SPEAKER_01"]["display_label"] == "Голос 1"
     assert body["SPEAKER_00"]["display_label"] == "Голос 2"
+
+
+@pytest.mark.asyncio
+async def test_speaker_matches_candidate_names_reflect_registry_rename(
+    client, authed_app, tmp_path
+):
+    # A candidate name is frozen into speaker_matches.json at match time. If the
+    # person is renamed in the registry afterwards, the reopened voice dialog
+    # must show the CURRENT name, not the stale one — get_speaker_matches
+    # reconciles candidate[].name against the live Speaker.name.
+    import json as _json
+    from vts.db.models import StepStatus, TaskStatus
+    from vts.db.repo import Repo
+
+    app, factory = authed_app
+    _ = app
+    task_id = uuid.uuid4()
+    outputs = tmp_path / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+
+    async with factory() as session:
+        repo = Repo(session)
+        await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/rename",
+            options={"diarize": True, "language": "ru"},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        step = await repo.upsert_step(task_id, "match_speakers")
+        await repo.set_step_status(step, StepStatus.completed)
+        person = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Старое Имя")
+        person_id = str(person.id)
+        await session.commit()
+
+    # speaker_matches.json froze the OLD name into the candidate list.
+    matches = {
+        "SPEAKER_00": {
+            "outcome": "auto", "speaker_id": person_id, "distance": 0.1,
+            "share": 1.0, "seconds": 60.0, "noise": False,
+            "candidates": [{"speaker_id": person_id, "name": "Старое Имя", "distance": 0.1}],
+        },
+    }
+    (outputs / "speaker_matches.json").write_text(_json.dumps(matches), encoding="utf-8")
+
+    # Operator renames the person in the registry after the match ran.
+    async with factory() as session:
+        repo = Repo(session)
+        await repo.rename_speaker(uuid.UUID(_TEST_USER_ID), person.id, "Новое Имя")
+        await session.commit()
+
+    r = await client.get(f"/api/tasks/{task_id}/speaker-matches")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    cand = body["SPEAKER_00"]["candidates"][0]
+    assert cand["name"] == "Новое Имя"
+    # The id is unchanged — only the rendered name tracks the rename.
+    assert cand["speaker_id"] == person_id

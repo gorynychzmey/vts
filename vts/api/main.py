@@ -2577,9 +2577,25 @@ def create_app() -> FastAPI:
         ordering_entries = _speaker_ordering_entries(outputs, matches)
         display = label_map(ordering_entries, speaker_label_word(language))
 
+        # Candidate names were frozen into speaker_matches.json at match time, so
+        # a person renamed since then would render under the stale name. Reconcile
+        # each candidate against the live registry (as decided_name already is),
+        # so the dialog always shows the current name. A candidate whose person
+        # was deleted is dropped from the live map and keeps its stored name.
+        live_names = {
+            str(speaker.id): speaker.name
+            for speaker in await repo.list_speakers(uuid.UUID(user.id))
+        }
+
         for label, entry in matches.items():
             if not isinstance(entry, dict):
                 continue
+            for candidate in entry.get("candidates") or []:
+                if not isinstance(candidate, dict):
+                    continue
+                current = live_names.get(str(candidate.get("speaker_id")))
+                if current is not None:
+                    candidate["name"] = current
             decision = decisions.get(label)
             entry["decided_speaker_id"] = decision["speaker_id"] if decision else None
             entry["decided_name"] = decision["name"] if decision else None
