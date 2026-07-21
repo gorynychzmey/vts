@@ -253,6 +253,15 @@ def _reset_summary_artifacts(task: Task) -> None:
     for path in (
         summary_dir / "chunks.json",
         summary_dir / "windows.json",
+        # A full re-summarize regenerates the window summaries, so the packed
+        # notes derived from them are stale. Leaving this file makes
+        # PackWindowNotesStep.already_done() short-circuit on it and the final
+        # step feed the OLD packed text to the LLM — e.g. a speaker renamed
+        # after the first run reappears under the old name in the final summary
+        # even though the transcript, window summaries and persons list are all
+        # fresh (vts-6b4). final_only keeps it on purpose (see
+        # _reset_final_summary_artifacts): the window summaries did not change.
+        summary_dir / "packed_notes.json",
         summary_dir / "final.json",
         summary_dir / "final.md",
         outputs_dir / "llama_model_ready.json",

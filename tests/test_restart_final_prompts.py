@@ -188,6 +188,53 @@ async def test_restart_downgrades_stale_summary_result_entry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["final_only", "full"])
+async def test_restart_summary_clears_packed_notes_only_on_full(
+    mode, client, authed_app, tmp_path
+):
+    """vts-6b4: a FULL re-summarize regenerates the window summaries, so the
+    packed notes (summary/packed_notes.json) — the exact text the final step
+    feeds the LLM — are stale and must be deleted, else PackWindowNotesStep sees
+    the old file, short-circuits (already_done), and the final summary keeps the
+    pre-rename speaker name. mode=final_only reuses the packed notes on purpose
+    (window summaries did not change), so it must NOT delete them."""
+    app, factory = authed_app
+    app.state.redis = _FakeRedis()
+    from vts.db.models import Task, TaskStatus, Step, StepStatus
+
+    async with factory() as s:
+        uid = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+        art = tmp_path / f"packed-{mode}"
+        (art / "summary").mkdir(parents=True)
+        packed = art / "summary" / "packed_notes.json"
+        packed.write_text('{"notes": ["stale note with old name"], "packing_triggered": false}')
+        (art / "summary" / "final.md").write_text("old")
+        task = Task(
+            id=uuid.uuid4(), user_id=uid, source_url="x", artifact_dir=str(art),
+            status=TaskStatus.completed,
+            summary_path=str(art / "summary" / "final.md"),
+            options={"prompts": [{"source": "system", "id": "summary"}],
+                     "prompt_results": [
+                         {"source": "system", "id": "summary", "name": "S",
+                          "path": str(art / "summary" / "final.md"), "status": "completed"}]},
+        )
+        s.add(task)
+        for name in ["download", "merge_transcript", "summarize_windows",
+                     "pack_window_notes", "summarize_final"]:
+            s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
+        await s.commit()
+        task_id = str(task.id)
+
+    resp = await client.post(f"/api/tasks/{task_id}/restart_summary", json={"mode": mode})
+    assert resp.status_code == 200
+
+    if mode == "full":
+        assert not packed.exists(), "full re-summarize must delete stale packed_notes.json"
+    else:
+        assert packed.exists(), "final_only must keep packed_notes.json (window summaries unchanged)"
+
+
+@pytest.mark.asyncio
 async def test_two_finalize_results_both_persist(authed_app, tmp_path):
     """Regression (vts-jal): a task that finalizes two prompts (system summary +
     one user prompt) must end with BOTH entries in options.prompt_results.
