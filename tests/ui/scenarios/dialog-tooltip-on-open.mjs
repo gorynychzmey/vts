@@ -51,38 +51,6 @@ async function tooltipOpacity(page, sel) {
   }, sel);
 }
 
-// worst clip overflow (px) of the ::after bubble against any clipping ancestor.
-async function bubbleClip(page, sel) {
-  return page.evaluate((s) => {
-    const el = document.querySelector(s);
-    if (!el) return null;
-    const style = getComputedStyle(el, "::after");
-    const box = el.getBoundingClientRect();
-    const w = parseFloat(style.width) || 0;
-    const h = parseFloat(style.height) || 0;
-    if (!w || !h) return { measured: false };
-    let worst = 0;
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      const ps = getComputedStyle(p);
-      const clips = ["hidden", "auto", "scroll", "clip"].some(
-        (v) => ps.overflowX === v || ps.overflowY === v
-      );
-      if (!clips) continue;
-      const pr = p.getBoundingClientRect();
-      const left = box.left + box.width / 2 - w / 2;
-      const right = left + w;
-      const top = box.top - h;
-      const worstHere = Math.max(
-        Math.max(0, pr.left - left),
-        Math.max(0, right - pr.right),
-        ps.overflowY === "visible" ? 0 : Math.max(0, pr.top - top)
-      );
-      if (worstHere > worst) worst = worstHere;
-    }
-    return { measured: true, overflow: worst };
-  }, sel);
-}
-
 export async function run() {
   const { server, baseUrl } = await startStubServer({
     "/api/status-config": { status_flags: FLAGS },
@@ -151,12 +119,65 @@ export async function run() {
         `it should not appear until the user actually hovers/keyboard-focuses it`
       );
     }
-    // 2. Whatever the bubble geometry, it must not be clipped by the dialog edge.
-    const clip = await bubbleClip(page, closeSel);
-    if (clip && clip.measured && clip.overflow > 1) {
-      failures.push(
-        `close-button tooltip bubble is clipped by ${Math.round(clip.overflow)}px at the dialog boundary`
-      );
+    // 2. The close button's tooltip must render DOWNWARD (into the dialog body),
+    // not upward past the dialog's top edge where a max-height dialog clips it.
+    // Read the rendered ::after anchoring: below means bottom:auto + a real top.
+    const anchor = await page.evaluate((s) => {
+      const el = document.querySelector(s);
+      if (!el) return "missing";
+      const cs = getComputedStyle(el, "::after");
+      return { bottom: cs.bottom, top: cs.top };
+    }, closeSel);
+    if (anchor === "missing") {
+      failures.push("voice close button not found");
+    } else {
+      // Below-anchoring sets `top: calc(100% + gap)` — a POSITIVE used top (the
+      // bubble starts below the button's bottom). Above-anchoring leaves top:auto
+      // (computed as a negative used value, the bubble sitting above). getComputed
+      // returns a px for both, so key off the sign of top rather than "auto".
+      const topPx = parseFloat(anchor.top);
+      if (!(topPx > 0)) {
+        failures.push(
+          `dialog close button's tooltip is anchored above (top=${anchor.top}) — ` +
+          "an upward bubble is clipped at the dialog's top edge; it must render below"
+        );
+      }
+    }
+
+    // 3. The Save / Save-and-continue buttons carry an explanatory tooltip.
+    for (const id of ["#voice-save", "#voice-save-continue"]) {
+      const hasTip = await page.evaluate((s) => {
+        const el = document.querySelector(s);
+        return el ? (el.getAttribute("data-tooltip") || "").trim().length > 0 : "missing";
+      }, id);
+      if (hasTip === "missing") {
+        failures.push(`${id} not found in the voice dialog`);
+      } else if (!hasTip) {
+        failures.push(`${id} has no explanatory data-tooltip`);
+      }
+    }
+
+    // 4. Stuck tooltip (screenshot bug): closing a dialog returns focus to the
+    // TRIGGER button, and :focus reveals the tooltip — so the trigger's tooltip
+    // hung after the dialog closed. Reproduce the exact screenshot path with a
+    // stable toolbar button (the prompts button): open its dialog by MOUSE and
+    // close it by MOUSE (a keyboard close is :focus-visible and legitimately
+    // shows the tooltip — the bug is the pointer path), then assert not stuck.
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const promptsSel = "#prompts-btn";
+    if (await page.$(promptsSel)) {
+      await clickReal(page, promptsSel);
+      await page.waitForTimeout(300);
+      await clickReal(page, "#prompts-close-btn");
+      await page.waitForTimeout(800); // past the show-delay, so a stuck :focus would show
+      const stuck = await tooltipOpacity(page, promptsSel);
+      if (stuck !== null && stuck > 0.01) {
+        failures.push(
+          `toolbar button tooltip is stuck visible (opacity ${stuck}) after its dialog closed — ` +
+          `focus returned to the trigger and :focus kept the tooltip up`
+        );
+      }
     }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));

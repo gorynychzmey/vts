@@ -586,6 +586,15 @@ input[type="file"] {
   bottom: auto;
   top: calc(100% + 0.35rem);
 }
+/* Tooltips on the buttons in a dialog header (the ✕ close button, help toggles)
+   sit at the very top of a max-height flex dialog: an upward bubble spills past
+   the dialog's top edge and is clipped by its overflow. Anchor these downward,
+   into the dialog body, where there is always room. Covers every dialog's close
+   button in one place — no need to tag each button in the HTML. */
+.tokens-dialog-header [data-tooltip]::after {
+  bottom: auto;
+  top: calc(100% + 0.35rem);
+}
 /* :focus (not only :focus-visible) is deliberate — on touch there is no hover,
    so a tap focuses the button and that is the only way to reveal its tooltip.
    The flip side (showModal() autofocusing a dialog's close button fires its
