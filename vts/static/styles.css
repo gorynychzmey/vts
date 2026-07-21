@@ -540,7 +540,10 @@ input[type="file"] {
   border-radius: 6px;
   opacity: 0;
   pointer-events: none;
+  /* No delay on the way OUT (hide immediately when the pointer leaves); the
+     show-delay lives on the trigger rule below. */
   transition: opacity 0.12s ease;
+  transition-delay: 0s;
   z-index: 50;
 }
 /* Right-aligned action buttons: a centred bubble on the last button still
@@ -583,11 +586,19 @@ input[type="file"] {
   bottom: auto;
   top: calc(100% + 0.35rem);
 }
+/* :focus (not only :focus-visible) is deliberate — on touch there is no hover,
+   so a tap focuses the button and that is the only way to reveal its tooltip.
+   The flip side (showModal() autofocusing a dialog's close button fires its
+   tooltip on open) is handled where the dialog opens, by blurring that button,
+   not by dropping :focus here. */
 [data-tooltip]:hover::after,
 [data-tooltip]:focus::after,
 [data-tooltip]:focus-visible::after,
 [data-tooltip]:active::after {
   opacity: 1;
+  /* Dwell before showing, so tooltips don't flash the moment the pointer sweeps
+     across a button. No delay on hide (base rule) — leaving is instant. */
+  transition-delay: 0.5s;
 }
 
 .submit-progress {

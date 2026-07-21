@@ -3307,6 +3307,43 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// Opening a <dialog> via showModal() autofocuses its first control — usually the
+// ✕ close button. Because a tooltip reveals on :focus (deliberately, so touch
+// taps, which have no hover, can still show it), that autofocus fired the close
+// button's tooltip the instant the dialog opened, clipped at the dialog's top
+// edge. Suppress ONLY that open-time autofocus flash: wrap showModal to mark a
+// one-frame window, and during it blur a freshly-autofocused tooltip button. A
+// later touch tap on the same button falls outside the window, so its tooltip
+// still works; keyboard focus (:focus-visible) is left alone regardless.
+let dialogJustOpenedUntil = 0;
+if (typeof HTMLDialogElement !== "undefined" && HTMLDialogElement.prototype.showModal) {
+  const nativeShowModal = HTMLDialogElement.prototype.showModal;
+  HTMLDialogElement.prototype.showModal = function patchedShowModal(...args) {
+    // performance.now avoids Date.now; the window is cleared on the next frame,
+    // so only the synchronous open-time autofocus falls inside it.
+    dialogJustOpenedUntil = performance.now() + 100;
+    requestAnimationFrame(() => { dialogJustOpenedUntil = 0; });
+    return nativeShowModal.apply(this, args);
+  };
+}
+document.addEventListener("focusin", (event) => {
+  if (performance.now() > dialogJustOpenedUntil) return;
+  const el = event.target;
+  if (!(el instanceof HTMLElement)) return;
+  if (!el.hasAttribute("data-tooltip")) return;
+  if (!el.closest("dialog[open]")) return;
+  let focusVisible = false;
+  try {
+    focusVisible = el.matches(":focus-visible");
+  } catch {
+    // :focus-visible unsupported — treat as keyboard focus and leave it be.
+    return;
+  }
+  if (!focusVisible) {
+    el.blur();
+  }
+});
+
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
 document.getElementById("file-input")?.addEventListener("change", clearTaskFormError);

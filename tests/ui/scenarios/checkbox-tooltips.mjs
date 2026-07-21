@@ -69,7 +69,9 @@ export async function run() {
     if (style.whiteSpace === "nowrap") failures.push("bubble is nowrap — long text will overflow and clip");
     if (style.rest !== "0") failures.push(`bubble should be hidden at rest, opacity=${style.rest}`);
     await page.hover(AUDIO_PILL);
-    await page.waitForTimeout(200);
+    // Tooltips have a ~0.5s show-delay (so a sweeping pointer doesn't flash
+    // them); wait past it plus the fade before asserting the revealed state.
+    await page.waitForTimeout(800);
     const shown = await page.evaluate((s) => getComputedStyle(document.querySelector(s), "::after").opacity, AUDIO_PILL);
     if (shown !== "1") failures.push(`bubble did not reveal on hover, opacity=${shown}`);
     await page.mouse.move(0, 0);

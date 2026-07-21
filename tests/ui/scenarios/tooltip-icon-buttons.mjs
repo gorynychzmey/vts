@@ -40,18 +40,21 @@ async function checkDialog(page, listSelector, label) {
   const rest = await afterOpacity(page, sel);
   if (rest !== "0") failures.push(`${label}: ::after opacity at rest expected "0", got "${rest}"`);
 
-  // Hover (desktop path). The opacity transition (0.12s) may be mid-flight,
-  // so assert "visible" (> 0.5) rather than exactly "1" to avoid a race.
+  // Hover (desktop path). Tooltips now have a ~0.5s show-delay, so wait past it
+  // (plus the 0.12s fade) before asserting; assert "visible" (> 0.5) rather than
+  // exactly "1" to avoid a fade-race.
   await page.hover(sel);
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(800);
   const hov = await afterOpacity(page, sel);
   if (parseFloat(hov) <= 0.5) failures.push(`${label}: ::after not visible on hover (opacity "${hov}")`);
 
-  // Move away, then focus (touch-tap path — buttons get focus on tap).
+  // Move away, then focus (touch-tap path — buttons get focus on tap). This is a
+  // later, user-initiated focus (well outside the dialog-open window), so the
+  // open-time autofocus blur must NOT apply here. Wait past the show-delay too.
   await page.mouse.move(0, 0);
   await page.waitForTimeout(80);
   await page.$eval(sel, (b) => b.focus());
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(800);
   const foc = await afterOpacity(page, sel);
   if (parseFloat(foc) <= 0.5) failures.push(`${label}: ::after not visible on focus (opacity "${foc}")`);
 
