@@ -1244,6 +1244,21 @@ function resolveActiveStep(runtime) {
   if (runtime.baseStatus === "completed" && runtime.enabledSteps.length > 0) {
     return runtime.enabledSteps[runtime.enabledSteps.length - 1];
   }
+  // awaiting_input is a real STOP with every step that has run already finished,
+  // and no running step to point at. Like completed, it must NOT fall through to
+  // the download heuristic below (a leftover SSE download flag would resolve the
+  // label back to "download"/"extract_audio" — an early step — vts-h3u). Unlike
+  // completed it has NOT run its whole enabled list (it paused at match_speakers,
+  // which isn't even an enabled step), so resolve to the LAST FINISHED enabled
+  // step rather than the last enabled one, which could be a not-yet-run finalize.
+  if (statusPred.needsInput(runtime.baseStatus)) {
+    for (let i = runtime.enabledSteps.length - 1; i >= 0; i--) {
+      if (isStepFinishedStatus(runtime.stepStatusByName[runtime.enabledSteps[i]] || "")) {
+        return runtime.enabledSteps[i];
+      }
+    }
+    return "";
+  }
   if (runtime.currentStepName && runtime.enabledSteps.includes(runtime.currentStepName)) {
     return runtime.currentStepName;
   }

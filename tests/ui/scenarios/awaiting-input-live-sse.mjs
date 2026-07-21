@@ -69,9 +69,20 @@ const RUNNING_TASK = {
   status: "running", awaiting_step: null, queue: null, queue_position: null,
   transcript_path: null, summary_path: null,
   options: { transcript: true, diarize: true, prompts: [] },
+  // A task paused at match_speakers has already finished the whole transcript
+  // head (download..merge_transcript). Listing them makes the step-label check
+  // (defect 4) realistic: the last finished step is merge_transcript, the 8th
+  // and last enabled step for a diarize-only (no-prompts) task.
   steps: [
-    { name: "diarize", status: "completed", started_at: "2026-07-19T10:00:00Z", finished_at: "2026-07-19T10:01:00Z" },
-    { name: "match_speakers", status: "running", started_at: "2026-07-19T10:01:00Z", finished_at: null },
+    { name: "download", status: "completed", started_at: "2026-07-19T10:00:00Z", finished_at: "2026-07-19T10:00:10Z" },
+    { name: "extract_audio", status: "completed", started_at: "2026-07-19T10:00:10Z", finished_at: "2026-07-19T10:00:20Z" },
+    { name: "trim_initial_silence", status: "completed", started_at: "2026-07-19T10:00:20Z", finished_at: "2026-07-19T10:00:25Z" },
+    { name: "segment_audio", status: "completed", started_at: "2026-07-19T10:00:25Z", finished_at: "2026-07-19T10:00:30Z" },
+    { name: "detect_language", status: "completed", started_at: "2026-07-19T10:00:30Z", finished_at: "2026-07-19T10:00:35Z" },
+    { name: "transcribe_segments", status: "completed", started_at: "2026-07-19T10:00:35Z", finished_at: "2026-07-19T10:00:55Z" },
+    { name: "diarize", status: "completed", started_at: "2026-07-19T10:00:55Z", finished_at: "2026-07-19T10:01:00Z" },
+    { name: "merge_transcript", status: "completed", started_at: "2026-07-19T10:01:00Z", finished_at: "2026-07-19T10:01:02Z" },
+    { name: "match_speakers", status: "running", started_at: "2026-07-19T10:01:02Z", finished_at: null },
   ],
   capabilities: { can_restart_summary: false, can_restart_final_summary: false },
   created_at: "2026-07-19T10:00:00Z", updated_at: "2026-07-19T10:01:00Z",
@@ -182,6 +193,44 @@ export async function run() {
     }, TASK_ID);
     if (prog && prog.indeterminate) {
       failures.push("local progress shows an indeterminate 'working' runner while awaiting_input (should be idle)");
+    }
+
+    // 4. Step label must not snap back to an early step (vts-h3u). Like the
+    // completed case (vts-ovn), resolveActiveStep fell through to the download
+    // heuristic (a leftover SSE download flag) for awaiting_input, so the label
+    // read "step 1/2 of N" — an early pipeline step — instead of the last step
+    // that actually ran. Reproduce the leftover flag, then sample the label
+    // across the ticker window and assert the worst index is the last step.
+    await page.evaluate((i) => {
+      const el = document.querySelector(`[data-task-id="${i}"]`);
+      if (el && el._runtime) el._runtime.download.hasVideo = true;
+    }, TASK_ID);
+    const parseStepIndex = (text) => {
+      const nums = String(text || "").match(/\d+/g);
+      return nums && nums.length >= 2 ? { index: Number(nums[0]), total: Number(nums[1]) } : null;
+    };
+    let worstIndex = null;
+    let worstLabel = "";
+    let total = null;
+    for (let k = 0; k < 18; k++) {
+      await page.waitForTimeout(100);
+      const label = await page.evaluate((i) => {
+        const el = document.querySelector(`[data-task-id="${i}"] .step-label`);
+        return el ? el.textContent : "";
+      }, TASK_ID);
+      const parsed = parseStepIndex(label);
+      if (!parsed) continue;
+      total = parsed.total;
+      if (worstIndex === null || parsed.index < worstIndex) {
+        worstIndex = parsed.index;
+        worstLabel = label;
+      }
+    }
+    if (worstIndex !== null && total !== null && worstIndex !== total) {
+      failures.push(
+        `awaiting_input task showed step ${worstIndex} of ${total} in the step label; ` +
+        `expected the last completed step (${total} of ${total}). Worst label: ${JSON.stringify(worstLabel)}`
+      );
     }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));
