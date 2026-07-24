@@ -321,6 +321,9 @@
           <div class="task-main">
             <div class="task-title-row">
               <a class="task-link" target="_blank" rel="noopener noreferrer"></a>
+              <a class="icon-btn ghost task-player-btn hidden" target="_blank" rel="noopener" data-i18n-title="tasks.open_player" data-i18n-aria-label="tasks.open_player">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+              </a>
               <span class="task-expired hidden" data-i18n="tasks.media_expired_badge" data-i18n-title="tasks.media_expired_tooltip"></span>
               <button class="icon-btn ghost task-edit-name-btn" type="button" data-i18n-title="action.edit_name" data-i18n-aria-label="action.edit_name">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>
@@ -335,7 +338,7 @@
                 </button>
               </span>
             </div>
-            <div class="task-source mono hidden"></div>
+            <a class="task-source mono hidden"></a>
             <button class="task-stats task-stats-chip hidden" type="button"
                     data-i18n-title="about.open" data-i18n-aria-label="about.open">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
@@ -722,7 +725,7 @@
       <section class="about-source">
         <h3 data-i18n="about.section_source">Source</h3>
         <a class="about-source-title task-link" target="_blank" rel="noopener noreferrer"></a>
-        <div class="about-source-url mono"></div>
+        <a class="about-source-url task-source mono"></a>
         <div class="about-grid">
           <div class="about-row">
             <span class="about-label" data-i18n="about.created">Created</span>

@@ -280,6 +280,13 @@ function parseIsoMs(value) {
   return Number.isFinite(ts) ? ts : null;
 }
 
+// Only http(s) URLs are safe to assign as an anchor href. Guards against a
+// task whose source_url is e.g. "javascript:..." producing a clickable title
+// that runs script in the user's own session (vts-dcc self-XSS).
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+
 function buildPath(path) {
   const url = new URL(path, window.location.origin);
   if (state.actingAs) {
@@ -1090,31 +1097,33 @@ function renderTaskAboutDialog(task) {
   const runtime = { stats: parseTaskStats(task), baseStatus: String(task.status || "") };
   const q = (sel) => taskAboutDialog.querySelector(sel);
 
-  // Title as a clickable link, mirroring the card's .task-link behavior:
-  // uploads link to the local player (or are unlinked when media expired),
-  // everything else links to its source URL.
+  // Title mirrors the card's .task-link behavior: the local player when media
+  // is available (uploads AND link tasks alike), unlinked otherwise. The
+  // original URL, when there is one, is the separate .about-source-url link.
   const sourceUrl = task.source_url || "";
   const isUpload = sourceUrl.startsWith("file://");
   const uploadName = isUpload ? sourceUrl.slice("file://".length) : "";
   const titleEl = q(".about-source-title");
   titleEl.textContent = task.source_title || (isUpload ? uploadName : sourceUrl);
   const mediaReady = Boolean(task.media_path);
-  const titleHref = isUpload
-    ? (mediaReady ? buildPath(`/player/${encodeURIComponent(task.id)}`) : "")
-    : sourceUrl;
-  if (titleHref) {
-    titleEl.href = titleHref;
-    if (isUpload) {
-      titleEl.target = "_blank";
-      titleEl.rel = "noopener";
-    } else {
-      titleEl.target = "_blank";
-      titleEl.rel = "noopener noreferrer";
-    }
+  if (mediaReady) {
+    titleEl.href = buildPath(`/player/${encodeURIComponent(task.id)}`);
+    titleEl.target = "_blank";
+    titleEl.rel = "noopener";
   } else {
     titleEl.removeAttribute("href");
   }
-  q(".about-source-url").textContent = sourceUrl;
+  const sourceUrlEl = q(".about-source-url");
+  // Original url: plain text for uploads (file://…), a real link for http(s)
+  // sources. isHttpUrl guards against javascript:/data: hrefs (vts-dcc).
+  sourceUrlEl.textContent = isUpload ? uploadName : sourceUrl;
+  if (isHttpUrl(sourceUrl)) {
+    sourceUrlEl.href = sourceUrl;
+    sourceUrlEl.target = "_blank";
+    sourceUrlEl.rel = "noopener noreferrer";
+  } else {
+    sourceUrlEl.removeAttribute("href");
+  }
   q(".about-created").textContent = task.created_at
     ? new Date(task.created_at).toLocaleString()
     : "";
@@ -1579,30 +1588,63 @@ function renderTaskTitle(taskEl) {
   const hasName = Boolean(runtime.displayName);
   const isUpload = typeof runtime.sourceUrl === "string" && runtime.sourceUrl.startsWith("file://");
   const uploadName = isUpload ? runtime.sourceUrl.slice("file://".length) : "";
-  const uploadExpired = isUpload && !runtime.mediaReady;
-  const playerHref = isUpload ? buildPath(`/player/${encodeURIComponent(runtime.id)}`) : runtime.sourceUrl;
+  // Our local player works for uploads AND downloaded-by-link tasks alike:
+  // _find_media_file just checks for the media file on disk. When the media is
+  // gone (TTL / archive / not-yet-downloaded), there's nothing to play — the
+  // name goes unclickable + "expired", matching what uploads already did.
+  const mediaReady = Boolean(runtime.mediaReady);
+  const playerHref = buildPath(`/player/${encodeURIComponent(runtime.id)}`);
+
   elements.linkEl.textContent = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
-  if (uploadExpired) {
+  if (mediaReady) {
+    elements.linkEl.href = playerHref;
+    elements.linkEl.target = "_blank";
+    elements.linkEl.rel = "noopener";
+    elements.linkEl.classList.remove("expired");
+  } else {
     elements.linkEl.removeAttribute("href");
     elements.linkEl.removeAttribute("target");
     elements.linkEl.removeAttribute("rel");
     elements.linkEl.classList.add("expired");
-  } else {
-    elements.linkEl.href = playerHref;
-    elements.linkEl.classList.remove("expired");
-    if (isUpload) {
-      elements.linkEl.target = "_blank";
-      elements.linkEl.rel = "noopener";
+  }
+
+  // Dedicated player affordance next to the title, so the player is
+  // discoverable rather than something you have to know exists (vts-at8).
+  if (elements.playerBtn) {
+    if (mediaReady) {
+      elements.playerBtn.href = playerHref;
+      elements.playerBtn.classList.remove("hidden");
     } else {
-      elements.linkEl.removeAttribute("target");
-      elements.linkEl.removeAttribute("rel");
+      elements.playerBtn.removeAttribute("href");
+      elements.playerBtn.classList.add("hidden");
     }
   }
+
   if (elements.expiredEl) {
-    elements.expiredEl.classList.toggle("hidden", !uploadExpired);
+    elements.expiredEl.classList.toggle("hidden", mediaReady);
   }
-  elements.sourceEl.textContent = isUpload ? uploadName : runtime.sourceUrl;
-  elements.sourceEl.classList.toggle("hidden", !hasName);
+
+  // The source line under the title: for link tasks, the ORIGINAL url as a
+  // real clickable link (shown always, so the original is always reachable
+  // even when the name now points at our player). For uploads there is no
+  // original url — show the filename as plain text, and only when a custom
+  // display name is set (otherwise the name IS the filename).
+  const sourceEl = elements.sourceEl;
+  if (isUpload) {
+    sourceEl.textContent = uploadName;
+    sourceEl.removeAttribute("href");
+    sourceEl.classList.toggle("hidden", !hasName);
+  } else {
+    sourceEl.textContent = runtime.sourceUrl;
+    if (isHttpUrl(runtime.sourceUrl)) {
+      sourceEl.href = runtime.sourceUrl;
+      sourceEl.target = "_blank";
+      sourceEl.rel = "noopener noreferrer";
+    } else {
+      sourceEl.removeAttribute("href");
+    }
+    sourceEl.classList.remove("hidden");
+  }
 }
 
 function renderTaskRuntime(taskEl) {
@@ -1909,6 +1951,7 @@ function renderTasks(tasks) {
 
     root._elements = {
       linkEl: root.querySelector(".task-link"),
+      playerBtn: root.querySelector(".task-player-btn"),
       expiredEl: root.querySelector(".task-expired"),
       sourceEl: root.querySelector(".task-source"),
       statsEl: root.querySelector(".task-stats"),
@@ -3241,6 +3284,18 @@ function connectEvents() {
   state.eventSource.addEventListener("segment_summary_text", (event) => {
     const payload = JSON.parse(event.data);
     appendRedactedSegment(payload.task_id, payload.data.text);
+  });
+  // Universal "transcript is whole again" signal (vts-at8): fired on first
+  // assembly (merge_transcript) AND on rerender after speaker resolve/save.
+  // Re-render the raw transcript in place if that tab is open — this is the
+  // path that keeps OTHER open tabs/sessions in sync; the resolve/save
+  // initiator also refreshes locally (idempotent, just faster for them).
+  state.eventSource.addEventListener("transcript_updated", (event) => {
+    const payload = JSON.parse(event.data);
+    const taskEl = findTaskEl(payload.task_id);
+    if (taskEl && getActiveTabName(taskEl) === "transcript") {
+      void loadTabContent(taskEl, payload.task_id, "transcript");
+    }
   });
   state.eventSource.onerror = () => {
     if (state.eventSource) {

@@ -733,6 +733,317 @@ def _find_media_file(artifact_dir: str | None) -> Path | None:
     return None
 
 
+def _load_transcript_entries(artifact_dir: str | None) -> list[dict[str, Any]]:
+    """Read outputs/transcript.json and return its `entries` list (each
+    {start, end, text, speaker}), or [] when absent/malformed. Powers the
+    clickable transcript on the /player page (vts-at8)."""
+    if not artifact_dir:
+        return []
+    path = Path(artifact_dir) / "outputs" / "transcript.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, dict)]
+
+
+def _format_timecode(seconds: float) -> str:
+    """Whole-second H:MM:SS / M:SS label for a transcript cue."""
+    total = max(0, int(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+# Media-unavailable message, per locale. The /player page is a self-contained
+# HTML document with no access to app.js's i18n, so it embeds these and picks
+# one client-side from navigator.language (vts-at8). Keep keys in sync with the
+# locales under vts/static/i18n/.
+_PLAYER_MEDIA_UNAVAILABLE_MSG = {
+    "en": "This media is no longer available.",
+    "ru": "Медиа более не доступно.",
+    "de": "Dieses Medium ist nicht mehr verfügbar.",
+}
+
+
+def _media_unavailable_block_html() -> str:
+    """The 'media is gone' state: a human-readable message (localized client-
+    side) in place of the player. Marked with data-media-unavailable so the
+    live SSE handler can swap the page into this state too."""
+    import json as _json
+
+    msgs = _json.dumps(_PLAYER_MEDIA_UNAVAILABLE_MSG, ensure_ascii=False)
+    default = _html.escape(_PLAYER_MEDIA_UNAVAILABLE_MSG["en"])
+    return (
+        f'<p class="media-unavailable" data-media-unavailable '
+        f"data-msgs='{msgs}'>{default}</p>"
+    )
+
+
+def _player_page_html(
+    *,
+    title: str,
+    media_tag: str | None,
+    entries: list[dict[str, Any]],
+    task_id: str | None = None,
+    as_user: str | None = None,
+) -> str:
+    """Self-contained /player page: the media element plus a clickable
+    transcript. Clicking a phrase seeks the player to that phrase's start
+    time (one-way transcript -> player, vts-at8 / VOS-111).
+
+    `media_tag` is a pre-built, already-escaped <video>/<audio> element, or
+    None when the media file is gone (TTL / archive / delete) — then a
+    localized 'media unavailable' message is shown in its place and the
+    transcript is omitted (nothing to seek).
+    Entry text is escaped here; start times drive the seek via data-start.
+    """
+    if media_tag is None:
+        media_block = _media_unavailable_block_html()
+        entries = []
+    else:
+        media_block = media_tag
+    rows: list[str] = []
+    for entry in entries:
+        try:
+            start = float(entry.get("start"))
+        except (TypeError, ValueError):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        speaker = str(entry.get("speaker") or "").strip()
+        speaker_html = (
+            f'<span class="cue-speaker">{_html.escape(speaker)}</span> '
+            if speaker
+            else ""
+        )
+        rows.append(
+            f'<li class="cue" data-start="{start}">'
+            f'<button type="button" class="cue-btn">'
+            f'<span class="cue-time">{_format_timecode(start)}</span> '
+            f"{speaker_html}"
+            f'<span class="cue-text">{_html.escape(text)}</span>'
+            f"</button></li>"
+        )
+    transcript_html = (
+        f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
+    )
+    # Live logic is only wired when we know which task the page is for. The
+    # page opens the shared SSE stream and reacts to this task's events:
+    #   transcript_updated -> re-fetch /transcript-entries and rebuild the list
+    #                         (covers first assembly AND rerender after resolve)
+    #   task_status canceled/deleted -> swap into the media-unavailable state
+    # Plus a <video>/<audio> error handler for media that vanishes mid-session.
+    import json as _json_live
+
+    live_script = ""
+    if task_id:
+        tid_js = _json_live.dumps(str(task_id))
+        as_user_js = _json_live.dumps(as_user or "")
+        msgs_js = _json_live.dumps(_PLAYER_MEDIA_UNAVAILABLE_MSG, ensure_ascii=False)
+        live_script = f"""
+  var TASK_ID = {tid_js};
+  var AS_USER = {as_user_js};
+  var MEDIA_MSGS = {msgs_js};
+
+  function localizedMsg(map) {{
+    var langs = (navigator.languages || [navigator.language || "en"]);
+    for (var i = 0; i < langs.length; i++) {{
+      var code = String(langs[i] || "").slice(0, 2).toLowerCase();
+      if (map[code]) return map[code];
+    }}
+    return map.en || "";
+  }}
+
+  function showMediaUnavailable() {{
+    var container = document.body;
+    var m = document.querySelector("video, audio");
+    if (m) m.remove();
+    var ol = document.querySelector(".transcript");
+    if (ol) ol.remove();
+    if (document.querySelector("[data-media-unavailable]")) return;
+    var p = document.createElement("p");
+    p.className = "media-unavailable";
+    p.setAttribute("data-media-unavailable", "");
+    p.textContent = localizedMsg(MEDIA_MSGS);
+    container.appendChild(p);
+  }}
+
+  function buildCue(entry) {{
+    var li = document.createElement("li");
+    li.className = "cue";
+    li.setAttribute("data-start", String(entry.start));
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cue-btn";
+    var timeSpan = document.createElement("span");
+    timeSpan.className = "cue-time";
+    var s = Math.max(0, Math.floor(Number(entry.start) || 0));
+    var hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    timeSpan.textContent = hh
+      ? hh + ":" + String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0")
+      : mm + ":" + String(ss).padStart(2, "0");
+    btn.appendChild(timeSpan);
+    btn.appendChild(document.createTextNode(" "));
+    if (entry.speaker) {{
+      var sp = document.createElement("span");
+      sp.className = "cue-speaker";
+      sp.textContent = String(entry.speaker);
+      btn.appendChild(sp);
+      btn.appendChild(document.createTextNode(" "));
+    }}
+    var txt = document.createElement("span");
+    txt.className = "cue-text";
+    txt.textContent = String(entry.text || "");
+    btn.appendChild(txt);
+    li.appendChild(btn);
+    return li;
+  }}
+
+  function rebuildTranscript(entries) {{
+    var media = document.querySelector("video, audio");
+    if (!media || !Array.isArray(entries) || !entries.length) return;
+    var ol = document.querySelector(".transcript");
+    if (!ol) {{
+      ol = document.createElement("ol");
+      ol.className = "transcript";
+      document.body.appendChild(ol);
+    }}
+    ol.innerHTML = "";
+    entries.forEach(function(entry) {{ ol.appendChild(buildCue(entry)); }});
+    wireCues(media);
+  }}
+
+  function refetchEntries() {{
+    var url = "/api/tasks/" + encodeURIComponent(TASK_ID) + "/transcript-entries";
+    if (AS_USER) url += "?as_user=" + encodeURIComponent(AS_USER);
+    fetch(url, {{ credentials: "same-origin" }})
+      .then(function(r) {{ return r.ok ? r.json() : null; }})
+      .then(function(data) {{ if (data && data.entries) rebuildTranscript(data.entries); }})
+      .catch(function() {{ /* transient; next event or reload recovers */ }});
+  }}
+
+  try {{
+    var es = new EventSource("/api/events", {{ withCredentials: false }});
+    es.addEventListener("transcript_updated", function(ev) {{
+      try {{
+        var p = JSON.parse(ev.data);
+        if (String(p.task_id) === TASK_ID) refetchEntries();
+      }} catch (e) {{}}
+    }});
+    es.addEventListener("task_status", function(ev) {{
+      try {{
+        var p = JSON.parse(ev.data);
+        if (String(p.task_id) !== TASK_ID) return;
+        var status = String((p.data && p.data.status) || "");
+        if (status === "canceled" || status === "archived" || status === "deleted") {{
+          showMediaUnavailable();
+        }}
+      }} catch (e) {{}}
+    }});
+  }} catch (e) {{ /* no SSE: page still works statically */ }}
+
+  var mediaEl = document.querySelector("video, audio");
+  if (mediaEl) {{
+    mediaEl.addEventListener("error", function() {{ showMediaUnavailable(); }});
+  }}
+"""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{_html.escape(title)}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body {{ margin: 0; padding: 0; background: #111; color: #ddd;
+    font-family: system-ui, sans-serif; min-height: 100vh; }}
+  body {{ display: flex; flex-direction: column; align-items: center;
+    padding: 1rem; box-sizing: border-box; }}
+  h1 {{ font-size: 1rem; font-weight: 400; margin: 0 0 1rem;
+    word-break: break-all; text-align: center; }}
+  video, audio {{ max-width: 100%; width: min(960px, 100%); }}
+  video {{ max-height: 60vh; background: #000; }}
+  .transcript {{ list-style: none; margin: 1rem 0 0; padding: 0;
+    width: min(960px, 100%); max-height: 40vh; overflow-y: auto; }}
+  .cue {{ margin: 0; }}
+  .cue-btn {{ display: block; width: 100%; text-align: left; cursor: pointer;
+    background: none; border: 0; color: inherit; font: inherit;
+    padding: 0.3rem 0.5rem; border-radius: 4px; }}
+  .cue-btn:hover {{ background: #222; }}
+  .cue.active .cue-btn {{ background: #2a3d55; }}
+  .cue-time {{ color: #7aa; font-variant-numeric: tabular-nums;
+    margin-right: 0.5rem; }}
+  .cue-speaker {{ color: #c99; }}
+  .media-unavailable {{ color: #ccc; font-size: 1.05rem; text-align: center;
+    margin: 3rem 1rem; }}
+</style>
+</head>
+<body>
+<h1>{_html.escape(title)}</h1>
+{media_block}
+{transcript_html}
+<script>
+(function() {{
+  // Localize the media-unavailable message client-side (the page has no
+  // access to app.js i18n). Runs whether or not media is present.
+  var mu = document.querySelector("[data-media-unavailable]");
+  if (mu) {{
+    try {{
+      var msgs = JSON.parse(mu.getAttribute("data-msgs") || "{{}}");
+      var langs = (navigator.languages || [navigator.language || "en"]);
+      for (var li = 0; li < langs.length; li++) {{
+        var code = String(langs[li] || "").slice(0, 2).toLowerCase();
+        if (msgs[code]) {{ mu.textContent = msgs[code]; break; }}
+      }}
+    }} catch (e) {{ /* keep the default English text */ }}
+  }}
+  // Wire seek-on-click + active-cue highlight. Re-queries .cue each call so it
+  // works after the transcript list is rebuilt from a transcript_updated event.
+  function wireCues(media) {{
+    if (!media) return;
+    var cues = Array.prototype.slice.call(document.querySelectorAll(".cue"));
+    cues.forEach(function(cue) {{
+      if (cue._wired) return;
+      cue._wired = true;
+      var start = parseFloat(cue.getAttribute("data-start"));
+      cue.querySelector(".cue-btn").addEventListener("click", function() {{
+        if (!isNaN(start)) {{ media.currentTime = start; media.play(); }}
+      }});
+    }});
+    if (media._cueHighlightWired) return;
+    media._cueHighlightWired = true;
+    var active = null;
+    media.addEventListener("timeupdate", function() {{
+      var all = document.querySelectorAll(".cue");
+      var t = media.currentTime, current = null;
+      for (var i = 0; i < all.length; i++) {{
+        if (parseFloat(all[i].getAttribute("data-start")) <= t) current = all[i];
+        else break;
+      }}
+      if (current !== active) {{
+        if (active) active.classList.remove("active");
+        if (current) current.classList.add("active");
+        active = current;
+      }}
+    }});
+  }}
+
+  var media = document.querySelector("video, audio");
+  wireCues(media);
+{live_script}
+}})();
+</script>
+</body>
+</html>"""
+
+
 def _media_seconds_for_file(media_file: Path) -> int | None:
     """Media (audio/video) length in whole seconds, probed via ffprobe.
 
@@ -2149,6 +2460,25 @@ def create_app() -> FastAPI:
         )
 
     @app.get(
+        "/api/tasks/{task_id}/transcript-entries",
+        include_in_schema=False,
+    )
+    async def get_transcript_entries(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> dict[str, Any]:
+        """Timecoded transcript entries [{start, end, text, speaker}] for the
+        /player page (vts-at8). Returns {"entries": []} (200, not 404) when the
+        transcript isn't ready yet, so the page can poll on transcript_updated
+        without special-casing the not-ready state."""
+        repo = Repo(session)
+        task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"entries": _load_transcript_entries(task.artifact_dir)}
+
+    @app.get(
         "/api/tasks/{task_id}/summary",
         responses={
             200: {
@@ -2302,18 +2632,32 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         media_file = _find_media_file(task.artifact_dir)
-        if media_file is None:
-            raise HTTPException(status_code=404, detail="Media file not available")
-        kind = media_kind(media_file)
+        # Propagate admin impersonation through the page: the media <src>, the
+        # SSE entries re-fetch, all must resolve as the same acting user.
+        acting_as = request.query_params.get("as_user")
         # source_url is "file://<name>" for uploads, an http URL otherwise;
         # in either case the last path segment is a sensible display name.
-        title = (task.source_url or "").rsplit("/", 1)[-1] or media_file.name
-        # Propagate admin impersonation: <video>/<audio> will fire its own
-        # request to /api/tasks/<id>/media, which must resolve to the same
-        # acting user as the page itself — otherwise the request resolves
-        # as the admin and the task ownership check returns 404.
+        title = (task.source_url or "").rsplit("/", 1)[-1] or (
+            media_file.name if media_file else "player"
+        )
+        if media_file is None:
+            # Media gone (TTL / archive / delete). Render a human-readable
+            # "unavailable" page (200), not a raw 404 (vts-at8). No player,
+            # no transcript — nothing to seek against. Still wires SSE so a
+            # later task_status keeps the page in sync.
+            html = _player_page_html(
+                title=title,
+                media_tag=None,
+                entries=[],
+                task_id=str(task_id),
+                as_user=acting_as,
+            )
+            return HTMLResponse(html)
+        kind = media_kind(media_file)
+        # <video>/<audio> fires its own request to /api/tasks/<id>/media, which
+        # must resolve to the same acting user as the page itself — otherwise
+        # the request resolves as the admin and ownership check returns 404.
         src = f"/api/tasks/{task_id}/media"
-        acting_as = request.query_params.get("as_user")
         if acting_as:
             src = f"{src}?{urlencode({'as_user': acting_as})}"
         tag = (
@@ -2321,27 +2665,14 @@ def create_app() -> FastAPI:
             if kind == "video"
             else f'<audio controls autoplay src="{_html.escape(src, quote=True)}"></audio>'
         )
-        html = f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>{_html.escape(title)}</title>
-<style>
-  html, body {{ margin: 0; padding: 0; background: #111; color: #ddd;
-    font-family: system-ui, sans-serif; min-height: 100vh; }}
-  body {{ display: flex; flex-direction: column; align-items: center;
-    justify-content: center; padding: 1rem; }}
-  h1 {{ font-size: 1rem; font-weight: 400; margin: 0 0 1rem;
-    word-break: break-all; text-align: center; }}
-  video, audio {{ max-width: 100%; width: min(960px, 100%); }}
-  video {{ max-height: 80vh; background: #000; }}
-</style>
-</head>
-<body>
-<h1>{_html.escape(title)}</h1>
-{tag}
-</body>
-</html>"""
+        entries = _load_transcript_entries(task.artifact_dir)
+        html = _player_page_html(
+            title=title,
+            media_tag=tag,
+            entries=entries,
+            task_id=str(task_id),
+            as_user=acting_as,
+        )
         return HTMLResponse(html)
 
     @app.get("/api/events", include_in_schema=False)
@@ -2807,6 +3138,16 @@ def create_app() -> FastAPI:
         await rerender_transcript(task, session, language=language)
 
         bus = RedisBus(redis, settings)
+        # Universal "transcript is whole again" signal (vts-at8): resolve/save
+        # re-rendered the transcript with new speaker names / noise flags, so
+        # the /player page and any other SPA tab re-fetch it live. Mirrors the
+        # event MergeTranscriptStep fires on first assembly.
+        await bus.publish_event(
+            user_id=str(user_id),
+            task_id=str(task_id),
+            event="transcript_updated",
+            data={"task_id": str(task_id)},
+        )
         if payload.continue_task:
             # Symmetric with /api/tasks/resume (vts-80i): clear any stale
             # pause request before requeuing, so a leftover pause flag can't

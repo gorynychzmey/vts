@@ -138,6 +138,7 @@ window.__VTS_I18N.en = {
 "tokens.copy": "Copy",
 "tasks.media_expired_badge": "expired",
 "tasks.media_expired_tooltip": "Original media file has been removed by retention policy.",
+"tasks.open_player": "Open player with transcript",
 "action.create": "Create task",
 "action.refresh": "Refresh the task list",
 "action.pause": "Pause processing after the current step",

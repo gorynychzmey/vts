@@ -138,6 +138,7 @@ window.__VTS_I18N.ru = {
 "tokens.copy": "Копировать",
 "tasks.media_expired_badge": "удалено",
 "tasks.media_expired_tooltip": "Исходный файл удалён по политике хранения.",
+"tasks.open_player": "Открыть плеер с транскриптом",
 "action.create": "Создать задачу",
 "action.refresh": "Обновить список задач",
 "action.pause": "Приостановить обработку после текущего шага",
