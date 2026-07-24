@@ -138,6 +138,7 @@ window.__VTS_I18N.de = {
 "tokens.copy": "Kopieren",
 "tasks.media_expired_badge": "abgelaufen",
 "tasks.media_expired_tooltip": "Die Originaldatei wurde gemäss Aufbewahrungsrichtlinie entfernt.",
+"tasks.open_player": "Player mit Transkript öffnen",
 "action.create": "Aufgabe erstellen",
 "action.refresh": "Aufgabenliste aktualisieren",
 "action.pause": "Verarbeitung nach dem aktuellen Schritt anhalten",

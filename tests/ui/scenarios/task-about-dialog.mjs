@@ -11,6 +11,7 @@ export const name = "task-about-dialog";
 const TASK = {
   id: "44444444-4444-4444-4444-444444444444",
   source_url: "http://x/v", source_title: "About me",
+  media_path: "/artifacts/44/media/video.mkv",
   status: "completed", summary_path: "/x/summary/final.md", transcript_path: "/x/t.txt",
   options: {
     language: "russian", audio_only: false, transcript: true,
@@ -115,6 +116,8 @@ export async function run() {
         titleText: titleEl?.textContent || "",
         titleHref: titleEl?.getAttribute("href") || "",
         titleTag: titleEl?.tagName || "",
+        sourceUrlHref: document.querySelector(".about-source-url")?.getAttribute("href") || "",
+        sourceUrlText: document.querySelector(".about-source-url")?.textContent || "",
         audioIsBool: audioEl?.classList.contains("about-bool") && audioEl.classList.contains("is-no"),
         audioHasSvg: !!audioEl?.querySelector("svg"),
         audioAria: audioEl?.getAttribute("aria-label") || "",
@@ -134,10 +137,14 @@ export async function run() {
     });
     if (info.language !== "russian") failures.push(`language wrong: ${JSON.stringify(info.language)}`);
     if (!info.prompts.includes("My memo")) failures.push(`prompts missing user name: ${JSON.stringify(info.prompts)}`);
-    // Title link: <a> with href to the source URL.
+    // Title link: <a> to OUR player when media is available (vts-at8), not the
+    // source URL. The original URL is the separate .about-source-url link.
     if (info.titleTag !== "A") failures.push(`title is not an <a> link (got ${info.titleTag})`);
     if (info.titleText !== "About me") failures.push(`title text wrong: ${JSON.stringify(info.titleText)}`);
-    if (info.titleHref !== "http://x/v") failures.push(`title href wrong: ${JSON.stringify(info.titleHref)}`);
+    if (!info.titleHref.includes("/player/")) failures.push(`title href not player: ${JSON.stringify(info.titleHref)}`);
+    // Original URL as a real clickable link under the title.
+    if (info.sourceUrlHref !== "http://x/v") failures.push(`source-url href wrong: ${JSON.stringify(info.sourceUrlHref)}`);
+    if (info.sourceUrlText !== "http://x/v") failures.push(`source-url text wrong: ${JSON.stringify(info.sourceUrlText)}`);
     // Boolean icons: audio_only=false -> is-no + svg + aria; transcript=true -> is-yes + svg.
     if (!info.audioIsBool) failures.push("audio_only not rendered as is-no boolean icon");
     if (!info.audioHasSvg) failures.push("audio_only boolean has no svg icon");

@@ -760,6 +760,28 @@ input[type="file"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+  display: block;
+}
+
+/* Only the link form (a real original URL) reads as clickable. Without href
+   the same element is just muted text (uploads / non-http sources). */
+.task-source[href] {
+  color: var(--link, #2563eb);
+}
+
+.task-source[href]:hover {
+  text-decoration: underline;
+}
+
+/* Player affordance next to the title. Inherits .icon-btn.ghost visuals;
+   this just keeps it from shrinking and centers the glyph. `.hidden` still
+   wins (display:none) via the global utility. */
+.task-player-btn:not(.hidden) {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .task-stats {

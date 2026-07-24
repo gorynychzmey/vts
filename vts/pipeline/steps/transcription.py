@@ -632,4 +632,13 @@ class MergeTranscriptStep(Step):
             event="phase",
             data={"phase": "merge_transcript", "status": "done"},
         )
+        # Universal "transcript is whole again" signal (vts-at8): the /player
+        # page and the main SPA both re-fetch on this rather than owning ad-hoc
+        # refresh logic. Also fired after rerender_transcript on resolve/save.
+        await ctx.bus.publish_event(
+            user_id=st.user_id,
+            task_id=str(st.task_id),
+            event="transcript_updated",
+            data={"task_id": str(st.task_id)},
+        )
         return True
