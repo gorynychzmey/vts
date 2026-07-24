@@ -848,6 +848,28 @@ function computeTaskStartedAt(task) {
   return Math.min(...startedTimes);
 }
 
+// Sum of the already-finished steps' own durations, in ms. Mirrors the
+// backend's _processing_seconds_for_task: work time is the sum of per-step
+// durations, NOT the span from the first start to the last finish — a task can
+// sit paused / awaiting input for hours between steps, and that idle gap is not
+// work. Only finished steps count here; the still-running step's elapsed time
+// is added live by the timer tick (see updateTaskRuntimeView).
+function computeCompletedStepMs(task) {
+  let total = 0;
+  for (const step of task.steps || []) {
+    const started = parseIsoMs(step.started_at);
+    const finished = parseIsoMs(step.finished_at);
+    if (started === null || finished === null) {
+      continue;
+    }
+    const stepMs = finished - started;
+    if (stepMs > 0) {
+      total += stepMs;
+    }
+  }
+  return total;
+}
+
 function normalizeProgress(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -1202,6 +1224,7 @@ function createRuntime(task) {
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
     taskStartedAt: computeTaskStartedAt(task),
+    completedStepMs: computeCompletedStepMs(task),
     mediaPhase: "",
     llamaStatus: "idle",
     download: {
@@ -1646,12 +1669,21 @@ function renderTaskRuntime(taskEl) {
 
   // specific status, not a group: only a running task's elapsed timer ticks;
   // a waiting task is not executing, so it must keep a blank runtime.
+  //
+  // Work time = sum of finished steps' durations + the current step's live
+  // elapsed. This deliberately excludes idle gaps between steps (pause /
+  // awaiting input), so it matches the backend's processing_seconds and never
+  // counts pause time as work. (The old code showed now - firstStepStart,
+  // which ballooned across long pauses.)
   if (runtime.baseStatus === "running") {
-    if (!runtime.taskStartedAt) {
-      runtime.taskStartedAt = Date.now();
+    let elapsedMs = runtime.completedStepMs || 0;
+    if (runtime.currentStepStartedAt) {
+      const currentStepMs = Date.now() - runtime.currentStepStartedAt;
+      if (currentStepMs > 0) {
+        elapsedMs += currentStepMs;
+      }
     }
-    const elapsed = (Date.now() - runtime.taskStartedAt) / 1000;
-    elements.taskRuntimeEl.textContent = formatDuration(elapsed);
+    elements.taskRuntimeEl.textContent = formatDuration(elapsedMs / 1000);
   } else {
     elements.taskRuntimeEl.textContent = "";
   }
@@ -2891,8 +2923,28 @@ function patchTaskStep(taskId, name, status) {
   } else if (stepStatus === "failed") {
     runtime.currentStepName = stepName;
     runtime.failedStepName = stepName;
+    // Fold the just-finished (failed) step's live duration into the running
+    // total so the work-time timer stays continuous. Skipped steps take no
+    // time, so they are not folded in.
+    if (runtime.currentStepName === stepName && runtime.currentStepStartedAt) {
+      const stepMs = Date.now() - runtime.currentStepStartedAt;
+      if (stepMs > 0) {
+        runtime.completedStepMs = (runtime.completedStepMs || 0) + stepMs;
+      }
+      runtime.currentStepStartedAt = null;
+    }
   } else if (stepStatus === "completed" || stepStatus === "skipped") {
     if (runtime.currentStepName === stepName) {
+      // Accumulate this step's own duration into the work-time total before
+      // clearing the running marker, so the timer keeps summing per-step
+      // durations across the whole run (and never counts the idle gap before
+      // the next step starts). Mirrors computeCompletedStepMs.
+      if (stepStatus === "completed" && runtime.currentStepStartedAt) {
+        const stepMs = Date.now() - runtime.currentStepStartedAt;
+        if (stepMs > 0) {
+          runtime.completedStepMs = (runtime.completedStepMs || 0) + stepMs;
+        }
+      }
       runtime.currentStepName = "";
       runtime.currentStepStartedAt = null;
     }

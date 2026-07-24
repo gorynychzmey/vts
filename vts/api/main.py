@@ -390,14 +390,27 @@ def _speaker_ordering_entries(outputs: Path, matches: dict) -> list[dict]:
 
 
 def _processing_seconds_for_task(task: Task) -> int | None:
-    started = [step.started_at for step in task.steps if step.started_at is not None]
-    finished = [step.finished_at for step in task.steps if step.finished_at is not None]
-    if not started or not finished:
+    # Sum each step's own duration rather than the span from the first step's
+    # start to the last step's finish. A task can sit paused / awaiting input
+    # for hours between steps; that idle gap is not work time, so counting the
+    # raw span (max(finished) - min(started)) massively overstates it. Each
+    # step carries its own started_at/finished_at (last attempt), so the sum of
+    # per-step durations is the actual processing time. Pauses that happen
+    # *inside* a running step are not subtracted (the step re-runs with a fresh
+    # started_at on resume anyway) — only between-step idle time is excluded.
+    total = 0.0
+    counted = False
+    for step in task.steps:
+        if step.started_at is None or step.finished_at is None:
+            continue
+        step_seconds = (step.finished_at - step.started_at).total_seconds()
+        if step_seconds < 0:
+            continue
+        total += step_seconds
+        counted = True
+    if not counted:
         return None
-    duration = (max(finished) - min(started)).total_seconds()
-    if duration < 0:
-        return 0
-    return int(duration)
+    return int(total)
 
 
 def _text_length_from_path(path_value: str | Path | None, *, prefer_json_text_field: bool = False) -> int | None:

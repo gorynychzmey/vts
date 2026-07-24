@@ -160,6 +160,34 @@ def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
     assert payload.stats.media_bytes is None
 
 
+def test_processing_seconds_excludes_pause_between_steps(tmp_path: Path) -> None:
+    # A task paused for a long time between two steps: processing time must be
+    # the SUM of the steps' own durations, not the span from the first step's
+    # start to the last step's finish (which would count the idle pause gap).
+    started = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    task = _task(
+        tmp_path,
+        steps=[
+            # 10s of real work...
+            _step("download", StepStatus.completed, started_at=started, finished_at=started + timedelta(seconds=10)),
+            # ...then a 1-hour pause before the next step starts...
+            # ...then 20s of real work.
+            _step(
+                "merge_transcript",
+                StepStatus.completed,
+                started_at=started + timedelta(hours=1),
+                finished_at=started + timedelta(hours=1, seconds=20),
+            ),
+        ],
+    )
+    task.status = TaskStatus.completed
+
+    payload = serialize_task(task)
+
+    # 10s + 20s of work, NOT 3620s (the first-to-last span).
+    assert payload.stats.processing_seconds == 30
+
+
 def test_serialize_task_includes_media_size_and_cached_duration(tmp_path: Path) -> None:
     media_dir = tmp_path / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
