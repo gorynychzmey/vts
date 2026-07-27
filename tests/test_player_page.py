@@ -24,14 +24,16 @@ from vts.api.main import _player_page_html
 # --------------------------------------------------------------- pure renderer
 
 def test_player_html_renders_clickable_entries_with_start_times():
-    entries = [
-        {"start": 0.0, "end": 2.5, "text": "First phrase", "speaker": "SPEAKER_00"},
-        {"start": 2.5, "end": 5.0, "text": "Second phrase", "speaker": "SPEAKER_01"},
+    blocks = [
+        {"start": 0.0, "end": 2.5, "text": "First phrase", "label": "",
+         "sentences": [{"start": 0.0, "end": 2.5, "text": "First phrase"}]},
+        {"start": 2.5, "end": 5.0, "text": "Second phrase", "label": "",
+         "sentences": [{"start": 2.5, "end": 5.0, "text": "Second phrase"}]},
     ]
     html = _player_page_html(
         title="My video",
         media_tag='<video controls src="/api/tasks/x/media"></video>',
-        entries=entries,
+        blocks=blocks,
     )
     # The media element is present.
     assert "<video" in html
@@ -46,18 +48,30 @@ def test_player_html_renders_clickable_entries_with_start_times():
 
 
 def test_player_html_escapes_entry_text():
-    entries = [{"start": 0.0, "end": 1.0, "text": "<script>alert(1)</script>", "speaker": ""}]
+    blocks = [{"start": 0.0, "end": 1.0, "text": "x", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "<script>alert(1)</script>"}]}]
     html = _player_page_html(
         title="t",
         media_tag="<audio></audio>",
-        entries=entries,
+        blocks=blocks,
     )
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
 
 
+def test_player_html_block_label_uses_resolved_name():
+    """A diarized block shows its resolved label (name / 'Голос N'), never the
+    raw SPEAKER_NN tag (vts-u6w #3)."""
+    blocks = [{"start": 0.0, "end": 5.0, "text": "hi", "speaker": "SPEAKER_00",
+               "label": "Alice",
+               "sentences": [{"start": 0.0, "end": 5.0, "text": "hi"}]}]
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
+    assert "Alice" in html
+    assert "SPEAKER_00" not in html
+
+
 def test_player_html_without_entries_still_renders_media():
-    html = _player_page_html(title="t", media_tag="<audio></audio>", entries=[])
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=[])
     assert "<audio></audio>" in html
 
 
@@ -69,7 +83,8 @@ def test_player_html_live_subscribes_to_events_for_its_task():
     html = _player_page_html(
         title="t",
         media_tag='<video src="/api/tasks/x/media"></video>',
-        entries=[{"start": 0.0, "end": 1.0, "text": "hi", "speaker": ""}],
+        blocks=[{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+                 "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}],
         task_id=tid,
     )
     # Opens the shared SSE stream.
@@ -90,7 +105,7 @@ def test_player_html_no_task_id_omits_live_subscription():
     html = _player_page_html(
         title="t",
         media_tag="<audio></audio>",
-        entries=[],
+        blocks=[],
     )
     assert "EventSource" not in html
 
@@ -98,7 +113,7 @@ def test_player_html_no_task_id_omits_live_subscription():
 def test_player_html_media_unavailable_shows_message_not_media():
     """media_tag=None → a human-readable 'media unavailable' page, no <video>/
     <audio>. Used when the media file is gone (TTL / archive / delete)."""
-    html = _player_page_html(title="t", media_tag=None, entries=[])
+    html = _player_page_html(title="t", media_tag=None, blocks=[])
     assert "<video" not in html
     assert "<audio" not in html
     # A stable marker the page + tests key on, locale-independent.

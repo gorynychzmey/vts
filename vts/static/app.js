@@ -1106,12 +1106,24 @@ function renderTaskAboutDialog(task) {
   const titleEl = q(".about-source-title");
   titleEl.textContent = task.source_title || (isUpload ? uploadName : sourceUrl);
   const mediaReady = Boolean(task.media_path);
+  const playerHref = buildPath(`/player/${encodeURIComponent(task.id)}`);
   if (mediaReady) {
-    titleEl.href = buildPath(`/player/${encodeURIComponent(task.id)}`);
+    titleEl.href = playerHref;
     titleEl.target = "_blank";
     titleEl.rel = "noopener";
   } else {
     titleEl.removeAttribute("href");
+  }
+  // Player ▶ icon next to the title, mirroring the task card (vts-u6w #1).
+  const playerBtn = q(".about-player-btn");
+  if (playerBtn) {
+    if (mediaReady) {
+      playerBtn.href = playerHref;
+      playerBtn.classList.remove("hidden");
+    } else {
+      playerBtn.removeAttribute("href");
+      playerBtn.classList.add("hidden");
+    }
   }
   const sourceUrlEl = q(".about-source-url");
   // Original url: plain text for uploads (file://…), a real link for http(s)
