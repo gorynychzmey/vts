@@ -99,8 +99,11 @@ async def test_transcript_entries_endpoint_returns_entries(authed_app, client, t
     r = await client.get(f"/api/tasks/{task_id}/transcript-entries")
     assert r.status_code == 200, r.text
     payload = r.json()
-    assert [e["text"] for e in payload["entries"]] == ["Hello", "world"]
-    assert payload["entries"][1]["start"] == 1.5
+    # Two-level shape: blocks, each with clickable sentences (vts-u6w).
+    assert [b["text"] for b in payload["blocks"]] == ["Hello", "world"]
+    assert payload["blocks"][1]["start"] == 1.5
+    # No raw segments in this fixture -> each block is one clickable sentence.
+    assert payload["blocks"][1]["sentences"][0]["start"] == 1.5
 
 
 class _SerializingFakeRedis:
@@ -206,4 +209,4 @@ async def test_transcript_entries_endpoint_empty_when_no_transcript(authed_app, 
 
     r = await client.get(f"/api/tasks/{task_id}/transcript-entries")
     assert r.status_code == 200, r.text
-    assert r.json()["entries"] == []
+    assert r.json()["blocks"] == []

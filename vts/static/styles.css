@@ -1822,6 +1822,24 @@ dialog:not([open]) {
   font-size: 0.8rem;
 }
 
+#task-about-dialog .about-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+#task-about-dialog .about-title-row .about-source-title {
+  min-width: 0;
+}
+
+.about-player-btn:not(.hidden) {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Label/value pairs share ONE grid per section so the value column lines up
    across all rows (the first column sizes to the widest label, e.g. the long
    "Verarbeitetes Transkript"). Rows use display:contents so their cells land

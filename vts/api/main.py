@@ -750,6 +750,50 @@ def _load_transcript_entries(artifact_dir: str | None) -> list[dict[str, Any]]:
     return [e for e in entries if isinstance(e, dict)]
 
 
+def _load_raw_segments(artifact_dir: str | None) -> list[dict[str, Any]]:
+    """Read asr/segments_raw.json's `segments` list (each carries the chunk
+    offset + the inner ASR segments with per-sentence timings), or [] when
+    absent. Powers the sentence-level split on the /player page (vts-u6w)."""
+    if not artifact_dir:
+        return []
+    path = Path(artifact_dir) / "asr" / "segments_raw.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    segments = payload.get("segments") if isinstance(payload, dict) else None
+    if not isinstance(segments, list):
+        return []
+    return [s for s in segments if isinstance(s, dict)]
+
+
+async def _load_player_blocks(task: Any, session: AsyncSession) -> list[dict[str, Any]]:
+    """Two-level transcript for /player: existing blocks (ASR segment / speaker
+    turn) with clickable sentences inside, and a resolved speaker label instead
+    of the raw SPEAKER_NN tag (vts-u6w). All derived on the fly from the stored
+    artifacts + registry names — transcript.json itself is never rewritten."""
+    from vts.services.diarization.merge import speaker_label_word
+    from vts.services.player_transcript import build_player_blocks
+
+    entries = _load_transcript_entries(task.artifact_dir)
+    if not entries:
+        return []
+    raw_segments = _load_raw_segments(task.artifact_dir)
+
+    repo = Repo(session)
+    names = await repo.speaker_names_for_task(task.user_id, task.id)
+    language = effective_language(
+        task.options if isinstance(task.options, dict) else {},
+        {"outputs": Path(task.artifact_dir) / "outputs"},
+    )
+    return build_player_blocks(
+        entries,
+        raw_segments,
+        names=names,
+        label_word=speaker_label_word(language),
+    )
+
+
 def _format_timecode(seconds: float) -> str:
     """Whole-second H:MM:SS / M:SS label for a transcript cue."""
     total = max(0, int(seconds))
@@ -785,52 +829,60 @@ def _media_unavailable_block_html() -> str:
     )
 
 
+def _player_block_html(block: dict[str, Any]) -> str:
+    """One transcript block: its speaker label (when diarized) plus each inner
+    sentence as an individually clickable cue that seeks to its own start.
+    A block with a single sentence renders as one cue — same structure, so the
+    whole block is still clickable when there were no finer timings."""
+    label = str(block.get("label") or "").strip()
+    label_html = (
+        f'<div class="block-label">{_html.escape(label)}</div>' if label else ""
+    )
+    cues: list[str] = []
+    for sentence in block.get("sentences") or []:
+        try:
+            start = float(sentence.get("start"))
+        except (TypeError, ValueError):
+            continue
+        text = str(sentence.get("text") or "").strip()
+        if not text:
+            continue
+        cues.append(
+            f'<span class="cue" data-start="{start}" role="button" tabindex="0" '
+            f'title="{_format_timecode(start)}">{_html.escape(text)}</span>'
+        )
+    if not cues:
+        return ""
+    return f'<li class="block">{label_html}<p class="block-body">{" ".join(cues)}</p></li>'
+
+
 def _player_page_html(
     *,
     title: str,
     media_tag: str | None,
-    entries: list[dict[str, Any]],
+    blocks: list[dict[str, Any]],
     task_id: str | None = None,
     as_user: str | None = None,
 ) -> str:
-    """Self-contained /player page: the media element plus a clickable
-    transcript. Clicking a phrase seeks the player to that phrase's start
-    time (one-way transcript -> player, vts-at8 / VOS-111).
+    """Self-contained /player page: the media element plus a two-level clickable
+    transcript (vts-at8 / VOS-111, vts-u6w). The transcript keeps its block
+    structure (an ASR segment for undiarized audio, a labelled speaker turn for
+    diarized) and makes each SENTENCE inside a block clickable — a click seeks
+    the player to that sentence's start.
 
     `media_tag` is a pre-built, already-escaped <video>/<audio> element, or
     None when the media file is gone (TTL / archive / delete) — then a
     localized 'media unavailable' message is shown in its place and the
     transcript is omitted (nothing to seek).
-    Entry text is escaped here; start times drive the seek via data-start.
+    Sentence/label text is escaped here; start times drive the seek via
+    data-start.
     """
     if media_tag is None:
         media_block = _media_unavailable_block_html()
-        entries = []
+        blocks = []
     else:
         media_block = media_tag
-    rows: list[str] = []
-    for entry in entries:
-        try:
-            start = float(entry.get("start"))
-        except (TypeError, ValueError):
-            continue
-        text = str(entry.get("text") or "").strip()
-        if not text:
-            continue
-        speaker = str(entry.get("speaker") or "").strip()
-        speaker_html = (
-            f'<span class="cue-speaker">{_html.escape(speaker)}</span> '
-            if speaker
-            else ""
-        )
-        rows.append(
-            f'<li class="cue" data-start="{start}">'
-            f'<button type="button" class="cue-btn">'
-            f'<span class="cue-time">{_format_timecode(start)}</span> '
-            f"{speaker_html}"
-            f'<span class="cue-text">{_html.escape(text)}</span>'
-            f"</button></li>"
-        )
+    rows = [html for block in blocks if (html := _player_block_html(block))]
     transcript_html = (
         f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
     )
@@ -875,40 +927,47 @@ def _player_page_html(
     container.appendChild(p);
   }}
 
-  function buildCue(entry) {{
-    var li = document.createElement("li");
-    li.className = "cue";
-    li.setAttribute("data-start", String(entry.start));
-    var btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "cue-btn";
-    var timeSpan = document.createElement("span");
-    timeSpan.className = "cue-time";
-    var s = Math.max(0, Math.floor(Number(entry.start) || 0));
+  function timecode(start) {{
+    var s = Math.max(0, Math.floor(Number(start) || 0));
     var hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
-    timeSpan.textContent = hh
+    return hh
       ? hh + ":" + String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0")
       : mm + ":" + String(ss).padStart(2, "0");
-    btn.appendChild(timeSpan);
-    btn.appendChild(document.createTextNode(" "));
-    if (entry.speaker) {{
-      var sp = document.createElement("span");
-      sp.className = "cue-speaker";
-      sp.textContent = String(entry.speaker);
-      btn.appendChild(sp);
-      btn.appendChild(document.createTextNode(" "));
+  }}
+
+  function buildCue(sentence) {{
+    var span = document.createElement("span");
+    span.className = "cue";
+    span.setAttribute("data-start", String(sentence.start));
+    span.setAttribute("role", "button");
+    span.setAttribute("tabindex", "0");
+    span.title = timecode(sentence.start);
+    span.textContent = String(sentence.text || "");
+    return span;
+  }}
+
+  function buildBlock(block) {{
+    var li = document.createElement("li");
+    li.className = "block";
+    if (block.label) {{
+      var lab = document.createElement("div");
+      lab.className = "block-label";
+      lab.textContent = String(block.label);
+      li.appendChild(lab);
     }}
-    var txt = document.createElement("span");
-    txt.className = "cue-text";
-    txt.textContent = String(entry.text || "");
-    btn.appendChild(txt);
-    li.appendChild(btn);
+    var body = document.createElement("p");
+    body.className = "block-body";
+    (block.sentences || []).forEach(function(sentence, i) {{
+      if (i) body.appendChild(document.createTextNode(" "));
+      body.appendChild(buildCue(sentence));
+    }});
+    li.appendChild(body);
     return li;
   }}
 
-  function rebuildTranscript(entries) {{
+  function rebuildTranscript(blocks) {{
     var media = document.querySelector("video, audio");
-    if (!media || !Array.isArray(entries) || !entries.length) return;
+    if (!media || !Array.isArray(blocks) || !blocks.length) return;
     var ol = document.querySelector(".transcript");
     if (!ol) {{
       ol = document.createElement("ol");
@@ -916,7 +975,7 @@ def _player_page_html(
       document.body.appendChild(ol);
     }}
     ol.innerHTML = "";
-    entries.forEach(function(entry) {{ ol.appendChild(buildCue(entry)); }});
+    blocks.forEach(function(block) {{ ol.appendChild(buildBlock(block)); }});
     wireCues(media);
   }}
 
@@ -925,7 +984,7 @@ def _player_page_html(
     if (AS_USER) url += "?as_user=" + encodeURIComponent(AS_USER);
     fetch(url, {{ credentials: "same-origin" }})
       .then(function(r) {{ return r.ok ? r.json() : null; }})
-      .then(function(data) {{ if (data && data.entries) rebuildTranscript(data.entries); }})
+      .then(function(data) {{ if (data && data.blocks) rebuildTranscript(data.blocks); }})
       .catch(function() {{ /* transient; next event or reload recovers */ }});
   }}
 
@@ -972,15 +1031,15 @@ def _player_page_html(
   video {{ max-height: 60vh; background: #000; }}
   .transcript {{ list-style: none; margin: 1rem 0 0; padding: 0;
     width: min(960px, 100%); max-height: 40vh; overflow-y: auto; }}
-  .cue {{ margin: 0; }}
-  .cue-btn {{ display: block; width: 100%; text-align: left; cursor: pointer;
-    background: none; border: 0; color: inherit; font: inherit;
-    padding: 0.3rem 0.5rem; border-radius: 4px; }}
-  .cue-btn:hover {{ background: #222; }}
-  .cue.active .cue-btn {{ background: #2a3d55; }}
-  .cue-time {{ color: #7aa; font-variant-numeric: tabular-nums;
-    margin-right: 0.5rem; }}
-  .cue-speaker {{ color: #c99; }}
+  .block {{ margin: 0 0 0.8rem; }}
+  .block-label {{ color: #c99; font-weight: 600; margin: 0 0 0.15rem;
+    font-size: 0.85rem; }}
+  .block-body {{ margin: 0; line-height: 1.55; }}
+  /* Sentences are inline, clickable, seek to their own start. */
+  .cue {{ cursor: pointer; border-radius: 3px; padding: 0 0.1rem; }}
+  .cue:hover {{ background: #222; }}
+  .cue.active {{ background: #2a3d55; }}
+  .cue:focus-visible {{ outline: 2px solid #7aa; outline-offset: 1px; }}
   .media-unavailable {{ color: #ccc; font-size: 1.05rem; text-align: center;
     margin: 3rem 1rem; }}
 </style>
@@ -1013,8 +1072,12 @@ def _player_page_html(
       if (cue._wired) return;
       cue._wired = true;
       var start = parseFloat(cue.getAttribute("data-start"));
-      cue.querySelector(".cue-btn").addEventListener("click", function() {{
+      var seek = function() {{
         if (!isNaN(start)) {{ media.currentTime = start; media.play(); }}
+      }};
+      cue.addEventListener("click", seek);
+      cue.addEventListener("keydown", function(e) {{
+        if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); seek(); }}
       }});
     }});
     if (media._cueHighlightWired) return;
@@ -2468,15 +2531,17 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> dict[str, Any]:
-        """Timecoded transcript entries [{start, end, text, speaker}] for the
-        /player page (vts-at8). Returns {"entries": []} (200, not 404) when the
-        transcript isn't ready yet, so the page can poll on transcript_updated
-        without special-casing the not-ready state."""
+        """Two-level transcript for the /player page: blocks (ASR segment /
+        speaker turn) each carrying a resolved speaker `label` and a list of
+        clickable `sentences` with their own timecodes (vts-at8, vts-u6w).
+        Returns {"blocks": []} (200, not 404) when the transcript isn't ready
+        yet, so the page can poll on transcript_updated without special-casing
+        the not-ready state."""
         repo = Repo(session)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        return {"entries": _load_transcript_entries(task.artifact_dir)}
+        return {"blocks": await _load_player_blocks(task, session)}
 
     @app.get(
         "/api/tasks/{task_id}/summary",
@@ -2648,7 +2713,7 @@ def create_app() -> FastAPI:
             html = _player_page_html(
                 title=title,
                 media_tag=None,
-                entries=[],
+                blocks=[],
                 task_id=str(task_id),
                 as_user=acting_as,
             )
@@ -2665,11 +2730,11 @@ def create_app() -> FastAPI:
             if kind == "video"
             else f'<audio controls autoplay src="{_html.escape(src, quote=True)}"></audio>'
         )
-        entries = _load_transcript_entries(task.artifact_dir)
+        blocks = await _load_player_blocks(task, session)
         html = _player_page_html(
             title=title,
             media_tag=tag,
-            entries=entries,
+            blocks=blocks,
             task_id=str(task_id),
             as_user=acting_as,
         )
