@@ -142,6 +142,26 @@ def test_player_html_no_autoscroll_checkbox_when_media_gone():
     assert 'id="autoscroll-toggle"' not in html
 
 
+def test_player_html_autoscroll_checkbox_present_when_media_present_no_transcript_yet():
+    # vts-eho: task still processing -> blocks=[] but media IS present. The
+    # checkbox must still render at the (empty) first paint so it's already
+    # wired by the time the transcript streams in via SSE.
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=[])
+    assert 'id="autoscroll-toggle"' in html
+
+
+def test_player_html_rebuild_reattaches_autoscroll_wiring():
+    # vts-eho: rebuildTranscript (SSE path) must (re)acquire .transcript and
+    # (re)attach the scroll listener, guarded so it isn't double-bound.
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(
+        title="t", media_tag='<video src="/m"></video>', blocks=blocks, task_id="x"
+    )
+    assert "_autoscrollWired" in html
+    assert "wireAutoscroll" in html or "attachAutoscrollScrollListener" in html
+
+
 def test_player_html_localizes_autoscroll_label_client_side():
     blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
                "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]

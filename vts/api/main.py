@@ -892,10 +892,13 @@ def _player_page_html(
     transcript_html = (
         f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
     )
-    # Autoscroll checkbox (only when transcript is present).
+    # Autoscroll checkbox: rendered whenever media is present, even if the
+    # transcript hasn't arrived yet (task still processing -> blocks=[] on
+    # first paint). The transcript streams in later via transcript_updated
+    # + rebuildTranscript, which (re)wires the scroll listener (vts-eho).
     import json as _json_ac
     autoscroll_html = ""
-    if transcript_html:
+    if media_tag is not None:
         ac_msgs = _json_ac.dumps(_PLAYER_AUTOSCROLL_MSG, ensure_ascii=False)
         autoscroll_html = (
             '<label class="autoscroll-toggle">'
@@ -995,6 +998,7 @@ def _player_page_html(
     ol.innerHTML = "";
     blocks.forEach(function(block) {{ ol.appendChild(buildBlock(block)); }});
     wireCues(media);
+    wireAutoscroll();
   }}
 
   function refetchEntries() {{
@@ -1138,6 +1142,13 @@ def _player_page_html(
   wireCues(media);
 
   // --- Autoscroll (vts-eho) ---
+  // The checkbox renders whenever media is present, even before the
+  // transcript exists (task still processing -> blocks=[] on first paint).
+  // ".transcript" itself may not exist yet at load time, so scrollBox starts
+  // null and maybeAutoscroll/scrollCueToCenter re-check it live. Once the
+  // transcript streams in via SSE, rebuildTranscript() calls wireAutoscroll()
+  // again to (re)acquire ".transcript" and attach the scroll listener,
+  // guarded by _autoscrollWired so it's never double-bound.
   var scrollBox = document.querySelector(".transcript");
   var autoToggle = document.getElementById("autoscroll-toggle");
   var programmaticScroll = false;
@@ -1160,7 +1171,10 @@ def _player_page_html(
     if (autoToggle && autoToggle.checked) scrollCueToCenter(cue);
   }}
 
-  if (scrollBox) {{
+  function wireAutoscroll() {{
+    scrollBox = document.querySelector(".transcript");
+    if (!scrollBox || scrollBox._autoscrollWired) return;
+    scrollBox._autoscrollWired = true;
     scrollBox.addEventListener("scroll", function() {{
       // Our own smooth-scroll fires scroll events too; ignore those.
       if (programmaticScroll) return;
@@ -1178,6 +1192,8 @@ def _player_page_html(
       }}
     }});
   }}
+
+  wireAutoscroll();
 {live_script}
 }})();
 </script>
