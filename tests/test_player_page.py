@@ -151,6 +151,22 @@ def test_player_html_localizes_autoscroll_label_client_side():
     assert "labelEl" in html  # the localizer variable — absent until Step 3
 
 
+def test_player_html_autoscroll_logic_present():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(
+        title="t", media_tag='<video src="/m"></video>', blocks=blocks, task_id="x"
+    )
+    # Scrolls the active cue to center.
+    assert "scrollIntoView" in html
+    assert 'block: "center"' in html
+    # Guards our own scroll and reacts to the checkbox.
+    assert "programmaticScroll" in html
+    assert "autoscroll-toggle" in html
+    # A user scroll unchecks the box (checked = false somewhere in the handler).
+    assert "checked = false" in html
+
+
 # ------------------------------------------------------------------ end-to-end
 
 @pytest.mark.asyncio

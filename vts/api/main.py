@@ -1129,12 +1129,55 @@ def _player_page_html(
         if (active) active.classList.remove("active");
         if (current) current.classList.add("active");
         active = current;
+        if (current) maybeAutoscroll(current);
       }}
     }});
   }}
 
   var media = document.querySelector("video, audio");
   wireCues(media);
+
+  // --- Autoscroll (vts-eho) ---
+  var scrollBox = document.querySelector(".transcript");
+  var autoToggle = document.getElementById("autoscroll-toggle");
+  var programmaticScroll = false;
+  var programmaticScrollTimer = null;
+
+  function scrollCueToCenter(cue) {{
+    if (!cue || !scrollBox) return;
+    // Mark this scroll as ours so the scroll listener doesn't treat the
+    // smooth-scroll's own events as a user gesture. Cleared on a debounce
+    // after the animation's events settle.
+    programmaticScroll = true;
+    if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+    programmaticScrollTimer = setTimeout(function() {{
+      programmaticScroll = false;
+    }}, 150);
+    cue.scrollIntoView({{ block: "center", behavior: "smooth" }});
+  }}
+
+  function maybeAutoscroll(cue) {{
+    if (autoToggle && autoToggle.checked) scrollCueToCenter(cue);
+  }}
+
+  if (scrollBox) {{
+    scrollBox.addEventListener("scroll", function() {{
+      // Our own smooth-scroll fires scroll events too; ignore those.
+      if (programmaticScroll) return;
+      // A genuine user scroll turns autoscroll off.
+      if (autoToggle && autoToggle.checked) autoToggle.checked = false;
+    }});
+  }}
+
+  if (autoToggle) {{
+    autoToggle.addEventListener("change", function() {{
+      // Re-enabling brings the current sentence back into view.
+      if (autoToggle.checked) {{
+        var cur = document.querySelector(".cue.active");
+        if (cur) scrollCueToCenter(cur);
+      }}
+    }});
+  }}
 {live_script}
 }})();
 </script>
