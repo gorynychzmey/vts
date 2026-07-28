@@ -142,6 +142,15 @@ def test_player_html_no_autoscroll_checkbox_when_media_gone():
     assert 'id="autoscroll-toggle"' not in html
 
 
+def test_player_html_localizes_autoscroll_label_client_side():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
+    # A dedicated client-side localizer resolves the label from navigator.language.
+    assert "data-autoscroll-label" in html
+    assert "labelEl" in html  # the localizer variable — absent until Step 3
+
+
 # ------------------------------------------------------------------ end-to-end
 
 @pytest.mark.asyncio

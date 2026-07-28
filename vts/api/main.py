@@ -1086,6 +1086,18 @@ def _player_page_html(
       }}
     }} catch (e) {{ /* keep the default English text */ }}
   }}
+  // Localize the autoscroll checkbox label client-side.
+  var labelEl = document.querySelector("[data-autoscroll-label]");
+  if (labelEl) {{
+    try {{
+      var acMsgs = JSON.parse(labelEl.getAttribute("data-msgs") || "{{}}");
+      var acLangs = (navigator.languages || [navigator.language || "en"]);
+      for (var ai = 0; ai < acLangs.length; ai++) {{
+        var acCode = String(acLangs[ai] || "").slice(0, 2).toLowerCase();
+        if (acMsgs[acCode]) {{ labelEl.textContent = acMsgs[acCode]; break; }}
+      }}
+    }} catch (e) {{ /* keep the default English label */ }}
+  }}
   // Wire seek-on-click + active-cue highlight. Re-queries .cue each call so it
   // works after the transcript list is rebuilt from a transcript_updated event.
   function wireCues(media) {{
