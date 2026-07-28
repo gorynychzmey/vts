@@ -123,6 +123,25 @@ def test_player_html_media_unavailable_shows_message_not_media():
     assert "более не доступно" in html.lower()
 
 
+def test_player_html_has_autoscroll_checkbox_checked_by_default():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
+    # The checkbox exists and is checked by default.
+    assert 'id="autoscroll-toggle"' in html
+    assert "checked" in html
+    # All three locale labels are embedded for client-side pick.
+    assert "Autoscroll" in html
+    assert "Автопрокрутка" in html
+    assert "Auto-Scrollen" in html
+
+
+def test_player_html_no_autoscroll_checkbox_when_media_gone():
+    # Media gone -> no transcript, so no autoscroll control either.
+    html = _player_page_html(title="t", media_tag=None, blocks=[])
+    assert 'id="autoscroll-toggle"' not in html
+
+
 # ------------------------------------------------------------------ end-to-end
 
 @pytest.mark.asyncio

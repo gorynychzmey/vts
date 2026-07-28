@@ -814,6 +814,12 @@ _PLAYER_MEDIA_UNAVAILABLE_MSG = {
     "de": "Dieses Medium ist nicht mehr verfügbar.",
 }
 
+_PLAYER_AUTOSCROLL_MSG = {
+    "en": "Autoscroll",
+    "ru": "Автопрокрутка",
+    "de": "Auto-Scrollen",
+}
+
 
 def _media_unavailable_block_html() -> str:
     """The 'media is gone' state: a human-readable message (localized client-
@@ -886,6 +892,18 @@ def _player_page_html(
     transcript_html = (
         f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
     )
+    # Autoscroll checkbox (only when transcript is present).
+    import json as _json_ac
+    autoscroll_html = ""
+    if transcript_html:
+        ac_msgs = _json_ac.dumps(_PLAYER_AUTOSCROLL_MSG, ensure_ascii=False)
+        autoscroll_html = (
+            '<label class="autoscroll-toggle">'
+            '<input type="checkbox" id="autoscroll-toggle" checked>'
+            f"<span data-autoscroll-label data-msgs='{ac_msgs}'>"
+            f"{_html.escape(_PLAYER_AUTOSCROLL_MSG['en'])}</span>"
+            "</label>"
+        )
     # Live logic is only wired when we know which task the page is for. The
     # page opens the shared SSE stream and reacts to this task's events:
     #   transcript_updated -> re-fetch /transcript-entries and rebuild the list
@@ -1042,11 +1060,16 @@ def _player_page_html(
   .cue:focus-visible {{ outline: 2px solid #7aa; outline-offset: 1px; }}
   .media-unavailable {{ color: #ccc; font-size: 1.05rem; text-align: center;
     margin: 3rem 1rem; }}
+  .autoscroll-toggle {{ display: flex; align-items: center; gap: 0.4rem;
+    width: min(960px, 100%); margin: 0.8rem 0 0; color: #bbb;
+    font-size: 0.85rem; cursor: pointer; }}
+  .autoscroll-toggle input {{ cursor: pointer; }}
 </style>
 </head>
 <body>
 <h1>{_html.escape(title)}</h1>
 {media_block}
+{autoscroll_html}
 {transcript_html}
 <script>
 (function() {{
