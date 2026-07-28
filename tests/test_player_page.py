@@ -123,6 +123,70 @@ def test_player_html_media_unavailable_shows_message_not_media():
     assert "более не доступно" in html.lower()
 
 
+def test_player_html_has_autoscroll_checkbox_checked_by_default():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
+    # The checkbox exists and is checked by default.
+    assert 'id="autoscroll-toggle"' in html
+    assert "checked" in html
+    # All three locale labels are embedded for client-side pick.
+    assert "Autoscroll" in html
+    assert "Автопрокрутка" in html
+    assert "Auto-Scrollen" in html
+
+
+def test_player_html_no_autoscroll_checkbox_when_media_gone():
+    # Media gone -> no transcript, so no autoscroll control either.
+    html = _player_page_html(title="t", media_tag=None, blocks=[])
+    assert 'id="autoscroll-toggle"' not in html
+
+
+def test_player_html_autoscroll_checkbox_present_when_media_present_no_transcript_yet():
+    # vts-eho: task still processing -> blocks=[] but media IS present. The
+    # checkbox must still render at the (empty) first paint so it's already
+    # wired by the time the transcript streams in via SSE.
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=[])
+    assert 'id="autoscroll-toggle"' in html
+
+
+def test_player_html_rebuild_reattaches_autoscroll_wiring():
+    # vts-eho: rebuildTranscript (SSE path) must (re)acquire .transcript and
+    # (re)attach the scroll listener, guarded so it isn't double-bound.
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(
+        title="t", media_tag='<video src="/m"></video>', blocks=blocks, task_id="x"
+    )
+    assert "_autoscrollWired" in html
+    assert "wireAutoscroll" in html or "attachAutoscrollScrollListener" in html
+
+
+def test_player_html_localizes_autoscroll_label_client_side():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
+    # A dedicated client-side localizer resolves the label from navigator.language.
+    assert "data-autoscroll-label" in html
+    assert "labelEl" in html  # the localizer variable — absent until Step 3
+
+
+def test_player_html_autoscroll_logic_present():
+    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
+               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
+    html = _player_page_html(
+        title="t", media_tag='<video src="/m"></video>', blocks=blocks, task_id="x"
+    )
+    # Scrolls the active cue to center.
+    assert "scrollIntoView" in html
+    assert 'block: "center"' in html
+    # Guards our own scroll and reacts to the checkbox.
+    assert "programmaticScroll" in html
+    assert "autoscroll-toggle" in html
+    # A user scroll unchecks the box (checked = false somewhere in the handler).
+    assert "checked = false" in html
+
+
 # ------------------------------------------------------------------ end-to-end
 
 @pytest.mark.asyncio

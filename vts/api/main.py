@@ -814,6 +814,12 @@ _PLAYER_MEDIA_UNAVAILABLE_MSG = {
     "de": "Dieses Medium ist nicht mehr verfügbar.",
 }
 
+_PLAYER_AUTOSCROLL_MSG = {
+    "en": "Autoscroll",
+    "ru": "Автопрокрутка",
+    "de": "Auto-Scrollen",
+}
+
 
 def _media_unavailable_block_html() -> str:
     """The 'media is gone' state: a human-readable message (localized client-
@@ -886,6 +892,21 @@ def _player_page_html(
     transcript_html = (
         f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
     )
+    # Autoscroll checkbox: rendered whenever media is present, even if the
+    # transcript hasn't arrived yet (task still processing -> blocks=[] on
+    # first paint). The transcript streams in later via transcript_updated
+    # + rebuildTranscript, which (re)wires the scroll listener (vts-eho).
+    import json as _json_ac
+    autoscroll_html = ""
+    if media_tag is not None:
+        ac_msgs = _json_ac.dumps(_PLAYER_AUTOSCROLL_MSG, ensure_ascii=False)
+        autoscroll_html = (
+            '<label class="autoscroll-toggle">'
+            '<input type="checkbox" id="autoscroll-toggle" checked>'
+            f"<span data-autoscroll-label data-msgs='{ac_msgs}'>"
+            f"{_html.escape(_PLAYER_AUTOSCROLL_MSG['en'])}</span>"
+            "</label>"
+        )
     # Live logic is only wired when we know which task the page is for. The
     # page opens the shared SSE stream and reacts to this task's events:
     #   transcript_updated -> re-fetch /transcript-entries and rebuild the list
@@ -977,6 +998,7 @@ def _player_page_html(
     ol.innerHTML = "";
     blocks.forEach(function(block) {{ ol.appendChild(buildBlock(block)); }});
     wireCues(media);
+    wireAutoscroll();
   }}
 
   function refetchEntries() {{
@@ -1042,11 +1064,16 @@ def _player_page_html(
   .cue:focus-visible {{ outline: 2px solid #7aa; outline-offset: 1px; }}
   .media-unavailable {{ color: #ccc; font-size: 1.05rem; text-align: center;
     margin: 3rem 1rem; }}
+  .autoscroll-toggle {{ display: flex; align-items: center; gap: 0.4rem;
+    width: min(960px, 100%); margin: 0.8rem 0 0; color: #bbb;
+    font-size: 0.85rem; cursor: pointer; }}
+  .autoscroll-toggle input {{ cursor: pointer; }}
 </style>
 </head>
 <body>
 <h1>{_html.escape(title)}</h1>
 {media_block}
+{autoscroll_html}
 {transcript_html}
 <script>
 (function() {{
@@ -1062,6 +1089,18 @@ def _player_page_html(
         if (msgs[code]) {{ mu.textContent = msgs[code]; break; }}
       }}
     }} catch (e) {{ /* keep the default English text */ }}
+  }}
+  // Localize the autoscroll checkbox label client-side.
+  var labelEl = document.querySelector("[data-autoscroll-label]");
+  if (labelEl) {{
+    try {{
+      var acMsgs = JSON.parse(labelEl.getAttribute("data-msgs") || "{{}}");
+      var acLangs = (navigator.languages || [navigator.language || "en"]);
+      for (var ai = 0; ai < acLangs.length; ai++) {{
+        var acCode = String(acLangs[ai] || "").slice(0, 2).toLowerCase();
+        if (acMsgs[acCode]) {{ labelEl.textContent = acMsgs[acCode]; break; }}
+      }}
+    }} catch (e) {{ /* keep the default English label */ }}
   }}
   // Wire seek-on-click + active-cue highlight. Re-queries .cue each call so it
   // works after the transcript list is rebuilt from a transcript_updated event.
@@ -1094,12 +1133,67 @@ def _player_page_html(
         if (active) active.classList.remove("active");
         if (current) current.classList.add("active");
         active = current;
+        if (current) maybeAutoscroll(current);
       }}
     }});
   }}
 
   var media = document.querySelector("video, audio");
   wireCues(media);
+
+  // --- Autoscroll (vts-eho) ---
+  // The checkbox renders whenever media is present, even before the
+  // transcript exists (task still processing -> blocks=[] on first paint).
+  // ".transcript" itself may not exist yet at load time, so scrollBox starts
+  // null and maybeAutoscroll/scrollCueToCenter re-check it live. Once the
+  // transcript streams in via SSE, rebuildTranscript() calls wireAutoscroll()
+  // again to (re)acquire ".transcript" and attach the scroll listener,
+  // guarded by _autoscrollWired so it's never double-bound.
+  var scrollBox = document.querySelector(".transcript");
+  var autoToggle = document.getElementById("autoscroll-toggle");
+  var programmaticScroll = false;
+  var programmaticScrollTimer = null;
+
+  function scrollCueToCenter(cue) {{
+    if (!cue || !scrollBox) return;
+    // Mark this scroll as ours so the scroll listener doesn't treat the
+    // smooth-scroll's own events as a user gesture. Cleared on a debounce
+    // after the animation's events settle.
+    programmaticScroll = true;
+    if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+    programmaticScrollTimer = setTimeout(function() {{
+      programmaticScroll = false;
+    }}, 150);
+    cue.scrollIntoView({{ block: "center", behavior: "smooth" }});
+  }}
+
+  function maybeAutoscroll(cue) {{
+    if (autoToggle && autoToggle.checked) scrollCueToCenter(cue);
+  }}
+
+  function wireAutoscroll() {{
+    scrollBox = document.querySelector(".transcript");
+    if (!scrollBox || scrollBox._autoscrollWired) return;
+    scrollBox._autoscrollWired = true;
+    scrollBox.addEventListener("scroll", function() {{
+      // Our own smooth-scroll fires scroll events too; ignore those.
+      if (programmaticScroll) return;
+      // A genuine user scroll turns autoscroll off.
+      if (autoToggle && autoToggle.checked) autoToggle.checked = false;
+    }});
+  }}
+
+  if (autoToggle) {{
+    autoToggle.addEventListener("change", function() {{
+      // Re-enabling brings the current sentence back into view.
+      if (autoToggle.checked) {{
+        var cur = document.querySelector(".cue.active");
+        if (cur) scrollCueToCenter(cur);
+      }}
+    }});
+  }}
+
+  wireAutoscroll();
 {live_script}
 }})();
 </script>
