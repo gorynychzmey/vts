@@ -1747,10 +1747,18 @@ def create_app() -> FastAPI:
         return JSONResponse({"version": __version__}, headers=no_cache_headers)
 
     @app.get("/api/status-config")
-    async def status_config() -> JSONResponse:
+    async def status_config(
+        settings: Settings = Depends(get_settings_dep),
+    ) -> JSONResponse:
         """Pure-status semantics for the frontend, fetched once at bootstrap.
         Task-DEPENDENT capabilities ride per-task on TaskOut.capabilities."""
-        return JSONResponse({"status_flags": _ts.status_flags()}, headers=no_cache_headers)
+        return JSONResponse(
+            {
+                "status_flags": _ts.status_flags(),
+                "tasks_page_size": settings.tasks_page_size,
+            },
+            headers=no_cache_headers,
+        )
 
     @app.get("/api/me", response_model=MeOut)
     async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeOut:
@@ -2307,25 +2315,50 @@ def create_app() -> FastAPI:
         limit: int | None = None,
         offset: int = 0,
         compact: bool = False,
+        before_ts: datetime | None = None,
+        before_id: uuid.UUID | None = None,
+        after_ts: datetime | None = None,
+        after_id: uuid.UUID | None = None,
+        order: str = "desc",
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> list[TaskOut] | list[TaskCompactOut]:
         """List tasks owned by the current user, newest first. Use
-        `limit`/`offset` to paginate and `compact=true` for slim records
-        (no steps/options/paths) when the client has a small response
-        budget (e.g. ChatGPT Custom Actions cap at ~30KB)."""
+        `limit`/`offset` (legacy) or the cursor params
+        `before_ts`/`before_id` (older than) and `after_ts`/`after_id`
+        (newer than) with `order=desc|asc` to paginate; `compact=true`
+        for slim records (ChatGPT Custom Actions cap ~30KB)."""
         if limit is not None and limit < 0:
             raise HTTPException(status_code=422, detail="limit must be non-negative")
         if offset < 0:
             raise HTTPException(status_code=422, detail="offset must be non-negative")
         if limit is not None and limit > 500:
             raise HTTPException(status_code=422, detail="limit must be <= 500")
+        if order not in ("asc", "desc"):
+            raise HTTPException(status_code=422, detail="order must be 'asc' or 'desc'")
+        if (before_ts is None) != (before_id is None):
+            raise HTTPException(status_code=422, detail="before_ts and before_id must be supplied together")
+        if (after_ts is None) != (after_id is None):
+            raise HTTPException(status_code=422, detail="after_ts and after_id must be supplied together")
+        before = (before_ts, before_id) if before_ts is not None else None
+        after = (after_ts, after_id) if after_ts is not None else None
+        if before is not None and after is not None and not (after < before):
+            raise HTTPException(status_code=422, detail="after cursor must be older than before cursor")
         repo = Repo(session)
-        tasks = await repo.list_tasks_for_user(
-            uuid.UUID(user.id), limit=limit, offset=offset,
-        )
+        if before is not None or after is not None:
+            tasks = await repo.list_tasks_page(
+                uuid.UUID(user.id),
+                before=before,
+                after=after,
+                order=order,
+                limit=limit if limit is not None else settings.tasks_page_size,
+            )
+        else:
+            tasks = await repo.list_tasks_for_user(
+                uuid.UUID(user.id), limit=limit, offset=offset,
+            )
         queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
         lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         task_ids = [task.id for task in tasks]

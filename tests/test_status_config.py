@@ -45,3 +45,9 @@ async def test_status_config_is_not_cached(client) -> None:
     response = await client.get("/api/status-config")
 
     assert "no-store" in response.headers["cache-control"]
+
+
+async def test_status_config_includes_page_size(client) -> None:
+    response = await client.get("/api/status-config")
+    body = response.json()
+    assert body["tasks_page_size"] == 10
