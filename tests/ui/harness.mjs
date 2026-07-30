@@ -2,8 +2,14 @@ import { chromium } from "playwright";
 import http from "http";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-export const STATIC_DIR = "/home/victor/dev/vts/vts/static";
+// Resolve relative to THIS file (tests/ui/harness.mjs) so the verifier serves
+// the static assets of whatever checkout it runs in — the main repo OR a git
+// worktree. A hardcoded absolute path silently tested the wrong tree from a
+// worktree (VOS-84), passing against feature-less code.
+const _here = path.dirname(fileURLToPath(import.meta.url));
+export const STATIC_DIR = path.resolve(_here, "..", "..", "vts", "static");
 
 const CT = {
   ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
