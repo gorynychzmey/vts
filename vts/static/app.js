@@ -2265,7 +2265,9 @@ function uploadFileWithProgress(fd) {
     xhr.onload = () => {
       setProgress(1);
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
+        let task = null;
+        try { task = JSON.parse(xhr.responseText); } catch (_) {}
+        resolve(task);
       } else {
         let msg = `HTTP ${xhr.status}`;
         try { msg = JSON.parse(xhr.responseText)?.detail || msg; } catch (_) {}
@@ -2836,6 +2838,7 @@ async function createTask(event) {
   clearTaskFormError();
   const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
+  let created = null;
   try {
     if (isFile && fileInput) {
       const file = fileInput.files[0];
@@ -2868,7 +2871,7 @@ async function createTask(event) {
         fd.append("transcript", fields.transcript ? "true" : "false");
         fd.append("diarize", fields.diarize ? "true" : "false");
         fd.append("prompts", fields.prompts);
-        await uploadFileWithProgress(fd);
+        created = await uploadFileWithProgress(fd);
       }
     } else {
       const payload = {
@@ -2880,7 +2883,7 @@ async function createTask(event) {
         speaker_no_manual_stop: form.speaker_no_manual_stop.checked,
         prompts: getSelectedPrompts()
       };
-      await api("/api/tasks", {
+      created = await api("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -2901,7 +2904,13 @@ async function createTask(event) {
   resetPromptSelection();
   syncSummaryToggle();
   syncSourceType();
-  await loadTasks();
+  if (created && created.id) {
+    prependTaskCard(created);
+    updateHeadTail();
+    void refreshQueuePositions();
+  } else {
+    await loadFirstPage();
+  }
 }
 
 function syncSummaryToggle() {
@@ -3503,7 +3512,7 @@ function connectEvents() {
     }
     setTimeout(() => {
       connectEvents();
-      void loadTasks();
+      void loadFirstPage();
     }, 2000);
   };
 }
