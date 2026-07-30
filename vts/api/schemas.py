@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_serializer, model_validator
 
 
 class PromptRef(BaseModel):
@@ -188,6 +188,14 @@ class TaskOut(BaseModel):
     progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
 
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime) -> str:
+        # Fixed-width microseconds so lexicographic string comparison of two
+        # same-second timestamps is correct (client isNewerThan / cursor strings).
+        # Pydantic's default omits fractional seconds when us==0, which breaks
+        # "...56Z" vs "...56.000001Z" ordering (Z > '.'). Force 6 digits.
+        return v.isoformat(timespec="microseconds")
+
 
 class TaskCompactOut(BaseModel):
     """Slimmed-down task representation for list views.
@@ -209,6 +217,13 @@ class TaskCompactOut(BaseModel):
     updated_at: datetime
     progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime) -> str:
+        # See TaskOut._ser_created_at: fixed-width microseconds keep
+        # lexicographic string ordering of created_at consistent with
+        # chronological ordering (VOS-84 pagination/banner cursors).
+        return v.isoformat(timespec="microseconds")
 
 
 class TaskIdsRequest(BaseModel):

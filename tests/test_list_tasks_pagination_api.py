@@ -158,3 +158,56 @@ async def test_compact_cursor_path(client, factory):
     for item in body:
         assert "steps" not in item
         assert "options" not in item
+
+
+async def test_created_at_is_fixed_width_and_lexicographically_ordered(client, factory):
+    """Pins the VOS-84 fix: pydantic's default datetime serialization omits
+    fractional seconds when microsecond==0 (e.g. "...56Z") but includes them
+    otherwise (e.g. "...56.000001Z"). Since "Z" (0x5A) sorts after "."
+    (0x2E), two same-second timestamps could compare as *out of order* as
+    plain strings — which breaks both the client's isNewerThan() comparison
+    and any future string-based cursor comparison. TaskOut/TaskCompactOut
+    force isoformat(timespec="microseconds") so created_at is always
+    fixed-width and lexicographic order matches chronological order.
+    """
+    same_second = datetime(2026, 1, 1, 12, 0, 0, 0, tzinfo=timezone.utc)
+    async with factory() as s:
+        older = Task(
+            id=uuid.uuid4(),
+            user_id=USER_ID,
+            source_url="https://example.com/zero-us",
+            status=TaskStatus.completed,
+            created_at=same_second,  # microsecond == 0
+            artifact_dir="/tmp/x",
+        )
+        newer = Task(
+            id=uuid.uuid4(),
+            user_id=USER_ID,
+            source_url="https://example.com/nonzero-us",
+            status=TaskStatus.completed,
+            created_at=same_second + timedelta(microseconds=1),
+            artifact_dir="/tmp/x",
+        )
+        s.add(older)
+        s.add(newer)
+        await s.commit()
+
+    r = await client.get("/api/tasks?limit=2")
+    assert r.status_code == 200
+    by_url = {t["source_url"]: t["created_at"] for t in r.json()}
+    zero_us_str = by_url["https://example.com/zero-us"]
+    nonzero_us_str = by_url["https://example.com/nonzero-us"]
+
+    # Fixed-width: both must carry exactly 6 fractional digits.
+    assert zero_us_str.endswith(".000000+00:00"), zero_us_str
+    assert nonzero_us_str.endswith(".000001+00:00"), nonzero_us_str
+    assert len(zero_us_str) == len(nonzero_us_str)
+
+    # Lexicographic order must match chronological order (older < newer).
+    assert zero_us_str < nonzero_us_str
+
+    # Also pin the compact path, which uses the same serializer.
+    rc = await client.get("/api/tasks", params={"compact": "true", "limit": 2})
+    assert rc.status_code == 200
+    by_url_compact = {t["source_url"]: t["created_at"] for t in rc.json()}
+    assert by_url_compact["https://example.com/zero-us"] < by_url_compact["https://example.com/nonzero-us"]
