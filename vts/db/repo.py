@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload, undefer
 from vts.db.models import (
     ApiToken,
     AsrSegment,
+    DeliveryTarget,
     MatchDecision,
     Preset,
     Prompt,
@@ -621,6 +622,64 @@ class Repo:
         if u is not None and u.default_preset == {"source": "user", "id": str(preset_id)}:
             u.default_preset = None
         await self.session.delete(preset)
+        await self.session.flush()
+        return True
+
+    # ------------------------------------------------------------------
+    # DeliveryTarget CRUD
+    # ------------------------------------------------------------------
+
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        config: dict, secrets_enc: bytes | None,
+    ) -> DeliveryTarget:
+        target = DeliveryTarget(
+            user_id=user_id, name=name, adapter=adapter,
+            config_json=config, secrets_enc=secrets_enc)
+        self.session.add(target)
+        await self.session.flush()
+        return target
+
+    async def list_delivery_targets(self, user_id: uuid.UUID) -> list[DeliveryTarget]:
+        stmt = (select(DeliveryTarget)
+                .where(DeliveryTarget.user_id == user_id)
+                .order_by(DeliveryTarget.created_at.desc()))
+        return list(await self.session.scalars(stmt))
+
+    async def get_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> DeliveryTarget | None:
+        return await self.session.scalar(
+            select(DeliveryTarget).where(
+                DeliveryTarget.id == target_id, DeliveryTarget.user_id == user_id))
+
+    async def get_delivery_target_by_name(self, user_id: uuid.UUID, name: str) -> DeliveryTarget | None:
+        return await self.session.scalar(
+            select(DeliveryTarget).where(
+                DeliveryTarget.user_id == user_id, DeliveryTarget.name == name))
+
+    async def update_delivery_target(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> DeliveryTarget | None:
+        target = await self.get_delivery_target(user_id, target_id)
+        if target is None:
+            return None
+        if name is not None:
+            target.name = name
+        if config is not None:
+            target.config_json = config
+        if clear_secrets:
+            target.secrets_enc = None
+        elif secrets_enc is not None:
+            target.secrets_enc = secrets_enc
+        await self.session.flush()
+        return target
+
+    async def delete_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+        target = await self.get_delivery_target(user_id, target_id)
+        if target is None:
+            return False
+        await self.session.delete(target)
         await self.session.flush()
         return True
 
