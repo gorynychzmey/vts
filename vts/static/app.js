@@ -170,7 +170,11 @@ const state = {
   versionTimer: null,
   durationTimer: null,
   queueTimer: null,
-  queueRefreshInFlight: false
+  queueRefreshInFlight: false,
+  taskPaging: {
+    head: null, tail: null, pageSize: 10,
+    loading: false, exhausted: false, newIds: new Set(),
+  }
 };
 
 function interpolate(template, params = {}) {
@@ -1815,6 +1819,7 @@ function renderTaskCard(task) {
   applyI18n(root);
 
   root.dataset.taskId = task.id;
+  root.dataset.createdAt = task.created_at;
   transcriptPre.textContent = t("tab.prompt_transcript");
   summaryPre.textContent = t("tab.prompt_summary");
   if (redactedPre) {
@@ -2034,12 +2039,75 @@ function renderTasks(tasks) {
   updateQueueWatcher(tasks);
 }
 
-async function loadTasks() {
-  const tasks = await api("/api/tasks").catch((err) => {
+function cursorOf(taskEl) {
+  if (!taskEl) return null;
+  return { ts: taskEl.dataset.createdAt, id: taskEl.dataset.taskId };
+}
+
+function updateHeadTail() {
+  const cards = taskList.querySelectorAll(".task");
+  state.taskPaging.head = cursorOf(cards[0]);
+  state.taskPaging.tail = cursorOf(cards[cards.length - 1]);
+}
+
+function updateSentinel() {
+  const sentinel = document.getElementById("task-sentinel");
+  if (!sentinel) return;
+  const p = state.taskPaging;
+  sentinel.hidden = false;
+  sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
+  sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+}
+
+async function loadFirstPage() {
+  const p = state.taskPaging;
+  p.loading = true;
+  // clearNewTasksBanner() is defined in Task 6; guard until it lands.
+  if (typeof clearNewTasksBanner === "function") clearNewTasksBanner();
+  updateSentinel();
+  let tasks;
+  try {
+    tasks = await api(`/api/tasks?limit=${p.pageSize}`);
+  } catch (err) {
     taskList.textContent = err.message;
-    return [];
-  });
+    p.loading = false;
+    return;
+  }
   renderTasks(tasks);
+  p.exhausted = tasks.length < p.pageSize;
+  updateHeadTail();
+  p.loading = false;
+  updateSentinel();
+}
+
+async function loadNextPage() {
+  const p = state.taskPaging;
+  if (p.loading || p.exhausted || !p.tail) return;
+  p.loading = true;
+  updateSentinel();
+  const q = new URLSearchParams({
+    limit: String(p.pageSize),
+    order: "desc",
+    before_ts: p.tail.ts,
+    before_id: p.tail.id,
+  });
+  let tasks;
+  try {
+    tasks = await api(`/api/tasks?${q.toString()}`);
+  } catch {
+    p.loading = false;
+    updateSentinel();
+    return;
+  }
+  tasks.forEach((t) => appendTaskCard(t));
+  p.exhausted = tasks.length < p.pageSize;
+  updateHeadTail();
+  p.loading = false;
+  updateSentinel();
+}
+
+async function loadTasks() {
+  await loadFirstPage();
 }
 
 function syncSourceType() {
@@ -3413,6 +3481,9 @@ async function refreshAll() {
   try {
     const cfg = await api("/api/status-config");
     if (cfg && cfg.status_flags) window.statusPred.setFlags(cfg.status_flags);
+    if (cfg && Number.isFinite(cfg.tasks_page_size)) {
+      state.taskPaging.pageSize = cfg.tasks_page_size;
+    }
   } catch { /* predicates degrade to false; loadTasks still renders */ }
   await loadTasks();
   connectEvents();
@@ -5483,6 +5554,13 @@ async function bootstrap() {
   // labels resolve to names (not the raw "finalize:user:<uuid>") on first paint.
   await loadPrompts();
   await refreshAll();
+  // Infinite scroll: observe the sentinel once at bootstrap (refreshAll()
+  // re-runs on user switches, so wiring here avoids duplicate observers).
+  const taskSentinelObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) void loadNextPage();
+  }, { rootMargin: "200px" });
+  const _sentinelEl = document.getElementById("task-sentinel");
+  if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
   await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();
