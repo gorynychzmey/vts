@@ -2059,6 +2059,91 @@ function updateSentinel() {
   sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
 }
 
+function isNewerThan(ts, id, cursor) {
+  // returns true if (ts,id) > cursor lexicographically on (ts, id)
+  if (!cursor) return true;
+  if (ts > cursor.ts) return true;
+  if (ts < cursor.ts) return false;
+  return String(id) > String(cursor.id);
+}
+
+function clearNewTasksBanner() {
+  state.taskPaging.newIds.clear();
+  const b = document.getElementById("new-tasks-banner");
+  if (b) b.hidden = true;
+}
+
+function showNewTasksBanner() {
+  const b = document.getElementById("new-tasks-banner");
+  const c = document.getElementById("new-tasks-count");
+  if (!b) return;
+  const n = state.taskPaging.newIds.size;
+  if (n === 0) { b.hidden = true; return; }
+  if (c) c.textContent = `(${n})`;
+  b.hidden = false;
+}
+
+async function maybeFlagNewerTask(taskId) {
+  const p = state.taskPaging;
+  if (p.newIds.has(taskId) || findTaskEl(taskId)) return;
+  let task;
+  try {
+    task = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  } catch {
+    return;
+  }
+  if (!task || !task.created_at) return;
+  if (isNewerThan(task.created_at, task.id, p.head)) {
+    p.newIds.add(taskId);
+    showNewTasksBanner();
+  }
+}
+
+async function loadNewer() {
+  const p = state.taskPaging;
+  if (p.loading || !p.head) return;
+  const myEpoch = p.epoch;
+  p.loading = true;
+  const q = new URLSearchParams({
+    limit: String(p.pageSize),
+    order: "asc",
+    after_ts: p.head.ts,
+    after_id: p.head.id,
+  });
+  try {
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?${q.toString()}`);
+    } catch {
+      return;
+    }
+    // A loadFirstPage reset may have happened while this fetch was in
+    // flight (same guard loadNextPage uses): discard the stale result
+    // instead of prepending onto a list that's been rebuilt/invalidated.
+    if (myEpoch !== p.epoch) return;
+    // ASC from server → reverse so newest ends on top after successive prepends
+    tasks.slice().reverse().forEach((t) => prependTaskCard(t));
+    updateHeadTail();
+    // Drop now-loaded ids; if a full page came back there may be more above.
+    tasks.forEach((t) => p.newIds.delete(t.id));
+    if (tasks.length < p.pageSize) {
+      clearNewTasksBanner();
+    } else {
+      showNewTasksBanner();
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } finally {
+    // Only the call that owns the current epoch clears `loading`, matching
+    // loadFirstPage/loadNextPage's ownership pattern.
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+    }
+  }
+}
+
+document.getElementById("new-tasks-banner")
+  ?.addEventListener("click", () => void loadNewer());
+
 async function loadFirstPage() {
   const p = state.taskPaging;
   // No re-entrancy guard on purpose: a reset must always be able to
@@ -3354,6 +3439,9 @@ function connectEvents() {
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
     patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code, payload.data.queue, payload.data.awaiting_step);
+    if (!findTaskEl(payload.task_id)) {
+      void maybeFlagNewerTask(payload.task_id);
+    }
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);

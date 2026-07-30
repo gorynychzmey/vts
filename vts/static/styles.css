@@ -668,6 +668,69 @@ input[type="file"] {
   gap: 0.7rem;
 }
 
+.new-tasks-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin-bottom: 0.7rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: #fff8e8;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.new-tasks-banner:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.new-tasks-banner[hidden] {
+  display: none;
+}
+
+.new-tasks-count {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.task-sentinel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.task-sentinel[hidden] {
+  display: none;
+}
+
+.task-sentinel-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: task-sentinel-spin 0.7s linear infinite;
+}
+
+@keyframes task-sentinel-spin {
+  to { transform: rotate(360deg); }
+}
+
+.task-sentinel-end {
+  color: var(--ink-soft);
+}
+
 .task {
   border: 1px solid var(--line);
   border-radius: 12px;
