@@ -51,6 +51,14 @@ class StepStatus(StrEnum):
     skipped = "skipped"
 
 
+class DeliveryStatus(StrEnum):
+    pending = "pending"
+    delivering = "delivering"
+    delivered = "delivered"
+    failed = "failed"
+    dead = "dead"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -197,6 +205,61 @@ class Preset(Base):
 
     __table_args__ = (
         Index("ix_presets_user_created", "user_id", "created_at"),
+    )
+
+
+class DeliveryTarget(Base):
+    __tablename__ = "delivery_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    adapter: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    secrets_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_delivery_targets_user_name"),
+        Index("ix_delivery_targets_user", "user_id"),
+    )
+
+
+class DeliveryAttempt(Base):
+    __tablename__ = "delivery_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    target_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("delivery_targets.id", ondelete="SET NULL"), nullable=True
+    )
+    adapter: Mapped[str] = mapped_column(String(64), nullable=False)
+    variant: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[DeliveryStatus] = mapped_column(
+        Enum(DeliveryStatus, name="delivery_status", native_enum=False),
+        nullable=False, default=DeliveryStatus.pending,
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_delivery_attempts_status_next", "status", "next_attempt_at"),
+        Index("ix_delivery_attempts_task", "task_id"),
     )
 
 
