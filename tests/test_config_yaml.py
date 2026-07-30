@@ -303,3 +303,9 @@ def test_diarization_defaults() -> None:
     assert settings.diarization_min_words == 2
     assert settings.diarization_min_seconds == 0.8
     assert settings.diarization_min_speaker_share == 0.05
+
+
+def test_normalize_yaml_overrides_flattens_tasks_page_size() -> None:
+    normalized = _normalize_yaml_overrides({"tasks": {"page_size": 25}})
+    assert "tasks" not in normalized
+    assert normalized["tasks_page_size"] == 25
