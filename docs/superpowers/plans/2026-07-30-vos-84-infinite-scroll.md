@@ -15,7 +15,7 @@
 - `app.js` has no `defer`; any new element referenced by `getElementById`/`querySelector` at load time must appear in `index.html` BEFORE the `<script src="/static/app.js">` tag at line ~895 (memory `feedback_script_dom_order`). The task list is at `index.html:314`, well before that — safe.
 - Repo integration tests run against Postgres via `make_test_engine` from `tests/_db.py` (see `tests/test_presets_repo.py` for the fixture pattern). No SQLite/Postgres split (memory `feedback_test_environment_parity`).
 - `vts/static/*` changes → run the `verifier-web` skill before tagging any build.
-- Config precedence is env > YAML > field default (standard pydantic-settings ordering).
+- Config precedence is YAML > env > field default. In this codebase `get_settings()` passes YAML as `Settings(**overrides)` init-kwargs, which pydantic-settings ranks above env; `settings_customise_sources` only swaps the env source class, it does not reorder. (My original "env > YAML" was wrong; verified empirically 2026-07-30.)
 
 ---
 
@@ -1067,7 +1067,7 @@ git status   # must show up to date with origin
 - SSE ignore of un-loaded tasks → unchanged early-return, noted in Task 6. ✓
 - "New tasks ↑" banner (newer-than-head) + pull via `after` → Task 6. ✓
 - Prepend own new tasks, no rebuild → Task 7. ✓
-- Config via YAML AND env, precedence env>YAML>default → Task 1. ✓
+- Config via YAML AND env, precedence YAML>env>default (codebase reality) → Task 1. ✓
 - Page size to client via status-config → Tasks 3, 5. ✓
 - SSE reconnect resets consistently → Task 7. ✓
 - `actingAs` switch resets paging → handled: those paths call `loadTasks` which now aliases `loadFirstPage`. ✓

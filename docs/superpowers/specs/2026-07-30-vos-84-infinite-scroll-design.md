@@ -144,9 +144,12 @@ tasks_page_size: int = 10
   `_flatten_nested_overrides` machinery: `tasks: { page_size: N }` →
   `tasks_page_size` — the same nesting convention `worker:` → `worker_max_active_tasks`
   already uses. No new loading code.
-- **Precedence:** env `VTS_TASKS_PAGE_SIZE` > YAML `tasks.page_size` > field
-  default (10). This is the standard pydantic-settings ordering already relied
-  on by the oauth fields.
+- **Precedence:** YAML `tasks.page_size` > env `VTS_TASKS_PAGE_SIZE` > field
+  default (10). NOTE: in this codebase `get_settings()` loads YAML and passes it
+  as `Settings(**overrides)` init-kwargs, and pydantic-settings ranks init-kwargs
+  ABOVE env (`settings_customise_sources` only swaps the env source class, it does
+  not reorder precedence). So YAML overrides env for every field, this one
+  included. Verified empirically 2026-07-30.
 - Document in `.env.example` (`# VTS_TASKS_PAGE_SIZE=10`) and `config.yaml`.
 
 ### Expose page size to the client
@@ -261,7 +264,7 @@ cursor beats offset here). Dedupe by `data-task-id` before inserting.
 
 **Config (pytest):**
 - `tasks.page_size` from YAML applies.
-- `VTS_TASKS_PAGE_SIZE` from env applies and wins over YAML.
+- `VTS_TASKS_PAGE_SIZE` from env applies over the default; YAML (init-kwarg) wins over env.
 
 **Frontend (verifier-web / Playwright):** `vts/static/*` changes → run
 `verifier-web` before tagging a build (project rule).
