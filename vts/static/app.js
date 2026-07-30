@@ -173,7 +173,7 @@ const state = {
   queueRefreshInFlight: false,
   taskPaging: {
     head: null, tail: null, pageSize: 10,
-    loading: false, exhausted: false, newIds: new Set(),
+    loading: false, exhausted: false, newIds: new Set(), epoch: 0,
   }
 };
 
@@ -2061,28 +2061,43 @@ function updateSentinel() {
 
 async function loadFirstPage() {
   const p = state.taskPaging;
+  // No re-entrancy guard on purpose: a reset must always be able to
+  // interrupt an in-flight loadNextPage (or a stale loadFirstPage) rather
+  // than be blocked by it. Bumping epoch here invalidates any fetch that
+  // was already in flight — its result gets discarded when it resolves
+  // (see the epoch check below and in loadNextPage).
+  const myEpoch = ++p.epoch;
   p.loading = true;
   // clearNewTasksBanner() is defined in Task 6; guard until it lands.
   if (typeof clearNewTasksBanner === "function") clearNewTasksBanner();
   updateSentinel();
-  let tasks;
   try {
-    tasks = await api(`/api/tasks?limit=${p.pageSize}`);
-  } catch (err) {
-    taskList.textContent = err.message;
-    p.loading = false;
-    return;
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?limit=${p.pageSize}`);
+    } catch (err) {
+      if (myEpoch !== p.epoch) return; // superseded by a newer reset; don't clobber its DOM
+      taskList.textContent = err.message;
+      return;
+    }
+    if (myEpoch !== p.epoch) return; // a newer loadFirstPage already reset the list
+    renderTasks(tasks);
+    p.exhausted = tasks.length < p.pageSize;
+    updateHeadTail();
+  } finally {
+    // Only the call that owns the current epoch clears `loading`/repaints
+    // the sentinel; a stale call must not clobber a newer call's state.
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateSentinel();
+    }
   }
-  renderTasks(tasks);
-  p.exhausted = tasks.length < p.pageSize;
-  updateHeadTail();
-  p.loading = false;
-  updateSentinel();
 }
 
 async function loadNextPage() {
   const p = state.taskPaging;
   if (p.loading || p.exhausted || !p.tail) return;
+  const myEpoch = p.epoch;
   p.loading = true;
   updateSentinel();
   const q = new URLSearchParams({
@@ -2091,19 +2106,23 @@ async function loadNextPage() {
     before_ts: p.tail.ts,
     before_id: p.tail.id,
   });
-  let tasks;
   try {
-    tasks = await api(`/api/tasks?${q.toString()}`);
-  } catch {
-    p.loading = false;
-    updateSentinel();
-    return;
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?${q.toString()}`);
+    } catch {
+      return;
+    }
+    if (myEpoch !== p.epoch) return; // a reset happened while this fetch was in flight; discard
+    tasks.forEach((t) => appendTaskCard(t));
+    p.exhausted = tasks.length < p.pageSize;
+    updateHeadTail();
+  } finally {
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateSentinel();
+    }
   }
-  tasks.forEach((t) => appendTaskCard(t));
-  p.exhausted = tasks.length < p.pageSize;
-  updateHeadTail();
-  p.loading = false;
-  updateSentinel();
 }
 
 async function loadTasks() {
