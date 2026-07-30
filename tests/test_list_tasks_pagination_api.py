@@ -127,3 +127,34 @@ async def test_after_ge_before_is_422(client, factory):
 async def test_bad_order_is_422(client):
     r = await client.get("/api/tasks?order=sideways")
     assert r.status_code == 422
+
+
+async def test_compact_legacy_path(client, factory):
+    await _seed(factory, 3)
+    r = await client.get("/api/tasks", params={"compact": "true", "limit": 2})
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    for item in body:
+        assert "steps" not in item
+        assert "options" not in item
+
+
+async def test_compact_cursor_path(client, factory):
+    rows = await _seed(factory, 3)
+    tail = rows[2]
+    r = await client.get(
+        "/api/tasks",
+        params={
+            "compact": "true",
+            "limit": 2,
+            "before_ts": tail.created_at.isoformat(),
+            "before_id": str(tail.id),
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    for item in body:
+        assert "steps" not in item
+        assert "options" not in item
