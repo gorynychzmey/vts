@@ -93,6 +93,8 @@ transcribe:
   parallel_per_task: 2
 worker:
   max_active_tasks: 4   # tasks in flight; 1 ≈ legacy sequential behaviour
+tasks:
+  page_size: 10        # infinite-scroll page size for the web task list
 lane:
   network_slots: 1      # concurrent downloads
   ffmpeg_slots: 2       # concurrent ffmpeg jobs

@@ -170,7 +170,11 @@ const state = {
   versionTimer: null,
   durationTimer: null,
   queueTimer: null,
-  queueRefreshInFlight: false
+  queueRefreshInFlight: false,
+  taskPaging: {
+    head: null, tail: null, pageSize: 10,
+    loading: false, exhausted: false, newIds: new Set(), epoch: 0,
+  }
 };
 
 function interpolate(template, params = {}) {
@@ -1782,252 +1786,432 @@ function renderTaskRuntime(taskEl) {
   }
 }
 
+function renderTaskCard(task) {
+  const node = taskTemplate.content.cloneNode(true);
+  const root = node.querySelector(".task");
+  const body = node.querySelector(".task-body");
+  const toggleBtn = root.querySelector(".toggle-btn");
+  const taskRightTop = root.querySelector(".task-right-top");
+  const toolbarWrap = root.querySelector(".task-toolbar-wrap");
+  const toolbarScroll = root.querySelector(".task-right-bottom");
+  const pauseBtn = root.querySelector(".pause-btn");
+  const resumeBtn = root.querySelector(".resume-btn");
+  const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
+  const restartSummaryBtn = root.querySelector(".restart-summary-btn");
+  const restartSummaryMenu = root.querySelector(".restart-summary-menu");
+  const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
+  const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
+  const downloadMediaBtn = root.querySelector(".download-media-btn");
+  const archiveBtn = root.querySelector(".archive-btn");
+  const deleteBtn = root.querySelector(".delete-btn");
+  const resultPromptBar = root.querySelector(".result-prompt-bar");
+  const resultPromptSelect = root.querySelector(".result-prompt-select");
+  const transcriptPre = root.querySelector(".tab-content.transcript");
+  const summaryPre = root.querySelector(".tab-content.summary");
+  const redactedPre = root.querySelector(".tab-content.redacted");
+  const logPre = root.querySelector(".tab-content.log");
+  const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
+  const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
+  const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
+  const copyTabBtn = root.querySelector(".tab-copy-btn");
+  const saveTabBtn = root.querySelector(".tab-save-btn");
+
+  applyI18n(root);
+
+  root.dataset.taskId = task.id;
+  root.dataset.createdAt = task.created_at;
+  transcriptPre.textContent = t("tab.prompt_transcript");
+  summaryPre.textContent = t("tab.prompt_summary");
+  if (redactedPre) {
+    redactedPre.textContent = t("tab.prompt_redacted");
+  }
+  logPre.textContent = t("tab.prompt_log");
+
+  pauseBtn.setAttribute("data-tooltip", t("action.pause"));
+  pauseBtn.setAttribute("aria-label", t("action.pause"));
+  resumeBtn.setAttribute("data-tooltip", t("action.resume"));
+  resumeBtn.setAttribute("aria-label", t("action.resume"));
+  if (resolveVoicesBtn) {
+    resolveVoicesBtn.setAttribute("data-tooltip", t("action.resolve_voices"));
+    resolveVoicesBtn.setAttribute("aria-label", t("action.resolve_voices"));
+  }
+  if (restartSummaryBtn) {
+    restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
+    restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
+  }
+  if (restartSummaryFullBtn) {
+    restartSummaryFullBtn.textContent = t("action.restart_summary_full");
+    restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
+  }
+  if (restartSummaryFinalBtn) {
+    restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
+    restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
+  }
+  if (downloadMediaBtn) {
+    downloadMediaBtn.setAttribute("data-tooltip", t("action.download_media"));
+    downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
+  }
+  if (archiveBtn) {
+    archiveBtn.setAttribute("data-tooltip", t("action.archive"));
+    archiveBtn.setAttribute("aria-label", t("action.archive"));
+  }
+  deleteBtn.setAttribute("data-tooltip", t("action.delete"));
+  deleteBtn.setAttribute("aria-label", t("action.delete"));
+  toggleBtn.setAttribute("data-tooltip", t("action.expand"));
+  toggleBtn.setAttribute("aria-label", t("action.expand"));
+
+  root.querySelectorAll(".tab-btn").forEach((btn) => {
+    const tabName = String(btn.dataset.tab || "");
+    const tabLabel = t(`tab.${tabName}`);
+    btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
+  });
+
+  const doToggle = () => {
+    body.classList.toggle("hidden");
+    const expanded = !body.classList.contains("hidden");
+    toggleBtn.classList.toggle("expanded", expanded);
+    const label = expanded ? t("action.collapse") : t("action.expand");
+    toggleBtn.title = label;
+    toggleBtn.setAttribute("aria-label", label);
+    if (expanded) {
+      const activeTab = ensureActiveTabSelection(root);
+      if (activeTab) {
+        void activateTaskTab(root, task.id, activeTab);
+      }
+    } else {
+      stopLogPolling(root);
+    }
+  };
+  taskRightTop.addEventListener("click", doToggle);
+  toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
+  if (toolbarWrap && toolbarScroll) {
+    const updateFade = () => {
+      const atEnd = toolbarScroll.scrollLeft + toolbarScroll.clientWidth >= toolbarScroll.scrollWidth - 1;
+      toolbarWrap.classList.toggle("scrolled-end", atEnd);
+    };
+    toolbarScroll.addEventListener("scroll", updateFade, { passive: true });
+    updateFade();
+  }
+  pauseBtn.addEventListener("click", () => pauseTask(task.id));
+  resumeBtn.addEventListener("click", () => resumeTask(task.id));
+  if (resolveVoicesBtn) {
+    resolveVoicesBtn.addEventListener("click", () => {
+      // Read live runtime at click time: paused === awaiting_input drives
+      // "Save & continue" visibility. (Per-speaker duration now comes from
+      // each row's own diarized seconds, not media length — vts-552.)
+      const rt = root._runtime;
+      const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
+      openVoiceDialog(task.id, paused);
+    });
+  }
+  if (restartSummaryBtn && restartSummaryMenu) {
+    restartSummaryBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = restartSummaryMenu.classList.contains("open");
+      document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+      if (!isOpen) {
+        const rect = restartSummaryBtn.getBoundingClientRect();
+        restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
+        restartSummaryMenu.style.left = "0px";
+        restartSummaryMenu.classList.add("open");
+        restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
+      }
+    });
+  }
+  if (restartSummaryFullBtn) {
+    restartSummaryFullBtn.addEventListener("click", () => {
+      restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+      restartSummary(task.id, "full");
+    });
+  }
+  if (restartSummaryFinalBtn) {
+    restartSummaryFinalBtn.addEventListener("click", () => {
+      restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+      openRestartFinalDialog(task);
+    });
+  }
+  if (downloadMediaBtn) {
+    downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title, downloadMediaBtn));
+  }
+  if (archiveBtn) {
+    archiveBtn.addEventListener("click", () => archiveTask(task.id));
+  }
+  deleteBtn.addEventListener("click", () => removeTask(task.id));
+  if (copyTabBtn) {
+    copyTabBtn.addEventListener("click", async () => {
+      await copyActiveTabContent(root, task.id);
+    });
+  }
+  if (saveTabBtn) {
+    saveTabBtn.addEventListener("click", async () => {
+      await saveActiveTabContent(root, task.id);
+    });
+  }
+
+  root.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) {
+        return;
+      }
+      await activateTaskTab(root, task.id, String(btn.dataset.tab || ""));
+    });
+  });
+
+  if (resultPromptSelect) {
+    resultPromptSelect.addEventListener("change", () => {
+      void loadSelectedResult(root, task.id);
+    });
+  }
+
+  root._elements = {
+    linkEl: root.querySelector(".task-link"),
+    playerBtn: root.querySelector(".task-player-btn"),
+    expiredEl: root.querySelector(".task-expired"),
+    sourceEl: root.querySelector(".task-source"),
+    statsEl: root.querySelector(".task-stats"),
+    statsTextEl: root.querySelector(".task-stats-text"),
+    editNameBtn: root.querySelector(".task-edit-name-btn"),
+    nameEditWrap: root.querySelector(".task-name-edit"),
+    nameInput: root.querySelector(".task-name-input"),
+    nameOkBtn: root.querySelector(".task-name-ok-btn"),
+    nameCancelBtn: root.querySelector(".task-name-cancel-btn"),
+    statusEl: root.querySelector(".task-status"),
+    taskRuntimeEl: root.querySelector(".task-runtime"),
+    pauseBtn,
+    resumeBtn,
+    resolveVoicesBtn,
+    restartSummaryBtn,
+    restartSummaryMenu,
+    restartSummaryFinalBtn,
+    downloadMediaBtn,
+    archiveBtn,
+    transcriptTabBtn,
+    summaryTabBtn,
+    redactedTabBtn,
+    copyTabBtn,
+    saveTabBtn,
+    resultPromptBar,
+    resultPromptSelect,
+    transcriptPanel: transcriptPre,
+    summaryPanel: summaryPre,
+    redactedPanel: redactedPre,
+    logPanel: logPre,
+    stepLabelEl: root.querySelector(".step-label"),
+    stepTimeEl: root.querySelector(".step-time"),
+    overallProgressWrap: root.querySelector(".overall-progress"),
+    overallProgressFill: root.querySelector(".overall-progress .step-progress-fill"),
+    overallProgressText: root.querySelector(".overall-progress .step-progress-text"),
+    localProgressWrap: root.querySelector(".local-progress"),
+    localProgressFill: root.querySelector(".local-progress .step-progress-fill"),
+    localProgressText: root.querySelector(".local-progress .step-progress-text"),
+    messageEl: root.querySelector(".task-message")
+  };
+  if (root._elements && root._elements.statsEl) {
+    root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
+  }
+  root._runtime = createRuntime(task);
+  const _els = root._elements;
+  _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
+  _els.nameOkBtn.addEventListener("click", () => commitTitleEdit(root));
+  _els.nameCancelBtn.addEventListener("click", () => cancelTitleEdit(root));
+  _els.nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
+  });
+  renderTaskRuntime(root);
+  return root;
+}
+
+function appendTaskCard(task) {
+  if (findTaskEl(task.id)) return;
+  taskList.appendChild(renderTaskCard(task));
+}
+
+function prependTaskCard(task) {
+  if (findTaskEl(task.id)) return;
+  taskList.insertBefore(renderTaskCard(task), taskList.firstChild);
+}
+
 function renderTasks(tasks) {
   stopAllLogPolling();
   taskList.innerHTML = "";
-  tasks.forEach((task) => {
-    const node = taskTemplate.content.cloneNode(true);
-    const root = node.querySelector(".task");
-    const body = node.querySelector(".task-body");
-    const toggleBtn = root.querySelector(".toggle-btn");
-    const taskRightTop = root.querySelector(".task-right-top");
-    const toolbarWrap = root.querySelector(".task-toolbar-wrap");
-    const toolbarScroll = root.querySelector(".task-right-bottom");
-    const pauseBtn = root.querySelector(".pause-btn");
-    const resumeBtn = root.querySelector(".resume-btn");
-    const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
-    const restartSummaryBtn = root.querySelector(".restart-summary-btn");
-    const restartSummaryMenu = root.querySelector(".restart-summary-menu");
-    const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
-    const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
-    const downloadMediaBtn = root.querySelector(".download-media-btn");
-    const archiveBtn = root.querySelector(".archive-btn");
-    const deleteBtn = root.querySelector(".delete-btn");
-    const resultPromptBar = root.querySelector(".result-prompt-bar");
-    const resultPromptSelect = root.querySelector(".result-prompt-select");
-    const transcriptPre = root.querySelector(".tab-content.transcript");
-    const summaryPre = root.querySelector(".tab-content.summary");
-    const redactedPre = root.querySelector(".tab-content.redacted");
-    const logPre = root.querySelector(".tab-content.log");
-    const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
-    const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
-    const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
-    const copyTabBtn = root.querySelector(".tab-copy-btn");
-    const saveTabBtn = root.querySelector(".tab-save-btn");
-
-    applyI18n(root);
-
-    root.dataset.taskId = task.id;
-    transcriptPre.textContent = t("tab.prompt_transcript");
-    summaryPre.textContent = t("tab.prompt_summary");
-    if (redactedPre) {
-      redactedPre.textContent = t("tab.prompt_redacted");
-    }
-    logPre.textContent = t("tab.prompt_log");
-
-    pauseBtn.setAttribute("data-tooltip", t("action.pause"));
-    pauseBtn.setAttribute("aria-label", t("action.pause"));
-    resumeBtn.setAttribute("data-tooltip", t("action.resume"));
-    resumeBtn.setAttribute("aria-label", t("action.resume"));
-    if (resolveVoicesBtn) {
-      resolveVoicesBtn.setAttribute("data-tooltip", t("action.resolve_voices"));
-      resolveVoicesBtn.setAttribute("aria-label", t("action.resolve_voices"));
-    }
-    if (restartSummaryBtn) {
-      restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
-      restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
-    }
-    if (restartSummaryFullBtn) {
-      restartSummaryFullBtn.textContent = t("action.restart_summary_full");
-      restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
-    }
-    if (restartSummaryFinalBtn) {
-      restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
-      restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
-    }
-    if (downloadMediaBtn) {
-      downloadMediaBtn.setAttribute("data-tooltip", t("action.download_media"));
-      downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
-    }
-    if (archiveBtn) {
-      archiveBtn.setAttribute("data-tooltip", t("action.archive"));
-      archiveBtn.setAttribute("aria-label", t("action.archive"));
-    }
-    deleteBtn.setAttribute("data-tooltip", t("action.delete"));
-    deleteBtn.setAttribute("aria-label", t("action.delete"));
-    toggleBtn.setAttribute("data-tooltip", t("action.expand"));
-    toggleBtn.setAttribute("aria-label", t("action.expand"));
-
-    root.querySelectorAll(".tab-btn").forEach((btn) => {
-      const tabName = String(btn.dataset.tab || "");
-      const tabLabel = t(`tab.${tabName}`);
-      btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
-    });
-
-    const doToggle = () => {
-      body.classList.toggle("hidden");
-      const expanded = !body.classList.contains("hidden");
-      toggleBtn.classList.toggle("expanded", expanded);
-      const label = expanded ? t("action.collapse") : t("action.expand");
-      toggleBtn.title = label;
-      toggleBtn.setAttribute("aria-label", label);
-      if (expanded) {
-        const activeTab = ensureActiveTabSelection(root);
-        if (activeTab) {
-          void activateTaskTab(root, task.id, activeTab);
-        }
-      } else {
-        stopLogPolling(root);
-      }
-    };
-    taskRightTop.addEventListener("click", doToggle);
-    toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
-    if (toolbarWrap && toolbarScroll) {
-      const updateFade = () => {
-        const atEnd = toolbarScroll.scrollLeft + toolbarScroll.clientWidth >= toolbarScroll.scrollWidth - 1;
-        toolbarWrap.classList.toggle("scrolled-end", atEnd);
-      };
-      toolbarScroll.addEventListener("scroll", updateFade, { passive: true });
-      updateFade();
-    }
-    pauseBtn.addEventListener("click", () => pauseTask(task.id));
-    resumeBtn.addEventListener("click", () => resumeTask(task.id));
-    if (resolveVoicesBtn) {
-      resolveVoicesBtn.addEventListener("click", () => {
-        // Read live runtime at click time: paused === awaiting_input drives
-        // "Save & continue" visibility. (Per-speaker duration now comes from
-        // each row's own diarized seconds, not media length — vts-552.)
-        const rt = root._runtime;
-        const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
-        openVoiceDialog(task.id, paused);
-      });
-    }
-    if (restartSummaryBtn && restartSummaryMenu) {
-      restartSummaryBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const isOpen = restartSummaryMenu.classList.contains("open");
-        document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
-        if (!isOpen) {
-          const rect = restartSummaryBtn.getBoundingClientRect();
-          restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
-          restartSummaryMenu.style.left = "0px";
-          restartSummaryMenu.classList.add("open");
-          restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
-        }
-      });
-    }
-    if (restartSummaryFullBtn) {
-      restartSummaryFullBtn.addEventListener("click", () => {
-        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
-        restartSummary(task.id, "full");
-      });
-    }
-    if (restartSummaryFinalBtn) {
-      restartSummaryFinalBtn.addEventListener("click", () => {
-        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
-        openRestartFinalDialog(task);
-      });
-    }
-    if (downloadMediaBtn) {
-      downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title, downloadMediaBtn));
-    }
-    if (archiveBtn) {
-      archiveBtn.addEventListener("click", () => archiveTask(task.id));
-    }
-    deleteBtn.addEventListener("click", () => removeTask(task.id));
-    if (copyTabBtn) {
-      copyTabBtn.addEventListener("click", async () => {
-        await copyActiveTabContent(root, task.id);
-      });
-    }
-    if (saveTabBtn) {
-      saveTabBtn.addEventListener("click", async () => {
-        await saveActiveTabContent(root, task.id);
-      });
-    }
-
-    root.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        if (btn.disabled) {
-          return;
-        }
-        await activateTaskTab(root, task.id, String(btn.dataset.tab || ""));
-      });
-    });
-
-    if (resultPromptSelect) {
-      resultPromptSelect.addEventListener("change", () => {
-        void loadSelectedResult(root, task.id);
-      });
-    }
-
-    root._elements = {
-      linkEl: root.querySelector(".task-link"),
-      playerBtn: root.querySelector(".task-player-btn"),
-      expiredEl: root.querySelector(".task-expired"),
-      sourceEl: root.querySelector(".task-source"),
-      statsEl: root.querySelector(".task-stats"),
-      statsTextEl: root.querySelector(".task-stats-text"),
-      editNameBtn: root.querySelector(".task-edit-name-btn"),
-      nameEditWrap: root.querySelector(".task-name-edit"),
-      nameInput: root.querySelector(".task-name-input"),
-      nameOkBtn: root.querySelector(".task-name-ok-btn"),
-      nameCancelBtn: root.querySelector(".task-name-cancel-btn"),
-      statusEl: root.querySelector(".task-status"),
-      taskRuntimeEl: root.querySelector(".task-runtime"),
-      pauseBtn,
-      resumeBtn,
-      resolveVoicesBtn,
-      restartSummaryBtn,
-      restartSummaryMenu,
-      restartSummaryFinalBtn,
-      downloadMediaBtn,
-      archiveBtn,
-      transcriptTabBtn,
-      summaryTabBtn,
-      redactedTabBtn,
-      copyTabBtn,
-      saveTabBtn,
-      resultPromptBar,
-      resultPromptSelect,
-      transcriptPanel: transcriptPre,
-      summaryPanel: summaryPre,
-      redactedPanel: redactedPre,
-      logPanel: logPre,
-      stepLabelEl: root.querySelector(".step-label"),
-      stepTimeEl: root.querySelector(".step-time"),
-      overallProgressWrap: root.querySelector(".overall-progress"),
-      overallProgressFill: root.querySelector(".overall-progress .step-progress-fill"),
-      overallProgressText: root.querySelector(".overall-progress .step-progress-text"),
-      localProgressWrap: root.querySelector(".local-progress"),
-      localProgressFill: root.querySelector(".local-progress .step-progress-fill"),
-      localProgressText: root.querySelector(".local-progress .step-progress-text"),
-      messageEl: root.querySelector(".task-message")
-    };
-    if (root._elements && root._elements.statsEl) {
-      root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
-    }
-    root._runtime = createRuntime(task);
-    const _els = root._elements;
-    _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
-    _els.nameOkBtn.addEventListener("click", () => commitTitleEdit(root));
-    _els.nameCancelBtn.addEventListener("click", () => cancelTitleEdit(root));
-    _els.nameInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
-      else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
-    });
-    renderTaskRuntime(root);
-    taskList.appendChild(node);
-  });
+  tasks.forEach((task) => appendTaskCard(task));
   updateQueueWatcher(tasks);
 }
 
-async function loadTasks() {
-  const tasks = await api("/api/tasks").catch((err) => {
-    taskList.textContent = err.message;
-    return [];
+function cursorOf(taskEl) {
+  if (!taskEl) return null;
+  return { ts: taskEl.dataset.createdAt, id: taskEl.dataset.taskId };
+}
+
+function updateHeadTail() {
+  const cards = taskList.querySelectorAll(".task");
+  state.taskPaging.head = cursorOf(cards[0]);
+  state.taskPaging.tail = cursorOf(cards[cards.length - 1]);
+}
+
+function updateSentinel() {
+  const sentinel = document.getElementById("task-sentinel");
+  if (!sentinel) return;
+  const p = state.taskPaging;
+  sentinel.hidden = false;
+  sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
+  sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+}
+
+function isNewerThan(ts, id, cursor) {
+  // returns true if (ts,id) > cursor lexicographically on (ts, id)
+  if (!cursor) return true;
+  if (ts > cursor.ts) return true;
+  if (ts < cursor.ts) return false;
+  return String(id) > String(cursor.id);
+}
+
+function clearNewTasksBanner() {
+  state.taskPaging.newIds.clear();
+  const b = document.getElementById("new-tasks-banner");
+  if (b) b.hidden = true;
+}
+
+function showNewTasksBanner() {
+  const b = document.getElementById("new-tasks-banner");
+  const c = document.getElementById("new-tasks-count");
+  if (!b) return;
+  const n = state.taskPaging.newIds.size;
+  if (n === 0) { b.hidden = true; return; }
+  if (c) c.textContent = `(${n})`;
+  b.hidden = false;
+}
+
+async function maybeFlagNewerTask(taskId) {
+  const p = state.taskPaging;
+  if (p.newIds.has(taskId) || findTaskEl(taskId)) return;
+  let task;
+  try {
+    task = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  } catch {
+    return;
+  }
+  if (!task || !task.created_at) return;
+  if (isNewerThan(task.created_at, task.id, p.head)) {
+    p.newIds.add(taskId);
+    showNewTasksBanner();
+  }
+}
+
+async function loadNewer() {
+  const p = state.taskPaging;
+  if (p.loading || !p.head) return;
+  const myEpoch = p.epoch;
+  p.loading = true;
+  const q = new URLSearchParams({
+    limit: String(p.pageSize),
+    order: "asc",
+    after_ts: p.head.ts,
+    after_id: p.head.id,
   });
-  renderTasks(tasks);
+  try {
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?${q.toString()}`);
+    } catch {
+      return;
+    }
+    // A loadFirstPage reset may have happened while this fetch was in
+    // flight (same guard loadNextPage uses): discard the stale result
+    // instead of prepending onto a list that's been rebuilt/invalidated.
+    if (myEpoch !== p.epoch) return;
+    // ASC from server → reverse so newest ends on top after successive prepends
+    tasks.slice().reverse().forEach((t) => prependTaskCard(t));
+    updateHeadTail();
+    // Drop now-loaded ids; if a full page came back there may be more above.
+    tasks.forEach((t) => p.newIds.delete(t.id));
+    if (tasks.length < p.pageSize) {
+      clearNewTasksBanner();
+    } else {
+      showNewTasksBanner();
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } finally {
+    // Only the call that owns the current epoch clears `loading`, matching
+    // loadFirstPage/loadNextPage's ownership pattern.
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+    }
+  }
+}
+
+document.getElementById("new-tasks-banner")
+  ?.addEventListener("click", () => void loadNewer());
+
+async function loadFirstPage() {
+  const p = state.taskPaging;
+  // No re-entrancy guard on purpose: a reset must always be able to
+  // interrupt an in-flight loadNextPage (or a stale loadFirstPage) rather
+  // than be blocked by it. Bumping epoch here invalidates any fetch that
+  // was already in flight — its result gets discarded when it resolves
+  // (see the epoch check below and in loadNextPage).
+  const myEpoch = ++p.epoch;
+  p.loading = true;
+  // clearNewTasksBanner() is defined in Task 6; guard until it lands.
+  if (typeof clearNewTasksBanner === "function") clearNewTasksBanner();
+  updateSentinel();
+  try {
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?limit=${p.pageSize}`);
+    } catch (err) {
+      if (myEpoch !== p.epoch) return; // superseded by a newer reset; don't clobber its DOM
+      taskList.textContent = err.message;
+      return;
+    }
+    if (myEpoch !== p.epoch) return; // a newer loadFirstPage already reset the list
+    renderTasks(tasks);
+    p.exhausted = tasks.length < p.pageSize;
+    updateHeadTail();
+  } finally {
+    // Only the call that owns the current epoch clears `loading`/repaints
+    // the sentinel; a stale call must not clobber a newer call's state.
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateSentinel();
+    }
+  }
+}
+
+async function loadNextPage() {
+  const p = state.taskPaging;
+  if (p.loading || p.exhausted || !p.tail) return;
+  const myEpoch = p.epoch;
+  p.loading = true;
+  updateSentinel();
+  const q = new URLSearchParams({
+    limit: String(p.pageSize),
+    order: "desc",
+    before_ts: p.tail.ts,
+    before_id: p.tail.id,
+  });
+  try {
+    let tasks;
+    try {
+      tasks = await api(`/api/tasks?${q.toString()}`);
+    } catch {
+      return;
+    }
+    if (myEpoch !== p.epoch) return; // a reset happened while this fetch was in flight; discard
+    tasks.forEach((t) => appendTaskCard(t));
+    p.exhausted = tasks.length < p.pageSize;
+    updateHeadTail();
+  } finally {
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateSentinel();
+    }
+  }
+}
+
+async function loadTasks() {
+  await loadFirstPage();
 }
 
 function syncSourceType() {
@@ -2081,7 +2265,9 @@ function uploadFileWithProgress(fd) {
     xhr.onload = () => {
       setProgress(1);
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
+        let task = null;
+        try { task = JSON.parse(xhr.responseText); } catch (_) {}
+        resolve(task);
       } else {
         let msg = `HTTP ${xhr.status}`;
         try { msg = JSON.parse(xhr.responseText)?.detail || msg; } catch (_) {}
@@ -2652,6 +2838,7 @@ async function createTask(event) {
   clearTaskFormError();
   const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
+  let created = null;
   try {
     if (isFile && fileInput) {
       const file = fileInput.files[0];
@@ -2684,7 +2871,7 @@ async function createTask(event) {
         fd.append("transcript", fields.transcript ? "true" : "false");
         fd.append("diarize", fields.diarize ? "true" : "false");
         fd.append("prompts", fields.prompts);
-        await uploadFileWithProgress(fd);
+        created = await uploadFileWithProgress(fd);
       }
     } else {
       const payload = {
@@ -2696,7 +2883,7 @@ async function createTask(event) {
         speaker_no_manual_stop: form.speaker_no_manual_stop.checked,
         prompts: getSelectedPrompts()
       };
-      await api("/api/tasks", {
+      created = await api("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -2717,7 +2904,13 @@ async function createTask(event) {
   resetPromptSelection();
   syncSummaryToggle();
   syncSourceType();
-  await loadTasks();
+  if (created && created.id) {
+    prependTaskCard(created);
+    updateHeadTail();
+    void refreshQueuePositions();
+  } else {
+    await loadFirstPage();
+  }
 }
 
 function syncSummaryToggle() {
@@ -3255,6 +3448,9 @@ function connectEvents() {
   state.eventSource.addEventListener("task_status", (event) => {
     const payload = JSON.parse(event.data);
     patchTaskStatus(payload.task_id, payload.data.status, payload.data.error, payload.data.failure_code, payload.data.queue, payload.data.awaiting_step);
+    if (!findTaskEl(payload.task_id)) {
+      void maybeFlagNewerTask(payload.task_id);
+    }
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);
@@ -3316,7 +3512,7 @@ function connectEvents() {
     }
     setTimeout(() => {
       connectEvents();
-      void loadTasks();
+      void loadFirstPage();
     }, 2000);
   };
 }
@@ -3401,6 +3597,9 @@ async function refreshAll() {
   try {
     const cfg = await api("/api/status-config");
     if (cfg && cfg.status_flags) window.statusPred.setFlags(cfg.status_flags);
+    if (cfg && Number.isFinite(cfg.tasks_page_size)) {
+      state.taskPaging.pageSize = cfg.tasks_page_size;
+    }
   } catch { /* predicates degrade to false; loadTasks still renders */ }
   await loadTasks();
   connectEvents();
@@ -5471,6 +5670,13 @@ async function bootstrap() {
   // labels resolve to names (not the raw "finalize:user:<uuid>") on first paint.
   await loadPrompts();
   await refreshAll();
+  // Infinite scroll: observe the sentinel once at bootstrap (refreshAll()
+  // re-runs on user switches, so wiring here avoids duplicate observers).
+  const taskSentinelObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) void loadNextPage();
+  }, { rootMargin: "200px" });
+  const _sentinelEl = document.getElementById("task-sentinel");
+  if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
   await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -105,6 +105,42 @@ class Repo:
             stmt = stmt.offset(offset)
         if limit is not None:
             stmt = stmt.limit(limit)
+        result = await self.session.scalars(stmt)
+        return list(result.all())
+
+    async def list_tasks_page(
+        self,
+        user_id: uuid.UUID,
+        *,
+        before: tuple[datetime, uuid.UUID] | None = None,
+        after: tuple[datetime, uuid.UUID] | None = None,
+        order: str = "desc",
+        limit: int,
+    ) -> list[Task]:
+        """Cursor page of a user's tasks within the open interval
+        ``after < (created_at, id) < before`` (either bound optional).
+
+        Ordered by the composite ``(created_at, id)`` key so equal
+        created_at timestamps never cause a skipped or duplicated row.
+        ``order`` selects which end ``limit`` cuts from: ``desc`` (newest
+        first, for paging downward) or ``asc`` (oldest first, for pulling
+        the tasks adjacent to a head cursor).
+        """
+        key = tuple_(Task.created_at, Task.id)
+        stmt = (
+            select(Task)
+            .options(selectinload(Task.steps))
+            .where(Task.user_id == user_id)
+        )
+        if before is not None:
+            stmt = stmt.where(key < tuple_(*before))
+        if after is not None:
+            stmt = stmt.where(key > tuple_(*after))
+        if order == "asc":
+            stmt = stmt.order_by(Task.created_at.asc(), Task.id.asc())
+        else:
+            stmt = stmt.order_by(Task.created_at.desc(), Task.id.desc())
+        stmt = stmt.limit(limit)
         result = await self.session.scalars(stmt)
         return list(result.all())
 

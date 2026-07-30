@@ -71,6 +71,8 @@ window.__VTS_I18N.en = {
 "new_task.language_fr": "French",
 "new_task.language_es": "Spanish",
 "tasks.title": "Tasks",
+"tasks.no_more": "No more tasks",
+"tasks.new_above": "New tasks ↑",
 "speakers.registry.open": "Manage voices",
 "speakers.registry.title": "Voice registry",
 "speakers.registry.name_placeholder": "Name",

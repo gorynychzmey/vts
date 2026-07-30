@@ -71,6 +71,8 @@ window.__VTS_I18N.ru = {
 "new_task.language_fr": "Французский",
 "new_task.language_es": "Испанский",
 "tasks.title": "Задачи",
+"tasks.no_more": "Больше задач нет",
+"tasks.new_above": "Новые задачи ↑",
 "speakers.registry.open": "Управление голосами",
 "speakers.registry.title": "Реестр голосов",
 "speakers.registry.name_placeholder": "Имя",

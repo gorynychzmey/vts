@@ -155,6 +155,7 @@ class Settings(BaseSettings):
 
     transcribe_parallel_per_task: int = 2
     worker_max_active_tasks: int = 4
+    tasks_page_size: int = 10
     lane_network_slots: int = 1
     lane_ffmpeg_slots: int = 2
     lane_gpu_slots: int = 1

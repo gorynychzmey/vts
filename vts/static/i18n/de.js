@@ -71,6 +71,8 @@ window.__VTS_I18N.de = {
 "new_task.language_fr": "Französisch",
 "new_task.language_es": "Spanisch",
 "tasks.title": "Aufgaben",
+"tasks.no_more": "Keine weiteren Aufgaben",
+"tasks.new_above": "Neue Aufgaben ↑",
 "speakers.registry.open": "Stimmen verwalten",
 "speakers.registry.title": "Stimmregister",
 "speakers.registry.name_placeholder": "Name",
