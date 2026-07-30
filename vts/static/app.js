@@ -1782,243 +1782,255 @@ function renderTaskRuntime(taskEl) {
   }
 }
 
+function renderTaskCard(task) {
+  const node = taskTemplate.content.cloneNode(true);
+  const root = node.querySelector(".task");
+  const body = node.querySelector(".task-body");
+  const toggleBtn = root.querySelector(".toggle-btn");
+  const taskRightTop = root.querySelector(".task-right-top");
+  const toolbarWrap = root.querySelector(".task-toolbar-wrap");
+  const toolbarScroll = root.querySelector(".task-right-bottom");
+  const pauseBtn = root.querySelector(".pause-btn");
+  const resumeBtn = root.querySelector(".resume-btn");
+  const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
+  const restartSummaryBtn = root.querySelector(".restart-summary-btn");
+  const restartSummaryMenu = root.querySelector(".restart-summary-menu");
+  const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
+  const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
+  const downloadMediaBtn = root.querySelector(".download-media-btn");
+  const archiveBtn = root.querySelector(".archive-btn");
+  const deleteBtn = root.querySelector(".delete-btn");
+  const resultPromptBar = root.querySelector(".result-prompt-bar");
+  const resultPromptSelect = root.querySelector(".result-prompt-select");
+  const transcriptPre = root.querySelector(".tab-content.transcript");
+  const summaryPre = root.querySelector(".tab-content.summary");
+  const redactedPre = root.querySelector(".tab-content.redacted");
+  const logPre = root.querySelector(".tab-content.log");
+  const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
+  const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
+  const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
+  const copyTabBtn = root.querySelector(".tab-copy-btn");
+  const saveTabBtn = root.querySelector(".tab-save-btn");
+
+  applyI18n(root);
+
+  root.dataset.taskId = task.id;
+  transcriptPre.textContent = t("tab.prompt_transcript");
+  summaryPre.textContent = t("tab.prompt_summary");
+  if (redactedPre) {
+    redactedPre.textContent = t("tab.prompt_redacted");
+  }
+  logPre.textContent = t("tab.prompt_log");
+
+  pauseBtn.setAttribute("data-tooltip", t("action.pause"));
+  pauseBtn.setAttribute("aria-label", t("action.pause"));
+  resumeBtn.setAttribute("data-tooltip", t("action.resume"));
+  resumeBtn.setAttribute("aria-label", t("action.resume"));
+  if (resolveVoicesBtn) {
+    resolveVoicesBtn.setAttribute("data-tooltip", t("action.resolve_voices"));
+    resolveVoicesBtn.setAttribute("aria-label", t("action.resolve_voices"));
+  }
+  if (restartSummaryBtn) {
+    restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
+    restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
+  }
+  if (restartSummaryFullBtn) {
+    restartSummaryFullBtn.textContent = t("action.restart_summary_full");
+    restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
+  }
+  if (restartSummaryFinalBtn) {
+    restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
+    restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
+  }
+  if (downloadMediaBtn) {
+    downloadMediaBtn.setAttribute("data-tooltip", t("action.download_media"));
+    downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
+  }
+  if (archiveBtn) {
+    archiveBtn.setAttribute("data-tooltip", t("action.archive"));
+    archiveBtn.setAttribute("aria-label", t("action.archive"));
+  }
+  deleteBtn.setAttribute("data-tooltip", t("action.delete"));
+  deleteBtn.setAttribute("aria-label", t("action.delete"));
+  toggleBtn.setAttribute("data-tooltip", t("action.expand"));
+  toggleBtn.setAttribute("aria-label", t("action.expand"));
+
+  root.querySelectorAll(".tab-btn").forEach((btn) => {
+    const tabName = String(btn.dataset.tab || "");
+    const tabLabel = t(`tab.${tabName}`);
+    btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
+  });
+
+  const doToggle = () => {
+    body.classList.toggle("hidden");
+    const expanded = !body.classList.contains("hidden");
+    toggleBtn.classList.toggle("expanded", expanded);
+    const label = expanded ? t("action.collapse") : t("action.expand");
+    toggleBtn.title = label;
+    toggleBtn.setAttribute("aria-label", label);
+    if (expanded) {
+      const activeTab = ensureActiveTabSelection(root);
+      if (activeTab) {
+        void activateTaskTab(root, task.id, activeTab);
+      }
+    } else {
+      stopLogPolling(root);
+    }
+  };
+  taskRightTop.addEventListener("click", doToggle);
+  toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
+  if (toolbarWrap && toolbarScroll) {
+    const updateFade = () => {
+      const atEnd = toolbarScroll.scrollLeft + toolbarScroll.clientWidth >= toolbarScroll.scrollWidth - 1;
+      toolbarWrap.classList.toggle("scrolled-end", atEnd);
+    };
+    toolbarScroll.addEventListener("scroll", updateFade, { passive: true });
+    updateFade();
+  }
+  pauseBtn.addEventListener("click", () => pauseTask(task.id));
+  resumeBtn.addEventListener("click", () => resumeTask(task.id));
+  if (resolveVoicesBtn) {
+    resolveVoicesBtn.addEventListener("click", () => {
+      // Read live runtime at click time: paused === awaiting_input drives
+      // "Save & continue" visibility. (Per-speaker duration now comes from
+      // each row's own diarized seconds, not media length — vts-552.)
+      const rt = root._runtime;
+      const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
+      openVoiceDialog(task.id, paused);
+    });
+  }
+  if (restartSummaryBtn && restartSummaryMenu) {
+    restartSummaryBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = restartSummaryMenu.classList.contains("open");
+      document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+      if (!isOpen) {
+        const rect = restartSummaryBtn.getBoundingClientRect();
+        restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
+        restartSummaryMenu.style.left = "0px";
+        restartSummaryMenu.classList.add("open");
+        restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
+      }
+    });
+  }
+  if (restartSummaryFullBtn) {
+    restartSummaryFullBtn.addEventListener("click", () => {
+      restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+      restartSummary(task.id, "full");
+    });
+  }
+  if (restartSummaryFinalBtn) {
+    restartSummaryFinalBtn.addEventListener("click", () => {
+      restartSummaryMenu && restartSummaryMenu.classList.remove("open");
+      openRestartFinalDialog(task);
+    });
+  }
+  if (downloadMediaBtn) {
+    downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title, downloadMediaBtn));
+  }
+  if (archiveBtn) {
+    archiveBtn.addEventListener("click", () => archiveTask(task.id));
+  }
+  deleteBtn.addEventListener("click", () => removeTask(task.id));
+  if (copyTabBtn) {
+    copyTabBtn.addEventListener("click", async () => {
+      await copyActiveTabContent(root, task.id);
+    });
+  }
+  if (saveTabBtn) {
+    saveTabBtn.addEventListener("click", async () => {
+      await saveActiveTabContent(root, task.id);
+    });
+  }
+
+  root.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) {
+        return;
+      }
+      await activateTaskTab(root, task.id, String(btn.dataset.tab || ""));
+    });
+  });
+
+  if (resultPromptSelect) {
+    resultPromptSelect.addEventListener("change", () => {
+      void loadSelectedResult(root, task.id);
+    });
+  }
+
+  root._elements = {
+    linkEl: root.querySelector(".task-link"),
+    playerBtn: root.querySelector(".task-player-btn"),
+    expiredEl: root.querySelector(".task-expired"),
+    sourceEl: root.querySelector(".task-source"),
+    statsEl: root.querySelector(".task-stats"),
+    statsTextEl: root.querySelector(".task-stats-text"),
+    editNameBtn: root.querySelector(".task-edit-name-btn"),
+    nameEditWrap: root.querySelector(".task-name-edit"),
+    nameInput: root.querySelector(".task-name-input"),
+    nameOkBtn: root.querySelector(".task-name-ok-btn"),
+    nameCancelBtn: root.querySelector(".task-name-cancel-btn"),
+    statusEl: root.querySelector(".task-status"),
+    taskRuntimeEl: root.querySelector(".task-runtime"),
+    pauseBtn,
+    resumeBtn,
+    resolveVoicesBtn,
+    restartSummaryBtn,
+    restartSummaryMenu,
+    restartSummaryFinalBtn,
+    downloadMediaBtn,
+    archiveBtn,
+    transcriptTabBtn,
+    summaryTabBtn,
+    redactedTabBtn,
+    copyTabBtn,
+    saveTabBtn,
+    resultPromptBar,
+    resultPromptSelect,
+    transcriptPanel: transcriptPre,
+    summaryPanel: summaryPre,
+    redactedPanel: redactedPre,
+    logPanel: logPre,
+    stepLabelEl: root.querySelector(".step-label"),
+    stepTimeEl: root.querySelector(".step-time"),
+    overallProgressWrap: root.querySelector(".overall-progress"),
+    overallProgressFill: root.querySelector(".overall-progress .step-progress-fill"),
+    overallProgressText: root.querySelector(".overall-progress .step-progress-text"),
+    localProgressWrap: root.querySelector(".local-progress"),
+    localProgressFill: root.querySelector(".local-progress .step-progress-fill"),
+    localProgressText: root.querySelector(".local-progress .step-progress-text"),
+    messageEl: root.querySelector(".task-message")
+  };
+  if (root._elements && root._elements.statsEl) {
+    root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
+  }
+  root._runtime = createRuntime(task);
+  const _els = root._elements;
+  _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
+  _els.nameOkBtn.addEventListener("click", () => commitTitleEdit(root));
+  _els.nameCancelBtn.addEventListener("click", () => cancelTitleEdit(root));
+  _els.nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
+  });
+  renderTaskRuntime(root);
+  return root;
+}
+
+function appendTaskCard(task) {
+  if (findTaskEl(task.id)) return;
+  taskList.appendChild(renderTaskCard(task));
+}
+
+function prependTaskCard(task) {
+  if (findTaskEl(task.id)) return;
+  taskList.insertBefore(renderTaskCard(task), taskList.firstChild);
+}
+
 function renderTasks(tasks) {
   stopAllLogPolling();
   taskList.innerHTML = "";
-  tasks.forEach((task) => {
-    const node = taskTemplate.content.cloneNode(true);
-    const root = node.querySelector(".task");
-    const body = node.querySelector(".task-body");
-    const toggleBtn = root.querySelector(".toggle-btn");
-    const taskRightTop = root.querySelector(".task-right-top");
-    const toolbarWrap = root.querySelector(".task-toolbar-wrap");
-    const toolbarScroll = root.querySelector(".task-right-bottom");
-    const pauseBtn = root.querySelector(".pause-btn");
-    const resumeBtn = root.querySelector(".resume-btn");
-    const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
-    const restartSummaryBtn = root.querySelector(".restart-summary-btn");
-    const restartSummaryMenu = root.querySelector(".restart-summary-menu");
-    const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
-    const restartSummaryFinalBtn = root.querySelector(".restart-summary-final-btn");
-    const downloadMediaBtn = root.querySelector(".download-media-btn");
-    const archiveBtn = root.querySelector(".archive-btn");
-    const deleteBtn = root.querySelector(".delete-btn");
-    const resultPromptBar = root.querySelector(".result-prompt-bar");
-    const resultPromptSelect = root.querySelector(".result-prompt-select");
-    const transcriptPre = root.querySelector(".tab-content.transcript");
-    const summaryPre = root.querySelector(".tab-content.summary");
-    const redactedPre = root.querySelector(".tab-content.redacted");
-    const logPre = root.querySelector(".tab-content.log");
-    const transcriptTabBtn = root.querySelector('.tab-btn[data-tab="transcript"]');
-    const summaryTabBtn = root.querySelector('.tab-btn[data-tab="summary"]');
-    const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
-    const copyTabBtn = root.querySelector(".tab-copy-btn");
-    const saveTabBtn = root.querySelector(".tab-save-btn");
-
-    applyI18n(root);
-
-    root.dataset.taskId = task.id;
-    transcriptPre.textContent = t("tab.prompt_transcript");
-    summaryPre.textContent = t("tab.prompt_summary");
-    if (redactedPre) {
-      redactedPre.textContent = t("tab.prompt_redacted");
-    }
-    logPre.textContent = t("tab.prompt_log");
-
-    pauseBtn.setAttribute("data-tooltip", t("action.pause"));
-    pauseBtn.setAttribute("aria-label", t("action.pause"));
-    resumeBtn.setAttribute("data-tooltip", t("action.resume"));
-    resumeBtn.setAttribute("aria-label", t("action.resume"));
-    if (resolveVoicesBtn) {
-      resolveVoicesBtn.setAttribute("data-tooltip", t("action.resolve_voices"));
-      resolveVoicesBtn.setAttribute("aria-label", t("action.resolve_voices"));
-    }
-    if (restartSummaryBtn) {
-      restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
-      restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
-    }
-    if (restartSummaryFullBtn) {
-      restartSummaryFullBtn.textContent = t("action.restart_summary_full");
-      restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
-    }
-    if (restartSummaryFinalBtn) {
-      restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
-      restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
-    }
-    if (downloadMediaBtn) {
-      downloadMediaBtn.setAttribute("data-tooltip", t("action.download_media"));
-      downloadMediaBtn.setAttribute("aria-label", t("action.download_media"));
-    }
-    if (archiveBtn) {
-      archiveBtn.setAttribute("data-tooltip", t("action.archive"));
-      archiveBtn.setAttribute("aria-label", t("action.archive"));
-    }
-    deleteBtn.setAttribute("data-tooltip", t("action.delete"));
-    deleteBtn.setAttribute("aria-label", t("action.delete"));
-    toggleBtn.setAttribute("data-tooltip", t("action.expand"));
-    toggleBtn.setAttribute("aria-label", t("action.expand"));
-
-    root.querySelectorAll(".tab-btn").forEach((btn) => {
-      const tabName = String(btn.dataset.tab || "");
-      const tabLabel = t(`tab.${tabName}`);
-      btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
-    });
-
-    const doToggle = () => {
-      body.classList.toggle("hidden");
-      const expanded = !body.classList.contains("hidden");
-      toggleBtn.classList.toggle("expanded", expanded);
-      const label = expanded ? t("action.collapse") : t("action.expand");
-      toggleBtn.title = label;
-      toggleBtn.setAttribute("aria-label", label);
-      if (expanded) {
-        const activeTab = ensureActiveTabSelection(root);
-        if (activeTab) {
-          void activateTaskTab(root, task.id, activeTab);
-        }
-      } else {
-        stopLogPolling(root);
-      }
-    };
-    taskRightTop.addEventListener("click", doToggle);
-    toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
-    if (toolbarWrap && toolbarScroll) {
-      const updateFade = () => {
-        const atEnd = toolbarScroll.scrollLeft + toolbarScroll.clientWidth >= toolbarScroll.scrollWidth - 1;
-        toolbarWrap.classList.toggle("scrolled-end", atEnd);
-      };
-      toolbarScroll.addEventListener("scroll", updateFade, { passive: true });
-      updateFade();
-    }
-    pauseBtn.addEventListener("click", () => pauseTask(task.id));
-    resumeBtn.addEventListener("click", () => resumeTask(task.id));
-    if (resolveVoicesBtn) {
-      resolveVoicesBtn.addEventListener("click", () => {
-        // Read live runtime at click time: paused === awaiting_input drives
-        // "Save & continue" visibility. (Per-speaker duration now comes from
-        // each row's own diarized seconds, not media length — vts-552.)
-        const rt = root._runtime;
-        const paused = Boolean(rt && rt.baseStatus === "awaiting_input");
-        openVoiceDialog(task.id, paused);
-      });
-    }
-    if (restartSummaryBtn && restartSummaryMenu) {
-      restartSummaryBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const isOpen = restartSummaryMenu.classList.contains("open");
-        document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
-        if (!isOpen) {
-          const rect = restartSummaryBtn.getBoundingClientRect();
-          restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
-          restartSummaryMenu.style.left = "0px";
-          restartSummaryMenu.classList.add("open");
-          restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
-        }
-      });
-    }
-    if (restartSummaryFullBtn) {
-      restartSummaryFullBtn.addEventListener("click", () => {
-        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
-        restartSummary(task.id, "full");
-      });
-    }
-    if (restartSummaryFinalBtn) {
-      restartSummaryFinalBtn.addEventListener("click", () => {
-        restartSummaryMenu && restartSummaryMenu.classList.remove("open");
-        openRestartFinalDialog(task);
-      });
-    }
-    if (downloadMediaBtn) {
-      downloadMediaBtn.addEventListener("click", () => downloadMedia(task.id, task.source_title, downloadMediaBtn));
-    }
-    if (archiveBtn) {
-      archiveBtn.addEventListener("click", () => archiveTask(task.id));
-    }
-    deleteBtn.addEventListener("click", () => removeTask(task.id));
-    if (copyTabBtn) {
-      copyTabBtn.addEventListener("click", async () => {
-        await copyActiveTabContent(root, task.id);
-      });
-    }
-    if (saveTabBtn) {
-      saveTabBtn.addEventListener("click", async () => {
-        await saveActiveTabContent(root, task.id);
-      });
-    }
-
-    root.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        if (btn.disabled) {
-          return;
-        }
-        await activateTaskTab(root, task.id, String(btn.dataset.tab || ""));
-      });
-    });
-
-    if (resultPromptSelect) {
-      resultPromptSelect.addEventListener("change", () => {
-        void loadSelectedResult(root, task.id);
-      });
-    }
-
-    root._elements = {
-      linkEl: root.querySelector(".task-link"),
-      playerBtn: root.querySelector(".task-player-btn"),
-      expiredEl: root.querySelector(".task-expired"),
-      sourceEl: root.querySelector(".task-source"),
-      statsEl: root.querySelector(".task-stats"),
-      statsTextEl: root.querySelector(".task-stats-text"),
-      editNameBtn: root.querySelector(".task-edit-name-btn"),
-      nameEditWrap: root.querySelector(".task-name-edit"),
-      nameInput: root.querySelector(".task-name-input"),
-      nameOkBtn: root.querySelector(".task-name-ok-btn"),
-      nameCancelBtn: root.querySelector(".task-name-cancel-btn"),
-      statusEl: root.querySelector(".task-status"),
-      taskRuntimeEl: root.querySelector(".task-runtime"),
-      pauseBtn,
-      resumeBtn,
-      resolveVoicesBtn,
-      restartSummaryBtn,
-      restartSummaryMenu,
-      restartSummaryFinalBtn,
-      downloadMediaBtn,
-      archiveBtn,
-      transcriptTabBtn,
-      summaryTabBtn,
-      redactedTabBtn,
-      copyTabBtn,
-      saveTabBtn,
-      resultPromptBar,
-      resultPromptSelect,
-      transcriptPanel: transcriptPre,
-      summaryPanel: summaryPre,
-      redactedPanel: redactedPre,
-      logPanel: logPre,
-      stepLabelEl: root.querySelector(".step-label"),
-      stepTimeEl: root.querySelector(".step-time"),
-      overallProgressWrap: root.querySelector(".overall-progress"),
-      overallProgressFill: root.querySelector(".overall-progress .step-progress-fill"),
-      overallProgressText: root.querySelector(".overall-progress .step-progress-text"),
-      localProgressWrap: root.querySelector(".local-progress"),
-      localProgressFill: root.querySelector(".local-progress .step-progress-fill"),
-      localProgressText: root.querySelector(".local-progress .step-progress-text"),
-      messageEl: root.querySelector(".task-message")
-    };
-    if (root._elements && root._elements.statsEl) {
-      root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
-    }
-    root._runtime = createRuntime(task);
-    const _els = root._elements;
-    _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));
-    _els.nameOkBtn.addEventListener("click", () => commitTitleEdit(root));
-    _els.nameCancelBtn.addEventListener("click", () => cancelTitleEdit(root));
-    _els.nameInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
-      else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
-    });
-    renderTaskRuntime(root);
-    taskList.appendChild(node);
-  });
+  tasks.forEach((task) => appendTaskCard(task));
   updateQueueWatcher(tasks);
 }
 
