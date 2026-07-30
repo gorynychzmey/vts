@@ -313,6 +313,8 @@ class Settings(BaseSettings):
     vapid_private_key: str | None = None
     vapid_subject: str = "mailto:admin@example.com"
 
+    secrets_key: str = ""  # VTS_SECRETS_KEY: Fernet key for delivery-target secrets
+
     # Chunked upload settings
     upload_chunked_threshold_bytes: int = 52_428_800
     upload_chunk_bytes: int = 8_388_608
