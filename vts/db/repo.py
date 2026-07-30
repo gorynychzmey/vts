@@ -11,6 +11,8 @@ from sqlalchemy.orm import selectinload, undefer
 from vts.db.models import (
     ApiToken,
     AsrSegment,
+    DeliveryAttempt,
+    DeliveryStatus,
     DeliveryTarget,
     MatchDecision,
     Preset,
@@ -682,6 +684,87 @@ class Repo:
         await self.session.delete(target)
         await self.session.flush()
         return True
+
+    # ------------------------------------------------------------------
+    # DeliveryAttempt
+    # ------------------------------------------------------------------
+
+    async def create_delivery_attempt(
+        self, *, task_id: uuid.UUID, target_id: uuid.UUID | None,
+        adapter: str, variant: str, max_attempts: int,
+        next_attempt_at: datetime,
+    ) -> DeliveryAttempt:
+        row = DeliveryAttempt(
+            task_id=task_id, target_id=target_id, adapter=adapter, variant=variant,
+            status=DeliveryStatus.pending, max_attempts=max_attempts,
+            next_attempt_at=next_attempt_at)
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def claim_due_deliveries(self, now: datetime, limit: int) -> list[DeliveryAttempt]:
+        stmt = (select(DeliveryAttempt)
+                .where(DeliveryAttempt.status == DeliveryStatus.pending,
+                       DeliveryAttempt.next_attempt_at <= now)
+                .order_by(DeliveryAttempt.next_attempt_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True))
+        rows = list(await self.session.scalars(stmt))
+        for row in rows:
+            row.status = DeliveryStatus.delivering
+            row.attempts += 1
+        await self.session.flush()
+        return rows
+
+    async def record_delivery_result(
+        self, attempt_id: uuid.UUID, *, external_id: str | None, external_url: str | None
+    ) -> None:
+        row = await self.session.get(DeliveryAttempt, attempt_id)
+        if row is None:
+            return
+        row.status = DeliveryStatus.delivered
+        row.external_id = external_id
+        row.external_url = external_url
+        row.last_error = None
+        await self.session.flush()
+
+    async def record_delivery_failure(
+        self, attempt_id: uuid.UUID, *, last_error: str,
+        next_attempt_at: datetime | None, dead: bool,
+    ) -> None:
+        row = await self.session.get(DeliveryAttempt, attempt_id)
+        if row is None:
+            return
+        row.status = DeliveryStatus.dead if dead else DeliveryStatus.pending
+        row.last_error = last_error[:2000]
+        row.next_attempt_at = next_attempt_at
+        await self.session.flush()
+
+    async def list_deliveries_for_task(self, task_id: uuid.UUID) -> list[DeliveryAttempt]:
+        stmt = (select(DeliveryAttempt)
+                .where(DeliveryAttempt.task_id == task_id)
+                .order_by(DeliveryAttempt.created_at))
+        return list(await self.session.scalars(stmt))
+
+    async def reap_stuck_deliveries(self, older_than: datetime) -> int:
+        stmt = (update(DeliveryAttempt)
+                .where(DeliveryAttempt.status == DeliveryStatus.delivering,
+                       DeliveryAttempt.updated_at < older_than)
+                .values(status=DeliveryStatus.pending))
+        result = await self.session.execute(stmt)
+        return result.rowcount or 0
+
+    async def reset_delivery_for_retry(
+        self, task_id: uuid.UUID, target_id: uuid.UUID | None, now: datetime
+    ) -> int:
+        conds = [DeliveryAttempt.task_id == task_id,
+                 DeliveryAttempt.status.in_([DeliveryStatus.failed, DeliveryStatus.dead])]
+        if target_id is not None:
+            conds.append(DeliveryAttempt.target_id == target_id)
+        stmt = (update(DeliveryAttempt).where(*conds)
+                .values(status=DeliveryStatus.pending, next_attempt_at=now))
+        result = await self.session.execute(stmt)
+        return result.rowcount or 0
 
     # ------------------------------------------------------------------
     # Speaker registry CRUD
