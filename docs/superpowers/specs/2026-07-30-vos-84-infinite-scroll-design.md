@@ -64,20 +64,40 @@ release.
 
 ## Section 1 — Backend
 
-### `GET /api/tasks` — add symmetric cursor params
+### `GET /api/tasks` — add interval cursor params + order
 
-Add two mutually-exclusive cursor pairs (existing `limit`/`offset`/`compact`
-untouched):
+The two cursors are **independent**, forming an open/closed interval
+(existing `limit`/`offset`/`compact` untouched):
 
-- `before_ts` + `before_id` — page **downward**: tasks strictly older than the
-  cursor. `ORDER BY created_at DESC, id DESC`.
-- `after_ts` + `after_id` — pull **newer** tasks (banner click): tasks strictly
-  newer than the cursor. `ORDER BY created_at ASC, id ASC LIMIT pageSize`;
-  the client reverses to DESC for prepend.
+- `before_ts` + `before_id` — upper bound: tasks strictly older than the cursor.
+- `after_ts` + `after_id` — lower bound: tasks strictly newer than the cursor.
+- `order` = `desc` (default) | `asc` — which end `LIMIT` cuts from.
+
+Combined predicate (any bound may be absent):
+`after < (created_at, id) < before`, i.e. a half-open interval when only one
+side is given (single cursor = interval with an open end). `LIMIT pageSize`
+applies after ordering.
+
+Client usage:
+- **Page downward:** `before = tail`, `order=desc` → newest-first from `tail`
+  down; `LIMIT` takes the tasks adjacent to `tail`.
+- **Pull newer (banner):** `after = head`, `order=asc` → oldest-first above
+  `head`; `LIMIT` takes the tasks **adjacent to `head`** (not the globally
+  newest), so prepend stays contiguous with no gap. Client reverses the ASC
+  page to DESC for display.
+
+Why `order` is explicit and not derived from which cursor is set: interval-ness
+and `LIMIT` direction are orthogonal. With a large delta above `head`,
+`after=head` under `desc` would return the *globally newest* tasks and leave a
+hole between them and `head`, breaking contiguous prepend. `order=asc` makes
+`LIMIT` bite the near edge. Keeping `order` a first-class param also serves the
+future filter/MCP work (VOS-84b/c), which needs interval queries in both
+directions.
 
 Validation:
-- `before_*` and `after_*` are mutually exclusive → 422 if both supplied.
 - Each cursor pair must be supplied together (both ts and id) → 422 otherwise.
+- If both bounds given, require `after < before` → 422 otherwise.
+- `order` ∈ {`asc`, `desc`} → 422 otherwise.
 - `limit` keeps its existing `0..500` validation.
 
 ### Repo
@@ -91,15 +111,19 @@ async def list_tasks_page(
     *,
     before: tuple[datetime, uuid.UUID] | None = None,
     after: tuple[datetime, uuid.UUID] | None = None,
+    order: str = "desc",   # "desc" | "asc"
     limit: int,
 ) -> list[Task]:
     ...
 ```
 
-- `before` and `after` are mutually exclusive (caller-enforced; assert).
-- Composite comparison via SQLAlchemy tuple: `tuple_(Task.created_at, Task.id) < tuple_(before_ts, before_id)` (and `>` for `after`).
-- `before`/no-cursor → `ORDER BY created_at DESC, id DESC`.
-- `after` → `ORDER BY created_at ASC, id ASC` (endpoint/client reverses for display).
+- Interval: both bounds independent and optional. Composite comparison via
+  SQLAlchemy tuple — add a `WHERE` clause per supplied bound:
+  `tuple_(Task.created_at, Task.id) < tuple_(before_ts, before_id)` for `before`,
+  `tuple_(Task.created_at, Task.id) > tuple_(after_ts, after_id)` for `after`.
+- `order="desc"` → `ORDER BY created_at DESC, id DESC`;
+  `order="asc"` → `ORDER BY created_at ASC, id ASC`. `LIMIT` after ordering.
+- No mutual-exclusion assert — both bounds may coexist.
 - `selectinload(Task.steps)` as the existing method does.
 
 ### Config — page size via YAML and env
@@ -192,7 +216,8 @@ Guard: skip the fetch if the id is already in `newIds` or already in the DOM.
 ### Banner click → pull newer (incremental prepend)
 
 `loadNewer()`:
-- Request `after_ts/after_id` = `head`, `limit=pageSize`.
+- Request `after_ts/after_id` = `head`, `order=asc`, `limit=pageSize` — the
+  page is the tasks *adjacent to* `head`, so prepend stays contiguous.
 - Reverse the ASC result to DESC, `prependTaskCard` each (newest ends up on
   top), move `head` up to the new topmost card. `tail` untouched — the loaded
   bottom and the scroll position are preserved.
@@ -224,12 +249,14 @@ cursor beats offset here). Dedupe by `data-task-id` before inserting.
 ## Section 5 — Testing
 
 **Backend (pytest):**
-- `list_tasks_page`: first page (no cursor), downward page via `before`, upward
-  page via `after`, boundary `received < pageSize` → caller sees exhaustion,
-  composite cursor correctness when two tasks share `created_at`, `before`/`after`
-  mutual exclusion assert.
-- Endpoint: param validation (both cursors → 422, half a cursor pair → 422,
-  `limit` bounds), `after` returns ASC, `before` returns DESC.
+- `list_tasks_page`: first page (no cursor), downward page via `before`+`order=desc`,
+  upward page via `after`+`order=asc`, interval query (`after` and `before`
+  together) returns only the in-between tasks, boundary `received < pageSize` →
+  caller sees exhaustion, composite cursor correctness when two tasks share
+  `created_at`.
+- Endpoint: param validation (half a cursor pair → 422, `after >= before` → 422,
+  bad `order` → 422, `limit` bounds), `order=asc` returns ASC, `order=desc`
+  returns DESC.
 - `/api/status-config` includes `tasks_page_size`.
 
 **Config (pytest):**
