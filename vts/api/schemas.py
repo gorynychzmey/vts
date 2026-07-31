@@ -78,6 +78,59 @@ class ProgressWeightsOut(BaseModel):
     final_summary_fallback: float
 
 
+class DeliveryOut(BaseModel):
+    id: str
+    adapter: str
+    variant: str
+    status: str
+    attempts: int
+    max_attempts: int
+    last_error: str | None
+    external_url: str | None
+    # True while the row is parked waiting for its plugin to come back. Lets the
+    # UI say "waiting for plugin" instead of rendering it as a failure.
+    waiting_for_adapter: bool
+
+
+class DeliveryRetryRequest(BaseModel):
+    target_id: UUID | None = None
+
+
+class DeliveryTargetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    adapter: str = Field(min_length=1, max_length=64)
+    config: dict = Field(default_factory=dict)
+    secrets: dict[str, str] | None = None
+
+
+class DeliveryTargetUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    config: dict | None = None
+    secrets: dict[str, str] | None = None
+    clear_secrets: bool = False
+
+    @model_validator(mode="after")
+    def _validate_name(self) -> "DeliveryTargetUpdate":
+        if self.name is not None and not self.name.strip():
+            raise ValueError("name must not be blank")
+        self.name = self.name.strip() if self.name is not None else None
+        return self
+
+
+class DeliveryTargetOut(BaseModel):
+    id: str
+    name: str
+    adapter: str
+    config: dict
+    # Presence markers only — {"api_token": {"set": true}}. Secret VALUES are
+    # write-only and must never appear in a response.
+    secrets: dict[str, dict]
+    # False when this target's adapter plugin is not loaded right now. The target
+    # is still listed (settings must survive a plugin being temporarily absent);
+    # it simply cannot be picked for a new task until the adapter is back.
+    adapter_available: bool
+
+
 class PresetCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     options: PresetOptions

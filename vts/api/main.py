@@ -39,6 +39,11 @@ from vts.api.schemas import (
     ApiTokenCreateRequest,
     ApiTokenOut,
     BatchResultOut,
+    DeliveryOut,
+    DeliveryRetryRequest,
+    DeliveryTargetCreate,
+    DeliveryTargetOut,
+    DeliveryTargetUpdate,
     MeOut,
     MergeSpeakersRequest,
     MessageOut,
@@ -1960,6 +1965,201 @@ def create_app() -> FastAPI:
         repo = Repo(session)
         if not await repo.delete_preset(uuid.UUID(user.id), preset_id):
             raise HTTPException(status_code=404, detail="Preset not found")
+        await session.commit()
+        return Response(status_code=204)
+
+    # ------------------------------------------------------------------
+    # Task deliveries: status + retry (vts-ouq)
+    # ------------------------------------------------------------------
+
+    async def _owned_task_or_404(repo: Repo, task_id: uuid.UUID, user: AuthenticatedUser):
+        task = await repo.get_task_by_id(task_id)
+        if task is None or str(task.user_id) != user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return task
+
+    @app.get("/api/tasks/{task_id}/deliveries", response_model=list[DeliveryOut])
+    async def list_task_deliveries_endpoint(
+        task_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[DeliveryOut]:
+        from vts.services.delivery_status import is_waiting_for_adapter
+
+        repo = Repo(session)
+        await _owned_task_or_404(repo, task_id, user)
+        rows = await repo.list_deliveries_for_task(task_id)
+        return [
+            DeliveryOut(
+                id=str(r.id),
+                adapter=r.adapter,
+                variant=r.variant,
+                status=r.status.value,
+                attempts=r.attempts,
+                max_attempts=r.max_attempts,
+                last_error=r.last_error,
+                external_url=r.external_url,
+                waiting_for_adapter=is_waiting_for_adapter(r.status),
+            )
+            for r in rows
+        ]
+
+    @app.post("/api/tasks/{task_id}/deliveries/retry")
+    async def retry_task_deliveries_endpoint(
+        task_id: uuid.UUID,
+        payload: DeliveryRetryRequest | None = None,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+        redis: Redis = Depends(get_redis),
+    ) -> dict:
+        from vts.db.models import utcnow as _utcnow
+
+        repo = Repo(session)
+        await _owned_task_or_404(repo, task_id, user)
+        target_id = payload.target_id if payload else None
+        reset = await repo.reset_delivery_for_retry(task_id, target_id, _utcnow())
+        await session.commit()
+        # Wake the consumer. Redis is only a hint: the rows are already due, so a
+        # dropped message merely delays them to the next timed tick.
+        await redis.publish(f"{settings.redis_prefix}delivery:notify", "1")
+        return {"reset": reset}
+
+    # ------------------------------------------------------------------
+    # DeliveryTarget CRUD (vts-ouq)
+    # ------------------------------------------------------------------
+
+    def _delivery_target_out(target) -> DeliveryTargetOut:
+        """Serialise a target WITHOUT secret values.
+
+        Adapters are installed as plugins from external sources, so a target
+        whose adapter is missing right now must still serialise — the user's
+        settings outlive a plugin being temporarily absent. In that case the
+        secret KEYS are unknown (they come from the adapter), so fall back to
+        whatever is stored, still emitting booleans only.
+        """
+        from vts.delivery.registry import UnknownAdapter, get_adapter
+
+        adapter_available = True
+        try:
+            keys = list(get_adapter(target.adapter).secret_keys())
+        except UnknownAdapter:
+            adapter_available = False
+            keys = []
+
+        stored: dict[str, str] = {}
+        if target.secrets_enc:
+            try:
+                from vts.core.secrets import decrypt_secrets, load_secrets_key
+
+                stored = decrypt_secrets(target.secrets_enc, load_secrets_key(settings))
+            except Exception:
+                # No key configured, or an undecryptable blob. Never fail the
+                # read and never leak: report presence for the keys we know of.
+                stored = {}
+                if not keys:
+                    keys = []
+        if not keys and stored:
+            keys = list(stored)
+
+        return DeliveryTargetOut(
+            id=str(target.id),
+            name=target.name,
+            adapter=target.adapter,
+            config=target.config_json or {},
+            secrets={k: {"set": bool(stored.get(k))} for k in keys},
+            adapter_available=adapter_available,
+        )
+
+    def _encrypt_secrets_or_400(secrets: dict[str, str]) -> bytes:
+        from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
+
+        try:
+            return encrypt_secrets(secrets, load_secrets_key(settings))
+        except SecretsKeyMissing as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
+            ) from exc
+
+    @app.get("/api/delivery-targets", response_model=list[DeliveryTargetOut])
+    async def list_delivery_targets_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[DeliveryTargetOut]:
+        repo = Repo(session)
+        rows = await repo.list_delivery_targets(uuid.UUID(user.id))
+        return [_delivery_target_out(row) for row in rows]
+
+    @app.post("/api/delivery-targets", response_model=DeliveryTargetOut)
+    async def create_delivery_target_endpoint(
+        payload: DeliveryTargetCreate,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryTargetOut:
+        from vts.delivery.registry import UnknownAdapter, get_adapter
+
+        try:
+            get_adapter(payload.adapter)
+        except UnknownAdapter as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown delivery adapter: {payload.adapter}"
+            ) from exc
+
+        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
+        repo = Repo(session)
+        row = await repo.create_delivery_target(
+            uuid.UUID(user.id),
+            name=payload.name.strip(),
+            adapter=payload.adapter,
+            config=payload.config,
+            secrets_enc=secrets_enc,
+        )
+        await session.commit()
+        return _delivery_target_out(row)
+
+    @app.get("/api/delivery-targets/{target_id}", response_model=DeliveryTargetOut)
+    async def get_delivery_target_endpoint(
+        target_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryTargetOut:
+        repo = Repo(session)
+        row = await repo.get_delivery_target(uuid.UUID(user.id), target_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Delivery target not found")
+        return _delivery_target_out(row)
+
+    @app.put("/api/delivery-targets/{target_id}", response_model=DeliveryTargetOut)
+    async def update_delivery_target_endpoint(
+        target_id: uuid.UUID,
+        payload: DeliveryTargetUpdate,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryTargetOut:
+        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
+        repo = Repo(session)
+        row = await repo.update_delivery_target(
+            uuid.UUID(user.id),
+            target_id,
+            name=payload.name,
+            config=payload.config,
+            secrets_enc=secrets_enc,
+            clear_secrets=payload.clear_secrets,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Delivery target not found")
+        await session.commit()
+        return _delivery_target_out(row)
+
+    @app.delete("/api/delivery-targets/{target_id}", status_code=204)
+    async def delete_delivery_target_endpoint(
+        target_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        if not await repo.delete_delivery_target(uuid.UUID(user.id), target_id):
+            raise HTTPException(status_code=404, detail="Delivery target not found")
         await session.commit()
         return Response(status_code=204)
 
