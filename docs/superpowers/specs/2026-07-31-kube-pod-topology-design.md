@@ -1,0 +1,152 @@
+# VTS: переход с двух systemd-юнитов на один podman kube pod
+
+**Дата:** 2026-07-31
+**bd:** vts-0pg
+**Статус:** дизайн утверждён, ожидает ревью перед планом реализации
+**Мотивирующая зависимость:** блокирует **vts-9y7** (plugin loader) — его bootstrap должен стать initContainer.
+
+## Мотивация
+
+Сегодня VTS в проде — два независимых systemd-юнита (`vts-webapi.service`, `vts-worker.service`),
+каждый запускает свой `podman run`. Композиция размазана по двум unit-файлам: дублируются env-файл,
+тома, network-alias, политики рестарта.
+
+Прямой триггер — **plugin loader** (vts-9y7): загрузчик адаптеров доставки должен выполниться ДО старта
+api и worker и записать плагины в общий с ними том. В systemd это выражается костылём (oneshot-юнит с
+`After=`/`Requires=` у обоих + блокировка от гонки). В pod-топологии это **initContainer** — примитив,
+означающий ровно «выполнись до основных контейнеров, раздели том». Поэтому loader проектируется уже под
+pod, а миграция делается до него.
+
+Образец композиции — уже работающий на том же хосте `cognee.service` (`podman kube play`).
+
+## Ключевые решения
+
+| Развилка | Решение |
+|---|---|
+| Топология | **Под с ДВУМЯ контейнерами** (webapi + worker), не один контейнер `VTS_ROLE=both`. |
+| Миграции | **Отдельный initContainer** (`VTS_ROLE=migrate`), а не внутри webapi. |
+| Рестарт по отдельности | `podman restart vts-{webapi,worker}` + **тонкие oneshot-юниты** как systemd-фасад. |
+| Деплой | `systemctl restart vts` — под целиком (образ новый для обоих контейнеров). |
+| Запуск пода | `podman kube play --replace --service-container=true` из одного юнита `vts.service`. |
+| Секреты | Остаются в `/opt/vts/config/vts.env` на хосте, НЕ в ConfigMap внутри YAML. |
+| Права | rootful podman (как у `cognee`), тот же режим, что сейчас. |
+
+### Почему два контейнера, а не `VTS_ROLE=both`
+
+Entrypoint (`docker/vts-entrypoint.sh`) уже поддерживает `both`, поэтому вариант «один контейнер»
+технически доступен и дал бы более простой YAML. Он отвергнут по одной причине, перевешивающей простоту:
+
+**Рестарт воркера стоит дорого.** `worker_loop` при старте вызывает `recover_pending_tasks`
+(`vts/worker/main.py`), который делает `requeue_running_tasks()` — все выполняющиеся задачи возвращаются
+в `queued` и переделываются с нуля; следом `reconcile_diarization_jobs` отменяет джобы у сайдкара. Это
+минуты-десятки минут GPU-работы.
+
+При `both` любой рестарт webapi (деплой, падение uvicorn, OOM в API-части) убивал бы идущую
+транскрибацию. Сегодня такого нет — юниты рестартятся независимо. Слияние в один контейнер было бы
+**регрессией надёжности** ради упрощения YAML.
+
+**Проверено эмпирически** (пробный под, podman 5.7.0): в поде с `restartPolicy: Always` падение одного
+контейнера не затрагивает соседний — упавший перезапустился дважды, соседний остался с нулём рестартов и
+непрерывным аптаймом. Независимость сохраняется.
+
+### Почему миграции — в initContainer
+
+Сейчас `alembic upgrade head` выполняет **webapi** (ветка `start_webapi` в entrypoint), а worker стартует
+сразу. В поде оба контейнера стартуют параллельно, поэтому воркер с большей вероятностью начнёт работать
+до применения миграций. initContainer снимает вопрос: podman гарантированно доводит его до успешного
+завершения перед стартом основных контейнеров.
+
+Побочная выгода: `start_webapi` перестаёт быть особенным — оба основных контейнера просто запускают свой
+процесс.
+
+## Архитектура
+
+```
+systemd: vts.service   (Type=notify, podman kube play --service-container=true)
+└── pod: vts
+    ├── initContainer: migrate      VTS_ROLE=migrate  → preflight + alembic upgrade head, exit 0
+    │   └── (ЗДЕСЬ ЖЕ позже: initContainer plugin-loader — vts-9y7)
+    ├── container: webapi           VTS_ROLE=webapi,  hostPort 8086→8080
+    └── container: worker           VTS_ROLE=worker
+    volumes (hostPath): /opt/vts, /disk/vts-data
+```
+
+Env для всех контейнеров — `/opt/vts/config/vts.env` (файл хоста). В отличие от `cognee.yaml`, секреты в
+YAML **не переносятся**: там они лежали бы открытым текстом в ConfigMap, а VTS уже имеет env-файл с
+правами доступа, и в него же добавится `VTS_SECRETS_KEY` (delivery).
+
+### Управление
+
+| Задача | Команда |
+|---|---|
+| Деплой / рестарт всего | `systemctl restart vts` |
+| Рестарт только воркера | `systemctl start vts-worker-restart` (= `podman restart vts-worker`) |
+| Рестарт только webapi | `systemctl start vts-webapi-restart` |
+| Остановить воркер на обслуживание | `podman stop vts-worker` |
+| Вернуть | `podman start vts-worker` |
+
+**Проверено:** `podman restart <контейнер>` внутри kube-пода перезапускает только его — соседний контейнер
+не прерывается, под остаётся `Running`. Явно остановленный контейнер НЕ воскрешается политикой
+`restartPolicy: Always` (семантика k8s: ручной stop уважается); под переходит в `Degraded`, второй
+контейнер продолжает работать; `podman start` возвращает под в `Running`.
+
+Тонкие oneshot-юниты нужны, чтобы `systemctl` остался единым интерфейсом управления и существующие
+привычки/скрипты не требовали правок.
+
+## Изменения в репозитории
+
+```
+systemd/
+  vts.service                  # НОВЫЙ: podman kube play (заменяет два юнита)
+  vts-worker-restart.service   # НОВЫЙ: oneshot podman restart vts-worker
+  vts-webapi-restart.service   # НОВЫЙ: oneshot podman restart vts-webapi
+  vts-webapi.service           # УДАЛИТЬ после успешной выкатки
+  vts-worker.service           # УДАЛИТЬ после успешной выкатки
+deploy/
+  vts.yaml                     # НОВЫЙ: Pod-манифест (initContainer + 2 контейнера + тома)
+docker/vts-entrypoint.sh       # +ветка VTS_ROLE=migrate; webapi перестаёт мигрировать
+.github/workflows/deploy-after-build.yml   # два restart → один; переменные сервисов
+```
+
+`vts.yaml` кладётся на хост в `/opt/vts/vts.yaml` (по образцу `/opt/cognee/cognee.yaml`); юнит ссылается
+на этот путь.
+
+## Риски и как они закрываются
+
+1. **Сетевые адреса — ПРОВЕРЕНО, риск низкий.** Алиасы `vts-{webapi,worker}.dns.podman` объявляются в
+   юнитах, но по ним **никто не обращается**: поиск по коду, конфигам и `/opt/vts/config/vts.env` не даёт
+   ни одной ссылки. Единственная используемая связь — исходящая:
+   `VTS_DIARIZATION_URL=http://vts-diarization.dns.podman:9100`, то есть VTS ходит К сайдкару, а тот
+   остаётся отдельным юнитом со своим алиасом. Обратных обращений (сайдкар → webapi/worker) нет.
+   Следствие: алиасы на поде воспроизводить не обязательно; исходящий доступ к сайдкару из пода всё равно
+   надо подтвердить при выкатке (под должен быть в той же сети `podman`).
+2. **Публикация порта.** `-p 8086:8080` переезжает в `hostPort` контейнера webapi. Проверить, что Traefik
+   /обратный прокси продолжает попадать по тому же адресу.
+3. **`--sdnotify=conmon` + `Type=notify`.** У `kube play` готовность сообщает service-container. Проверить,
+   что `systemctl start vts` не висит и не считает под готовым раньше времени.
+4. **`podman pull` при рестарте.** Сейчас образ тянется в `ExecStartPre` каждого юнита. В kube-топологии
+   pull должен остаться (иначе деплой не подхватит новый образ) — либо `ExecStartPre` в `vts.service`,
+   либо `io.containers.autoupdate` аннотация. Решение — в плане.
+5. **Откат.** Старые unit-файлы удаляются ТОЛЬКО после подтверждённо успешной выкатки; до тех пор они
+   лежат рядом и позволяют вернуться одной командой.
+6. **Деплой-переменные.** `WEBAPI_SERVICE`/`WORKER_SERVICE` — GitHub Variables; переход на один юнит
+   требует ручной правки в настройках репозитория. Это шаг для оператора, не для CI.
+
+## Границы
+
+**Делаем:** pod-манифест, три юнита, ветка `migrate` в entrypoint, правка деплой-workflow, документация
+команд управления, выкатка с проверкой и удаление старых юнитов.
+
+**Не делаем:**
+- Диаризационный сайдкар (`vts-diarization.service`) остаётся отдельным юнитом — у него свой образ, свой
+  пайплайн сборки и своя жизнь (см. память `project_diarization_deploy_topology`).
+- Postgres/Redis не трогаем.
+- Plugin loader (vts-9y7) — отдельная фича; здесь только оставляется место под его initContainer.
+
+## Открытые вопросы для реализации
+
+- Точная форма `Type=notify` для `vts.service`: как `cognee.service` (`NotifyAccess=all`) или иначе.
+- Нужен ли `podman pull` в `ExecStartPre` при наличии `io.containers.autoupdate` — выбрать одно.
+- ~~Сохранять ли `network-alias` на поде~~ — закрыт проверкой (риск 1): алиасы webapi/worker никем не
+  используются, воспроизводить не требуется.
+- Значение `terminationGracePeriodSeconds` для воркера: сейчас `podman stop -t 20` + `TimeoutStopSec=30`.
