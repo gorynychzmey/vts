@@ -235,3 +235,9 @@ tests/ui/node_modules/
 
 # Local working notes / scratch (never track)
 .claude/_docs/
+
+# Rendered kube ConfigMap for the VTS pod (vts-0pg). Derived from
+# /opt/vts/config/vts.env and CONTAINS SECRETS — it lives on the deploy host,
+# never in the repo. Only scripts/render-configmap.sh is tracked.
+*configmap*.yaml
+*configmap*.yml
