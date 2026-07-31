@@ -196,6 +196,19 @@ class TaskProcessor:
                         "title": task.source_title or task.source_url,
                     },
                 )
+                try:
+                    from vts.delivery.queue import enqueue_deliveries
+                    from vts.db.models import utcnow as _utcnow
+                    n = await enqueue_deliveries(
+                        repo, task,
+                        max_attempts=self.settings.delivery_max_attempts,
+                        now=_utcnow())
+                    if n:
+                        await session.commit()
+                        await self.redis.publish(
+                            f"{self.settings.redis_prefix}delivery:notify", "1")
+                except Exception:
+                    logger.exception("delivery enqueue failed for task %s (task stays completed)", task.id)
                 _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
                 emitter.emit({
                     "stage": "task.final",

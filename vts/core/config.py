@@ -314,6 +314,11 @@ class Settings(BaseSettings):
     vapid_subject: str = "mailto:admin@example.com"
 
     secrets_key: str = ""  # VTS_SECRETS_KEY: Fernet key for delivery-target secrets
+    delivery_max_attempts: int = 5
+    delivery_backoff_base_seconds: int = 60
+    delivery_backoff_cap_seconds: int = 3600
+    delivery_claim_batch: int = 10
+    delivery_stuck_seconds: int = 600
 
     # Chunked upload settings
     upload_chunked_threshold_bytes: int = 52_428_800
