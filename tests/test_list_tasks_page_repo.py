@@ -127,3 +127,32 @@ async def test_composite_cursor_breaks_equal_created_at(session, user):
         user.id, before=(ts, uuid.UUID(int=2)), limit=10
     )
     assert [t.id for t in nxt] == [uuid.UUID(int=1)]
+
+
+async def test_status_filter_narrows_and_cursor_still_pages(session, user):
+    # 4 tasks: alternate completed/queued, minute 0..3 (task 3 newest).
+    rows = []
+    for i in range(4):
+        t = Task(
+            id=uuid.uuid4(), user_id=user.id, source_url=f"https://example.com/{i}",
+            artifact_dir=f"/tmp/{i}",
+            status=TaskStatus.completed if i % 2 == 0 else TaskStatus.queued,
+            created_at=BASE + timedelta(minutes=i),
+        )
+        session.add(t)
+        rows.append(t)
+    await session.flush()
+    repo = Repo(session)
+    # completed tasks are i=0 (min0) and i=2 (min2); newest-first -> [2, 0]
+    page = await repo.list_tasks_page(user.id, limit=1, status=TaskStatus.completed)
+    assert [t.source_url for t in page] == ["https://example.com/2"]
+    tail = page[-1]
+    page2 = await repo.list_tasks_page(
+        user.id, before=(tail.created_at, tail.id), limit=10, status=TaskStatus.completed
+    )
+    assert [t.source_url for t in page2] == ["https://example.com/0"]
+    # no queued leaked in either page
+    assert all(
+        "example.com/1" not in t.source_url and "example.com/3" not in t.source_url
+        for t in page + page2
+    )

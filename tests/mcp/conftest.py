@@ -195,6 +195,30 @@ class FakeRepo:
         items.sort(key=key_map[sort], reverse=(order == "desc"))
         return items[:limit]
 
+    async def list_tasks_page(
+        self,
+        user_id: uuid.UUID,
+        *,
+        before: tuple | None = None,
+        after: tuple | None = None,
+        order: str = "desc",
+        limit: int = 20,
+        status: Any = None,
+    ) -> list[FakeTask]:
+        items = [t for t in self.tasks.values() if t.user_id == user_id]
+        if status is not None:
+            # Real repo receives a TaskStatus enum; FakeTask.status is a str.
+            want = getattr(status, "value", status)
+            items = [t for t in items if t.status == want]
+        items.sort(key=lambda t: (t.created_at, str(t.id)), reverse=(order == "desc"))
+        if before is not None:
+            b_ts, b_id = before
+            items = [t for t in items if (t.created_at, str(t.id)) < (b_ts, str(b_id))]
+        if after is not None:
+            a_ts, a_id = after
+            items = [t for t in items if (t.created_at, str(t.id)) > (a_ts, str(a_id))]
+        return items[:limit]
+
 
 class FakeBus:
     """Mirrors the subset of vts.services.redis_bus.RedisBus that the MCP tools call."""

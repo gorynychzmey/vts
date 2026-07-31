@@ -2093,6 +2093,11 @@ async function maybeFlagNewerTask(taskId) {
     return;
   }
   if (!task || !task.created_at) return;
+  // Re-check after the await: the task may have been pulled into the DOM by
+  // loadNewer()/prepend while /api/tasks/{id} was in flight. Without this,
+  // its id would still be added to newIds, inflating the banner count for a
+  // task that is already visible (vts-7ud).
+  if (p.newIds.has(taskId) || findTaskEl(taskId)) return;
   if (isNewerThan(task.created_at, task.id, p.head)) {
     p.newIds.add(taskId);
     showNewTasksBanner();

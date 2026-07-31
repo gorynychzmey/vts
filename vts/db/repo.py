@@ -116,15 +116,18 @@ class Repo:
         after: tuple[datetime, uuid.UUID] | None = None,
         order: str = "desc",
         limit: int,
+        status: TaskStatus | None = None,
     ) -> list[Task]:
         """Cursor page of a user's tasks within the open interval
-        ``after < (created_at, id) < before`` (either bound optional).
+        ``after < (created_at, id) < before`` (either bound optional), with an
+        optional ``status`` filter.
 
         Ordered by the composite ``(created_at, id)`` key so equal
         created_at timestamps never cause a skipped or duplicated row.
         ``order`` selects which end ``limit`` cuts from: ``desc`` (newest
         first, for paging downward) or ``asc`` (oldest first, for pulling
-        the tasks adjacent to a head cursor).
+        the tasks adjacent to a head cursor). ``status`` only narrows the
+        set — the cursor/order logic is unchanged.
         """
         key = tuple_(Task.created_at, Task.id)
         stmt = (
@@ -132,6 +135,8 @@ class Repo:
             .options(selectinload(Task.steps))
             .where(Task.user_id == user_id)
         )
+        if status is not None:
+            stmt = stmt.where(Task.status == status)
         if before is not None:
             stmt = stmt.where(key < tuple_(*before))
         if after is not None:

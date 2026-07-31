@@ -61,14 +61,16 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
     async with Client(mcp) as client:
         result = await client.call_tool("list_tasks", {})
 
-    # The tool returns list[TaskSummary]; FastMCP deserializes the structured content
-    # into a list of Root namedtuple-like objects (not dicts, not Pydantic models).
-    # Access fields as attributes.
+    # The tool now returns a TaskPage; FastMCP deserializes the structured
+    # content into a namedtuple-like object with `tasks`, `next_cursor`,
+    # `has_more`. Access fields as attributes.
     assert result.is_error is False
     data = result.data
-    assert isinstance(data, list)
-    assert len(data) == 1
-    summary = data[0]
+    assert hasattr(data, "tasks")
+    assert data.has_more is False
+    assert data.next_cursor is None
+    assert len(data.tasks) == 1
+    summary = data.tasks[0]
     assert summary.title == "Test video"
     assert summary.url == "https://x/abc"
     assert summary.status == "completed"

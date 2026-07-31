@@ -3,17 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
+from vts.db.models import TaskStatus
+from vts.mcp.cursor import decode_cursor, encode_cursor
 from vts.mcp.schemas import (
     PresetInfo,
     ProgressCounts,
     PromptInfo,
     PromptResult,
     SubmitVideoResult,
+    TaskPage,
     TaskStatusResult,
     TaskSummary,
     TranscriptResult,
@@ -189,14 +193,15 @@ async def submit_video(
 
 
 class _RepoListLike(Protocol):
-    async def list_tasks_for_user_filtered(
+    async def list_tasks_page(
         self,
         user_id: uuid.UUID,
         *,
-        status: Any = None,
-        limit: int = 20,
-        sort: str = "updated_at",
+        before: tuple[datetime, uuid.UUID] | None = None,
+        after: tuple[datetime, uuid.UUID] | None = None,
         order: str = "desc",
+        limit: int = 20,
+        status: Any = None,
     ) -> list[Any]: ...
 
 
@@ -204,21 +209,33 @@ async def list_tasks(
     *,
     user: _UserLike,
     repo: _RepoListLike,
-    status: Literal["queued", "running", "completed", "failed", "paused", "canceled", "archived"] | None = None,
+    status: Literal["queued", "running", "waiting", "paused", "completed", "archived", "failed", "canceled"] | None = None,
     limit: int = 20,
-    sort: Literal["created_at", "updated_at", "title"] = "updated_at",
-    order: Literal["asc", "desc"] = "desc",
-) -> list[TaskSummary]:
+    cursor: str | None = None,
+) -> TaskPage:
+    """List the caller's tasks newest-first, one page at a time.
+
+    Pages on the immutable ``created_at`` cursor. Pass ``cursor`` (the
+    ``next_cursor`` from a prior page) to fetch the next page; ``status``
+    optionally narrows the set.
+    """
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
-    tasks = await repo.list_tasks_for_user_filtered(
+    before = None
+    if cursor:
+        try:
+            before = decode_cursor(cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid cursor") from exc
+    status_enum = TaskStatus(status) if status is not None else None
+    tasks = await repo.list_tasks_page(
         uuid.UUID(user.id),
-        status=status,
+        before=before,
+        order="desc",
         limit=limit,
-        sort=sort,
-        order=order,
+        status=status_enum,
     )
-    return [
+    summaries = [
         TaskSummary(
             task_id=t.id,
             status=t.status,
@@ -229,6 +246,13 @@ async def list_tasks(
         )
         for t in tasks
     ]
+    has_more = len(tasks) == limit
+    next_cursor = (
+        encode_cursor(tasks[-1].created_at, tasks[-1].id)
+        if (has_more and tasks)
+        else None
+    )
+    return TaskPage(tasks=summaries, next_cursor=next_cursor, has_more=has_more)
 
 
 def _stage_label(task: Any) -> str | None:
