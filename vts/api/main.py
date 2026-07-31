@@ -2029,46 +2029,9 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
 
     def _delivery_target_out(target) -> DeliveryTargetOut:
-        """Serialise a target WITHOUT secret values.
+        from vts.services.delivery_submit import delivery_target_view
 
-        Adapters are installed as plugins from external sources, so a target
-        whose adapter is missing right now must still serialise — the user's
-        settings outlive a plugin being temporarily absent. In that case the
-        secret KEYS are unknown (they come from the adapter), so fall back to
-        whatever is stored, still emitting booleans only.
-        """
-        from vts.delivery.registry import UnknownAdapter, get_adapter
-
-        adapter_available = True
-        try:
-            keys = list(get_adapter(target.adapter).secret_keys())
-        except UnknownAdapter:
-            adapter_available = False
-            keys = []
-
-        stored: dict[str, str] = {}
-        if target.secrets_enc:
-            try:
-                from vts.core.secrets import decrypt_secrets, load_secrets_key
-
-                stored = decrypt_secrets(target.secrets_enc, load_secrets_key(settings))
-            except Exception:
-                # No key configured, or an undecryptable blob. Never fail the
-                # read and never leak: report presence for the keys we know of.
-                stored = {}
-                if not keys:
-                    keys = []
-        if not keys and stored:
-            keys = list(stored)
-
-        return DeliveryTargetOut(
-            id=str(target.id),
-            name=target.name,
-            adapter=target.adapter,
-            config=target.config_json or {},
-            secrets={k: {"set": bool(stored.get(k))} for k in keys},
-            adapter_available=adapter_available,
-        )
+        return DeliveryTargetOut(**delivery_target_view(target, settings))
 
     def _encrypt_secrets_or_400(secrets: dict[str, str]) -> bytes:
         from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
@@ -2273,13 +2236,27 @@ def create_app() -> FastAPI:
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
+        from vts.services.delivery_submit import (
+            DeliveryValidationError,
+            validate_delivery_refs,
+        )
+
         repo = Repo(session)
         effective_user_id = uuid.UUID(user.id)
+        options = request.model_dump()
+        options.pop("url", None)
+        # Explicit submit: an unknown target or an unavailable adapter is an
+        # error the caller should see now, before any work is done.
+        try:
+            options["delivery"] = await validate_delivery_refs(
+                repo, effective_user_id, options.get("delivery")
+            )
+        except DeliveryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         task_id = uuid.uuid4()
         artifact = task_dir(settings.artifacts_root, user.username, task_id)
         artifact.mkdir(parents=True, exist_ok=True)
-        options = request.model_dump()
-        options.pop("url", None)
         task = await repo.create_task(
             user_id=effective_user_id,
             source_url=request.url,

@@ -89,6 +89,7 @@ async def test_submit_video_defaults_match_web_pipeline(tmp_path: Path) -> None:
         "transcript": True,
         "diarize": False,
         "prompts": [{"source": "system", "id": "summary"}],
+        "delivery": [],
     }
     assert "summary" not in opts
     assert repo.last_options == opts
@@ -116,6 +117,7 @@ async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> N
         "transcript": True,
         "diarize": False,
         "prompts": [],
+        "delivery": [],
     }
     assert "summary" not in opts
 

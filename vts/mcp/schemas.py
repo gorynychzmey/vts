@@ -73,6 +73,29 @@ class PresetInfo(BaseModel):
     options: dict
 
 
+class DeliveryTargetInfo(BaseModel):
+    """One delivery target. Secret VALUES are never included."""
+    id: str
+    name: str
+    adapter: str
+    config: dict
+    secrets: dict[str, dict]  # {key: {"set": bool}} — presence only
+    adapter_available: bool
+
+
+class DeliveryStatusInfo(BaseModel):
+    """State of one delivery of one task to one target."""
+    id: str
+    adapter: str
+    variant: str
+    status: str
+    attempts: int
+    max_attempts: int
+    last_error: str | None
+    external_url: str | None
+    waiting_for_adapter: bool
+
+
 class PromptResult(BaseModel):
     task_id: uuid.UUID
     source: str

@@ -10,6 +10,8 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
 from vts.mcp.schemas import (
+    DeliveryStatusInfo,
+    DeliveryTargetInfo,
     PresetInfo,
     PromptInfo,
     PromptResult,
@@ -21,19 +23,25 @@ from vts.mcp.schemas import (
     WaitResult,
 )
 from vts.mcp.tools import (
+    create_delivery_target,
     create_preset,
     create_prompt,
+    delete_delivery_target,
     delete_preset,
     delete_prompt,
     get_default_preset,
+    get_delivery_status,
     get_prompt_result,
     get_status,
     get_transcript,
+    list_delivery_targets,
     list_presets,
     list_prompts,
     list_tasks,
+    retry_delivery,
     set_default_preset,
     submit_video,
+    update_delivery_target,
     update_preset,
     update_prompt,
     wait_for_task,
@@ -90,6 +98,7 @@ def build_mcp_server() -> FastMCP:
         diarize: bool = False,
         prompts: list[dict] | None = None,
         preset: dict | None = None,
+        delivery: list[dict] | None = None,
     ) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately.
 
@@ -112,6 +121,12 @@ def build_mcp_server() -> FastMCP:
                 or {"source": "user", "id": "<preset-uuid>"} supplying default
                 pipeline options. The preset fills any field you leave at its
                 default; explicit params above override the preset.
+            delivery: Optional destinations for the result, each
+                {"deliver_to": "<target name>", "variant": "raw"|"redacted"|"summary"}.
+                Targets are managed with the delivery-target tools; reference
+                them by name. Omitting `variant` uses the target's configured
+                default. An unknown target name, or one whose adapter plugin is
+                not currently installed, is rejected with 422.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -129,6 +144,7 @@ def build_mcp_server() -> FastMCP:
                     diarize=diarize,
                     prompts=prompts,
                     preset=preset,
+                    delivery=delivery,
                 )
                 await session.commit()
                 return result
@@ -274,6 +290,104 @@ def build_mcp_server() -> FastMCP:
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
             result = await delete_preset(preset_id=preset_id, user=user, repo=Repo(session))
+            await session.commit()
+            return result
+
+    @mcp.tool(name="list_delivery_targets")
+    async def _list_delivery_targets() -> list[DeliveryTargetInfo]:
+        """List the caller's delivery targets.
+
+        Secret values are never returned — each secret shows only whether it is
+        set. `adapter_available` is False when the target's adapter plugin is
+        not installed right now; such a target cannot be used for a new task
+        until it is back.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            return await list_delivery_targets(user=user, repo=Repo(session), settings=settings)
+
+    @mcp.tool(name="create_delivery_target")
+    async def _create_delivery_target(
+        name: str, adapter: str, config: dict | None = None,
+        secrets: dict[str, str] | None = None,
+    ) -> DeliveryTargetInfo:
+        """Create a delivery target: a named destination for task results.
+
+        Args:
+            name: Unique name for this target; tasks reference it by this name.
+            adapter: Installed adapter to deliver through (e.g. "outline").
+            config: Non-secret adapter settings (e.g. base_url, collection_id).
+            secrets: Sensitive values (e.g. {"api_token": "..."}). Encrypted at
+                rest and never returned by any tool.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            result = await create_delivery_target(
+                user=user, repo=Repo(session), settings=settings,
+                name=name, adapter=adapter, config=config, secrets=secrets,
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="update_delivery_target")
+    async def _update_delivery_target(
+        target_id: str, name: str | None = None, config: dict | None = None,
+        secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+    ) -> DeliveryTargetInfo:
+        """Update a delivery target. Omitting `secrets` keeps the stored ones;
+        pass clear_secrets=True to remove them."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            result = await update_delivery_target(
+                user=user, repo=Repo(session), settings=settings, target_id=target_id,
+                name=name, config=config, secrets=secrets, clear_secrets=clear_secrets,
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="delete_delivery_target")
+    async def _delete_delivery_target(target_id: str) -> dict[str, Any]:
+        """Delete a delivery target."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await delete_delivery_target(
+                user=user, repo=Repo(session), target_id=target_id
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="get_delivery_status")
+    async def _get_delivery_status(task_id: uuid.UUID) -> list[DeliveryStatusInfo]:
+        """Where each of a task's deliveries got to.
+
+        Poll this when you need to know the result actually landed before
+        continuing a pipeline: `delivered` with an `external_url` is the
+        confirmation. `waiting_for_adapter` means the destination's plugin is
+        temporarily missing — the delivery is queued, not lost, and leaves on
+        its own once the plugin is back.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            return await get_delivery_status(user=user, repo=Repo(session), task_id=task_id)
+
+    @mcp.tool(name="retry_delivery")
+    async def _retry_delivery(task_id: uuid.UUID, target_id: str | None = None) -> dict[str, Any]:
+        """Retry a task's dead deliveries (optionally just one target's).
+
+        Returns how many were revived. Deliveries waiting on a missing adapter
+        are left alone — they retry themselves when the plugin returns.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await retry_delivery(
+                user=user, repo=Repo(session), task_id=task_id, target_id=target_id
+            )
             await session.commit()
             return result
 

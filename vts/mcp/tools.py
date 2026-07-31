@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from vts.db.models import TaskStatus
 from vts.mcp.cursor import decode_cursor, encode_cursor
 from vts.mcp.schemas import (
+    DeliveryStatusInfo,
+    DeliveryTargetInfo,
     PresetInfo,
     ProgressCounts,
     PromptInfo,
@@ -24,6 +26,7 @@ from vts.mcp.schemas import (
     WaitResult,
 )
 from vts.services import task_status
+from vts.services.delivery_submit import DeliveryValidationError, validate_delivery_refs
 from vts.services.preset_expand import expand_preset_options, resolve_preset
 from vts.services.preset_registry import (
     default_system_preset,
@@ -57,6 +60,7 @@ class _RepoLike(Protocol):
 
     async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
     async def list_prompts(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def get_delivery_target_by_name(self, user_id: uuid.UUID, name: str) -> Any | None: ...
 
 
 class _BusLike(Protocol):
@@ -86,6 +90,7 @@ async def submit_video(
     diarize: bool = False,
     prompts: list[dict] | None = None,
     preset: dict | None = None,
+    delivery: list[dict] | None = None,
 ) -> SubmitVideoResult:
     """Create a new task in the queued state and notify the worker.
 
@@ -110,10 +115,22 @@ async def submit_video(
       - diarize: caller wins if `diarize is True` (non-default), else
         preset's.
       - prompts: caller wins if `prompts is not None`, else preset's.
+      - delivery: caller wins if `delivery is not None`, else preset's.
     With no preset, behaviour is unchanged.
+
+    `delivery` is a list of `{deliver_to: "<target name>", variant?}`. An
+    EXPLICIT delivery is validated here: an unknown target name, or a target
+    whose adapter plugin is not currently loaded, raises 422 so the caller finds
+    out at submit time. Delivery inherited from a PRESET is not gated that way —
+    a temporarily missing plugin must not fail the task; that delivery is
+    enqueued and parked until the adapter returns.
     """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
+    # Delivery inherited from a preset (if any). Kept separate from an explicit
+    # `delivery` because only the explicit one is validated up-front: a preset
+    # naming a target whose plugin is missing must park, not fail the submit.
+    preset_delivery: list[dict] = []
     if preset is None:
         if prompts is None:
             norm: list[dict] = [ref_to_dict("system", "summary")]
@@ -161,10 +178,30 @@ async def submit_video(
                 except ValueError as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
                 norm.append(ref_to_dict(source, ref_id))
+        # Field-level replace, like every other option: an explicit `delivery`
+        # wins outright, otherwise the preset's applies.
+        if delivery is None:
+            preset_delivery = list(base.get("delivery", []))
     if norm and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     if diarize and not transcript:
         raise HTTPException(status_code=422, detail="diarize requires transcript")
+
+    if delivery is None:
+        delivery_refs = preset_delivery
+    else:
+        # Explicit submit: unknown target or unavailable adapter fails NOW.
+        try:
+            delivery_refs = await validate_delivery_refs(
+                repo, uuid.UUID(user.id), delivery
+            )
+        except DeliveryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if any(d.get("variant") == "summary" for d in delivery_refs) and not norm:
+        raise HTTPException(
+            status_code=422, detail="delivery variant 'summary' requires prompts"
+        )
+
     task_id = uuid.uuid4()
     artifact = task_dir(artifacts_root, user.username, task_id)
     artifact.mkdir(parents=True, exist_ok=True)
@@ -174,6 +211,7 @@ async def submit_video(
         "transcript": transcript,
         "diarize": diarize,
         "prompts": norm,
+        "delivery": delivery_refs,
     }
     task = await repo.create_task(
         user_id=uuid.UUID(user.id),
@@ -341,6 +379,161 @@ async def get_prompt_result(
         id=ref_id,
         content=Path(path).read_text(encoding="utf-8"),
     )
+
+
+class _RepoDeliveryLike(Protocol):
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        config: dict, secrets_enc: bytes | None,
+    ) -> Any: ...
+    async def list_delivery_targets(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def get_delivery_target_by_name(self, user_id: uuid.UUID, name: str) -> Any | None: ...
+    async def update_delivery_target(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> Any | None: ...
+    async def delete_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> bool: ...
+
+
+async def create_delivery_target(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
+    name: str, adapter: str, config: dict | None = None,
+    secrets: dict[str, str] | None = None,
+) -> DeliveryTargetInfo:
+    """Create a delivery target. Secrets are encrypted at rest and never returned."""
+    from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
+    from vts.delivery.registry import UnknownAdapter, get_adapter
+    from vts.services.delivery_submit import delivery_target_view
+
+    if not name or not name.strip():
+        raise HTTPException(status_code=422, detail="name is required")
+    try:
+        get_adapter(adapter)
+    except UnknownAdapter as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown delivery adapter: {adapter}"
+        ) from exc
+
+    secrets_enc = None
+    if secrets:
+        try:
+            secrets_enc = encrypt_secrets(secrets, load_secrets_key(settings))
+        except SecretsKeyMissing as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
+            ) from exc
+
+    row = await repo.create_delivery_target(
+        uuid.UUID(user.id), name=name.strip(), adapter=adapter,
+        config=config or {}, secrets_enc=secrets_enc,
+    )
+    return DeliveryTargetInfo(**delivery_target_view(row, settings))
+
+
+async def list_delivery_targets(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any
+) -> list[DeliveryTargetInfo]:
+    """List the caller's delivery targets. Secret values are never included."""
+    from vts.services.delivery_submit import delivery_target_view
+
+    rows = await repo.list_delivery_targets(uuid.UUID(user.id))
+    return [DeliveryTargetInfo(**delivery_target_view(r, settings)) for r in rows]
+
+
+async def update_delivery_target(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
+    target_id: str, name: str | None = None, config: dict | None = None,
+    secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+) -> DeliveryTargetInfo:
+    """Update a delivery target. Omitting `secrets` keeps the stored ones."""
+    from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
+    from vts.services.delivery_submit import delivery_target_view
+
+    secrets_enc = None
+    if secrets:
+        try:
+            secrets_enc = encrypt_secrets(secrets, load_secrets_key(settings))
+        except SecretsKeyMissing as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
+            ) from exc
+    try:
+        tid = uuid.UUID(target_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="target_id must be a UUID") from exc
+
+    row = await repo.update_delivery_target(
+        uuid.UUID(user.id), tid, name=name, config=config,
+        secrets_enc=secrets_enc, clear_secrets=clear_secrets,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Delivery target not found")
+    return DeliveryTargetInfo(**delivery_target_view(row, settings))
+
+
+async def delete_delivery_target(
+    *, user: _UserLike, repo: _RepoDeliveryLike, target_id: str
+) -> dict:
+    try:
+        tid = uuid.UUID(target_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="target_id must be a UUID") from exc
+    if not await repo.delete_delivery_target(uuid.UUID(user.id), tid):
+        raise HTTPException(status_code=404, detail="Delivery target not found")
+    return {"deleted": True}
+
+
+class _RepoDeliveryStatusLike(Protocol):
+    async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Any: ...
+    async def list_deliveries_for_task(self, task_id: uuid.UUID) -> list[Any]: ...
+    async def reset_delivery_for_retry(
+        self, task_id: uuid.UUID, target_id: uuid.UUID | None, now: Any
+    ) -> int: ...
+
+
+async def get_delivery_status(
+    *, user: _UserLike, repo: _RepoDeliveryStatusLike, task_id: uuid.UUID
+) -> list[DeliveryStatusInfo]:
+    """Deliveries of one task: where each one got to, and why if it stalled."""
+    from vts.services.delivery_status import is_waiting_for_adapter
+
+    await repo.get_task_for_user(uuid.UUID(user.id), task_id)  # 404s if not owned
+    rows = await repo.list_deliveries_for_task(task_id)
+    return [
+        DeliveryStatusInfo(
+            id=str(r.id), adapter=r.adapter, variant=r.variant,
+            status=str(r.status), attempts=r.attempts, max_attempts=r.max_attempts,
+            last_error=r.last_error, external_url=r.external_url,
+            waiting_for_adapter=is_waiting_for_adapter(r.status),
+        )
+        for r in rows
+    ]
+
+
+async def retry_delivery(
+    *, user: _UserLike, repo: _RepoDeliveryStatusLike, task_id: uuid.UUID,
+    target_id: str | None = None,
+) -> dict:
+    """Revive dead deliveries of a task.
+
+    Rows parked in `waiting_adapter` are deliberately untouched: they are not
+    stuck, and forcing them to retry would spend attempts against an adapter
+    that is still missing.
+    """
+    from vts.db.models import utcnow
+
+    await repo.get_task_for_user(uuid.UUID(user.id), task_id)  # 404s if not owned
+    tid = None
+    if target_id:
+        try:
+            tid = uuid.UUID(target_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="target_id must be a UUID") from exc
+    reset = await repo.reset_delivery_for_retry(task_id, tid, utcnow())
+    return {"reset": reset}
 
 
 class _RepoPromptLike(Protocol):

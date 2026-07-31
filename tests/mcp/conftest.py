@@ -46,6 +46,17 @@ class FakePreset:
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
+@dataclass
+class FakeDeliveryTarget:
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    adapter: str
+    config_json: dict[str, Any]
+    secrets_enc: bytes | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
 class FakeRepo:
     """Mirrors the subset of vts.db.repo.Repo that the MCP tools call."""
 
@@ -56,6 +67,7 @@ class FakeRepo:
         self.presets: dict[uuid.UUID, FakePreset] = {}
         self.default_presets: dict[uuid.UUID, dict | None] = {}
         self.last_options: dict[str, Any] | None = None
+        self.delivery_targets: dict[uuid.UUID, Any] = {}
 
     async def create_task(
         self,
@@ -75,6 +87,61 @@ class FakeRepo:
         )
         self.tasks[task.id] = task
         return task
+
+    # ---- DeliveryTarget CRUD (mirrors vts.db.repo.Repo delivery methods) ----
+
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        config: dict, secrets_enc: bytes | None,
+    ) -> "FakeDeliveryTarget":
+        target = FakeDeliveryTarget(
+            id=uuid.uuid4(), user_id=user_id, name=name, adapter=adapter,
+            config_json=config, secrets_enc=secrets_enc,
+        )
+        self.delivery_targets[target.id] = target
+        return target
+
+    async def list_delivery_targets(self, user_id: uuid.UUID) -> list["FakeDeliveryTarget"]:
+        return [t for t in self.delivery_targets.values() if t.user_id == user_id]
+
+    async def get_delivery_target(
+        self, user_id: uuid.UUID, target_id: uuid.UUID
+    ) -> "FakeDeliveryTarget | None":
+        t = self.delivery_targets.get(target_id)
+        return t if t is not None and t.user_id == user_id else None
+
+    async def get_delivery_target_by_name(
+        self, user_id: uuid.UUID, name: str
+    ) -> "FakeDeliveryTarget | None":
+        for t in self.delivery_targets.values():
+            if t.user_id == user_id and t.name == name:
+                return t
+        return None
+
+    async def update_delivery_target(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> "FakeDeliveryTarget | None":
+        t = await self.get_delivery_target(user_id, target_id)
+        if t is None:
+            return None
+        if name is not None:
+            t.name = name
+        if config is not None:
+            t.config_json = config
+        if clear_secrets:
+            t.secrets_enc = None
+        elif secrets_enc is not None:
+            t.secrets_enc = secrets_enc
+        return t
+
+    async def delete_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+        t = await self.get_delivery_target(user_id, target_id)
+        if t is None:
+            return False
+        del self.delivery_targets[target_id]
+        return True
 
     # ---- Prompt CRUD (mirrors vts.db.repo.Repo prompt methods) ----
 

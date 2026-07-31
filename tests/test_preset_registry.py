@@ -54,7 +54,8 @@ def test_filter_keeps_system_drops_unknown_user():
 def test_expand_defaults_missing_and_filters():
     opts = {"audio_only": True, "prompts": [{"source":"user","id":"gone"}]}
     out = expand_preset_options(opts, set())
-    assert out == {"language": None, "audio_only": True, "transcript": True, "diarize": False, "prompts": []}
+    assert out == {"language": None, "audio_only": True, "transcript": True, "diarize": False,
+                   "prompts": [], "delivery": []}
 
 def test_expand_diarize_defaults_false_when_missing():
     out = expand_preset_options({}, set())

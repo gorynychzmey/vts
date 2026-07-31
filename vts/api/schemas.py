@@ -57,12 +57,20 @@ class PresetRef(BaseModel):
     id: str = Field(min_length=1)
 
 
+class DeliveryRef(BaseModel):
+    """A preset's reference to a delivery target: name only, never secrets."""
+
+    deliver_to: str = Field(min_length=1)
+    variant: Literal["raw", "redacted", "summary"] | None = None
+
+
 class PresetOptions(BaseModel):
     language: str | None = None
     audio_only: bool = False
     transcript: bool = True
     diarize: bool = False
     prompts: list[PromptRef] = Field(default_factory=list)
+    delivery: list[DeliveryRef] = Field(default_factory=list)
 
 
 class PresetOut(BaseModel):
@@ -163,11 +171,16 @@ class TaskCreateRequest(BaseModel):
     # Meaningless without diarize, same dependency shape as diarize/transcript.
     speaker_no_manual_stop: bool = False
     prompts: list[PromptRef] = Field(default_factory=_default_prompts)
+    # Optional delivery destinations, by target name. Validated against the
+    # caller's targets (and their adapters' availability) in the endpoint.
+    delivery: list[DeliveryRef] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_stage_dependencies(self) -> "TaskCreateRequest":
         if self.prompts and not self.transcript:
             raise ValueError("prompts require transcript")
+        if any(d.variant == "summary" for d in self.delivery) and not self.prompts:
+            raise ValueError("delivery variant 'summary' requires prompts")
         if self.diarize and not self.transcript:
             raise ValueError("diarize requires transcript")
         if self.speaker_no_manual_stop and not self.diarize:

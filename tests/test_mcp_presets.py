@@ -125,6 +125,7 @@ async def test_submit_video_no_preset_unchanged(
         "transcript": True,
         "diarize": False,
         "prompts": [{"source": "system", "id": "summary"}],
+        "delivery": [],
     }
 
 
