@@ -1283,6 +1283,22 @@ git commit -m "feat(delivery): settings, backoff, enqueue-on-completion (deliver
 
 ## Task 9: Consumer loop (claim → deliver → record) + reaper
 
+> **SPEC UPDATE 2026-07-31 (commit cce964c) — applies to this task.** A temporarily unavailable adapter
+> (plugin did not load this restart) is a normal transient state, NOT a delivery failure. Therefore:
+> - Add `waiting_adapter = "waiting_adapter"` to `DeliveryStatus` in `vts/db/models.py`. **No migration
+>   needed** — the `status` column is `sa.String(32)` / `native_enum=False`, so a new value is
+>   Python-side only.
+> - Add `delivery_adapter_wait_seconds: int = 300` to `Settings` (recheck interval for parked rows).
+> - In `process_one_delivery`: call `get_adapter(attempt.adapter)` **FIRST** inside the `try`, before
+>   resolving the variant or decrypting secrets. Catch `UnknownAdapter` in its **own** `except` BEFORE
+>   the generic one: set `status=waiting_adapter`, **decrement `attempts` back** (the attempt was not
+>   spent), `next_attempt_at = now + delivery_adapter_wait_seconds`. Never `dead`, never `last_error`
+>   noise. Requires a repo method (e.g. `park_delivery_for_adapter(attempt_id, next_attempt_at)`).
+> - `claim_due_deliveries` must claim `status IN (pending, waiting_adapter)` — otherwise parked rows
+>   never wake up. This changes the Task 6 repo method; update it here.
+> - Test additionally: unregistered adapter → `waiting_adapter`, `attempts` stays 0, not `dead` after
+>   max_attempts; then register the adapter → next tick delivers.
+
 **Files:**
 - Create: `vts/delivery/consumer.py`
 - Modify: `vts/worker/main.py`
@@ -1525,6 +1541,12 @@ git commit -m "feat(delivery): consumer loop with backoff/dead + reaper, wired i
 ---
 
 ## Task 10: DeliveryTarget REST endpoints (write-only secrets)
+
+> **SPEC UPDATE 2026-07-31 (commit cce964c).** Add `adapter_available: bool` to `DeliveryTargetOut`
+> (computed via `registry`: is this target's adapter currently loaded). A target whose plugin is missing
+> stays listed and is merely flagged — list/get must never fail because of it (the existing
+> `except UnknownAdapter` around `secret_keys()` already covers that). Test that a target with an
+> unregistered adapter still lists, with `adapter_available=false`.
 
 **Files:**
 - Modify: `vts/api/schemas.py`, `vts/api/main.py`
@@ -1800,6 +1822,11 @@ git commit -m "feat(api): task delivery status + retry endpoints (vts-ouq)"
 ---
 
 ## Task 12: MCP surface — target CRUD, submit.delivery, status, retry + preset allowlist
+
+> **SPEC UPDATE 2026-07-31 (commit cce964c).** Submit validation gains an availability check: an
+> **explicitly submitted** `deliver_to` whose adapter is not currently loaded → clear error (REST + MCP).
+> The SAME target arriving from a **preset** must NOT fail the task — it is enqueued and parked in
+> `waiting_adapter` (Task 9). Keep those two paths distinct; test both.
 
 **Files:**
 - Modify: `vts/mcp/tools.py`, `vts/mcp/schemas.py`, `vts/mcp/server.py`, `vts/services/preset_expand.py`, `vts/api/schemas.py`
