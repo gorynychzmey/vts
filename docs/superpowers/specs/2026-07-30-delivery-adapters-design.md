@@ -136,7 +136,7 @@ class DeliveryAttempt(Base):
     target_id: UUID → delivery_targets.id (ondelete=SET NULL)  # target могут удалить
     adapter: str               # снимок имени адаптера
     variant: str               # снимок: raw|redacted|summary
-    status: DeliveryStatus     # pending|delivering|delivered|failed|dead
+    status: DeliveryStatus     # pending|delivering|delivered|failed|dead|waiting_adapter
     attempts: int = 0
     max_attempts: int          # снимок настройки на момент enqueue
     next_attempt_at: datetime | None
@@ -149,6 +149,41 @@ class DeliveryAttempt(Base):
 
 Снимки (`adapter`, `variant`, `max_attempts`) — чтобы удаление/правка target не ломала интерпретацию
 уже поставленной доставки.
+
+## Временно недоступный адаптер (плагин не загрузился)
+
+Плагины ставятся загрузчиком из внешних источников (см. `2026-07-31-plugin-loader-design.md`), поэтому
+нормальна ситуация: targets настроены, добавлены в пресеты, а при очередном рестарте адаптер не
+загрузился (сеть, сбой источника, несовместимость контракта) — предполагаем, что **временно**.
+
+Требуемое поведение:
+
+1. **Настройки не теряются.** `DeliveryTarget` — строка в БД, `adapter` — обычная строка; отсутствие
+   плагина на неё не влияет. Пресеты хранят имена targets. Ничего не удаляется и не чистится.
+2. **Target не пропадает из списка, но помечен недоступным.** `DeliveryTargetOut` получает поле
+   `adapter_available: bool` (вычисляется через `registry`), чтобы UI показал «сейчас недоступен».
+   Отдача списка/деталей target НЕ падает при отсутствующем адаптере (уже заложено: `secret_keys()`
+   под `except UnknownAdapter`).
+3. **Недоступный target нельзя выбрать для новой задачи.** Валидация на submit (REST и MCP) проверяет
+   не только существование target по имени, но и доступность его адаптера → внятная ошибка сразу.
+4. **Задача с пресетом стартует нормально, доставка откладывается.** Если `delivery` пришёл из пресета
+   и адаптер недоступен, задача выполняется как обычно, а `DeliveryAttempt` создаётся в статусе
+   **`waiting_adapter`**: не тратит `attempts`, не уходит в `dead`, ждёт возвращения адаптера. Консьюмер
+   при `UnknownAdapter` возвращает строку в `waiting_adapter` (а не в общий retry/`dead`-путь) —
+   намерение пользователя сохраняется, и доставка уходит сама, когда плагин вернётся.
+5. **Видимость.** Статус доставки виден в карточке задачи через `GET /api/tasks/{id}/deliveries` и
+   MCP `get_delivery_status`.
+
+**Важное разграничение статусов** (две разные сущности, не путать):
+
+- `Task.status` (`queued → running → completed`) — **не затрагивается никогда**. Доставка ставится в
+  очередь ПОСЛЕ перехода в `completed` и не может изменить статус задачи (`deliver_safe`).
+- `DeliveryAttempt.status` — статус отдельной строки доставки. `waiting_adapter` — значение ИМЕННО
+  этого статуса. Момент постановки в очередь не меняется; меняется лишь состояние поставленной строки.
+
+Отдельный `waiting_adapter` (а не `pending` с далёким `next_attempt_at`) выбран потому, что несёт другой
+смысл и по-другому обрабатывается: не инкрементит попытки, не ведёт к `dead`, в UI читается как «ждёт
+плагин», а не «ошибка», и не замусоривает `last_error` техническим `UnknownAdapter`.
 
 ## Поток доставки
 
@@ -169,15 +204,19 @@ class DeliveryAttempt(Base):
 ```
 reaper: delivering-строки с updated_at старше порога → назад в pending  (реанимация после падения worker)
 while True:
-    claim = SELECT ... WHERE status=pending AND next_attempt_at<=now
+    claim = SELECT ... WHERE status IN (pending, waiting_adapter) AND next_attempt_at<=now
             ORDER BY next_attempt_at LIMIT N FOR UPDATE SKIP LOCKED
     для каждого:
         status=delivering, attempts+=1, commit
         try:
-            payload = resolve_variant_content(task)     # читает файл варианта
+            adapter = get_adapter(row.adapter)           # ← ПЕРВЫМ: может бросить UnknownAdapter
+            payload = resolve_variant_content(task)      # читает файл варианта
             target  = load_target + decrypt_secrets      # секрет только в памяти
             result  = adapter.deliver(payload, target)
             status=delivered, external_id/url, commit
+        except UnknownAdapter:                           # плагин не загружен — ВРЕМЕННО
+            status=waiting_adapter, attempts-=1,         # попытка не потрачена
+            next_attempt_at=now+adapter_wait_interval, commit
         except:
             if attempts >= max_attempts: status=dead
             else: status=pending, next_attempt_at=now+backoff(attempts), last_error
@@ -194,6 +233,11 @@ while True:
 - **Backoff** экспоненциальный с потолком, напр. `min(60·2^n, 3600)` сек; значения из настроек.
 - **`dead`** после `max_attempts` — не молчаливая потеря: строка видна, `retry_delivery` оживляет
   (`status=pending, next_attempt_at=now`).
+- **`waiting_adapter` ≠ ошибка.** Отсутствие плагина не тратит попытку (`attempts` откатывается) и не
+  ведёт к `dead` — строка периодически перепроверяется с интервалом `delivery_adapter_wait_seconds`
+  (настройка) и уходит сама, как только адаптер появится. `get_adapter` вызывается ПЕРВЫМ в try, до
+  чтения артефактов и расшифровки секретов: незачем дешифровать секреты для доставки, которую всё равно
+  некому исполнить.
 
 ### Восстановление после рестарта
 
@@ -224,6 +268,8 @@ MCP: `create_delivery_target`, `list_delivery_targets`, `update_delivery_target`
 - **update без секрета сохраняет старый**; явный `null`/`""` очищает.
 - **валидация config** через `adapter.config_schema()` при create/update; неизвестный adapter
   (нет entry_point) → внятная ошибка (400 / MCP error).
+- **`adapter_available: bool`** в выдаче list/get: target с временно недоступным адаптером остаётся в
+  списке, но помечен. Выдача НЕ падает при отсутствующем адаптере (см. «Временно недоступный адаптер»).
 - шифрование секретов при записи (`vts/core/secrets.py`); расшифровка только в consumer перед `deliver`.
 
 ### Submit с доставкой
@@ -240,7 +286,9 @@ submit_task(url=..., ..., delivery=[
 - Кладётся в `task.options.delivery` (список). Ссылка по **имени** target (не id) — агенту удобнее,
   имена стабильны, id он не знает.
 - Валидация на submit: каждый `deliver_to` резолвится в существующий target пользователя;
-  несуществующее имя → ошибка сразу (не тихо на completion).
+  несуществующее имя → ошибка сразу (не тихо на completion). Дополнительно проверяется **доступность
+  адаптера**: недоступный target нельзя выбрать явным submit'ом → внятная ошибка. (Из ПРЕСЕТА тот же
+  target проходит и откладывается в `waiting_adapter` — задача не должна падать из-за пресета.)
 - `variant`-override валидируется: `summary` требует включённого summarize-шага — иначе внятная
   ошибка на submit.
 
@@ -317,6 +365,10 @@ outline = "vts_outline:OutlineAdapter"
 
 - **Контракт/ядро** (без Outline): fake in-memory adapter, регистрируемый в тесте — enqueue → claim →
   deliver → delivered; backoff; dead после max_attempts; реанимация зависших `delivering`;
+- **Недоступный адаптер:** доставка с незарегистрированным адаптером → `waiting_adapter`, `attempts` не
+  растёт, после max_attempts НЕ становится `dead`; адаптер появился → следующий tick доставляет;
+  `adapter_available=false` в выдаче target; явный submit на недоступный target → ошибка, а тот же
+  target из пресета → задача стартует и доставка ждёт;
   идемпотентность повторной доставки.
 - **Секреты**: encrypt/decrypt round-trip; write-only в API (GET не отдаёт); update без секрета
   сохраняет старый; явная очистка.
@@ -332,6 +384,8 @@ outline = "vts_outline:OutlineAdapter"
 - ✅ Контракт + discovery.
 - ✅ `DeliveryTarget` (шифрованные секреты, REST+MCP CRUD, write-only секреты).
 - ✅ `DeliveryAttempt` + очередь + consumer + backoff + dead + reaper.
+- ✅ Устойчивость к временно недоступному адаптеру: `waiting_adapter`, `adapter_available` в выдаче
+  targets, проверка доступности на явном submit.
 - ✅ `delivery` в submit и пресетах (replace-семантика; `expand_preset_options` allowlist).
 - ✅ `get_delivery_status` / `retry_delivery` (MCP + REST).
 - ✅ Один реальный адаптер — **Outline**.
@@ -349,3 +403,8 @@ outline = "vts_outline:OutlineAdapter"
   недоступны — fail loud на старте consumer, не молча).
 - Значения по умолчанию для `max_attempts`, backoff-потолка, reaper-таймаута — в `Settings`.
 - Формат `content_format` для summary (txt vs markdown) — от того, что реально пишет summarize-шаг.
+- `delivery_adapter_wait_seconds` (интервал перепроверки `waiting_adapter`) — значение по умолчанию в
+  `Settings`; достаточно редкий, чтобы не крутить впустую (порядка минут), т.к. плагин появляется только
+  при рестарте.
+- Нужен ли потолок ожидания для `waiting_adapter` (сейчас решено: ждёт бессрочно — ситуация считается
+  временной). Если появятся вечно висящие строки от удалённых навсегда плагинов — вернуться к вопросу.
