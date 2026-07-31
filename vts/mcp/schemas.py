@@ -33,6 +33,13 @@ class TaskSummary(BaseModel):
     updated_at: datetime
 
 
+class TaskPage(BaseModel):
+    """One page of tasks plus an opaque cursor for the next page."""
+    tasks: list[TaskSummary]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
 class TaskStatusResult(BaseModel):
     task_id: uuid.UUID
     status: TaskStatusLiteral
