@@ -14,6 +14,7 @@ from vts.mcp.schemas import (
     PromptInfo,
     PromptResult,
     SubmitVideoResult,
+    TaskPage,
     TaskStatusResult,
     TaskSummary,
     TranscriptResult,
@@ -140,16 +141,22 @@ def build_mcp_server() -> FastMCP:
             "queued", "running", "paused", "completed", "archived", "failed", "canceled"
         ] | None = None,
         limit: int = 20,
-        sort: Literal["created_at", "updated_at", "title"] = "updated_at",
-        order: Literal["asc", "desc"] = "desc",
-    ) -> list[TaskSummary]:
-        """List tasks owned by the calling user."""
+        cursor: str | None = None,
+    ) -> TaskPage:
+        """List the calling user's tasks, newest first, in pages.
+
+        Returns up to `limit` tasks (max 100) plus `next_cursor` and `has_more`.
+        To fetch the next page, call again with `cursor` set to the
+        `next_cursor` from the previous response. When `has_more` is false (or
+        `next_cursor` is null) there are no more tasks. Optionally filter by
+        `status`.
+        """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
             return await list_tasks(
                 user=user, repo=Repo(session),
-                status=status, limit=limit, sort=sort, order=order,
+                status=status, limit=limit, cursor=cursor,
             )
 
     @mcp.tool(name="get_status")
