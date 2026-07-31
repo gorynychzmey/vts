@@ -28,6 +28,7 @@ from vts.db.models import (
 )
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
+from vts.services.delivery_status import RETRYABLE_STATUSES
 
 
 def utcnow() -> datetime:
@@ -703,8 +704,11 @@ class Repo:
         return row
 
     async def claim_due_deliveries(self, now: datetime, limit: int) -> list[DeliveryAttempt]:
+        # waiting_adapter rows are claimed too: a parked delivery must wake up and
+        # retry once its plugin is back, otherwise it would sit there forever.
         stmt = (select(DeliveryAttempt)
-                .where(DeliveryAttempt.status == DeliveryStatus.pending,
+                .where(DeliveryAttempt.status.in_(
+                           [DeliveryStatus.pending, DeliveryStatus.waiting_adapter]),
                        DeliveryAttempt.next_attempt_at <= now)
                 .order_by(DeliveryAttempt.next_attempt_at)
                 .limit(limit)
@@ -740,6 +744,23 @@ class Repo:
         row.next_attempt_at = next_attempt_at
         await self.session.flush()
 
+    async def park_delivery_for_adapter(
+        self, attempt_id: uuid.UUID, *, next_attempt_at: datetime
+    ) -> None:
+        """Park a delivery whose adapter is not loaded right now.
+
+        Not a failure: the attempt claim() charged is refunded, so a missing
+        plugin can never exhaust max_attempts and kill the delivery. The row
+        keeps its intent and leaves on its own once the adapter is back.
+        """
+        row = await self.session.get(DeliveryAttempt, attempt_id)
+        if row is None:
+            return
+        row.status = DeliveryStatus.waiting_adapter
+        row.attempts = max(0, row.attempts - 1)
+        row.next_attempt_at = next_attempt_at
+        await self.session.flush()
+
     async def list_deliveries_for_task(self, task_id: uuid.UUID) -> list[DeliveryAttempt]:
         stmt = (select(DeliveryAttempt)
                 .where(DeliveryAttempt.task_id == task_id)
@@ -757,8 +778,10 @@ class Repo:
     async def reset_delivery_for_retry(
         self, task_id: uuid.UUID, target_id: uuid.UUID | None, now: datetime
     ) -> int:
+        # RETRYABLE_STATUSES is the single source of "what retry revives" — it
+        # deliberately excludes waiting_adapter, which is not stuck but waiting.
         conds = [DeliveryAttempt.task_id == task_id,
-                 DeliveryAttempt.status.in_([DeliveryStatus.failed, DeliveryStatus.dead])]
+                 DeliveryAttempt.status.in_(sorted(RETRYABLE_STATUSES))]
         if target_id is not None:
             conds.append(DeliveryAttempt.target_id == target_id)
         stmt = (update(DeliveryAttempt).where(*conds)

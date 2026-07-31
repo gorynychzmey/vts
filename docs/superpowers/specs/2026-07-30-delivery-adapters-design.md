@@ -136,7 +136,9 @@ class DeliveryAttempt(Base):
     target_id: UUID → delivery_targets.id (ondelete=SET NULL)  # target могут удалить
     adapter: str               # снимок имени адаптера
     variant: str               # снимок: raw|redacted|summary
-    status: DeliveryStatus     # pending|delivering|delivered|failed|dead|waiting_adapter
+    status: DeliveryStatus     # pending|delivering|delivered|dead|waiting_adapter
+                               # (нет `failed`: неуспешная попытка возвращает строку
+                               #  в pending, исчерпание попыток → dead)
     attempts: int = 0
     max_attempts: int          # снимок настройки на момент enqueue
     next_attempt_at: datetime | None
@@ -173,6 +175,15 @@ class DeliveryAttempt(Base):
    намерение пользователя сохраняется, и доставка уходит сама, когда плагин вернётся.
 5. **Видимость.** Статус доставки виден в карточке задачи через `GET /api/tasks/{id}/deliveries` и
    MCP `get_delivery_status`.
+
+**Предикаты статусов доставки** (`vts/services/delivery_status.py`) — по образцу существующего
+`vts/services/task_status.py`: единственный источник семантики, чистые функции над `DeliveryStatus`.
+Наборы: `TERMINAL` (`delivered|dead`), `IN_FLIGHT` (`pending|delivering|waiting_adapter`), `CLAIMABLE`
+(`pending|waiting_adapter` — что забирает консьюмер), `RETRYABLE`/`ERROR` (`dead`). Заводятся сразу,
+потому что различение «ждёт плагин ≠ ошибка» иначе придётся выводить заново в consumer, retry, MCP и UI —
+и оно неизбежно где-то разъедется (ровно та поломка, что случилась с задачами в vts-hdl). Тест
+`test_every_status_is_classified` требует, чтобы каждое значение enum попадало в `TERMINAL` или
+`IN_FLIGHT` — новый статус нельзя добавить, забыв про предикаты.
 
 **Важное разграничение статусов** (две разные сущности, не путать):
 
@@ -296,7 +307,8 @@ submit_task(url=..., ..., delivery=[
 
 ```
 MCP  get_delivery_status(task_id) → [{target, adapter, variant, status, attempts, external_url, last_error}]
-MCP  retry_delivery(task_id, target?)              # dead/failed → pending
+MCP  retry_delivery(task_id, target?)              # dead → pending (НЕ waiting_adapter:
+                                                   # оно не застряло, а ждёт плагин)
 REST GET  /api/tasks/{id}/deliveries
 REST POST /api/tasks/{id}/deliveries/{delivery_id}/retry
 ```

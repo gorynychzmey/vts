@@ -319,6 +319,9 @@ class Settings(BaseSettings):
     delivery_backoff_cap_seconds: int = 3600
     delivery_claim_batch: int = 10
     delivery_stuck_seconds: int = 600
+    # Recheck interval for deliveries parked in waiting_adapter. A missing plugin
+    # only reappears on a restart, so polling often would spin for nothing.
+    delivery_adapter_wait_seconds: int = 300
 
     # Chunked upload settings
     upload_chunked_threshold_bytes: int = 52_428_800

@@ -55,8 +55,16 @@ class DeliveryStatus(StrEnum):
     pending = "pending"
     delivering = "delivering"
     delivered = "delivered"
-    failed = "failed"
+    # No `failed`: a failing delivery goes back to `pending` (retry pending) or
+    # to `dead` (attempts exhausted) — there was never a transition into it, so
+    # it was dropped while the column was still free of production values.
     dead = "dead"
+    # Plugin adapters are installed from external sources, so "target configured
+    # but its adapter did not load this restart" is a normal transient state, not
+    # a failure: the row parks here, spends no attempts, never reaches dead, and
+    # delivers itself once the plugin returns. No migration needed for this value
+    # — delivery_attempts.status is String(32), not a native enum.
+    waiting_adapter = "waiting_adapter"
 
 
 class User(Base):

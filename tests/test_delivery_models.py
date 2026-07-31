@@ -2,8 +2,11 @@ from vts.db.models import DeliveryStatus, DeliveryTarget, DeliveryAttempt
 
 
 def test_delivery_status_values():
+    # No "failed": a failing delivery returns to "pending" (retry) or becomes
+    # "dead" (attempts exhausted), so nothing ever set it. "waiting_adapter"
+    # parks a delivery whose plugin is not loaded — transient, not a failure.
     assert {s.value for s in DeliveryStatus} == {
-        "pending", "delivering", "delivered", "failed", "dead"}
+        "pending", "delivering", "delivered", "dead", "waiting_adapter"}
 
 
 def test_target_columns_exist():

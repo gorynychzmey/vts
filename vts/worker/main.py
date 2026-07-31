@@ -15,6 +15,7 @@ from vts.core.logging import configure_logging
 from vts.db.models import TaskStatus
 from vts.db.repo import Repo
 from vts.db.session import SessionLocal
+from vts.delivery.consumer import delivery_loop
 from vts.pipeline.processor import TaskProcessor
 from vts.services.redis_bus import RedisBus
 from vts.services.step_weights_recompute import recompute_all_users
@@ -244,6 +245,7 @@ async def worker_loop() -> None:
     pump_task: asyncio.Task[None] | None = None
     weights_task: asyncio.Task[None] | None = None
     upload_gc_task: asyncio.Task[None] | None = None
+    delivery_task: asyncio.Task[None] | None = None
     pubsub = None
     pool = WorkerPool(
         session_factory=SessionLocal,
@@ -276,6 +278,10 @@ async def worker_loop() -> None:
         if settings.upload_gc_enabled:
             upload_gc_task = asyncio.create_task(_upload_gc_loop())
 
+        delivery_task = asyncio.create_task(
+            delivery_loop(SessionLocal, settings, redis)
+        )
+
         while True:
             admitted = await pool.admit()
             await pool.watch_cancels()
@@ -300,6 +306,10 @@ async def worker_loop() -> None:
             upload_gc_task.cancel()
             with suppress(asyncio.CancelledError):
                 await upload_gc_task
+        if delivery_task is not None:
+            delivery_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await delivery_task
         if pubsub is not None:
             with suppress(Exception):
                 await pubsub.unsubscribe(notify_channel)
