@@ -3050,8 +3050,22 @@ def create_app() -> FastAPI:
         )
         return HTMLResponse(html)
 
+    async def _client_gone(request: Request) -> bool:
+        """Resolve once the connection is gone.
+
+        `is_disconnected()` answers immediately, so it is polled rather than
+        awaited. One second is a compromise: fast enough that a graceful stop
+        is not held up noticeably, slow enough to stay cheap for an idle
+        stream that may live for hours.
+        """
+        while True:
+            if await request.is_disconnected():
+                return True
+            await asyncio.sleep(1.0)
+
     @app.get("/api/events", include_in_schema=False)
     async def get_events(
+        request: Request,
         user: AuthenticatedUser = Depends(get_current_user),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
@@ -3067,8 +3081,9 @@ def create_app() -> FastAPI:
             try:
                 while True:
                     if shutting_down is not None and shutting_down.is_set():
-                        # Say why, so the client reconnects at once instead of
-                        # waiting out its own error backoff.
+                        # Second line of defence, and the one that gets a word
+                        # in: the client reconnects at once instead of waiting
+                        # out its own error backoff.
                         yield "event: server_shutdown\ndata: {}\n\n"
                         return
 
@@ -3080,6 +3095,12 @@ def create_app() -> FastAPI:
                     if shutting_down is not None:
                         stop = asyncio.ensure_future(shutting_down.wait())
                         waiters.add(stop)
+                    # Poll for disconnection alongside the read: without it the
+                    # loop would sit in the 30s pubsub wait and only notice the
+                    # closed connection afterwards, which is most of what a
+                    # graceful shutdown is waiting on.
+                    gone = asyncio.ensure_future(_client_gone(request))
+                    waiters.add(gone)
                     # Race the read against the shutdown rather than polling on
                     # a short timeout: the loop keeps waking on its original
                     # ~30s cadence, but a shutdown is noticed immediately.
@@ -3088,6 +3109,15 @@ def create_app() -> FastAPI:
                     finally:
                         if stop is not None and not stop.done():
                             stop.cancel()
+                        if not gone.done():
+                            gone.cancel()
+
+                    if gone.done() and not gone.cancelled() and gone.result():
+                        # Client (or uvicorn, on its behalf) hung up.
+                        read.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await read
+                        return
 
                     if not read.done():
                         # Shutdown won the race: drop the pending read and let

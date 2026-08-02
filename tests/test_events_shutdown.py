@@ -49,6 +49,21 @@ class _FakeRedis:
         return ps
 
 
+class _FakeRequest:
+    """Stands in for the Starlette Request the endpoint now takes.
+
+    The generator polls `is_disconnected()` to notice uvicorn closing the
+    connection — which is what actually unblocks a graceful shutdown, since
+    uvicorn waits for connections BEFORE running the lifespan.
+    """
+
+    def __init__(self, disconnected: bool = False) -> None:
+        self._disconnected = disconnected
+
+    async def is_disconnected(self) -> bool:
+        return self._disconnected
+
+
 async def _call_events_endpoint(app):
     """Invoke the /api/events handler directly, bypassing the transport.
 
@@ -71,7 +86,7 @@ async def _call_events_endpoint(app):
         acting_as="tester",
     )
     return await route.endpoint(
-        user=user, redis=app.state.redis, settings=get_settings()
+        request=_FakeRequest(), user=user, redis=app.state.redis, settings=get_settings()
     )
 
 
@@ -137,3 +152,52 @@ async def test_event_stream_still_starts_without_the_flag(client, authed_app):
         await agen.aclose()
 
     assert first.startswith("event: server_version"), first
+
+
+@pytest.mark.asyncio
+async def test_event_stream_ends_when_the_client_disconnects(client, authed_app):
+    """A disconnected client must end the stream — this is what actually
+    unblocks uvicorn's graceful shutdown.
+
+    uvicorn calls connection.shutdown() on every open connection and THEN
+    waits for them; only afterwards does it run the lifespan. So the lifespan
+    event alone arrives too late: measured on the live host, a stop still took
+    the full 15s with only that check in place. Noticing the disconnect is
+    what makes the stop prompt.
+    """
+    app, _factory = authed_app
+    app.state.redis = _FakeRedis()
+    app.state.shutting_down = asyncio.Event()  # never set: disconnect must suffice
+
+    from vts.core.config import get_settings
+    from vts.services.auth import AuthenticatedUser
+
+    route = next(
+        r for r in app.router.routes if getattr(r, "path", None) == "/api/events"
+    )
+    request = _FakeRequest(disconnected=False)
+    response = await route.endpoint(
+        request=request,
+        user=AuthenticatedUser(
+            id="00000000-0000-0000-0000-0000000000a1",
+            username="tester",
+            requested_by="tester",
+            is_admin=False,
+            acting_as="tester",
+        ),
+        redis=app.state.redis,
+        settings=get_settings(),
+    )
+    agen = response.body_iterator
+
+    # First frame proves the stream is live.
+    first = await asyncio.wait_for(agen.__anext__(), timeout=5)
+    assert first.startswith("event: server_version"), first
+
+    # Now hang up. The generator polls is_disconnected once a second, so it
+    # must finish well inside the 30s pubsub read it would otherwise sit in.
+    request._disconnected = True
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(agen.__anext__(), timeout=10)
+
+    assert app.state.redis.pubsubs[0].closed, "pubsub was not closed on disconnect"
