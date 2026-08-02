@@ -82,6 +82,19 @@ run_tests_in_container() {
     exit 1
   fi
 
+  # Create the vector extension — the image only SHIPS pgvector, it does not
+  # enable it. tests.yml does this explicitly and docker-compose does it from
+  # scripts/pg-init-app-role.sh at init; build.sh did neither, so it was the one
+  # environment where the extension was missing. Tests build their schema with
+  # create_all, which includes voice_samples' VECTOR column, so every DB test
+  # here died on `type "vector" does not exist` while the same tests passed in
+  # CI and locally — exactly the dev/CI split the comment above warns against.
+  # Caught when build-1.5.38 failed with the suite green everywhere else.
+  echo "Creating the vector extension in ${pg_container}"
+  "${runtime}" exec "${pg_container}" \
+    psql -U vts -d vts_test -v ON_ERROR_STOP=1 \
+    -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
+
   run_args+=(--network "${pg_network}")
   run_args+=(-e "VTS_TEST_DATABASE_URL=postgresql+asyncpg://vts:vts@${pg_container}:5432/vts_test")
 
