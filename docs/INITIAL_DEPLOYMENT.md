@@ -145,17 +145,36 @@ Migrations run as the application role (`vts`), not as a superuser, so anything
 needing superuser rights must be done out of band — see section 8 for the
 versions where that applies. A failing migration aborts startup, and systemd
 restarts the unit, so a migration that cannot succeed turns into a crash loop
-(and `502 Bad gateway` behind a reverse proxy) rather than a one-off error.
+(and `502 Bad gateway` behind a reverse proxy) rather than a one-off error. In
+the pod topology the failure surfaces earlier and more clearly: migrations run
+in the `migrate` init container, and a non-zero exit there stops the pod from
+starting webapi or worker at all — check it with `sudo podman logs vts-migrate`.
 
 ## 6. Install and start systemd units
 
+VTS runs as ONE podman pod (webapi + worker + a run-once migrate init
+container), played by a single unit. The manifest and the ConfigMap renderer
+live on the host next to the env file:
+
 ```bash
-sudo cp systemd/vts-webapi.service /etc/systemd/system/
-sudo cp systemd/vts-worker.service /etc/systemd/system/
+sudo cp deploy/vts.yaml /opt/vts/vts.yaml
+sudo cp scripts/render-configmap.sh /opt/vts/render-configmap.sh
+sudo chmod 755 /opt/vts/render-configmap.sh
+
+sudo cp systemd/vts.service /etc/systemd/system/
+sudo cp systemd/vts-webapi-restart.service /etc/systemd/system/
+sudo cp systemd/vts-worker-restart.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now vts-webapi.service
-sudo systemctl enable --now vts-worker.service
+sudo systemctl enable --now vts.service
 ```
+
+`vts.service` re-renders `/opt/vts/vts-configmap.yaml` from `vts.env` on every
+start — `podman kube play` has no `--env-file`, only `--configmap`. That
+rendered file holds secrets, is written mode 600, and must never be committed.
+
+The two `*-restart.service` units are optional conveniences: they restart a
+single container (`sudo systemctl start vts-worker-restart`) without cycling
+the whole pod. See `docs/deploy-pod.md`.
 
 ### Diarization sidecar (optional)
 
@@ -184,8 +203,8 @@ speaker registry in production.
 ## 7. Verify deployment
 
 ```bash
-sudo systemctl status vts-webapi.service --no-pager
-sudo systemctl status vts-worker.service --no-pager
+sudo systemctl status vts.service --no-pager
+sudo podman ps --format "{{.Names}}\t{{.Status}}" | grep '^vts-'
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/api/version
 ```
@@ -248,7 +267,7 @@ extension as the admin user.
 If the services are already crash-looping, create the extension and restart:
 
 ```bash
-sudo systemctl restart vts-webapi.service vts-worker.service
+sudo systemctl restart vts.service
 ```
 
 ## 9. Next releases

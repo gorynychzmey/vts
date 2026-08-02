@@ -4,8 +4,7 @@ set -euo pipefail
 SSH_HOST="${SSH_HOST:-}"
 SSH_USER="${SSH_USER:-root}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/vts}"
-WEBAPI_SERVICE="${WEBAPI_SERVICE:-vts-webapi.service}"
-WORKER_SERVICE="${WORKER_SERVICE:-vts-worker.service}"
+VTS_SERVICE="${VTS_SERVICE:-vts.service}"
 
 if [[ -z "${SSH_HOST}" ]]; then
   echo "Set SSH_HOST to deployment target"
@@ -42,10 +41,8 @@ else
   exit 1
 fi
 podman pull "\${image}"
-sudo systemctl restart "${WEBAPI_SERVICE}"
-sudo systemctl restart "${WORKER_SERVICE}"
-sudo systemctl status "${WEBAPI_SERVICE}" --no-pager
-sudo systemctl status "${WORKER_SERVICE}" --no-pager
+sudo systemctl restart "${VTS_SERVICE}"
+sudo systemctl status "${VTS_SERVICE}" --no-pager
 EOF
 
 echo "Deployment complete"

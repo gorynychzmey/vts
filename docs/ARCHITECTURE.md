@@ -558,8 +558,9 @@ Optional repository variables (defaults shown):
 - `DEPLOY_PORT` (`22`)
 - `DEPLOY_REMOTE_DIR` (`/opt/vts`)
 - `DEPLOY_ENV_FILE` (`/opt/vts/config/vts.env`)
-- `WEBAPI_SERVICE` (`vts-webapi.service`)
-- `WORKER_SERVICE` (`vts-worker.service`)
+- `VTS_SERVICE` (`vts.service`) — the single unit that plays the pod; it replaced
+  the former `WEBAPI_SERVICE`/`WORKER_SERVICE` pair when VTS moved from two
+  systemd units to one `podman kube play` pod (vts-0pg)
 
 Prepare `DEPLOY_KNOWN_HOSTS` locally:
 
