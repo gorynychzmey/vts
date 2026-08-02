@@ -18,6 +18,13 @@ Requisite=vts.service
 [Service]
 Type=oneshot
 RemainAfterExit=no
+# Without this systemd reaps the whole cgroup once ExecStart returns — and
+# `podman restart` leaves the RESTARTED container's conmon inside that cgroup.
+# Measured the hard way: the unit killed the very container it had just brought
+# back, taking the service down and leaving the pod Degraded, while reporting a
+# timeout failure. KillMode=none makes systemd leave those processes alone; this
+# unit only issues a command, it does not own the container.
+KillMode=none
 # Restarting one container leaves its neighbour untouched and the pod Running
 # (verified on podman 5.7.0). The worker requeues in-flight tasks on start, so
 # only do this when that cost is acceptable.
