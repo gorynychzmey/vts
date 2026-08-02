@@ -3510,11 +3510,31 @@ function connectEvents() {
       void loadTabContent(taskEl, payload.task_id, "transcript");
     }
   });
-  state.eventSource.onerror = () => {
+  // The server is stopping (deploy or restart) and says so before closing the
+  // stream, so we come back deliberately instead of waiting out onerror's
+  // blind 2s backoff. Nulling state.eventSource first also stops onerror —
+  // which fires as the stream drops — from scheduling a second reconnect.
+  // A shutdown almost always means a new version is landing; the reconnect's
+  // server_version frame triggers the reload when it does.
+  state.eventSource.addEventListener("server_shutdown", () => {
     if (state.eventSource) {
       state.eventSource.close();
       state.eventSource = null;
     }
+    setTimeout(() => {
+      connectEvents();
+      void loadFirstPage();
+    }, 1000);
+  });
+
+  state.eventSource.onerror = () => {
+    if (!state.eventSource) {
+      // Already handled — server_shutdown got here first and has queued its
+      // own reconnect. Doing it again would open two streams.
+      return;
+    }
+    state.eventSource.close();
+    state.eventSource = null;
     setTimeout(() => {
       connectEvents();
       void loadFirstPage();
