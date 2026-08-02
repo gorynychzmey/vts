@@ -1,0 +1,139 @@
+"""The SSE stream must end when the app shuts down (vts-9er).
+
+Before this fix the generator looped forever on pubsub, so uvicorn's graceful
+shutdown blocked until --timeout-graceful-shutdown expired and the container
+was SIGKILLed. Measured on the live host: `podman stop -t 15 vts-webapi` waited
+the full 15s, with uvicorn logging "Waiting for connections to close."
+"""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+
+class _FakePubSub:
+    """Just enough pubsub for the SSE generator: it subscribes, polls for
+    messages, and unsubscribes on the way out. Never yields a message, which
+    is exactly the idle stream that used to block shutdown."""
+
+    def __init__(self) -> None:
+        self.subscribed: list[str] = []
+        self.closed = False
+
+    async def subscribe(self, channel: str) -> None:
+        self.subscribed.append(channel)
+
+    async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float = 0.0):
+        # Behave like a real idle channel: block for the timeout, return None.
+        await asyncio.sleep(timeout)
+        return None
+
+    async def unsubscribe(self, channel: str) -> None:
+        pass
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeRedis:
+    """app.state.redis normally comes from the lifespan, which the
+    ASGITransport-based test client never runs."""
+
+    def __init__(self) -> None:
+        self.pubsubs: list[_FakePubSub] = []
+
+    def pubsub(self) -> _FakePubSub:
+        ps = _FakePubSub()
+        self.pubsubs.append(ps)
+        return ps
+
+
+async def _call_events_endpoint(app):
+    """Invoke the /api/events handler directly, bypassing the transport.
+
+    The endpoint is a closure inside create_app, so it is reached through the
+    router rather than imported. Dependencies are supplied by hand because we
+    are not going through FastAPI's dependency injection here.
+    """
+    from vts.core.config import get_settings
+    from vts.services.auth import AuthenticatedUser
+
+    route = next(
+        r for r in app.router.routes
+        if getattr(r, "path", None) == "/api/events"
+    )
+    user = AuthenticatedUser(
+        id="00000000-0000-0000-0000-0000000000a1",
+        username="tester",
+        requested_by="tester",
+        is_admin=False,
+        acting_as="tester",
+    )
+    return await route.endpoint(
+        user=user, redis=app.state.redis, settings=get_settings()
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_stream_ends_when_shutdown_is_signalled(client, authed_app):
+    """Setting the shutdown event must end the stream promptly."""
+    app, _factory = authed_app
+
+    # Both of these normally come from the lifespan, which does not run here.
+    app.state.redis = _FakeRedis()
+    app.state.shutting_down = asyncio.Event()
+
+    frames: list[str] = []
+
+    async def read_stream() -> None:
+        async with client.stream("GET", "/api/events") as response:
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                frames.append(line)
+
+    reader = asyncio.create_task(read_stream())
+    try:
+        # Give the generator time to subscribe and emit its first frame.
+        await asyncio.sleep(0.5)
+        app.state.shutting_down.set()
+
+        # Must finish quickly — the whole point is not waiting out a timeout.
+        await asyncio.wait_for(reader, timeout=10)
+    finally:
+        if not reader.done():
+            reader.cancel()
+
+    body = "\n".join(frames)
+    assert "event: server_shutdown" in body, body
+    # The generator's finally must still run, or the subscription leaks.
+    assert app.state.redis.pubsubs, "the generator never subscribed"
+    assert app.state.redis.pubsubs[0].closed, "pubsub was not closed on exit"
+
+
+@pytest.mark.asyncio
+async def test_event_stream_still_starts_without_the_flag(client, authed_app):
+    """A missing app.state.shutting_down must not break the endpoint.
+
+    Defensive: the attribute only exists once the lifespan has run, so the
+    generator must not raise if something constructs the app differently.
+
+    Driven through the endpoint directly rather than the test client, because
+    httpx's ASGITransport does NOT stream — it awaits `response_complete`
+    and buffers the whole body (verified by reading its source). A stream that
+    never ends therefore cannot be consumed through it at all; only the first
+    test can use the client, and only because its stream does end.
+    """
+    app, _factory = authed_app
+    app.state.redis = _FakeRedis()
+    if hasattr(app.state, "shutting_down"):
+        delattr(app.state, "shutting_down")
+
+    response = await _call_events_endpoint(app)
+    agen = response.body_iterator
+    try:
+        first = await asyncio.wait_for(agen.__anext__(), timeout=5)
+    finally:
+        await agen.aclose()
+
+    assert first.startswith("event: server_version"), first

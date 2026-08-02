@@ -8,7 +8,7 @@ import os
 import secrets
 import shutil
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1611,6 +1611,11 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Watched by long-lived streams (/api/events) so they can end
+        # themselves. Without it uvicorn's graceful shutdown waits on SSE
+        # clients that never disconnect, so the container only died once
+        # --timeout-graceful-shutdown expired and SIGKILL arrived (vts-9er).
+        app.state.shutting_down = asyncio.Event()
         app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
         try:
             if mcp_app is not None:
@@ -1619,6 +1624,7 @@ def create_app() -> FastAPI:
             else:
                 yield
         finally:
+            app.state.shutting_down.set()
             await app.state.redis.aclose()
 
     app = FastAPI(
@@ -3052,12 +3058,46 @@ def create_app() -> FastAPI:
     ) -> StreamingResponse:
         async def event_generator() -> Any:
             yield f"event: server_version\ndata: {json.dumps({'version': __version__}, ensure_ascii=True)}\n\n"
+            # Set by the lifespan on the way out. This stream would otherwise
+            # outlive the shutdown and hold uvicorn open (vts-9er).
+            shutting_down: asyncio.Event | None = getattr(app.state, "shutting_down", None)
             pubsub = redis.pubsub()
             channel = f"{settings.redis_prefix}events"
             await pubsub.subscribe(channel)
             try:
                 while True:
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
+                    if shutting_down is not None and shutting_down.is_set():
+                        # Say why, so the client reconnects at once instead of
+                        # waiting out its own error backoff.
+                        yield "event: server_shutdown\ndata: {}\n\n"
+                        return
+
+                    read = asyncio.ensure_future(
+                        pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
+                    )
+                    waiters: set[asyncio.Future] = {read}
+                    stop: asyncio.Future | None = None
+                    if shutting_down is not None:
+                        stop = asyncio.ensure_future(shutting_down.wait())
+                        waiters.add(stop)
+                    # Race the read against the shutdown rather than polling on
+                    # a short timeout: the loop keeps waking on its original
+                    # ~30s cadence, but a shutdown is noticed immediately.
+                    try:
+                        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                    finally:
+                        if stop is not None and not stop.done():
+                            stop.cancel()
+
+                    if not read.done():
+                        # Shutdown won the race: drop the pending read and let
+                        # the check at the top of the loop emit the farewell.
+                        read.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await read
+                        continue
+
+                    message = read.result()
                     if not message:
                         yield "event: ping\ndata: {}\n\n"
                         continue

@@ -443,4 +443,14 @@ Expected: the worker logged its signal handling on the previous stop.
 
 **Deliberate omission:** neither `--timeout-graceful-shutdown` nor `TimeoutStopSec` is changed. They exist as the backstop for a hang; raising or lowering them would hide the problem rather than fix it. Likewise `terminationGracePeriodSeconds` stays unset in `deploy/vts.yaml` — worth revisiting only if a stop still misbehaves after these fixes.
 
-**Known risk carried into Task 2:** shortening the pubsub read from 30s to 1s makes the loop wake 30× more often. The counter keeps the visible ping cadence unchanged, but this is the one change here with a steady-state cost; if it ever matters, the alternative is racing `get_message` against `shutting_down.wait()` with `asyncio.wait(..., return_when=FIRST_COMPLETED)` instead of polling.
+**Task 2 was implemented differently from the sketch above, and better.** The plan proposed
+polling `get_message(timeout=1.0)` with a counter to preserve the ping cadence, which would have
+woken the loop 30x more often for every connected client. The implementation instead races the
+30-second read against `shutting_down.wait()` with `asyncio.wait(..., FIRST_COMPLETED)`: the
+cadence and the ping are untouched, and a shutdown is still noticed immediately. The counter was
+not needed.
+
+**Task 2's second test could not use the test client.** httpx's `ASGITransport` awaits
+`response_complete` and buffers the whole body (verified in its source), so it cannot consume a
+stream that never ends — the defensive case drives the endpoint directly through the router
+instead. The first test still uses the client, and only because its stream does end.
