@@ -1,0 +1,24 @@
+[Unit]
+Description=Restart only the VTS worker container inside the vts pod
+Documentation=man:podman-restart(1)
+# Requisite=, not Requires= and not BindsTo=. All three were tried; only this one
+# matches the intent "pointless unless the pod is up, and this must NEVER start it".
+# Measured on this host with throwaway units:
+#   Requires=  -> starting this with the pod DOWN *started the pod* (exit 0). The
+#                 man page says so outright: "If this unit gets activated, the units
+#                 listed will be activated as well."
+#   Requisite= -> starting this with the pod DOWN fails immediately (exit 1) and
+#                 leaves the pod inactive; with the pod UP it runs normally (exit 0).
+#   BindsTo=   -> Requires plus unexpected-stop propagation: inert for a oneshot that
+#                 goes inactive in milliseconds, and it pollutes the dependency graph.
+# Requisite= implies no ordering, hence the explicit After=.
+After=vts.service
+Requisite=vts.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# Restarting one container leaves its neighbour untouched and the pod Running
+# (verified on podman 5.7.0). The worker requeues in-flight tasks on start, so
+# only do this when that cost is acceptable.
+ExecStart=/usr/bin/podman restart vts-worker

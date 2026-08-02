@@ -287,9 +287,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
   key=${line%%=*}
   value=${line#*=}
+  # NOTE the trailing '*' cases: `[A-Za-z_][A-Za-z_0-9]*` alone would require at
+  # least TWO characters, silently dropping a single-letter key such as `A=1`.
+  # Losing a variable without a word is the worst failure this script can have,
+  # so an unusable key is a hard error, not a skip.
   case "$key" in
-    [A-Za-z_][A-Za-z_0-9]*) ;;
-    *) continue ;;
+    [A-Za-z_]|[A-Za-z_][A-Za-z_0-9]*) ;;
+    *) echo "refusing to render: unusable key '$key' in $ENV_FILE" >&2; exit 1 ;;
   esac
   # Strip one layer of surrounding quotes, as the shell would when sourcing.
   case "$value" in
@@ -401,7 +405,21 @@ TimeoutStartSec=300
 ExecStartPre=/usr/bin/podman pull ${VTS_IMAGE}
 # Re-derive the ConfigMap from vts.env on every start, so editing vts.env and
 # restarting is enough — the ConfigMap can never drift from its source.
-ExecStartPre=/bin/sh -c '/opt/vts/render-configmap.sh /opt/vts/config/vts.env > /opt/vts/vts-configmap.yaml && chmod 600 /opt/vts/vts-configmap.yaml'
+#
+# Rendered via a temp file, then moved into place. Two reasons, both verified:
+#   1. `> file` creates it with the umask-derived mode (root's umask 0022 -> 644)
+#      and only chmods AFTER the writer exits, leaving the secrets world-readable
+#      for the whole write. `umask 077` makes the temp file 600 from creation.
+#   2. `> file` truncates the CURRENT ConfigMap before knowing the render will
+#      succeed. A mid-render failure would leave a valid-looking but INCOMPLETE
+#      ConfigMap on disk and destroy the working one. Writing to .tmp and `mv`
+#      only on success keeps the last good file intact; mv within one directory
+#      is atomic, so no reader ever sees a partial file.
+# A failed render leaves the .tmp behind; that is harmless (it is 600, it is not
+# what the pod reads, and the next start overwrites it) and needs no cleanup step
+# — a cleanup ExecStartPre placed after this one would never run on the very
+# failure it exists for, since this step aborts the start first.
+ExecStartPre=/bin/sh -c 'umask 077 && /opt/vts/render-configmap.sh /opt/vts/config/vts.env > /opt/vts/vts-configmap.yaml.tmp && mv /opt/vts/vts-configmap.yaml.tmp /opt/vts/vts-configmap.yaml'
 ExecStartPre=-/usr/bin/podman kube down /opt/vts/vts.yaml
 ExecStart=/usr/bin/podman kube play \
     --replace \
@@ -456,9 +474,19 @@ git commit -m "feat(deploy): vts.service playing the kube pod (vts-0pg)"
 [Unit]
 Description=Restart only the VTS worker container inside the vts pod
 Documentation=man:podman-restart(1)
-# Pointless unless the pod is up; this does not start it.
+# Requisite=, not Requires= and not BindsTo=. All three were tried; only this one
+# matches the intent "pointless unless the pod is up, and this must NEVER start it".
+# Measured on this host with throwaway units:
+#   Requires=  -> starting this with the pod DOWN *started the pod* (exit 0). The
+#                 man page says so outright: "If this unit gets activated, the units
+#                 listed will be activated as well."
+#   Requisite= -> starting this with the pod DOWN fails immediately (exit 1) and
+#                 leaves the pod inactive; with the pod UP it runs normally (exit 0).
+#   BindsTo=   -> Requires plus unexpected-stop propagation: inert for a oneshot that
+#                 goes inactive in milliseconds, and it pollutes the dependency graph.
+# Requisite= implies no ordering, hence the explicit After=.
 After=vts.service
-BindsTo=vts.service
+Requisite=vts.service
 
 [Service]
 Type=oneshot
@@ -475,8 +503,10 @@ ExecStart=/usr/bin/podman restart vts-worker
 [Unit]
 Description=Restart only the VTS web API container inside the vts pod
 Documentation=man:podman-restart(1)
+# Same reasoning as vts-worker-restart.service: Requisite=, so this never starts
+# the pod as a side effect.
 After=vts.service
-BindsTo=vts.service
+Requisite=vts.service
 
 [Service]
 Type=oneshot
@@ -572,6 +602,13 @@ Expected: `vtsstage` gone, staging directory removed; production containers unto
 **This is the only irreversible-feeling step, and it briefly stops the service.** Everything before it was additive.
 
 **Files:** none in repo (host installation)
+
+> **ORDERING HAZARD introduced by Task 1 — read before deploying.** Task 1 removed
+> `migrate` from `start_webapi`, so in the OLD two-unit topology nothing applies migrations
+> any more (there is no initContainer there). An image built from this branch must therefore
+> NOT be deployed onto the old units: if a migration lands in the same release, the schema
+> would never be upgraded. Either cut over to the pod in the same window as the image
+> rollout, or keep running the pre-branch image until the cutover happens.
 
 - [ ] **Step 1: Confirm nothing is in flight**
 

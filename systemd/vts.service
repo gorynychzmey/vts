@@ -1,0 +1,60 @@
+[Unit]
+Description=VTS (podman kube pod: webapi + worker)
+Documentation=man:podman-kube-play(1)
+# dns-ready.service is a host unit that waits until DNS actually resolves; both
+# outgoing pulls and the diarization sidecar's DNS alias depend on it. The two
+# units this replaces carry the same guard — it was added on the host after the
+# repo copies were written, so it is absent from systemd/vts-*.service in git.
+Wants=network-online.target dns-ready.service
+After=network-online.target dns-ready.service
+RequiresMountsFor=%t/containers
+
+# Carried over from the units this replaces: bound restart attempts so a
+# crash-looping pod cannot spin forever.
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=/opt/vts/config/vts.env
+Restart=on-failure
+RestartSec=5
+# Migrations run in an initContainer, so first start can take a while.
+TimeoutStartSec=300
+# Pull before playing: the deploy flow updates the :latest tag and expects a
+# restart to pick it up. kube play alone would reuse the local image.
+# '-' prefix: a failed pull must not block the start. The image is usually
+# already local, and a registry or network hiccup should not take the service
+# down — the units this replaces made the same choice.
+ExecStartPre=-/usr/bin/podman pull ${VTS_IMAGE}
+# Re-derive the ConfigMap from vts.env on every start, so editing vts.env and
+# restarting is enough — the ConfigMap can never drift from its source.
+#
+# Rendered via a temp file, then moved into place. Two reasons, both verified:
+#   1. `> file` creates it with the umask-derived mode (root's umask 0022 -> 644)
+#      and only chmods AFTER the writer exits, leaving the secrets world-readable
+#      for the whole write. `umask 077` makes the temp file 600 from creation.
+#   2. `> file` truncates the CURRENT ConfigMap before knowing the render will
+#      succeed. A mid-render failure would leave a valid-looking but INCOMPLETE
+#      ConfigMap on disk and destroy the working one. Writing to .tmp and `mv`
+#      only on success keeps the last good file intact; mv within one directory
+#      is atomic, so no reader ever sees a partial file.
+# A failed render leaves the .tmp behind; that is harmless (it is 600, it is not
+# what the pod reads, and the next start overwrites it) and needs no cleanup step
+# — a cleanup ExecStartPre placed after this one would never run on the very
+# failure it exists for, since this step aborts the start first.
+ExecStartPre=/bin/sh -c 'umask 077 && /opt/vts/render-configmap.sh /opt/vts/config/vts.env > /opt/vts/vts-configmap.yaml.tmp && mv /opt/vts/vts-configmap.yaml.tmp /opt/vts/vts-configmap.yaml'
+ExecStartPre=-/usr/bin/podman kube down /opt/vts/vts.yaml
+ExecStart=/usr/bin/podman kube play \
+    --replace \
+    --service-container=true \
+    --network=podman \
+    --log-driver=journald \
+    --configmap /opt/vts/vts-configmap.yaml \
+    /opt/vts/vts.yaml
+ExecStop=/usr/bin/podman kube down /opt/vts/vts.yaml
+Type=notify
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target

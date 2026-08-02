@@ -1,0 +1,13 @@
+[Unit]
+Description=Restart only the VTS web API container inside the vts pod
+Documentation=man:podman-restart(1)
+# Same reasoning as vts-worker-restart.service: Requisite=, so this never starts
+# the pod as a side effect.
+After=vts.service
+Requisite=vts.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# Restarting one container leaves its neighbour untouched and the pod Running (verified on podman 5.7.0): an in-flight transcription in vts-worker keeps running.
+ExecStart=/usr/bin/podman restart vts-webapi
