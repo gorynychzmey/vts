@@ -201,3 +201,57 @@ async def test_event_stream_ends_when_the_client_disconnects(client, authed_app)
         await asyncio.wait_for(agen.__anext__(), timeout=10)
 
     assert app.state.redis.pubsubs[0].closed, "pubsub was not closed on disconnect"
+
+
+@pytest.mark.asyncio
+async def test_sigterm_sets_the_shutdown_flag_before_the_lifespan(authed_app):
+    """SIGTERM must set app.state.shutting_down at signal-delivery time.
+
+    This is the whole fix for the webapi half of vts-9er. uvicorn's
+    Server.shutdown() waits for open connections BEFORE running the lifespan:
+
+        connection.shutdown() for each connection
+        await asyncio.wait_for(self._wait_tasks_to_complete(), timeout=...)  <- waits here
+        await self.lifespan.shutdown()                                       <- flag was set here
+
+    So a flag set by the lifespan arrives after the wait it was meant to cut
+    short, and an idle SSE stream held the stop for the full
+    --timeout-graceful-shutdown (measured: 15s on the live host, twice).
+
+    uvicorn installs its own handler with plain signal.signal (server.py:319),
+    and that handler only flips `should_exit`. We chain ours in front of it,
+    which fires at signal delivery — before shutdown() is even entered.
+    Measured on an isolated harness with one live SSE client: 15.19s without
+    the chained handler, 0.19s with it.
+    """
+    import signal
+
+    app, _factory = authed_app
+
+    # The fixture builds the app but never enters the lifespan, and the
+    # handler is installed on the way in — so drive the lifespan here, which
+    # is also the path uvicorn actually takes.
+    before = signal.getsignal(signal.SIGTERM)
+    async with app.router.lifespan_context(app):
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler), (
+            "no SIGTERM handler installed; the app must register one at startup"
+        )
+        assert handler is not before, "the previous handler was not replaced"
+        assert not app.state.shutting_down.is_set()
+
+        # Deliver the signal the way the kernel would, then let the loop run
+        # the call_soon_threadsafe the handler schedules.
+        handler(signal.SIGTERM, None)
+        await asyncio.sleep(0)
+
+        assert app.state.shutting_down.is_set(), (
+            "SIGTERM did not set the shutdown flag; the SSE stream would keep "
+            "uvicorn waiting for the full graceful-shutdown timeout"
+        )
+
+    # On the way out the signal must be handed back, so uvicorn's own restore
+    # in capture_signals() puts back what was there before the app started.
+    assert signal.getsignal(signal.SIGTERM) is before, (
+        "the previous SIGTERM handler was not restored"
+    )

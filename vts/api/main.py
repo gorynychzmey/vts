@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import shutil
+import signal
 import uuid
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
@@ -1617,6 +1618,42 @@ def create_app() -> FastAPI:
         # --timeout-graceful-shutdown expired and SIGKILL arrived (vts-9er).
         app.state.shutting_down = asyncio.Event()
         app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        # Setting the flag here in the `finally` is too late to be useful on
+        # its own: uvicorn waits for open connections BEFORE running the
+        # lifespan, so an idle SSE stream held the stop for the whole
+        # --timeout-graceful-shutdown (measured twice on prod: 15s).
+        #
+        #   connection.shutdown() for each connection
+        #   await asyncio.wait_for(_wait_tasks_to_complete(), timeout=...)  <- waits
+        #   await self.lifespan.shutdown()                                  <- too late
+        #
+        # uvicorn installs its own SIGTERM/SIGINT handler with plain
+        # signal.signal (server.py:319) and that handler only flips
+        # `should_exit`. So we chain ours in front of it: ours fires at signal
+        # delivery, before shutdown() is entered, and the streams end
+        # themselves while uvicorn is still closing listeners. Measured with
+        # one live SSE client: 15.19s without this, 0.19s with it.
+        loop = asyncio.get_running_loop()
+        previous: dict[int, Any] = {}
+
+        def _note_shutdown(sig: int, frame: Any) -> None:
+            # Runs in the signal context, so only schedule work on the loop.
+            loop.call_soon_threadsafe(app.state.shutting_down.set)
+            chained = previous.get(sig)
+            if callable(chained):
+                chained(sig, frame)
+
+        installed: list[int] = []
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                previous[sig] = signal.getsignal(sig)
+                signal.signal(sig, _note_shutdown)
+            except ValueError:
+                # Not the main thread (tests, embedded runs): the flag still
+                # gets set by the lifespan below, just as late as before.
+                previous.pop(sig, None)
+            else:
+                installed.append(sig)
         try:
             if mcp_app is not None:
                 async with mcp_app.router.lifespan_context(mcp_app):
@@ -1625,6 +1662,11 @@ def create_app() -> FastAPI:
                 yield
         finally:
             app.state.shutting_down.set()
+            for sig in installed:
+                # Hand the signal back, so uvicorn's own restore in
+                # capture_signals() puts back what was there before us.
+                with suppress(ValueError):
+                    signal.signal(sig, previous[sig])
             await app.state.redis.aclose()
 
     app = FastAPI(
