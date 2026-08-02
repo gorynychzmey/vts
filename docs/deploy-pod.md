@@ -1,11 +1,13 @@
 # VTS pod topology — operator commands
 
-> **NOT YET LIVE.** This document describes the topology **after** the
-> planned cutover to the single-pod deployment (vts-0pg). At the time of
-> writing, the cutover has **not** happened yet: the host still runs the old
-> two-unit topology (`vts-webapi.service` / `vts-worker.service`), not
-> `vts.service`. Do not follow the commands below against the current
-> production host until the cutover is complete and this note is removed.
+> **LIVE since 2026-08-02.** Production runs this topology: `vts.service` plays
+> the pod, and the old `vts-webapi.service` / `vts-worker.service` are stopped
+> and disabled. The commands below apply to the running host.
+>
+> Known rough edge (**vts-9er**): the worker ignores SIGTERM, so stopping or
+> restarting it takes the full timeout and then a SIGKILL — measured at 30s.
+> Nothing is lost (in-flight tasks are requeued on start), but do not mistake
+> the delay for a hang.
 
 VTS runs as a single podman pod (`vts`) played by `vts.service` from
 `/opt/vts/vts.yaml`. Containers inside it are `vts-webapi` and `vts-worker`;

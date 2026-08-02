@@ -67,16 +67,17 @@ jobs:
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_REMOTE_DIR: ${{ vars.DEPLOY_REMOTE_DIR }}
           DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
-          WEBAPI_SERVICE: ${{ vars.WEBAPI_SERVICE }}
-          WORKER_SERVICE: ${{ vars.WORKER_SERVICE }}
+          # Optional. Undefined repo variables expand to "", and the shell below
+          # defaults to vts.service — the same way DEPLOY_USER/DEPLOY_PORT work.
+          # Nothing needs adding under Repo Settings → Variables for this to run.
+          VTS_SERVICE: ${{ vars.VTS_SERVICE }}
         run: |
           set -euo pipefail
           deploy_user="${DEPLOY_USER:-root}"
           deploy_port="${DEPLOY_PORT:-22}"
           remote_dir="${DEPLOY_REMOTE_DIR:-/opt/vts}"
           env_file="${DEPLOY_ENV_FILE:-/opt/vts/config/vts.env}"
-          webapi_service="${WEBAPI_SERVICE:-vts-webapi.service}"
-          worker_service="${WORKER_SERVICE:-vts-worker.service}"
+          vts_service="${VTS_SERVICE:-vts.service}"
 
           proxy_args=()
           if [[ -n "${DEPLOY_JUMP_HOST:-}" ]]; then
@@ -92,7 +93,7 @@ jobs:
             -p "${deploy_port}" \
             "${proxy_args[@]}" \
             "${deploy_user}@${DEPLOY_HOST}" \
-            "REMOTE_DIR='${remote_dir}' ENV_FILE='${env_file}' WEBAPI_SERVICE='${webapi_service}' WORKER_SERVICE='${worker_service}' bash -s" <<'REMOTE'
+            "REMOTE_DIR='${remote_dir}' ENV_FILE='${env_file}' VTS_SERVICE='${vts_service}' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "${REMOTE_DIR}"
           set -a
@@ -109,8 +110,6 @@ jobs:
             exit 1
           fi
           podman pull "${image}"
-          sudo systemctl restart "${WEBAPI_SERVICE}"
-          sudo systemctl restart "${WORKER_SERVICE}"
-          sudo systemctl status "${WEBAPI_SERVICE}" --no-pager
-          sudo systemctl status "${WORKER_SERVICE}" --no-pager
+          sudo systemctl restart "${VTS_SERVICE}"
+          sudo systemctl status "${VTS_SERVICE}" --no-pager
           REMOTE
