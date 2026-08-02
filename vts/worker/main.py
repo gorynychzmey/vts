@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 import json
 import logging
+import signal
 import uuid
 from typing import Any
 
@@ -317,9 +318,54 @@ async def worker_loop() -> None:
         await redis.aclose()
 
 
+async def _run_worker() -> None:
+    """Run worker_loop until it finishes or a termination signal arrives.
+
+    The worker is PID 1 in its container, and the kernel applies no default
+    action to signals for PID 1 — without an explicit handler SIGTERM is simply
+    dropped. That is why stopping the container used to wait out the whole
+    timeout and end in SIGKILL, losing the teardown entirely (vts-9er).
+
+    Cancelling the task is all that is needed: worker_loop's own `finally`
+    already cancels the pool and every background loop and closes redis.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.create_task(worker_loop())
+    log = logging.getLogger("vts.worker")
+    installed: list[int] = []
+
+    def _request_stop(signame: str) -> None:
+        if not task.done():
+            log.info("received %s, shutting down", signame)
+            task.cancel()
+
+    for signame in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, signame, None)
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, _request_stop, signame)
+        except NotImplementedError:
+            # Not available on every platform; the container is Linux, so this
+            # only guards exotic dev environments.
+            continue
+        installed.append(sig)
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        # Expected: our own cancellation, not a failure.
+        log.info("worker stopped")
+    finally:
+        # Production exits right after this, but the test suite keeps the loop
+        # alive — a handler left behind would fire during an unrelated test.
+        for sig in installed:
+            loop.remove_signal_handler(sig)
+
+
 def main() -> None:
     configure_logging()
-    asyncio.run(worker_loop())
+    asyncio.run(_run_worker())
 
 
 if __name__ == "__main__":
