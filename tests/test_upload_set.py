@@ -86,3 +86,47 @@ def test_video_suffix_without_video_stream_is_rejected():
 def test_audio_set_with_a_video_stream_is_rejected():
     with pytest.raises(UploadSetError, match="b.m4a"):
         verify_probes("audio", [("a.mp3", _probe(has_video=False)), ("b.m4a", _probe(has_video=True))])
+
+
+def test_video_set_rejected_on_codec_mismatch():
+    """Video codec must match across parts; a hypothetical bug comparing only
+    resolution would miss this."""
+    with pytest.raises(UploadSetError):
+        verify_probes("video", [("a.mp4", _probe(vcodec="h264")), ("b.mp4", _probe(vcodec="vp9"))])
+
+
+def test_video_set_rejected_on_audio_codec_mismatch():
+    """Audio codec must match across video parts; audio re-encoding is NOT
+    automatic, so codec mismatch is a concat error."""
+    with pytest.raises(UploadSetError):
+        verify_probes("video", [("a.mp4", _probe(acodec="aac")), ("b.mp4", _probe(acodec="opus"))])
+
+
+def test_video_set_rejected_on_channel_count_mismatch():
+    """Channel count must match across video parts."""
+    with pytest.raises(UploadSetError):
+        verify_probes("video", [("a.mp4", _probe(ch=1)), ("b.mp4", _probe(ch=2))])
+
+
+def test_video_set_rejected_on_width_mismatch_only():
+    """Width must match; a bug comparing only height would miss this."""
+    with pytest.raises(UploadSetError):
+        verify_probes("video", [("a.mp4", _probe(w=640, h=480)), ("b.mp4", _probe(w=1280, h=480))])
+
+
+def test_video_set_rejected_on_height_mismatch_only():
+    """Height must match; a bug comparing only width would miss this."""
+    with pytest.raises(UploadSetError):
+        verify_probes("video", [("a.mp4", _probe(w=640, h=480)), ("b.mp4", _probe(w=640, h=720))])
+
+
+def test_three_part_video_set_rejects_third_file_on_mismatch():
+    """All files are checked against the first; a hypothetical bug that only
+    compares probes[0] vs probes[1] would not catch a third-file mismatch."""
+    with pytest.raises(UploadSetError) as excinfo:
+        verify_probes("video", [
+            ("a.mp4", _probe(w=640, h=480)),
+            ("b.mp4", _probe(w=640, h=480)),
+            ("c.mp4", _probe(w=1280, h=720)),
+        ])
+    assert "c.mp4" in str(excinfo.value)
