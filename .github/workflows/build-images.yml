@@ -24,7 +24,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate the release on a dependency audit (vts-7to).
+  #
+  # tests.yml also runs pip-audit, but only on push/PR to main — and a release
+  # is a `build-X.Y.Z` TAG, which those triggers never match. So the two never
+  # overlapped, and a build whose audit was red could be (and was) shipped:
+  # cryptography 46.0.7 with GHSA-537c-gmf6-5ccf (HIGH) reached prod on three
+  # consecutive releases while "Build Images" and "Deploy After Build" were
+  # both green.
+  #
+  # Duplicated here rather than read across workflows on purpose: a
+  # cross-workflow status lookup would pass when tests.yml simply had not run
+  # for this commit, which is exactly the hole being closed.
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit runtime requirements for known vulnerabilities
+        # Keep this in step with the identical step in tests.yml — including
+        # any --ignore-vuln entries, or a release would block on a CVE that
+        # main has already triaged.
+        run: pip-audit --strict --requirement requirements.txt
+
   build:
+    needs: audit
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create GitHub Release on tag builds
