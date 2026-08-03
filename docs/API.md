@@ -162,6 +162,39 @@ infrastructure doesn't forward arbitrary request headers to your server.
 For GPT, use `?offset=&limit=` (the Action spec includes them as query
 parameters, GPT picks them up automatically).
 
+## Chunked uploads
+
+Files above a server-configured threshold (the web UI checks
+`GET /api/uploads/config`) go through a small chunked protocol under
+`/api/uploads` instead of the single-shot `POST /api/tasks/upload`:
+`POST /api/uploads/init` starts a session, `PATCH /api/uploads/{id}?offset=N`
+appends a chunk, `GET /api/uploads/{id}/offset` reports how much has been
+received (for resuming after a dropped connection), and
+`POST /api/uploads/{id}/finalize` turns the assembled file into a task.
+
+### Multi-file sets
+
+`POST /api/uploads/init` accepts a `files` array instead of a single
+`filename`/`total_size`:
+
+```json
+{"files": [{"filename": "part1.m4a", "total_size": 1048576, "last_modified": 1785000000000}]}
+```
+
+The response carries `files: [{index, filename}]`; chunks are then sent with
+`PATCH /api/uploads/{id}?offset=N&index=K` (`index` defaults to `0`, which is
+what keeps the single-file client working unchanged), and resumed with
+`GET /api/uploads/{id}/offset?index=K`. `finalize` returns one task.
+
+A set must be all-video or all-audio (mixed sets are rejected at `init`), the
+combined size must not exceed `max_upload_bytes` (2 GiB by default), and it
+may contain at most `upload_max_files` files (10 by default). Both limits are
+checked at `init`, before any bytes are transferred. Video parts must share
+codec, resolution, frame rate, audio codec, sample rate and channel count —
+mismatched sets are rejected at `finalize`, because stream-copy concat of
+mismatched inputs silently produces a wrong-duration file rather than an
+error.
+
 ## Curl quick reference
 
 ```bash
