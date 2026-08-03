@@ -1100,11 +1100,13 @@ git commit -m "feat(uploads): indexed multi-part staging in UploadSession (vts-v
 
 ---
 
-### Task 6: API — init, patch, offset, finalize for sets
+### Task 6: API — init, patch, offset for sets
+
+(`uploads_finalize` is NOT part of this task — sets are finalized in Task 7.)
 
 **Files:**
 - Modify: `vts/api/schemas.py` (near `UploadInitRequest`, line 420)
-- Modify: `vts/api/main.py` (`uploads_init` 2424, `uploads_offset` 2474, `uploads_patch` 2485, `uploads_finalize` 2507)
+- Modify: `vts/api/main.py` (`uploads_init` 2424, `uploads_offset` 2474, `uploads_patch` 2485)
 - Modify: `vts/core/config.py` (add `upload_max_files` near `max_upload_bytes`, line 329)
 - Test: `tests/test_uploads_multi_api.py` (create)
 
