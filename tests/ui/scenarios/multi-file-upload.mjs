@@ -60,6 +60,21 @@ async function startServer() {
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
         const parsed = JSON.parse(body || "{}");
+        // Mirror the real UploadInitRequest validator (vts/api/schemas.py):
+        // either a non-empty `files` array, or both legacy `filename` and
+        // `total_size`. A mock that accepts any body would hide the exact
+        // class of bug this scenario exists to catch — the client sending a
+        // body the real schema 422s on while every browser assertion still
+        // passes because nothing here validates the shape.
+        const hasFiles = Array.isArray(parsed.files) && parsed.files.length > 0;
+        const hasLegacy = typeof parsed.filename === "string" && parsed.filename.length > 0
+          && typeof parsed.total_size === "number" && parsed.total_size > 0;
+        if (!hasFiles && !hasLegacy) {
+          res.statusCode = 422;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ detail: "filename and total_size are required when files is absent" }));
+          return;
+        }
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({
           upload_id: TASK_ID, chunk_size: 8388608,
@@ -69,12 +84,25 @@ async function startServer() {
       return;
     }
     if (url === `/api/uploads/${TASK_ID}` && req.method === "PATCH") {
+      const index = new URL("http://x" + req.url).searchParams.get("index");
       let size = 0;
       req.on("data", (c) => { size += c.length; });
       req.on("end", () => {
-        patched.push({ url: req.url, size });
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ received: size }));
+        const respond = () => {
+          // Recorded only once the response actually goes out, so `patched()`
+          // reflects what the client has received, not what the server has
+          // merely seen arrive -- the delay below only matters if the two are
+          // distinguished this way.
+          patched.push({ url: req.url, size });
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ received: size }));
+        };
+        // Delay index 1's response slightly so there is a real window, after
+        // index 0 finishes and before index 1 starts, in which to sample the
+        // progress ring. Without this the two chunks (each file fits in one
+        // PATCH here) resolve back-to-back and a per-file-only implementation
+        // would be indistinguishable from an aggregate one by timing alone.
+        if (index === "1") { setTimeout(respond, 300); } else { respond(); }
       });
       return;
     }
@@ -129,12 +157,47 @@ export async function run() {
       radio.checked = true;
       radio.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    // Sizes deliberately differ (1000 vs 3000 bytes, total 4000): after file 0
+    // alone finishes, aggregate progress is 1000/4000 = 25%, while a
+    // per-file-only implementation would show 100% for file 0. The PATCH for
+    // index 1 is delayed 300ms server-side (see startServer) so there is a
+    // window to sample the ring in between.
     await page.setInputFiles("#file-input", [
       { name: "a.mp3", mimeType: "audio/mpeg", buffer: Buffer.alloc(1000, 1) },
       { name: "b.mp3", mimeType: "audio/mpeg", buffer: Buffer.alloc(3000, 2) },
     ]);
     await page.click("#submit-btn", { force: true });
-    await page.waitForTimeout(2500);
+
+    // Poll until index 0's PATCH has landed but index 1's has not yet -- the
+    // 300ms server delay on index 1 gives a real window, but wait
+    // deterministically on the actual PATCH log rather than a fixed sleep.
+    let ratioAfterFirstFile = null;
+    for (let i = 0; i < 50; i += 1) {
+      const sentSoFar = patched();
+      const hasIndex0 = sentSoFar.some((p) => new URL("http://x" + p.url).searchParams.get("index") === "0");
+      const hasIndex1 = sentSoFar.some((p) => new URL("http://x" + p.url).searchParams.get("index") === "1");
+      if (hasIndex0 && !hasIndex1) {
+        ratioAfterFirstFile = await page.evaluate(() => {
+          const fill = document.querySelector("#submit-btn .submit-progress-fill");
+          if (!fill) return null;
+          const circumference = 56.55;
+          const offset = parseFloat(fill.style.strokeDashoffset || "0");
+          return 1 - offset / circumference;
+        });
+        break;
+      }
+      await page.waitForTimeout(20);
+    }
+    if (ratioAfterFirstFile === null) {
+      failures.push("never observed a moment where index 0 had landed and index 1 had not (timing window missed)");
+    } else if (ratioAfterFirstFile > 0.6) {
+      failures.push(
+        `progress ring showed ${(ratioAfterFirstFile * 100).toFixed(0)}% after only file 0 (1000/4000 bytes) finished -- `
+        + `looks like per-file progress restarting rather than aggregate (expected ~25%)`
+      );
+    }
+
+    await page.waitForTimeout(1000);
 
     const sent = patched();
     if (sent.length < 2) {

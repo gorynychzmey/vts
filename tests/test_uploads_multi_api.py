@@ -97,3 +97,25 @@ async def test_single_file_init_still_works(client):
     }, headers=_HEADERS)
     assert r.status_code == 200, r.text
     assert r.json()["upload_id"]
+
+
+@pytest.mark.asyncio
+async def test_init_accepts_files_only_no_legacy_fields(client):
+    """The real browser client sends only `files` for a multi-file set — it
+    has no single filename/total_size to report honestly. This must be
+    accepted without requiring placeholder legacy fields (vts-vm0)."""
+    r = await client.post("/api/uploads/init", json={
+        "files": _files(("a.mp4", 10, 1000), ("b.mp4", 20, 2000)),
+    }, headers=_HEADERS)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["upload_id"]
+    assert [f["filename"] for f in body["files"]] == ["a.mp4", "b.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_init_rejects_missing_files_and_missing_legacy_fields(client):
+    """Neither a file set nor legacy filename/total_size: must still 422,
+    not silently accept an empty/ambiguous request."""
+    r = await client.post("/api/uploads/init", json={}, headers=_HEADERS)
+    assert r.status_code == 422, r.text
