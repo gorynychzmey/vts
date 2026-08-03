@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from urllib.parse import urlparse
 
@@ -14,6 +15,8 @@ from vts.mcp.allowlist import is_email_allowed
 from vts.services import session_store
 from vts.services.web_oauth import build_oauth_client
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _oauth_client_cache: dict[str, object] = {}
@@ -71,7 +74,11 @@ async def auth_callback(request: Request):
     try:
         token = await google.authorize_access_token(request)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}") from exc
+        # Log the reason, return a generic one: authlib's text is usually
+        # harmless ("mismatching_state", "invalid_grant"), but echoing library
+        # internals to an unauthenticated caller is a needless leak (vts-1ec).
+        logger.warning("OAuth exchange failed: %s", exc)
+        raise HTTPException(status_code=400, detail="OAuth exchange failed") from exc
     userinfo = token.get("userinfo") or {}
     email = (userinfo.get("email") or "").strip().lower()
     if not email:

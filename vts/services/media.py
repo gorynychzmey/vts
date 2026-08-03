@@ -25,7 +25,12 @@ def run_ffmpeg(command: list[str], log_path: Path | None = None) -> None:
             if proc.stderr:
                 f.write(proc.stderr + "\n")
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {' '.join(command)}")
+        # Include the tail of stderr: without it the exception said only that
+        # ffmpeg failed, and the actual reason lived in a log file that the
+        # error message did not name (vts-c58).
+        tail = "\n".join((proc.stderr or "").strip().splitlines()[-5:])
+        detail = f"\n{tail}" if tail else ""
+        raise RuntimeError(f"ffmpeg failed: {' '.join(command)}{detail}")
 
 
 def probe_duration(path: Path) -> float:

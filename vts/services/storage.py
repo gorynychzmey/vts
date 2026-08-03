@@ -32,8 +32,16 @@ def ensure_task_dirs(base: Path) -> dict[str, Path]:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    """Write JSON to `path`, atomically.
+
+    Delegates to write_json_atomic rather than write_text: a crash partway
+    through a direct write left truncated JSON behind, and recovery code reads
+    these artifacts back later (vts-76y). Every caller gets the guarantee
+    without having to know to ask for it, which is why the two names still
+    exist — write_json_atomic is kept for callers that state the intent
+    explicitly.
+    """
+    write_json_atomic(path, payload)
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:

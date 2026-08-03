@@ -21,6 +21,33 @@ if TYPE_CHECKING:
     from vts.pipeline.context import PipelineContext
 
 
+# Progress callbacks below run on a worker thread (asyncio.to_thread) and hand
+# the publish back to the loop. Two footguns live in that handoff, both fixed
+# here rather than repeated at each call site (vts-c58):
+#
+#  1. The event loop holds only WEAK references to tasks, so a bare
+#     `asyncio.create_task(...)` with nothing keeping the result alive can be
+#     garbage-collected mid-publish. Keeping a strong reference until the task
+#     finishes is the documented remedy.
+#  2. A `lambda` closing over the callback's arguments captures them by
+#     reference. These callbacks fire repeatedly and rapidly, so the next call
+#     could rebind the name before the scheduled lambda ran, publishing the
+#     wrong payload. Passing the coroutine in as a default argument binds it at
+#     schedule time instead.
+_background_publishes: set[asyncio.Task] = set()
+
+
+def _publish_soon(loop: asyncio.AbstractEventLoop, make_coro) -> None:
+    """Schedule `make_coro()` on `loop` from a worker thread, safely."""
+
+    def _schedule(make_coro=make_coro) -> None:
+        task = asyncio.create_task(make_coro())
+        _background_publishes.add(task)
+        task.add_done_callback(_background_publishes.discard)
+
+    loop.call_soon_threadsafe(_schedule)
+
+
 class DownloadStep(Step):
     name = "download"
     lane = "network"
@@ -75,28 +102,26 @@ class DownloadStep(Step):
                 if title and isinstance(title, str):
                     captured_title.append(title.strip())
             merged_data = {"phase": phase, **payload}
-            loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(
-                    ctx.bus.publish_event(
-                        user_id=st.user_id,
-                        task_id=str(st.task_id),
-                        event="media_progress",
-                        data=merged_data,
-                        throttle_key="media_progress",
-                    )
-                )
+            _publish_soon(
+                loop,
+                lambda data=merged_data: ctx.bus.publish_event(
+                    user_id=st.user_id,
+                    task_id=str(st.task_id),
+                    event="media_progress",
+                    data=data,
+                    throttle_key="media_progress",
+                ),
             )
 
         def sync_phase(phase: str, status: str) -> None:
-            loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(
-                    ctx.bus.publish_event(
-                        user_id=st.user_id,
-                        task_id=str(st.task_id),
-                        event="phase",
-                        data={"phase": phase, "status": status},
-                    )
-                )
+            _publish_soon(
+                loop,
+                lambda phase=phase, status=status: ctx.bus.publish_event(
+                    user_id=st.user_id,
+                    task_id=str(st.task_id),
+                    event="phase",
+                    data={"phase": phase, "status": status},
+                ),
             )
 
         _, _, selected_youtube_client = await asyncio.to_thread(
@@ -264,16 +289,15 @@ class SegmentAudioStep(Step):
         loop = asyncio.get_running_loop()
 
         def sync_segment_progress(current: int, total: int) -> None:
-            loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(
-                    ctx.bus.publish_event(
-                        user_id=st.user_id,
-                        task_id=str(st.task_id),
-                        event="segment_progress",
-                        data={"current": int(current), "total": int(total)},
-                        throttle_key="segment_progress",
-                    )
-                )
+            _publish_soon(
+                loop,
+                lambda current=int(current), total=int(total): ctx.bus.publish_event(
+                    user_id=st.user_id,
+                    task_id=str(st.task_id),
+                    event="segment_progress",
+                    data={"current": current, "total": total},
+                    throttle_key="segment_progress",
+                ),
             )
 
         specs = await asyncio.to_thread(

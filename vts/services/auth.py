@@ -152,6 +152,26 @@ _TOKEN_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
 _token_last_touched: dict[str, float] = {}
 
 
+def _prune_token_touches(now: float) -> None:
+    """Drop entries older than the throttle interval.
+
+    Otherwise the dict keeps one entry per distinct token id for the life of
+    the process — unbounded in a long-lived worker with token churn (vts-1ec).
+    An entry older than the interval can only ever produce a write on the next
+    request, which is exactly what its absence does, so dropping it is free.
+    """
+    if len(_token_last_touched) < _TOKEN_TOUCH_CACHE_HIGH_WATER:
+        return
+    cutoff = now - _TOKEN_TOUCH_INTERVAL_SECONDS
+    for key in [k for k, seen in _token_last_touched.items() if seen < cutoff]:
+        del _token_last_touched[key]
+
+
+# Only sweep once the dict is big enough to be worth it: the scan is O(n), and
+# a handful of active tokens is the normal case.
+_TOKEN_TOUCH_CACHE_HIGH_WATER = 256
+
+
 async def _resolve_via_api_token(
     raw_token: str,
     request: Request,
@@ -194,6 +214,7 @@ async def _resolve_via_api_token(
     now = _time.monotonic()
     last = _token_last_touched.get(token_key)
     if last is None or (now - last) >= _TOKEN_TOUCH_INTERVAL_SECONDS:
+        _prune_token_touches(now)
         _token_last_touched[token_key] = now
         await repo.touch_api_token_last_used(token_row.id)
 

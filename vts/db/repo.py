@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Text, delete, func, select, tuple_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -51,9 +52,19 @@ class Repo:
         user = await self.session.scalar(stmt)
         if user:
             return user
-        user = User(username=username)
-        self.session.add(user)
+        # Check-then-insert races: two concurrent first requests for the same
+        # new user both saw "no row" and the loser hit the unique constraint as
+        # a 500 (vts-76y). Insert with ON CONFLICT DO NOTHING, then re-select —
+        # whoever lost the race reads the winner's row.
+        await self.session.execute(
+            pg_insert(User.__table__)
+            .values(username=username)
+            .on_conflict_do_nothing(index_elements=[User.__table__.c.username])
+        )
         await self.session.flush()
+        user = await self.session.scalar(stmt)
+        if user is None:  # pragma: no cover - the row was just inserted
+            raise RuntimeError(f"user {username!r} vanished after insert")
         return user
 
     async def list_usernames(self) -> list[str]:

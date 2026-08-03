@@ -486,3 +486,162 @@ async def test_asr_progress_does_not_fetch_raw_json(authed_app):
     assert not any(
         "raw_json" in s and "count" not in s.lower() for s in selected
     ), selected
+
+
+# ------------------------------------------------- nit batches (1ec/76y/c58)
+
+def test_ffmpeg_failure_includes_stderr_tail():
+    """The exception must name the reason, not just that ffmpeg failed.
+
+    Before, stderr went only to a log file that the message did not name
+    (vts-c58).
+    """
+    import subprocess
+    from unittest.mock import patch
+
+    from vts.services.media import run_ffmpeg
+
+    completed = subprocess.CompletedProcess(
+        args=["ffmpeg"], returncode=1, stdout="",
+        stderr="line1\nline2\nline3\nline4\nline5\nline6\nNo such file or directory",
+    )
+    with patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError) as excinfo:
+            run_ffmpeg(["ffmpeg", "-i", "missing.mp4"])
+
+    message = str(excinfo.value)
+    assert "No such file or directory" in message, message
+    # Tail only — a huge stderr must not be pasted wholesale.
+    assert "line1" not in message, message
+
+
+def test_ffmpeg_failure_without_stderr_still_raises():
+    import subprocess
+    from unittest.mock import patch
+
+    from vts.services.media import run_ffmpeg
+
+    completed = subprocess.CompletedProcess(
+        args=["ffmpeg"], returncode=1, stdout="", stderr=""
+    )
+    with patch("subprocess.run", return_value=completed):
+        with pytest.raises(RuntimeError, match="ffmpeg failed"):
+            run_ffmpeg(["ffmpeg", "-i", "x.mp4"])
+
+
+def test_zero_confidence_is_not_swallowed():
+    """`raw.get("confidence") or ...` turned a legitimate 0.0 into None, so a
+    "confidence too low" case was reported as "probability missing" — the one
+    case where the number matters most (vts-c58)."""
+    from vts.services.transcription._asr import normalize_detect_payload as build
+
+    assert build({"language_code": "en", "confidence": 0.0})["language_probability"] == 0.0
+    assert build({"language_code": "en", "confidence": 0.87})["language_probability"] == 0.87
+    # Falls back only when the key is genuinely absent.
+    assert build(
+        {"language_code": "en", "language_probability": 0.5}
+    )["language_probability"] == 0.5
+
+
+def test_write_json_is_atomic(tmp_path):
+    """A crash mid-write must not leave truncated JSON for recovery code."""
+    import json as jsonlib
+    from unittest.mock import patch
+
+    from vts.services import storage
+
+    target = tmp_path / "out.json"
+    storage.write_json(target, {"first": "write"})
+
+    # Simulate dying between writing the temp file and swapping it in.
+    with patch("vts.services.storage.os.replace", side_effect=OSError("boom")):
+        with pytest.raises(OSError):
+            storage.write_json(target, {"second": "write"})
+
+    # The original file must be intact, not truncated or half-written.
+    assert jsonlib.loads(target.read_text(encoding="utf-8")) == {"first": "write"}
+    # And no temp litter left behind.
+    assert [p.name for p in tmp_path.iterdir()] == ["out.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_survives_a_concurrent_insert(authed_app):
+    """Two first-requests for the same new user must not 500.
+
+    The old check-then-insert let the loser hit the unique constraint
+    (vts-76y). Simulated by inserting the row from a separate session between
+    this caller's SELECT and its INSERT.
+    """
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    username = f"racer-{uuid.uuid4().hex[:8]}"
+
+    async with factory() as other:
+        # The "winner": commits the row while our caller is mid-flight.
+        await Repo(other).get_or_create_user(username)
+        await other.commit()
+
+    async with factory() as session:
+        user = await Repo(session).get_or_create_user(username)
+        await session.commit()
+
+    assert user is not None
+    assert user.username == username
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_is_idempotent(authed_app):
+    """Repeated calls must return the same row, not duplicates."""
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    username = f"idem-{uuid.uuid4().hex[:8]}"
+
+    async with factory() as session:
+        repo = Repo(session)
+        first = await repo.get_or_create_user(username)
+        await session.commit()
+        first_id = first.id
+
+    async with factory() as session:
+        second = await Repo(session).get_or_create_user(username)
+        await session.commit()
+
+    assert second.id == first_id
+
+
+def test_token_touch_cache_is_pruned():
+    """The throttle dict must not grow one entry per token forever (vts-1ec)."""
+    from vts.services import auth
+
+    auth._token_last_touched.clear()
+    try:
+        now = 10_000.0
+        # Stale entries, well past the throttle interval.
+        for index in range(auth._TOKEN_TOUCH_CACHE_HIGH_WATER + 10):
+            auth._token_last_touched[f"stale-{index}"] = (
+                now - auth._TOKEN_TOUCH_INTERVAL_SECONDS - 1
+            )
+        # One fresh entry that must survive.
+        auth._token_last_touched["fresh"] = now - 1
+
+        auth._prune_token_touches(now)
+
+        assert "fresh" in auth._token_last_touched
+        assert not [k for k in auth._token_last_touched if k.startswith("stale-")]
+    finally:
+        auth._token_last_touched.clear()
+
+
+def test_token_touch_cache_left_alone_while_small():
+    """The sweep is O(n); it must not run for the normal handful of tokens."""
+    from vts.services import auth
+
+    auth._token_last_touched.clear()
+    try:
+        auth._token_last_touched["old"] = 0.0  # ancient, but the dict is tiny
+        auth._prune_token_touches(10_000.0)
+        assert "old" in auth._token_last_touched
+    finally:
+        auth._token_last_touched.clear()

@@ -6,6 +6,23 @@ from typing import Any
 from ._base import WhisperBackend
 
 
+def normalize_detect_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalise /detect-language output to {language, language_probability}.
+
+    `raw.get("confidence") or raw.get("language_probability")` swallowed a
+    legitimate 0.0, so DetectLanguageStep reported "probability missing"
+    instead of "confidence too low" — precisely the case where the number
+    matters most (vts-c58). Absence and zero are different answers.
+    """
+    confidence = raw.get("confidence")
+    return {
+        "language": raw.get("language_code") or raw.get("language"),
+        "language_probability": (
+            confidence if confidence is not None else raw.get("language_probability")
+        ),
+    }
+
+
 class AsrBackend(WhisperBackend):
     backend_name = "asr"
 
@@ -44,7 +61,4 @@ class AsrBackend(WhisperBackend):
             timeout_seconds=timeout_seconds,
             error_context="whisper-asr detect-language",
         )
-        return {
-            "language": raw.get("language_code") or raw.get("language"),
-            "language_probability": raw.get("confidence") or raw.get("language_probability"),
-        }
+        return normalize_detect_payload(raw)
