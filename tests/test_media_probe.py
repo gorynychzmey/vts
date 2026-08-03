@@ -19,14 +19,20 @@ def _make(path: Path, *, video: bool, seconds: int = 1, size: str = "320x240",
     if video:
         cmd += ["-f", "lavfi", "-i", f"testsrc=size={size}:rate={rate}:duration={seconds}"]
     cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}:sample_rate={sample_rate}"]
-    # Use VP9+Vorbis for webm (standard codecs), h264+aac for mp4/m4a
+    # Each container takes its own codecs: WebM permits only VP8/VP9 with
+    # Vorbis/Opus, and wav is PCM. Muxing h264+aac into webm produces no file
+    # at all, which is how an earlier measurement mistook "could not build the
+    # file" for "the container cannot store creation_time".
+    name = str(path)
     if video:
-        if str(path).endswith(".webm"):
+        if name.endswith(".webm"):
             cmd += ["-c:v", "libvpx-vp9"]
         else:
             cmd += ["-c:v", "libx264", "-preset", "ultrafast"]
-    if str(path).endswith(".webm"):
+    if name.endswith(".webm"):
         cmd += ["-c:a", "libvorbis"]
+    elif name.endswith(".wav"):
+        cmd += ["-c:a", "pcm_s16le"]
     else:
         cmd += ["-c:a", "aac"]
     cmd += ["-ar", str(sample_rate), "-shortest"]
@@ -62,9 +68,26 @@ def test_probe_reads_creation_time_when_present(tmp_path):
 
 
 def test_probe_returns_none_creation_time_when_absent(tmp_path):
-    # webm carries no creation_time at all — measured, see the spec's table.
-    f = _make(tmp_path / "c.webm", video=True)
+    """A container that genuinely cannot store the tag must probe as None.
+
+    wav is used because it really does drop creation_time: the assertion below
+    holds even though the tag is explicitly SET on the ffmpeg command line, so
+    the test cannot pass merely because nobody asked for the tag.
+
+    (An earlier version used webm and did not set the tag. That passed for the
+    wrong reason — webm stores creation_time perfectly well; the fixture simply
+    never wrote one, so the test would also have passed against a probe_media
+    that ignored the field entirely.)
+    """
+    f = _make(tmp_path / "c.wav", video=False, creation="2026-08-01T10:00:00.000000Z")
     assert probe_media(f).creation_time is None
+
+
+def test_probe_reads_creation_time_from_webm(tmp_path):
+    """webm DOES carry creation_time — pinned because an earlier measurement
+    claimed otherwise and the spec's container table was wrong as a result."""
+    f = _make(tmp_path / "c.webm", video=True, creation="2026-08-01T10:00:00.000000Z")
+    assert probe_media(f).creation_time == "2026-08-01T10:00:00.000000Z"
 
 
 def test_signatures_match_for_identical_parameters(tmp_path):
