@@ -12,8 +12,13 @@ DAG_HEAD: Final[list[str]] = [
     "segment_audio",
     "detect_language",
     "transcribe_segments",
-    # Needs transcription's chunks done; merge_transcript consumes the speaker
-    # artifact this step writes, so it must run before that.
+    # Placed here, but NOT dependent on transcription: diarize reads the whole
+    # trimmed audio (ctx.transcribe_audio_path), never the per-chunk WAVs or
+    # the transcript. The only ordering that matters is that it precedes
+    # merge_transcript, which consumes the speaker artifact it writes.
+    # Running it concurrently with transcribe_segments is therefore possible
+    # and was deliberately declined — see "The pipeline stays strictly
+    # sequential" in docs/ARCHITECTURE.md (vts-bv7).
     "diarize",
     "merge_transcript",
     "prepare_llama_model",
