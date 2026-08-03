@@ -214,6 +214,98 @@ async def test_partial_failure_leaves_no_completion_marker(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_audio_set_produces_combined_artefact_for_playback(tmp_path):
+    """An AUDIO set must end up with ONE combined playable artefact, mirroring
+    video.mkv for video sets (blocker 1, vts-vm0 final review).
+
+    Without this, _find_media_file's only candidate for an audio set is the
+    raw `audio.original.NNN.*` parts, and its glob-then-[-1] resolution
+    serves only the highest-numbered part — playback (and vts-at8 transcript
+    seeking, and the stats block's media_seconds/media_bytes) then covers
+    only the last part instead of the whole recording.
+    """
+    from vts.pipeline.steps.media import ExtractAudioStep
+
+    dirs = ensure_task_dirs(tmp_path)
+    _audio(dirs["media"] / "audio.original.000.wav", 2, 440)
+    _audio(dirs["media"] / "audio.original.001.wav", 3, 880)
+
+    options = {
+        "source_files_kind": "audio",
+        "source_files": [
+            {"name": "a.wav", "offset_sec": 0.0, "duration_sec": 2.0},
+            {"name": "b.wav", "offset_sec": 0.0, "duration_sec": 3.0},
+        ],
+    }
+    st = _State(dirs, options)
+    await ExtractAudioStep().run(_Ctx(), st)
+
+    from vts.api.main import _find_media_file
+
+    resolved = _find_media_file(str(tmp_path))
+    assert resolved is not None
+    assert resolved.name not in {
+        "audio.original.000.wav", "audio.original.001.wav",
+    }, (
+        f"_find_media_file resolved a raw part ({resolved.name}) instead of "
+        "a combined artefact covering the whole set"
+    )
+    assert abs(probe_duration(resolved) - 5.0) < 0.3, (
+        "the resolved file must cover the full 5s set, not just one part"
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_partial_failure_leaves_no_combined_artefact(tmp_path, monkeypatch):
+    """Same crash-safety guarantee as the video branch's
+    test_partial_failure_leaves_no_completion_marker, applied to the new
+    audio.combined.wav artefact: a failure after it is written but before
+    the step's own completion marker (audio_16k.wav) must not leave a stray
+    combined file behind for a retry to trip over.
+    """
+    import shutil as shutil_module
+
+    import vts.pipeline.steps.media as media_module
+    from vts.pipeline.steps.media import ExtractAudioStep
+
+    dirs = ensure_task_dirs(tmp_path)
+    _audio(dirs["media"] / "audio.original.000.wav", 2, 440)
+    _audio(dirs["media"] / "audio.original.001.wav", 3, 880)
+
+    options = {
+        "source_files_kind": "audio",
+        "source_files": [
+            {"name": "a.wav", "offset_sec": 0.0, "duration_sec": 2.0},
+            {"name": "b.wav", "offset_sec": 0.0, "duration_sec": 3.0},
+        ],
+    }
+    st = _State(dirs, options)
+    ctx = _Ctx()
+
+    real_copyfile = shutil_module.copyfile
+    calls = {"n": 0}
+
+    def _flaky_copyfile(src, dst, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated crash copying audio.combined.wav")
+        return real_copyfile(src, dst, *a, **kw)
+
+    monkeypatch.setattr(media_module.shutil, "copyfile", _flaky_copyfile)
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        await ExtractAudioStep().run(ctx, st)
+
+    assert not (dirs["media"] / "audio.combined.wav").exists()
+    assert not (dirs["media"] / "audio_16k.wav").exists(), (
+        "audio_16k.wav must not exist after a partial failure — its presence "
+        "would make a retry's early-return guard declare the step done"
+    )
+    assert not ctx.persisted_options
+    assert not (dirs["media"] / "concat_work").exists()
+
+
+@pytest.mark.asyncio
 async def test_single_file_task_is_unaffected(tmp_path):
     """No source_files in options means the original single-file behaviour."""
     from vts.pipeline.steps.media import ExtractAudioStep

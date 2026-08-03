@@ -734,7 +734,7 @@ def _find_media_file(artifact_dir: str | None) -> Path | None:
     if not artifact_dir:
         return None
     media_dir = Path(artifact_dir) / "media"
-    for pattern in ("video.mkv", "audio.original.*"):
+    for pattern in ("video.mkv", "audio.combined.wav", "audio.original.*"):
         matches = sorted(
             p for p in (media_dir.glob(pattern) if media_dir.exists() else [])
             # Skip our own probe sidecar (audio.original.*.probe.json), which
@@ -2606,12 +2606,58 @@ def create_app() -> FastAPI:
 
         if meta.get("files"):
             media_dir = Path(settings.artifacts_root) / _user_hash_dir(user.username) / str(uid) / "media"
-            # Every part must be complete before anything else is worth doing.
-            for entry in meta["files"]:
-                part = UploadSession.part_path_for(
-                    settings.artifacts_root, user.username, uid, entry["index"], entry["suffix"]
-                )
-                if UploadSession.received_bytes(part) != entry["total_size"]:
+
+            # Recover any `ordered.NNN.*` leftovers from an interrupted
+            # concat-order reorder (vts-vm0 blocker 2, "second, dirtier
+            # window"): a crash between the two rename passes below leaves
+            # files under a name nothing else recognises. `ordered.NNN.*`
+            # already encodes the target concat-order position in its own
+            # name — finishing pass 2 for it needs no re-probing and no
+            # re-resolution of order, so this is safe to do unconditionally,
+            # before the completeness check, on every finalize call (a no-op
+            # when there is nothing to recover). This can never collide with
+            # entries not yet reordered: `ordered.*` is a distinct name
+            # prefix from `audio.original.*`, and each `position` is unique
+            # across the whole set.
+            def _finish_interrupted_reorder() -> None:
+                for stray in sorted(media_dir.glob("ordered.*")):
+                    target = media_dir / part_name(
+                        int(stray.stem.split(".")[1]), stray.suffix
+                    )
+                    stray.rename(target)
+
+            if media_dir.exists():
+                await asyncio.to_thread(_finish_interrupted_reorder)
+
+            # Whether a PREVIOUS (crashed) attempt already got far enough to
+            # persist the concat-order decision (see below). Used to skip
+            # completeness/finalize_multi/probing work that already
+            # succeeded once and can no longer be safely redone by name —
+            # once the reorder has run, files may no longer sit at the
+            # selection-index name those steps look for (vts-vm0 blocker 2).
+            already_resolved = meta.get("resolved_order") is not None
+
+            # Every part must be complete before anything else is worth
+            # doing. A part already renamed to its final (selection-index)
+            # name by a previous, crashed finalize call also satisfies this
+            # — otherwise every retry past that rename would 409 forever
+            # even though the bytes are safely on disk. If resolved_order is
+            # already persisted, completeness was already proven at that
+            # point (probing every final succeeded and verify_probes
+            # passed), so this check is skipped entirely rather than
+            # wrongly reporting "incomplete" for an upload that is actually
+            # fully finalized and just hasn't reached the Task-row commit
+            # yet.
+            if not already_resolved:
+                for entry in meta["files"]:
+                    part = UploadSession.part_path_for(
+                        settings.artifacts_root, user.username, uid, entry["index"], entry["suffix"]
+                    )
+                    if UploadSession.received_bytes(part) == entry["total_size"]:
+                        continue
+                    final = media_dir / part_name(entry["index"], entry["suffix"])
+                    if final.exists() and final.stat().st_size == entry["total_size"]:
+                        continue
                     raise HTTPException(
                         status_code=409, detail=f"Upload incomplete: {entry['filename']}"
                     )
@@ -2622,38 +2668,78 @@ def create_app() -> FastAPI:
             # validation and the concat-order rename are all still ahead and
             # can fail (or the process can die) before a Task row exists, so
             # the sidecar stays until the row is actually committed below.
-            try:
-                finals = await asyncio.to_thread(
-                    UploadSession.finalize_multi,
-                    settings.artifacts_root, user.username, uid, meta,
-                    remove_meta=False,
-                )
-            except RuntimeError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            #
+            # Once resolved_order is persisted, finalize_multi has already
+            # done its job for good on a previous attempt — every `.part`
+            # it could ever rename is gone, and by this point the reorder
+            # rename may have moved finals off their selection-index name
+            # entirely, which is the only name finalize_multi knows how to
+            # look for. Calling it again here would raise "missing staging
+            # file" for a set that is not missing anything.
+            if not already_resolved:
+                try:
+                    finals = await asyncio.to_thread(
+                        UploadSession.finalize_multi,
+                        settings.artifacts_root, user.username, uid, meta,
+                        remove_meta=False,
+                    )
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+            else:
+                finals = []
 
-            try:
-                probes = await asyncio.to_thread(
-                    lambda: [(e["filename"], probe_media(p)) for e, p in zip(meta["files"], finals)]
-                )
-            except RuntimeError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # The order decision (vts-vm0 blocker 2): resolve_order's result
+            # depends on probing files that the reorder rename below is about
+            # to move (and that a PREVIOUS, crashed finalize call may already
+            # have moved). Re-probing and re-resolving on every retry would
+            # mean re-identifying which on-disk file is which entry once the
+            # reorder has run — the selection-index name the probe loop
+            # above matched against is gone by then. So the decision is made
+            # exactly ONCE and persisted into the upload.json sidecar right
+            # after it is computed, before any reorder rename touches disk. A
+            # retry that finds a persisted decision reuses it verbatim
+            # instead of re-deriving it, which is what makes the reorder
+            # rename below safe to redo/resume no matter where a previous
+            # attempt crashed inside it.
+            resolved = meta.get("resolved_order")
+            if not already_resolved:
+                try:
+                    probes = await asyncio.to_thread(
+                        lambda: [(e["filename"], probe_media(p)) for e, p in zip(meta["files"], finals)]
+                    )
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-            try:
-                verify_probes(meta["kind"], probes)
-            except UploadSetError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                try:
+                    verify_probes(meta["kind"], probes)
+                except UploadSetError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-            entries = [
-                {
-                    "filename": entry["filename"],
-                    "creation_time": probe.creation_time,
-                    "last_modified": entry.get("last_modified"),
-                    "index": entry["index"],
-                    "duration_sec": probe.duration_sec,
-                }
-                for entry, (_, probe) in zip(meta["files"], probes)
-            ]
-            ordered, order_source = resolve_order(entries)
+                entries = [
+                    {
+                        "filename": entry["filename"],
+                        "creation_time": probe.creation_time,
+                        "last_modified": entry.get("last_modified"),
+                        "index": entry["index"],
+                        "duration_sec": probe.duration_sec,
+                    }
+                    for entry, (_, probe) in zip(meta["files"], probes)
+                ]
+                ordered, order_source = resolve_order(entries)
+                resolved = {"ordered": ordered, "order_source": order_source}
+
+                def _persist_resolved_order() -> None:
+                    meta_path = UploadSession.meta_path(settings.artifacts_root, user.username, uid)
+                    on_disk = json.loads(meta_path.read_text(encoding="utf-8"))
+                    on_disk["resolved_order"] = resolved
+                    meta_path.write_text(
+                        json.dumps(on_disk, ensure_ascii=True, indent=2), encoding="utf-8"
+                    )
+
+                await asyncio.to_thread(_persist_resolved_order)
+
+            ordered = resolved["ordered"]
+            order_source = resolved["order_source"]
 
             # Rename to concat order: a later task globs the finals in name
             # order, so the index in the name IS the order (vts-vm0). Staging
@@ -2661,16 +2747,33 @@ def create_app() -> FastAPI:
             # permutation of that — a naive one-pass rename can collide (renaming
             # A onto a name B still occupies destroys B), so go through
             # temporary `ordered.NNN.*` names first.
+            #
+            # Resumable (vts-vm0 blocker 2): a previous crashed attempt may
+            # have already moved some or all entries into `ordered.*` (pass
+            # 1) or all the way to their final concat-order name (pass 2, or
+            # the `ordered.*` recovery pass above). Pass 1 only fires for an
+            # entry whose selection-index file still exists — note this is
+            # NOT the same test as "does the concat-order target already
+            # exist", because a sibling entry's selection-index file can
+            # legitimately still be sitting at that same name (e.g. b at
+            # selection index 0 occupies audio.original.000.* while a, at
+            # position 0, has not been moved there yet) — checking the
+            # wrong thing would wrongly skip a's move and leave b's bytes
+            # under a's name. Pass 2 is naturally idempotent: its only
+            # precondition is "source is at ordered.*", a namespace nothing
+            # else ever writes to, so re-running it is always safe.
             def _rename_to_concat_order() -> None:
-                renamed: list[Path] = []
+                pending: list[tuple[int, Path]] = []
                 for position, item in enumerate(ordered):
                     suffix = Path(item["filename"]).suffix.lower()
                     current = media_dir / part_name(item["index"], suffix)
-                    target = media_dir / f"ordered.{position:03d}{suffix}"
-                    current.rename(target)
-                    renamed.append(target)
-                for position, path in enumerate(renamed):
-                    path.rename(media_dir / part_name(position, path.suffix))
+                    ordered_name = media_dir / f"ordered.{position:03d}{suffix}"
+                    if current.exists():
+                        current.rename(ordered_name)
+                    pending.append((position, ordered_name))
+                for position, ordered_name in pending:
+                    if ordered_name.exists():
+                        ordered_name.rename(media_dir / part_name(position, ordered_name.suffix))
 
             await asyncio.to_thread(_rename_to_concat_order)
 

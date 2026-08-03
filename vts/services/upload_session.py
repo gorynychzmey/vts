@@ -205,6 +205,17 @@ class UploadSession:
         Pre-checks that all expected .part files exist before renaming any of them,
         so the session is left intact and retryable on any error.
 
+        Idempotent / resumable (vts-vm0 blocker 2): a retried finalize call
+        can land here again after a first call already renamed some or all
+        `.part` files away (a crash further down the pipeline — probing,
+        verify_probes, the concat-order reorder, or the Task-row commit —
+        does not undo this rename). An entry whose `.part` is missing but
+        whose final name already exists at the declared size is treated as
+        already finalized rather than missing: without this, every retry
+        past this point would raise "missing staging file" and the caller
+        would turn that into a 409 forever, even though the bytes are safe
+        on disk under their final name.
+
         `remove_meta=False` keeps the `upload.json` sidecar alive after the
         rename. The caller (uploads_finalize) still has probing, set
         validation and a concat-order rename ahead of it before a Task row
@@ -220,22 +231,28 @@ class UploadSession:
         media = cls._dir(artifacts_root, username, upload_id) / "media"
         entries = sorted(meta.get("files", []), key=lambda e: e["index"])
 
-        # Verify all parts exist before renaming any (atomic-ish: either all or none)
+        # Verify every entry has either its .part staging file, or is already
+        # finalized (final name exists at the declared size) — genuinely
+        # missing otherwise (atomic-ish: either all resolve, or none rename).
         missing = []
         for entry in entries:
             final = media / part_name(entry["index"], entry["suffix"])
             part = media / f"{final.name}.part"
-            if not part.exists():
-                missing.append(str(part))
+            if part.exists():
+                continue
+            if final.exists() and final.stat().st_size == entry["total_size"]:
+                continue
+            missing.append(str(part))
         if missing:
             raise RuntimeError(f"Cannot finalize: missing staging file(s): {', '.join(missing)}")
 
-        # All parts exist; now rename them
+        # All parts resolve; now rename whichever ones are still staged.
         finals: list[Path] = []
         for entry in entries:
             final = media / part_name(entry["index"], entry["suffix"])
             part = media / f"{final.name}.part"
-            part.rename(final)  # same dir/volume -> atomic
+            if part.exists():
+                part.rename(final)  # same dir/volume -> atomic
             finals.append(final)
         if remove_meta:
             try:

@@ -236,6 +236,24 @@ class ExtractAudioStep(Step):
                         concat_video_stream_copy, parts, pending_video, log_path, work
                     )
                     os.replace(pending_video, st.dirs["media"] / "video.mkv")
+                else:
+                    # An AUDIO set has no combined playable artefact otherwise:
+                    # _find_media_file would fall back to globbing the raw
+                    # `audio.original.NNN.*` parts and return only the
+                    # highest-numbered one (blocker 1, vts-vm0 final review).
+                    # pending_audio (the concat of all parts, normalised to
+                    # 16 kHz mono for transcription) already covers the whole
+                    # set, so copy it into a name _find_media_file prefers
+                    # over the raw parts. It is a transcription-quality copy
+                    # (16 kHz mono), not the original recording quality, but
+                    # it is the only artefact that already spans every part
+                    # without re-deriving one from originals that verify_probes
+                    # never checked for matching sample rate/codec (unlike the
+                    # video branch, which is safe to stream-copy because
+                    # verify_probes enforces a matching audio_signature there).
+                    pending_combined = work / "pending.audio.combined.wav"
+                    shutil.copyfile(pending_audio, pending_combined)
+                    os.replace(pending_combined, st.dirs["media"] / "audio.combined.wav")
 
                 # Persist before the final audio move: if this fails, the
                 # audio still doesn't exist at its final name, so a retry
