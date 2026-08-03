@@ -6,9 +6,13 @@ probing and where video compatibility is enforced.
 from __future__ import annotations
 
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
+
+from vts.core.config import get_settings
+from vts.services.upload_session import UploadSession
 
 _HEADERS = {"X-Forwarded-User": "tester"}
 
@@ -139,3 +143,46 @@ async def test_finalize_rejects_incomplete_set(client, tmp_path):
     r = await client.post(f"/api/uploads/{upload_id}/finalize", headers=_HEADERS)
     assert r.status_code == 409
     assert "b.m4a" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_failure_after_rename_leaves_session_retryable(client, tmp_path, monkeypatch):
+    """A crash between finalize_multi and the Task row commit must not strand
+    the upload (vts-vm0 review finding 1).
+
+    finalize_multi renames every staging .part into its final name — the
+    point of no return for the bytes on disk — but a Task row does not exist
+    yet: probing, verify_probes and the concat-order rename are all still
+    ahead. If the process dies (or, as simulated here, probing raises) in
+    that window, the upload.json sidecar must still be present, because:
+      - UploadSession.load(...) is how a retried finalize call finds the
+        session again (without it, _load_owned_session 404s the retry)
+      - find_abandoned_sessions() only ever reclaims a directory that is
+        MISSING upload.json — a directory that still has it is treated as
+        live, in-progress work and is never garbage collected
+
+    So this test asserts the sidecar survives a mid-finalize failure, which
+    is exactly what makes the upload recoverable rather than orphaned.
+    """
+    monkeypatch.setattr(
+        "vts.api.main.probe_media",
+        lambda path: (_ for _ in ()).throw(RuntimeError("boom: simulated probe crash")),
+    )
+
+    a = _make_audio(tmp_path / "a.m4a", 1, 440)
+    b = _make_audio(tmp_path / "b.m4a", 1, 880)
+    upload_id = await _upload_set(client, [("a.m4a", a), ("b.m4a", b)])
+
+    r = await client.post(f"/api/uploads/{upload_id}/finalize", headers=_HEADERS)
+    assert r.status_code == 422
+    assert "boom" in r.json()["detail"]
+
+    # The session must still be loadable — this is the retry property.
+    settings = get_settings()
+    meta = UploadSession.load(settings.artifacts_root, "tester", uuid.UUID(upload_id))
+    assert meta is not None, (
+        "upload.json was removed before the Task row existed — a retry of "
+        "this upload_id would 404, and find_abandoned_sessions() would treat "
+        "the directory as GC-eligible: the upload is stranded."
+    )
+    assert meta.get("files"), "multi-file session metadata must round-trip its files list"

@@ -197,12 +197,25 @@ class UploadSession:
 
     @classmethod
     def finalize_multi(
-        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID, meta: dict
+        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID, meta: dict,
+        *, remove_meta: bool = True,
     ) -> list[Path]:
         """Rename every staging part to its final name, in index order.
 
         Pre-checks that all expected .part files exist before renaming any of them,
         so the session is left intact and retryable on any error.
+
+        `remove_meta=False` keeps the `upload.json` sidecar alive after the
+        rename. The caller (uploads_finalize) still has probing, set
+        validation and a concat-order rename ahead of it before a Task row
+        exists — all of which can fail or the process can die mid-way. The
+        sidecar is what makes a session findable/retryable and what makes
+        find_abandoned_sessions() treat the directory as live rather than
+        eligible for GC (vts-vm0); unlinking it here, before that work is
+        done, would strand the upload with no way back if anything after
+        this call fails. The default stays True so Task 5's tests and any
+        other caller that finalizes in one uninterruptible step keep their
+        existing behaviour.
         """
         media = cls._dir(artifacts_root, username, upload_id) / "media"
         entries = sorted(meta.get("files", []), key=lambda e: e["index"])
@@ -224,10 +237,11 @@ class UploadSession:
             part = media / f"{final.name}.part"
             part.rename(final)  # same dir/volume -> atomic
             finals.append(final)
-        try:
-            cls.meta_path(artifacts_root, username, upload_id).unlink()
-        except OSError:
-            pass
+        if remove_meta:
+            try:
+                cls.meta_path(artifacts_root, username, upload_id).unlink()
+            except OSError:
+                pass
         return finals
 
 

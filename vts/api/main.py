@@ -2616,9 +2616,20 @@ def create_app() -> FastAPI:
                         status_code=409, detail=f"Upload incomplete: {entry['filename']}"
                     )
 
-            finals = await asyncio.to_thread(
-                UploadSession.finalize_multi, settings.artifacts_root, user.username, uid, meta
-            )
+            # remove_meta=False: the sidecar is what makes this session
+            # findable/retryable and what keeps find_abandoned_sessions()
+            # from treating the directory as GC-eligible. Probing, set
+            # validation and the concat-order rename are all still ahead and
+            # can fail (or the process can die) before a Task row exists, so
+            # the sidecar stays until the row is actually committed below.
+            try:
+                finals = await asyncio.to_thread(
+                    UploadSession.finalize_multi,
+                    settings.artifacts_root, user.username, uid, meta,
+                    remove_meta=False,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
             try:
                 probes = await asyncio.to_thread(
@@ -2682,6 +2693,13 @@ def create_app() -> FastAPI:
                 source_title=meta.get("display_name"),
             )
             await session.commit()
+            # Only now is the Task row real: safe to remove the sidecar that
+            # made this session retryable up to this point (vts-vm0).
+            meta_path = UploadSession.meta_path(settings.artifacts_root, user.username, uid)
+            try:
+                await asyncio.to_thread(meta_path.unlink)
+            except OSError:
+                pass
             return await _enqueue_uploaded_task(task, repo, redis, settings)
 
         part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
