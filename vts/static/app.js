@@ -3103,6 +3103,63 @@ function findTaskEl(taskId) {
   return document.querySelector(`[data-task-id="${taskId}"]`);
 }
 
+// Resync after the SSE stream dropped and came back, WITHOUT rebuilding the
+// list. While the stream was down we missed events, so what is on screen may
+// be stale — but loadFirstPage() fixes that by destroying the view: it does
+// `taskList.innerHTML = ""`, so every expanded card collapses, its open tab is
+// lost, and pages scrolled in via infinite scroll are dropped back to the
+// first page. On a flaky connection that fired every couple of seconds
+// (vts-9zs).
+//
+// Instead, refresh the cards that are actually on screen in place — the same
+// approach refreshTaskInPlace() already uses for a single task — and pull in
+// anything created while we were disconnected via the existing loadNewer()
+// path, which prepends rather than rebuilds.
+async function resyncAfterReconnect() {
+  const cards = Array.from(document.querySelectorAll(".task"));
+  if (!cards.length) {
+    // Nothing on screen to preserve, so the cheap path is also the correct
+    // one (first load, or the list genuinely empty).
+    await loadFirstPage();
+    return;
+  }
+  // Re-read the first page and patch the matching cards in place. Deliberately
+  // NOT refreshTaskInPlace() per card: that helper blanks runtime.awaitingStep
+  // when the response omits the field, which is safe for the one task it was
+  // written for but would silently disable controls (the resolve-voices
+  // button) across the whole list if any response came back partial. Patching
+  // from the list keeps the cards' DOM — and their expanded state — intact.
+  let fresh;
+  try {
+    fresh = await api(`/api/tasks?limit=${state.taskPaging.pageSize}`);
+  } catch {
+    return; // still offline; the next reconnect will try again
+  }
+  if (!Array.isArray(fresh)) return;
+  fresh.forEach((task) => {
+    if (!task || !task.id) return;
+    const el = findTaskEl(task.id);
+    if (!el || !el._runtime) return;
+    patchTaskStatus(
+      task.id,
+      task.status,
+      task.error || "",
+      task.failure_code || "",
+      task.queue,
+      typeof task.awaiting_step === "string" ? task.awaiting_step : undefined,
+    );
+  });
+  // Anything on the fresh page we don't have a card for was created while the
+  // stream was down; prepend it rather than rebuilding.
+  const known = new Set(cards.map((el) => el.dataset.taskId));
+  fresh
+    .filter((task) => task && task.id && !known.has(String(task.id)))
+    .reverse()
+    .forEach((task) => prependTaskCard(task));
+  updateHeadTail();
+  void refreshQueuePositions();
+}
+
 // Refresh ONE task's runtime from the server and re-render it in place, WITHOUT
 // rebuilding the task list. loadTasks() does `taskList.innerHTML = ""`, which
 // recreates every card collapsed and loses the open transcript tab; this keeps
@@ -3565,7 +3622,7 @@ function connectEvents() {
     }
     setTimeout(() => {
       connectEvents();
-      void loadFirstPage();
+      void resyncAfterReconnect();
     }, 1000);
   });
 
@@ -3579,7 +3636,7 @@ function connectEvents() {
     state.eventSource = null;
     setTimeout(() => {
       connectEvents();
-      void loadFirstPage();
+      void resyncAfterReconnect();
     }, 2000);
   };
 }
