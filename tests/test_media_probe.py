@@ -1,88 +1,96 @@
+"""ffprobe-backed media inspection (vts-vm0).
+
+Ordering and video-compatibility both need facts about the file that only
+ffprobe can supply, so they share one probe rather than shelling out twice.
+"""
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from vts.services.media import probe_duration, trim_initial_silence
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
-    reason="ffmpeg/ffprobe not available",
-)
+from vts.services.media import MediaProbe, probe_media
 
 
-def _make_silent_wav(path: Path, seconds: float) -> None:
-    # anullsrc emits true digital silence — silenceremove will strip it entirely.
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=16000:cl=mono",
-            "-t",
-            str(seconds),
-            "-c:a",
-            "pcm_s16le",
-            str(path),
-        ],
-        check=True,
-        capture_output=True,
-    )
+def _make(path: Path, *, video: bool, seconds: int = 1, size: str = "320x240",
+          rate: int = 25, sample_rate: int = 44100, creation: str | None = None) -> Path:
+    cmd = ["ffmpeg", "-y"]
+    if video:
+        cmd += ["-f", "lavfi", "-i", f"testsrc=size={size}:rate={rate}:duration={seconds}"]
+    cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}:sample_rate={sample_rate}"]
+    # Use VP9+Vorbis for webm (standard codecs), h264+aac for mp4/m4a
+    if video:
+        if str(path).endswith(".webm"):
+            cmd += ["-c:v", "libvpx-vp9"]
+        else:
+            cmd += ["-c:v", "libx264", "-preset", "ultrafast"]
+    if str(path).endswith(".webm"):
+        cmd += ["-c:a", "libvorbis"]
+    else:
+        cmd += ["-c:a", "aac"]
+    cmd += ["-ar", str(sample_rate), "-shortest"]
+    if creation:
+        cmd += ["-metadata", f"creation_time={creation}"]
+    cmd += [str(path)]
+    subprocess.run(cmd, capture_output=True, check=True)
+    return path
 
 
-def _make_empty_wav(path: Path) -> None:
-    # Stripping all audio yields a 0-sample WAV — ffprobe reports no format.duration.
-    src = path.with_name("src.wav")
-    _make_silent_wav(src, 1.0)
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(src),
-            "-af",
-            "silenceremove=start_periods=1:start_duration=0.5:start_threshold=-50dB:start_mode=all",
-            "-c:a",
-            "pcm_s16le",
-            str(path),
-        ],
-        check=True,
-        capture_output=True,
-    )
+def test_probe_reads_duration_and_streams_for_video(tmp_path):
+    f = _make(tmp_path / "v.mp4", video=True, seconds=2, size="640x480", rate=25)
+    probe = probe_media(f)
+    assert probe.has_video is True
+    assert probe.width == 640 and probe.height == 480
+    assert probe.video_codec == "h264"
+    assert probe.audio_codec == "aac"
+    assert probe.sample_rate == 44100
+    assert 1.8 < probe.duration_sec < 2.3
 
 
-def test_probe_duration_returns_zero_for_empty_wav(tmp_path: Path) -> None:
-    empty = tmp_path / "empty.wav"
-    _make_empty_wav(empty)
-    # Regression: ffprobe returns {"format": {}} with no "duration" key for a
-    # zero-sample WAV. probe_duration must degrade to 0.0, not raise KeyError.
-    assert probe_duration(empty) == 0.0
+def test_probe_reads_audio_only_file(tmp_path):
+    f = _make(tmp_path / "a.m4a", video=False, seconds=1)
+    probe = probe_media(f)
+    assert probe.has_video is False
+    assert probe.width is None and probe.height is None
+    assert probe.audio_codec == "aac"
 
 
-def test_trim_initial_silence_falls_back_when_everything_is_silence(
-    tmp_path: Path,
-) -> None:
-    silent = tmp_path / "audio_16k.wav"
-    _make_silent_wav(silent, 10.0)
-    output = tmp_path / "audio_16k_trimmed.wav"
-    log = tmp_path / "ffmpeg.log"
+def test_probe_reads_creation_time_when_present(tmp_path):
+    f = _make(tmp_path / "c.mp4", video=True, creation="2026-08-01T10:00:00.000000Z")
+    assert probe_media(f).creation_time == "2026-08-01T10:00:00.000000Z"
 
-    trimmed = trim_initial_silence(
-        silent,
-        output,
-        log,
-        threshold_db=-50.0,
-        min_duration_sec=0.5,
-        max_trim_seconds=30.0,
-    )
 
-    # Whole clip was silence → silenceremove empties the output. The guard must
-    # copy the original back and report no trim, not crash on the empty probe.
-    assert trimmed == 0.0
-    assert output.exists()
-    assert probe_duration(output) > 0.0
+def test_probe_returns_none_creation_time_when_absent(tmp_path):
+    # webm carries no creation_time at all — measured, see the spec's table.
+    f = _make(tmp_path / "c.webm", video=True)
+    assert probe_media(f).creation_time is None
+
+
+def test_signatures_match_for_identical_parameters(tmp_path):
+    a = _make(tmp_path / "a.mp4", video=True, size="640x480", rate=25)
+    b = _make(tmp_path / "b.mp4", video=True, size="640x480", rate=25)
+    pa, pb = probe_media(a), probe_media(b)
+    assert pa.video_signature() == pb.video_signature()
+    assert pa.audio_signature() == pb.audio_signature()
+
+
+def test_video_signature_differs_on_resolution(tmp_path):
+    a = _make(tmp_path / "a.mp4", video=True, size="640x480")
+    b = _make(tmp_path / "b.mp4", video=True, size="1280x720")
+    assert probe_media(a).video_signature() != probe_media(b).video_signature()
+
+
+def test_audio_signature_differs_on_sample_rate(tmp_path):
+    """This is the case ffmpeg does NOT report as an error — concat -c copy
+    silently produces a wrong-duration file (measured: 4.38s for 2+2s)."""
+    a = _make(tmp_path / "a.mp4", video=True, sample_rate=44100)
+    b = _make(tmp_path / "b.mp4", video=True, sample_rate=48000)
+    assert probe_media(a).audio_signature() != probe_media(b).audio_signature()
+
+
+def test_probe_raises_on_unreadable_file(tmp_path):
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"not a media file")
+    with pytest.raises(RuntimeError, match="ffprobe"):
+        probe_media(bad)

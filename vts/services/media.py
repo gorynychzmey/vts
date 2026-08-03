@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypedDict
 
@@ -55,6 +56,81 @@ def probe_duration(path: Path) -> float:
     if raw is None:
         return 0.0
     return float(raw)
+
+
+@dataclass(frozen=True)
+class MediaProbe:
+    """What one ffprobe call tells us about an uploaded file (vts-vm0).
+
+    Ordering wants `creation_time`; video concat compatibility wants the stream
+    parameters. One probe serves both.
+    """
+
+    duration_sec: float
+    creation_time: str | None
+    has_video: bool
+    video_codec: str | None
+    width: int | None
+    height: int | None
+    frame_rate: str | None
+    audio_codec: str | None
+    sample_rate: int | None
+    channels: int | None
+
+    def video_signature(self) -> tuple:
+        return (self.video_codec, self.width, self.height, self.frame_rate)
+
+    def audio_signature(self) -> tuple:
+        return (self.audio_codec, self.sample_rate, self.channels)
+
+
+def probe_media(path: Path) -> MediaProbe:
+    """Inspect `path` with a single ffprobe call.
+
+    Raises RuntimeError when ffprobe cannot read the file — the caller turns
+    that into a task failure naming the file (vts-vm0).
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration:format_tags=creation_time"
+                         ":stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels",
+        "-of", "json", str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stderr or "").strip().splitlines()[-3:])
+        raise RuntimeError(f"ffprobe failed for {path.name}{': ' + tail if tail else ''}")
+    payload = json.loads(proc.stdout or "{}")
+    fmt = payload.get("format", {}) or {}
+    streams = payload.get("streams", []) or []
+
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    raw_duration = fmt.get("duration")
+    try:
+        duration = float(raw_duration) if raw_duration is not None else 0.0
+    except (TypeError, ValueError):
+        duration = 0.0
+
+    def _int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return MediaProbe(
+        duration_sec=duration,
+        creation_time=(fmt.get("tags") or {}).get("creation_time"),
+        has_video=video is not None,
+        video_codec=(video or {}).get("codec_name"),
+        width=_int((video or {}).get("width")),
+        height=_int((video or {}).get("height")),
+        frame_rate=(video or {}).get("r_frame_rate"),
+        audio_codec=(audio or {}).get("codec_name"),
+        sample_rate=_int((audio or {}).get("sample_rate")),
+        channels=_int((audio or {}).get("channels")),
+    )
 
 
 def extract_audio_16k_mono(input_file: Path, output_wav: Path, log_path: Path) -> None:
