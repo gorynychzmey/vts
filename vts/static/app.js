@@ -1146,6 +1146,21 @@ function renderTaskAboutDialog(task) {
   } else {
     sourceUrlEl.removeAttribute("href");
   }
+  // A set was joined into one recording; list the parts and say which rule
+  // decided their order, since the user cannot change it (vts-vm0).
+  const sourceFiles = Array.isArray(options.source_files) ? options.source_files : [];
+  const filesEl = q(".about-source-files");
+  if (filesEl) {
+    if (sourceFiles.length > 1) {
+      const orderKey = `about.order_${options.source_files_order || "filename"}`;
+      const lines = sourceFiles.map((f, i) => `${i + 1}. ${f.name}`);
+      filesEl.textContent = `${t("about.source_files")} (${t(orderKey)}): ${lines.join("; ")}`;
+      filesEl.classList.remove("hidden");
+    } else {
+      filesEl.textContent = "";
+      filesEl.classList.add("hidden");
+    }
+  }
   q(".about-created").textContent = task.created_at
     ? new Date(task.created_at).toLocaleString()
     : "";
