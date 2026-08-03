@@ -23,7 +23,10 @@ transcript over the whole set, one summary over the combined transcript.
 **Out of scope, deliberately:**
 - A `files` table or any change to the `Task` model (see *Data model*).
 - Per-file ASR, per-file status, or per-file retry.
-- Re-encoding video parts to a common resolution (see *Video sets*).
+- Re-encoding video parts to a common resolution — deferred to **vts-3ow**
+  (hardware encoding), see *Video sets*.
+- A separate DAG step for concatenation — measured as too fast to warrant one,
+  see *Concat stays inside `extract_audio`*.
 - Drag-to-reorder UI (see *Ordering*).
 - Visible separators inside the transcript text (see *Boundaries*).
 - Multi-file via the single-shot `POST /api/tasks/upload` path, and via MCP.
@@ -122,8 +125,36 @@ Re-encoding to a common resolution does work (verified: 1280x720 letterboxed,
 correct 4.04 s duration) and is the obvious escape hatch — but it means CPU
 `libx264` on the box that already runs diarization, with no hardware encoder in
 the image. That is a heavy, open-ended step to add to the pipeline for a case
-that mostly arises from deliberately mismatched sources. Deferred; if it is
-wanted later, the filter-graph approach above is the known-good recipe.
+that mostly arises from deliberately mismatched sources. **Deferred to
+vts-3ow**, which covers checking what the host's GPU offers for transcoding
+(VAAPI/AMF is a separate hardware block from the inference path that failed in
+vts-887) and measuring it against libx264 before deciding.
+
+### Concat stays inside `extract_audio` — it is fast
+
+Stream copy is I/O-bound, not CPU-bound: it rewrites the container without
+touching frames. Measured on real encoded video:
+
+| set | `concat -c copy` |
+|---|---|
+| 20 MB / 3 min (3×720p) | 0.11 s |
+| 330 MB / 30 min (3×720p) | 0.64–0.69 s |
+
+The host sustains 3.2 GB/s, so the 2 GiB ceiling extrapolates to roughly 4 s in
+the worst case, and well under a second for realistic sets. That does not
+warrant its own DAG step with its own progress reporting — a separate step
+would add a status, a progress channel and a failure mode to the pipeline for
+something that finishes before the UI could render a bar.
+
+It stays inside `extract_audio`, which is where the audio concatenation already
+happens. If the deferred re-encoding path (vts-3ow) is ever adopted, that
+changes the arithmetic completely and the split should be revisited then —
+re-encoding is minutes, not milliseconds.
+
+(An earlier attempt to measure a ~700 MB set was discarded: the test files were
+built by `cat`-repeating an MP4, which is not a valid concatenable stream, so
+ffmpeg stopped after the first segment and produced a 20 MB output. The figures
+above come from genuinely long re-encoded sources.)
 
 The typical real case — parts of one recording from one device — has identical
 parameters and takes the cheap copy path.
@@ -144,12 +175,20 @@ first:
    every file.
 3. **Natural sort by filename** — digit runs compared numerically.
 
-Measured behaviour of the containers we actually receive:
+Measured behaviour across every container in `_ALLOWED_UPLOAD_SUFFIXES`:
 
 | container | `creation_time` |
 |---|---|
+| mp4, mkv, mov, flv, m4v | present |
 | m4a, mp3 | present |
-| **ogg, opus, wav** | **absent — the container has no such tag** |
+| **webm, avi, wmv, ts** | **absent** |
+| **ogg, opus, wav** | **absent** |
+
+So `creation_time` is available in 5 of 9 video containers and 2 of 8 audio
+ones. The absent four video containers were checked for an alternative date key
+under both `format_tags` and `stream_tags` — there is none. In practice this is
+survivable: phone and camera recordings, which is what arrives as "parts of one
+recording", are mp4/mov/mkv.
 
 This matters: opus is what Telegram and WhatsApp voice messages use, i.e. the
 most likely "several parts of one conversation" case, and for those files
@@ -249,7 +288,9 @@ Both rejections happen at `init`, before any bytes are transferred.
 ## Risks
 
 - **Ordering is unfixable without re-upload.** Accepted: the order and its
-  source are shown, so a wrong result is at least explicable.
+  source are shown, so a wrong result is at least explicable. The exposure is
+  wider than audio alone — `creation_time` is also missing from webm, avi, wmv
+  and ts — so those fall to `lastModified`, then to filename order.
 - **Peak disk doubles** during extract (originals + combined WAV), and for a
   video set roughly triples (originals + `video.mkv` + WAV). Bounded by the
   2 GiB set limit.
