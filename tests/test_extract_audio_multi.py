@@ -102,6 +102,9 @@ async def test_audio_set_is_concatenated(tmp_path):
     out = dirs["media"] / "audio_16k.wav"
     assert out.exists()
     assert abs(probe_duration(out) - 5.0) < 0.3
+    # A gating typo (e.g. `!= "audio"`) on the video branch must not slip
+    # through silently — an audio-kind set must never produce video.mkv.
+    assert not (dirs["media"] / "video.mkv").exists()
 
 
 @pytest.mark.asyncio
@@ -131,6 +134,9 @@ async def test_offsets_are_recorded(tmp_path):
     assert ctx.persisted_options, "persist_task_options was never called"
     persisted = ctx.persisted_options[-1]
     assert abs(persisted["source_files"][1]["offset_sec"] - 2.0) < 0.3
+    # A gating typo (e.g. `!= "audio"`) on the video branch must not slip
+    # through silently — an audio-kind set must never produce video.mkv.
+    assert not (dirs["media"] / "video.mkv").exists()
 
 
 @pytest.mark.asyncio
@@ -155,6 +161,56 @@ async def test_video_set_also_builds_video_mkv(tmp_path):
     video = dirs["media"] / "video.mkv"
     assert video.exists(), "a video set must produce a combined video for the player"
     assert abs(probe_duration(video) - 2.0) < 0.4
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_leaves_no_completion_marker(tmp_path, monkeypatch):
+    """A failure part-way through the multi-file branch must be retriable.
+
+    If video.mkv building blows up (ffmpeg error, disk full, OOM kill), the
+    step must not have already written audio_16k.wav — that file is the
+    completion marker already_done()/run()'s own early-return guard checks.
+    Leaving it behind after a partial failure would make the retry silently
+    skip the whole step: video.mkv never gets built (so the player falls
+    back to one arbitrary raw part) and the DB keeps Task 7's 0.0 offset
+    placeholders forever, with nothing reporting an error (vts-vm0).
+    """
+    import vts.pipeline.steps.media as media_module
+    from vts.pipeline.steps.media import ExtractAudioStep
+
+    dirs = ensure_task_dirs(tmp_path)
+    _video(dirs["media"] / "audio.original.000.mp4", 1, 440)
+    _video(dirs["media"] / "audio.original.001.mp4", 1, 880)
+
+    options = {
+        "source_files_kind": "video",
+        "source_files": [
+            {"name": "a.mp4", "offset_sec": 0.0, "duration_sec": 1.0},
+            {"name": "b.mp4", "offset_sec": 0.0, "duration_sec": 1.0},
+        ],
+    }
+    st = _State(dirs, options)
+    ctx = _Ctx()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated ffmpeg failure building video.mkv")
+
+    monkeypatch.setattr(media_module, "concat_video_stream_copy", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated ffmpeg failure"):
+        await ExtractAudioStep().run(ctx, st)
+
+    # The exception must propagate (not be swallowed)...
+    assert not (dirs["media"] / "audio_16k.wav").exists(), (
+        "audio_16k.wav must not exist after a partial failure — its presence "
+        "would make a retry's early-return guard declare the step done"
+    )
+    assert not (dirs["media"] / "video.mkv").exists()
+    # ...and options must not have been persisted with placeholder-replacing
+    # values the pipeline never actually committed to disk.
+    assert not ctx.persisted_options, "persist_task_options must not run before all work succeeds"
+    # The work dir must not be leaked on the failure path either.
+    assert not (dirs["media"] / "concat_work").exists()
 
 
 @pytest.mark.asyncio

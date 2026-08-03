@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -194,34 +195,61 @@ class ExtractAudioStep(Step):
                 )
 
             work = st.dirs["media"] / "concat_work"
-            durations = await asyncio.to_thread(
-                concat_to_audio_16k_mono, parts, output, log_path, work
-            )
-
-            # Record real boundaries now that the durations are known.
-            offset = 0.0
-            updated = []
-            for entry, duration in zip(source_files, durations):
-                item = dict(entry)
-                item["offset_sec"] = round(offset, 3)
-                item["duration_sec"] = round(duration, 3)
-                updated.append(item)
-                offset += duration
-            # JSON column: reassign, never mutate in place.
-            options = dict(st.task_options or {})
-            options["source_files"] = updated
-            st.task_options = options
-
-            if options.get("source_files_kind") == "video":
-                # The player resolves media via _find_media_file, which prefers
-                # video.mkv — without this a video set would play one part.
-                await asyncio.to_thread(
-                    concat_video_stream_copy, parts, st.dirs["media"] / "video.mkv", log_path, work
+            try:
+                # Build everything under `work` first. The final artefacts
+                # (audio_16k.wav, video.mkv) must appear only once ALL of the
+                # work below has succeeded — a partial failure (ffmpeg error,
+                # disk full, OOM kill) must leave no completion marker behind,
+                # or a retry's already_done()/early-return guard would declare
+                # the step done while video.mkv is missing and the DB still
+                # has Task 7's 0.0 offset placeholders (vts-vm0).
+                # ffmpeg infers container format from the extension, so the
+                # pending name keeps .wav/.mkv and puts the "not final yet"
+                # marker in the stem instead (a ".pending" suffix breaks
+                # ffmpeg's muxer auto-detection).
+                pending_audio = work / "pending.audio_16k.wav"
+                durations = await asyncio.to_thread(
+                    concat_to_audio_16k_mono, parts, pending_audio, log_path, work
                 )
 
-            shutil.rmtree(work, ignore_errors=True)
+                # Record real boundaries now that the durations are known.
+                offset = 0.0
+                updated = []
+                for entry, duration in zip(source_files, durations):
+                    item = dict(entry)
+                    item["offset_sec"] = round(offset, 3)
+                    item["duration_sec"] = round(duration, 3)
+                    updated.append(item)
+                    offset += duration
+                # JSON column: reassign, never mutate in place.
+                options = dict(st.task_options or {})
+                options["source_files"] = updated
+                st.task_options = options
+
+                if options.get("source_files_kind") == "video":
+                    # The player resolves media via _find_media_file, which
+                    # prefers video.mkv — without this a video set would play
+                    # one part. Build into a pending name in the same dir so
+                    # the final os.replace below is atomic.
+                    pending_video = work / "pending.video.mkv"
+                    await asyncio.to_thread(
+                        concat_video_stream_copy, parts, pending_video, log_path, work
+                    )
+                    os.replace(pending_video, st.dirs["media"] / "video.mkv")
+
+                # Persist before the final audio move: if this fails, the
+                # audio still doesn't exist at its final name, so a retry
+                # redoes the whole branch (idempotent — same offsets result).
+                await ctx.persist_task_options(st.task_id, options)
+
+                # Move the combined audio into place last: this is the file
+                # already_done()/run()'s own early-return guard checks, so
+                # its presence is the actual completion marker for this step.
+                os.replace(pending_audio, output)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
             st.logger.info("audio extraction finished (multi-file set, %d parts)", len(parts))
-            await ctx.persist_task_options(st.task_id, options)
             return True
 
         audio_file = next(st.dirs["media"].glob("audio.original.*"), None)
