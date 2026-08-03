@@ -298,3 +298,77 @@ def export_segments(
         if progress_cb is not None:
             progress_cb(idx, total)
     return specs
+
+
+def _write_concat_list(inputs: list[Path], list_path: Path) -> None:
+    """ffmpeg's concat demuxer input list. Single quotes are escaped per its
+    own quoting rules, so a filename containing one cannot break the list."""
+    lines = []
+    for item in inputs:
+        escaped = str(item.resolve()).replace("'", r"'\''")
+        lines.append(f"file '{escaped}'")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def concat_to_audio_16k_mono(
+    inputs: list[Path], output_wav: Path, log_path: Path, work_dir: Path
+) -> list[float]:
+    """Normalise each input to 16 kHz mono PCM, then join in the given order.
+
+    Returns each input's duration, in the same order, so the caller can record
+    file-boundary offsets. Normalising first is what makes heterogeneous
+    sources safe to concatenate: verified, mp3 44.1k stereo + wav 48k mono +
+    ogg 22k stereo of 2+3+1s produce exactly 6.000s (vts-vm0).
+    """
+    if not inputs:
+        raise RuntimeError("No input files to concatenate")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    normalized: list[Path] = []
+    durations: list[float] = []
+    for index, item in enumerate(inputs):
+        target = work_dir / f"norm_{index:03d}.wav"
+        if not target.exists():
+            extract_audio_16k_mono(item, target, log_path)
+        normalized.append(target)
+        durations.append(probe_duration(target))
+
+    if len(normalized) == 1:
+        shutil.copyfile(normalized[0], output_wav)
+        return durations
+
+    list_path = work_dir / "concat_audio.txt"
+    _write_concat_list(normalized, list_path)
+    run_ffmpeg(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+         "-c", "copy", str(output_wav)],
+        log_path,
+    )
+    return durations
+
+
+def concat_video_stream_copy(
+    inputs: list[Path], output: Path, log_path: Path, work_dir: Path
+) -> None:
+    """Join video parts without re-encoding.
+
+    Callers MUST have verified parameter compatibility first
+    (vts.services.upload_set.verify_probes): stream-copying mismatched inputs
+    silently produces a wrong-duration file, and for differing audio sample
+    rates ffmpeg does not even report an error (vts-vm0).
+    """
+    if not inputs:
+        raise RuntimeError("No input files to concatenate")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if len(inputs) == 1:
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(inputs[0]), "-c", "copy", str(output)], log_path)
+        return
+
+    list_path = work_dir / "concat_video.txt"
+    _write_concat_list(inputs, list_path)
+    run_ffmpeg(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+         "-c", "copy", str(output)],
+        log_path,
+    )
