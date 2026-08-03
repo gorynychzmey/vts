@@ -417,6 +417,14 @@ class UploadConfigOut(BaseModel):
     max_upload_bytes: int
 
 
+class UploadFileSpec(BaseModel):
+    filename: str
+    total_size: int
+    # File.lastModified from the browser, epoch ms. Used only as the second
+    # ordering signal, after the container's own creation_time (vts-vm0).
+    last_modified: int | None = None
+
+
 class UploadInitRequest(BaseModel):
     filename: str
     total_size: int
@@ -426,11 +434,15 @@ class UploadInitRequest(BaseModel):
     diarize: bool = False
     prompts: str | None = None
     display_name: str | None = None
+    # When present, this is a multi-file set and `filename`/`total_size` above
+    # are ignored. Absent means the existing single-file flow (vts-vm0).
+    files: list[UploadFileSpec] | None = None
 
 
 class UploadInitOut(BaseModel):
     upload_id: str
     chunk_size: int
+    files: list[dict] | None = None
 
 
 class UploadOffsetOut(BaseModel):

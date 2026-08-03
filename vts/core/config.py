@@ -327,6 +327,9 @@ class Settings(BaseSettings):
     upload_chunked_threshold_bytes: int = 52_428_800
     upload_chunk_bytes: int = 8_388_608
     max_upload_bytes: int = 2_147_483_648
+    # Cap on how many files one upload set may contain (vts-vm0). The total
+    # size limit is max_upload_bytes above, shared across the whole set.
+    upload_max_files: int = 10
     upload_session_ttl_seconds: int = 86_400
     # Background sweep that deletes uploads abandoned before finalize (vts-ee3).
     upload_gc_enabled: bool = True

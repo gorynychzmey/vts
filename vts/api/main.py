@@ -105,6 +105,7 @@ from vts.services.storage import task_dir
 from vts.services import task_status as _ts
 from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
 from vts.services.upload_session import UploadSession
+from vts.services.upload_set import UploadSetError, classify_suffixes
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -2427,6 +2428,59 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(get_current_user),
         settings: Settings = Depends(get_settings_dep),
     ) -> UploadInitOut:
+        if payload.files:
+            if len(payload.files) > settings.upload_max_files:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"A set may contain at most {settings.upload_max_files} files",
+                )
+            if any(f.total_size <= 0 for f in payload.files):
+                raise HTTPException(status_code=422, detail="total_size must be positive")
+            combined = sum(f.total_size for f in payload.files)
+            if combined > settings.max_upload_bytes:
+                raise HTTPException(status_code=413, detail="Set exceeds maximum upload size")
+            try:
+                kind = classify_suffixes([f.filename for f in payload.files])
+            except UploadSetError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            normalized_prompts = _normalize_prompts_json(payload.prompts)
+            if normalized_prompts and not payload.transcript:
+                raise HTTPException(status_code=422, detail="prompts require transcript")
+            if payload.diarize and not payload.transcript:
+                raise HTTPException(status_code=422, detail="diarize requires transcript")
+
+            upload_id = uuid.uuid4()
+            options = {
+                "language": payload.language or None,
+                "audio_only": False,
+                "transcript": payload.transcript,
+                "diarize": payload.diarize,
+                "prompts": normalized_prompts,
+            }
+            # Order is resolved at finalize, once creation_time can be probed
+            # from the actual bytes. Index here is just selection order.
+            spec_files = [
+                {
+                    "filename": f.filename,
+                    "suffix": Path(f.filename).suffix.lower(),
+                    "total_size": f.total_size,
+                    "last_modified": f.last_modified,
+                }
+                for f in payload.files
+            ]
+            UploadSession.init_multi(
+                settings.artifacts_root, user.username,
+                user_id=user.id, upload_id=upload_id, files=spec_files, kind=kind,
+                options=options, display_name=normalize_display_name(payload.display_name),
+                created_at=datetime.now(tz=timezone.utc).isoformat(),
+            )
+            return UploadInitOut(
+                upload_id=str(upload_id),
+                chunk_size=settings.upload_chunk_bytes,
+                files=[{"index": i, "filename": f["filename"]} for i, f in enumerate(spec_files)],
+            )
+
         suffix = Path(payload.filename).suffix.lower()
         if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
             raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
@@ -2472,13 +2526,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Upload not found")
         return upload_id, meta
 
+    def _entry_for_index(meta: dict, index: int) -> dict:
+        for entry in meta.get("files", []):
+            if entry.get("index") == index:
+                return entry
+        raise HTTPException(status_code=404, detail=f"No file at index {index}")
+
     @app.get("/api/uploads/{upload_id}/offset", response_model=UploadOffsetOut)
     async def uploads_offset(
         upload_id: str,
+        index: int = 0,
         user: AuthenticatedUser = Depends(get_current_user),
         settings: Settings = Depends(get_settings_dep),
     ) -> UploadOffsetOut:
         uid, meta = _load_owned_session(settings, user, upload_id)
+        if meta.get("files"):
+            entry = _entry_for_index(meta, index)
+            part = UploadSession.part_path_for(
+                settings.artifacts_root, user.username, uid, entry["index"], entry["suffix"]
+            )
+            return UploadOffsetOut(
+                received=UploadSession.received_bytes(part), total_size=entry["total_size"]
+            )
         part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
         return UploadOffsetOut(received=UploadSession.received_bytes(part), total_size=meta["total_size"])
 
@@ -2487,21 +2556,36 @@ def create_app() -> FastAPI:
         upload_id: str,
         request: Request,
         offset: int,
+        index: int = 0,
         user: AuthenticatedUser = Depends(get_current_user),
         settings: Settings = Depends(get_settings_dep),
     ) -> JSONResponse:
         uid, meta = _load_owned_session(settings, user, upload_id)
-        part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
+        if meta.get("files"):
+            entry = _entry_for_index(meta, index)
+            part = UploadSession.part_path_for(
+                settings.artifacts_root, user.username, uid, entry["index"], entry["suffix"]
+            )
+            declared = entry["total_size"]
+        else:
+            part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
+            declared = meta["total_size"]
+
         current = UploadSession.received_bytes(part)
         if offset != current:
             raise HTTPException(status_code=409, detail=f"Offset mismatch; expected {current}")
         data = await request.body()
-        if current + len(data) > meta["total_size"]:
+        if current + len(data) > declared:
             raise HTTPException(status_code=413, detail="Chunk exceeds declared total_size")
         meta_path = UploadSession.meta_path(settings.artifacts_root, user.username, uid)
-        new_size = await asyncio.to_thread(
-            UploadSession.append_chunk, part, meta_path, data, meta["total_size"]
-        )
+        if meta.get("files"):
+            new_size = await asyncio.to_thread(
+                UploadSession.append_chunk_at, part, meta_path, data, index
+            )
+        else:
+            new_size = await asyncio.to_thread(
+                UploadSession.append_chunk, part, meta_path, data, declared
+            )
         return JSONResponse({"received": new_size})
 
     @app.post("/api/uploads/{upload_id}/finalize", response_model=TaskOut)
