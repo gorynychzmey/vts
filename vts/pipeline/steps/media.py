@@ -234,6 +234,12 @@ class ExtractAudioStep(Step):
             log_path,
         )
         st.logger.info("audio extraction finished")
+        await ctx.bus.publish_event(
+            user_id=st.user_id,
+            task_id=str(st.task_id),
+            event="phase",
+            data={"phase": "extract_audio", "status": "done"},
+        )
         return True
 
 

@@ -37,6 +37,25 @@ def _video(path: Path, seconds: int, freq: int) -> Path:
     return path
 
 
+class _Bus:
+    """Minimal async no-op event bus that records what was published.
+
+    ExtractAudioStep's single-file path publishes a phase/done event on the
+    real bus (vts.pipeline.context.PipelineContext.bus) — that call must keep
+    working, since app.js:3387 unconditionally clears runtime.mediaPhase on
+    receipt, which gates the download/media progress display (app.js:1323,
+    app.js:1360). A fake ctx with no .bus at all would mask a regression that
+    silently deletes this call, so the fake mirrors the real shape instead of
+    omitting it.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[dict] = []
+
+    async def publish_event(self, *, user_id, task_id, event, data, **kwargs):
+        self.published.append({"user_id": user_id, "task_id": task_id, "event": event, "data": data})
+
+
 class _Ctx:
     class settings:
         timezone = "UTC"
@@ -46,6 +65,7 @@ class _Ctx:
 
     def __init__(self):
         self.persisted_options: list[dict] = []
+        self.bus = _Bus()
 
     async def persist_task_options(self, task_id, options):
         self.persisted_options.append(options)
@@ -146,8 +166,21 @@ async def test_single_file_task_is_unaffected(tmp_path):
     _audio(dirs["media"] / "audio.original.wav", 2, 440)
 
     st = _State(dirs, {})
-    await ExtractAudioStep().run(_Ctx(), st)
+    ctx = _Ctx()
+    await ExtractAudioStep().run(ctx, st)
 
     out = dirs["media"] / "audio_16k.wav"
     assert out.exists()
     assert abs(probe_duration(out) - 2.0) < 0.3
+
+    # The frontend clears runtime.mediaPhase unconditionally on receipt of
+    # this event (app.js:3387), which gates the download/media progress
+    # display (app.js:1323, app.js:1360). Do not delete this publish call —
+    # it is not dead code just because status:"done" skips the "running"
+    # branch above it in patchTaskPhase.
+    phase_done_events = [
+        e for e in ctx.bus.published
+        if e["event"] == "phase" and e["data"].get("phase") == "extract_audio"
+    ]
+    assert phase_done_events, "single-file extract_audio must publish a phase/done event"
+    assert phase_done_events[-1]["data"]["status"] == "done"
