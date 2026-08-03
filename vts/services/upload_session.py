@@ -31,6 +31,9 @@ def part_name(index: int, suffix: str) -> str:
     The single-file session used a fixed `audio.original<suffix>`, so N files in
     one session would overwrite each other. The index IS the concat order, so
     globbing the finals in name order gives the right sequence (vts-vm0).
+
+    Note: zero-padding assumes file count << 1000 (1000+ files would sort
+    incorrectly: 1000.mp4 < 099.mp4). The API layer enforces upload_max_files.
     """
     return f"audio.original.{index:03d}{suffix}"
 
@@ -196,10 +199,27 @@ class UploadSession:
     def finalize_multi(
         cls, artifacts_root: Path, username: str, upload_id: uuid.UUID, meta: dict
     ) -> list[Path]:
-        """Rename every staging part to its final name, in index order."""
+        """Rename every staging part to its final name, in index order.
+
+        Pre-checks that all expected .part files exist before renaming any of them,
+        so the session is left intact and retryable on any error.
+        """
         media = cls._dir(artifacts_root, username, upload_id) / "media"
+        entries = sorted(meta.get("files", []), key=lambda e: e["index"])
+
+        # Verify all parts exist before renaming any (atomic-ish: either all or none)
+        missing = []
+        for entry in entries:
+            final = media / part_name(entry["index"], entry["suffix"])
+            part = media / f"{final.name}.part"
+            if not part.exists():
+                missing.append(str(part))
+        if missing:
+            raise RuntimeError(f"Cannot finalize: missing staging file(s): {', '.join(missing)}")
+
+        # All parts exist; now rename them
         finals: list[Path] = []
-        for entry in sorted(meta.get("files", []), key=lambda e: e["index"]):
+        for entry in entries:
             final = media / part_name(entry["index"], entry["suffix"])
             part = media / f"{final.name}.part"
             part.rename(final)  # same dir/volume -> atomic
