@@ -333,3 +333,156 @@ async def test_donor_lookup_prefers_the_newest_among_equal_matches(authed_app):
         )
 
     assert found is not None and found.id == newest_id
+
+
+# ---------------------------------------------------------------- vts-7q7
+
+@pytest.mark.asyncio
+async def test_asr_progress_counts_done_and_total(authed_app):
+    """Counting must survive the move from Python to SQL aggregation.
+
+    The old version pulled every segment's raw_json (megabytes of word timings)
+    only to test emptiness. Measured on 25 tasks x 400 segments: ~250ms and
+    8.6MB transferred. These tests pin the semantics so the rewrite cannot
+    quietly change what "done" means.
+    """
+    from vts.db.models import AsrSegment, Task, TaskStatus, User
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+
+    async with factory() as session:
+        user = User(id=uuid.uuid4(), username="asr-progress")
+        session.add(user)
+        await session.flush()
+
+        task_id = uuid.uuid4()
+        session.add(
+            Task(
+                id=task_id, user_id=user.id, source_url="https://example.com/a.mp4",
+                status=TaskStatus.completed, options={}, artifact_dir="/tmp/asr",
+            )
+        )
+        await session.flush()
+
+        # 3 transcribed, 2 still empty ({} is the column default).
+        for index in range(5):
+            session.add(
+                AsrSegment(
+                    id=uuid.uuid4(), task_id=task_id, segment_index=index,
+                    start_sec=index * 1.0, end_sec=index * 1.0 + 0.9, text="t",
+                    raw_json={"text": "t", "words": []} if index < 3 else {},
+                )
+            )
+        await session.commit()
+
+        progress = await Repo(session).get_asr_progress_for_tasks([task_id])
+
+    assert progress[task_id] == (3, 5)
+
+
+@pytest.mark.asyncio
+async def test_asr_progress_handles_several_tasks_and_unknown_ids(authed_app):
+    """Per-task grouping, and ids with no segments simply do not appear."""
+    from vts.db.models import AsrSegment, Task, TaskStatus, User
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+
+    async with factory() as session:
+        user = User(id=uuid.uuid4(), username="asr-multi")
+        session.add(user)
+        await session.flush()
+
+        first, second, empty = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        for task_id in (first, second, empty):
+            session.add(
+                Task(
+                    id=task_id, user_id=user.id,
+                    source_url=f"https://example.com/{task_id}.mp4",
+                    status=TaskStatus.completed, options={}, artifact_dir="/tmp/asr",
+                )
+            )
+        await session.flush()
+
+        for index in range(4):  # first: all done
+            session.add(AsrSegment(
+                id=uuid.uuid4(), task_id=first, segment_index=index,
+                start_sec=0.0, end_sec=1.0, text="t", raw_json={"text": "t"},
+            ))
+        for index in range(2):  # second: none done
+            session.add(AsrSegment(
+                id=uuid.uuid4(), task_id=second, segment_index=index,
+                start_sec=0.0, end_sec=1.0, text="", raw_json={},
+            ))
+        await session.commit()
+
+        progress = await Repo(session).get_asr_progress_for_tasks(
+            [first, second, empty]
+        )
+
+    assert progress[first] == (4, 4)
+    assert progress[second] == (0, 2)
+    assert empty not in progress, "a task with no segments must not appear"
+
+
+@pytest.mark.asyncio
+async def test_asr_progress_empty_input(authed_app):
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    async with factory() as session:
+        assert await Repo(session).get_asr_progress_for_tasks([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_asr_progress_does_not_fetch_raw_json(authed_app):
+    """The point of the change: the payloads must stay in the database.
+
+    Without this the rewrite could regress to selecting raw_json again and the
+    counting tests would still pass.
+    """
+    from sqlalchemy import event
+
+    from vts.db.models import AsrSegment, Task, TaskStatus, User
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+
+    async with factory() as session:
+        user = User(id=uuid.uuid4(), username="asr-nofetch")
+        session.add(user)
+        await session.flush()
+        task_id = uuid.uuid4()
+        session.add(Task(
+            id=task_id, user_id=user.id, source_url="https://example.com/n.mp4",
+            status=TaskStatus.completed, options={}, artifact_dir="/tmp/asr",
+        ))
+        await session.flush()
+        session.add(AsrSegment(
+            id=uuid.uuid4(), task_id=task_id, segment_index=0,
+            start_sec=0.0, end_sec=1.0, text="t",
+            raw_json={"words": [{"word": "hello"}]},
+        ))
+        await session.commit()
+
+        statements = []
+
+        def before_cursor_execute(conn, cursor, statement, *args):
+            statements.append(statement)
+
+        bind = session.get_bind()
+        engine = getattr(bind, "sync_engine", bind)
+        event.listen(engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            await Repo(session).get_asr_progress_for_tasks([task_id])
+        finally:
+            event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+    selected = [s for s in statements if "asr_segments" in s]
+    assert selected, "expected a query against asr_segments"
+    # The column may be named in a COUNT(...) FILTER, but must not be selected
+    # as a bare output column.
+    assert not any(
+        "raw_json" in s and "count" not in s.lower() for s in selected
+    ), selected

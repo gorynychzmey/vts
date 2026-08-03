@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import Text, delete, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -423,16 +423,26 @@ class Repo:
     async def get_asr_progress_for_tasks(self, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
         if not task_ids:
             return {}
-        stmt = select(AsrSegment.task_id, AsrSegment.raw_json).where(AsrSegment.task_id.in_(task_ids))
+        # Count in SQL. Selecting raw_json to test it for emptiness pulled every
+        # ASR payload (word-level timings) across the wire for a task-list page:
+        # measured at 25 tasks x 400 segments, ~8.6MB and ~250ms just to produce
+        # two integers per task (vts-7q7).
+        #
+        # raw_json is a `json` column, not `jsonb`, and `json` has no equality
+        # operator in Postgres — so emptiness is tested on the text form. The
+        # old Python check was `isinstance(raw_json, dict) and bool(raw_json)`,
+        # i.e. a non-empty JSON object; '{}' and SQL NULL are the two ways to
+        # be not-done, and both are excluded here.
+        done_filter = func.count().filter(
+            func.cast(AsrSegment.raw_json, Text).notin_(("{}", "null"))
+        )
+        stmt = (
+            select(AsrSegment.task_id, done_filter, func.count())
+            .where(AsrSegment.task_id.in_(task_ids))
+            .group_by(AsrSegment.task_id)
+        )
         result = await self.session.execute(stmt)
-        progress: dict[uuid.UUID, tuple[int, int]] = {}
-        for task_id, raw_json in result.all():
-            done, total = progress.get(task_id, (0, 0))
-            total += 1
-            if isinstance(raw_json, dict) and bool(raw_json):
-                done += 1
-            progress[task_id] = (done, total)
-        return progress
+        return {task_id: (done, total) for task_id, done, total in result.all()}
 
     async def clear_asr_for_task(self, task_id: uuid.UUID) -> None:
         await self.session.execute(delete(AsrSegment).where(AsrSegment.task_id == task_id))
