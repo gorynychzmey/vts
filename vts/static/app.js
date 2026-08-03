@@ -1152,6 +1152,10 @@ function renderTaskAboutDialog(task) {
   const filesEl = q(".about-source-files");
   if (filesEl) {
     if (sourceFiles.length > 1) {
+      // Assumes the closed enum resolve_order() returns (vts/services/upload_order.py):
+      // "creation_time" | "last_modified" | "filename", with an unconditional
+      // filename fallback. Adding a fourth order value means adding its
+      // about.order_* key to all three locale files too, or it renders raw.
       const orderKey = `about.order_${options.source_files_order || "filename"}`;
       const lines = sourceFiles.map((f, i) => `${i + 1}. ${f.name}`);
       filesEl.textContent = `${t("about.source_files")} (${t(orderKey)}): ${lines.join("; ")}`;
