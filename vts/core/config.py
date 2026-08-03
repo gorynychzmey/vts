@@ -390,14 +390,26 @@ class Settings(BaseSettings):
         return normalized in {item.strip().lower() for item in self.admin_emails}
 
 
+_DEFAULT_CONFIG_PATH = Path("/opt/vts/config/config.yaml")
+
+
 def _load_yaml_overrides() -> dict[str, Any]:
-    default_path = Path("/opt/vts/config/config.yaml")
     local_path = Path("config.yaml")
-    path = default_path if default_path.exists() else local_path
+    path = _DEFAULT_CONFIG_PATH if _DEFAULT_CONFIG_PATH.exists() else local_path
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as file:
-        data = yaml.safe_load(file) or {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except PermissionError:
+        # The deployed config is 600 root:root (vts-bz6), so an unprivileged
+        # process on the prod host cannot read it — which is the healthy case,
+        # not an error. Fall through to a local config.yaml if there is one
+        # rather than dying on a raw Errno 13.
+        if path != local_path and local_path.exists():
+            text = local_path.read_text(encoding="utf-8")
+        else:
+            return {}
+    data = yaml.safe_load(text) or {}
     if not isinstance(data, dict):
         return {}
     return _normalize_yaml_overrides(data)

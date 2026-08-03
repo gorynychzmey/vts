@@ -8,7 +8,11 @@ UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="${VTS_UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-15}"
 # otherwise surface as an asyncpg traceback plus a systemd crash loop.
 migrate() {
   python -m vts.db.preflight
-  alembic upgrade head
+  # Migrating from inside the image IS the deliberate case, so state the intent
+  # the guard asks for. It only matters when config.yaml marks this deployment
+  # productive; the guard exists to stop a stray `alembic upgrade head` in a
+  # checkout on the prod host, not this one (vts-66i).
+  VTS_ALLOW_PROD_MIGRATIONS=1 alembic upgrade head
 }
 
 start_webapi() {
