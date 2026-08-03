@@ -174,6 +174,12 @@ const state = {
   taskPaging: {
     head: null, tail: null, pageSize: 10,
     loading: false, exhausted: false, newIds: new Set(), epoch: 0,
+    // Tasks this tab just created. The server publishes task_status BEFORE
+    // returning the HTTP response, so for a slow create (a chunked upload)
+    // the SSE event arrives while the request is still in flight — with no
+    // card in the DOM yet, it was flagged as "new tasks (1)" instead of
+    // appearing at the top of the list (vts-3iw).
+    ownIds: new Set(),
   }
 };
 
@@ -2067,6 +2073,16 @@ function isNewerThan(ts, id, cursor) {
   return String(id) > String(cursor.id);
 }
 
+function forgetOwnTask(taskId) {
+  // The claim only needs to outlive the create round-trip: once the card is in
+  // the DOM, findTaskEl() is what keeps the banner quiet. Dropping it keeps
+  // ownIds from growing for the life of the tab. The delay covers a
+  // task_status event that raced just behind the HTTP response.
+  window.setTimeout(() => {
+    state.taskPaging.ownIds.delete(String(taskId));
+  }, 30_000);
+}
+
 function clearNewTasksBanner() {
   state.taskPaging.newIds.clear();
   const b = document.getElementById("new-tasks-banner");
@@ -2085,6 +2101,9 @@ function showNewTasksBanner() {
 
 async function maybeFlagNewerTask(taskId) {
   const p = state.taskPaging;
+  // Never announce this tab's own creation as somebody else's new task: its
+  // card is on its way in from the create/upload response (vts-3iw).
+  if (p.ownIds.has(taskId)) return;
   if (p.newIds.has(taskId) || findTaskEl(taskId)) return;
   let task;
   try {
@@ -2296,6 +2315,8 @@ async function uploadFileChunked(file, fields) {
   const fill = ring && ring.querySelector(".submit-progress-fill");
   const circumference = 56.55;
   const setProgress = (r) => { if (fill) fill.style.strokeDashoffset = circumference * (1 - r); };
+  // Declared out here so the catch below can release the ownIds claim.
+  let uploadId = null;
 
   if (btn) btn.disabled = true;
   if (icon) icon.classList.add("hidden");
@@ -2320,7 +2341,13 @@ async function uploadFileChunked(file, fields) {
         "X-Forwarded-User": state.authUser,
       },
     });
-    const uploadId = init.upload_id;
+    uploadId = init.upload_id;
+    // The finalize endpoint creates the task with task_id = upload_id, so we
+    // know our own task's id before it exists. Claim it now: uploading the
+    // chunks can take minutes, and the server publishes task_status before
+    // returning the finalize response, so the SSE event would otherwise
+    // announce this tab's own upload as somebody else's new task (vts-3iw).
+    state.taskPaging.ownIds.add(uploadId);
     const chunkSize = init.chunk_size || 8388608;
     let offset = 0;
     while (offset < file.size) {
@@ -2348,11 +2375,22 @@ async function uploadFileChunked(file, fields) {
       offset = resp.received;
       setProgress(offset / file.size);
     }
-    await api(`/api/uploads/${uploadId}/finalize`, {
+    // Return the created task: the caller prepends it straight onto the list.
+    // Discarding it left `created` null, so the chunked path fell through to
+    // loadFirstPage() and the SSE task_status event — which arrives first —
+    // flagged the user's own upload as "new tasks (1)" instead of showing the
+    // card (vts-3iw). The single-shot path already returned its task.
+    const task = await api(`/api/uploads/${uploadId}/finalize`, {
       method: "POST",
       headers: { "X-Forwarded-User": state.authUser },
     });
     setProgress(1);
+    return task;
+  } catch (err) {
+    // Release the claim made at init: with no task to render, nothing else
+    // would ever drop it (vts-3iw).
+    if (uploadId) state.taskPaging.ownIds.delete(uploadId);
+    throw err;
   } finally {
     if (btn) btn.disabled = false;
     if (icon) icon.classList.remove("hidden");
@@ -2867,7 +2905,7 @@ async function createTask(event) {
         ? uploadConfig.chunked_threshold_bytes
         : Infinity; // no config -> always single-shot (unchanged behavior)
       if (file.size > threshold) {
-        await uploadFileChunked(file, fields);
+        created = await uploadFileChunked(file, fields);
       } else {
         const fd = new FormData();
         fd.append("file", file);
@@ -2910,8 +2948,12 @@ async function createTask(event) {
   syncSummaryToggle();
   syncSourceType();
   if (created && created.id) {
+    // Claim it before rendering, so a task_status event still in flight for
+    // this task cannot flag it as new (vts-3iw).
+    state.taskPaging.ownIds.add(String(created.id));
     prependTaskCard(created);
     updateHeadTail();
+    forgetOwnTask(created.id);
     void refreshQueuePositions();
   } else {
     await loadFirstPage();
