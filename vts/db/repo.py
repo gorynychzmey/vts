@@ -35,6 +35,13 @@ def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+# How many completed tasks for the same URL find_completed_donor() examines,
+# newest first. Bounded rather than unbounded: the point is to see past a newer
+# task whose options differ (vts-wpy), and a URL processed more than this many
+# times with the wanted options never matching is not worth an unbounded scan.
+_DONOR_CANDIDATE_LIMIT = 20
+
+
 class Repo:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -447,15 +454,23 @@ class Repo:
                 Task.user_id != exclude_user_id,
             )
             .order_by(Task.updated_at.desc())
-            .limit(1)
+            .limit(_DONOR_CANDIDATE_LIMIT)
         )
-        candidate = await self.session.scalar(stmt)
-        if candidate is None:
-            return None
-        # Compare options exactly
-        if candidate.options != options:
-            return None
-        return candidate
+        # Scan candidates newest-first instead of testing only the newest row.
+        # With limit(1), a newer task for the same URL with DIFFERENT options
+        # shadowed an older exact match, and donor-clone silently fell back to
+        # full processing — a wasted GPU/LLM pass, not a correctness bug
+        # (vts-wpy).
+        #
+        # Compared in Python rather than in the WHERE clause because `options`
+        # is a JSON column: Postgres would compare it as jsonb/text, where key
+        # order and numeric spelling (1 vs 1.0) decide equality, so a
+        # semantically identical dict could miss. The candidate list is capped
+        # so this stays one bounded query.
+        for candidate in (await self.session.scalars(stmt)).all():
+            if candidate.options == options:
+                return candidate
+        return None
 
     async def create_api_token(
         self,

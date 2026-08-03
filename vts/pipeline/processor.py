@@ -289,6 +289,10 @@ class TaskProcessor:
                 # lazy DB load off the event loop (MissingGreenlet) — vts-d64.
                 self._task_metrics.pop(str(task_id), None)
                 self._task_n_ctx.pop(str(task_id), None)
+                # Release the per-task log file: the logger itself lives on in
+                # logging's manager, so the fd would leak for the life of the
+                # worker otherwise (vts-e5l).
+                self._close_task_logger(task_id)
 
     async def _run_step(
         self,
@@ -529,6 +533,25 @@ class TaskProcessor:
             handler.setFormatter(fmt)
             logger.addHandler(handler)
         return logger
+
+    def _close_task_logger(self, task_id: uuid.UUID) -> None:
+        """Detach and close the task's FileHandler.
+
+        logging's manager keeps every named logger for the life of the process,
+        so without this a long-lived worker accumulated one open fd per task
+        until restart — and a deleted task's log kept its disk blocks, being
+        unlinked but still open (vts-e5l).
+
+        Safe to call for a task whose logger was never created, since
+        process_task's finally block also runs when setup failed early.
+        """
+        logger = logging.Logger.manager.loggerDict.get(f"task.{task_id}")
+        if not isinstance(logger, logging.Logger):
+            return
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                logger.removeHandler(handler)
+                handler.close()
 
     async def delete_task_artifacts(self, artifact_dir: str) -> None:
         await asyncio.to_thread(shutil.rmtree, artifact_dir, True)

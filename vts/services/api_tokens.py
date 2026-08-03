@@ -18,8 +18,18 @@ def looks_like_api_token(value: str) -> bool:
 
 
 def hash_token(raw: str) -> str:
-    """SHA-256 hex of the raw token. Used as the DB key."""
-    return hashlib.sha256(raw.encode("ascii")).hexdigest()
+    """SHA-256 hex of the raw token. Used as the DB key.
+
+    Encodes as UTF-8, not ASCII: Starlette decodes header values as latin-1, so
+    `Authorization: Bearer vts_\\xff` arrives as a non-ASCII str and
+    `.encode("ascii")` raised UnicodeEncodeError. Nothing caught it, so junk
+    bytes from an unauthenticated client produced a 500 and a traceback instead
+    of a 401 (vts-cy1). The hash input is arbitrary bytes anyway.
+
+    UTF-8 and ASCII agree byte-for-byte on ASCII input, so digests of existing
+    tokens are unchanged and stored hashes stay valid.
+    """
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def token_prefix(raw: str) -> str:
