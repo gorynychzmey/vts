@@ -875,11 +875,18 @@ class Repo:
         return sample
 
     async def list_voice_samples(self, speaker_id: uuid.UUID) -> list[VoiceSample]:
-        # audio stays deferred — never loaded here
+        # audio stays deferred — never loaded here.
+        #
+        # Newest first (vts-4nx): the registry dialog renders this order, and a
+        # person's fragments accumulate over time, so oldest-first buried the
+        # freshly recorded one at the bottom of a growing list. Ordered here
+        # rather than in the browser so every consumer sees the same order.
+        # id is the tiebreaker: samples added in one transaction share a
+        # created_at, and without it their relative order is arbitrary.
         stmt = (
             select(VoiceSample)
             .where(VoiceSample.speaker_id == speaker_id)
-            .order_by(VoiceSample.created_at.asc())
+            .order_by(VoiceSample.created_at.desc(), VoiceSample.id.desc())
         )
         result = await self.session.scalars(stmt)
         return list(result.all())

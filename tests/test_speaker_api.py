@@ -1042,3 +1042,41 @@ async def test_speaker_matches_candidate_names_reflect_registry_rename(
     assert cand["name"] == "Новое Имя"
     # The id is unchanged — only the rendered name tracks the rename.
     assert cand["speaker_id"] == person_id
+
+
+@pytest.mark.asyncio
+async def test_voice_samples_endpoint_returns_newest_first(client, authed_app):
+    """GET /api/speakers/{id}/samples must be newest-first (vts-4nx).
+
+    Asserted at the endpoint, not just the repo: this is the response the
+    registry dialog renders verbatim, so the endpoint is what the UI's order
+    actually depends on.
+    """
+    import datetime as dt
+
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        sp = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "Alice")
+        made = []
+        for index in range(3):
+            made.append(await repo.add_voice_sample(
+                speaker_id=sp.id, embedding=[0.1] * 256, embedding_model="m",
+                audio=b"A", audio_format="wav",
+                duration_sec=float(index + 1), source_task_id=None,
+            ))
+        await session.flush()
+        base = dt.datetime(2026, 8, 3, 9, 0, tzinfo=dt.timezone.utc)
+        for index, sample in enumerate(made):
+            sample.created_at = base + dt.timedelta(hours=index)
+        await session.commit()
+        sid = str(sp.id)
+
+    r = await client.get(f"/api/speakers/{sid}/samples")
+    assert r.status_code == 200
+    body = r.json()
+    assert [s["duration_sec"] for s in body] == [3.0, 2.0, 1.0], body
+    stamps = [s["created_at"] for s in body]
+    assert stamps == sorted(stamps, reverse=True), stamps

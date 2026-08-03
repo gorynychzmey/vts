@@ -263,3 +263,45 @@ async def test_decisions_for_task_deleted_person_reads_as_unbound(factory):
         decs = await repo.decisions_for_task(_USER, task_id)
         assert decs["SPEAKER_00"]["speaker_id"] is None
         assert decs["SPEAKER_00"]["name"] is None
+
+
+@pytest.mark.asyncio
+async def test_voice_samples_are_newest_first(factory):
+    """Fragments are listed newest-first (vts-4nx).
+
+    The registry dialog shows a person's fragments in whatever order the API
+    returns, and a person accumulates them over time. Oldest-first buried the
+    fragment you just recorded at the bottom of a growing list, which is the
+    one you are most likely to want.
+
+    Ordered in SQL rather than in the browser so every consumer of the endpoint
+    sees the same order.
+    """
+    import datetime as dt
+
+    async with factory() as s:
+        repo = Repo(s)
+        sp = await repo.create_speaker(_USER, "Вася")
+        made = []
+        for index in range(3):
+            sample = await repo.add_voice_sample(
+                speaker_id=sp.id, embedding=[0.1] * 256,
+                embedding_model="m", audio=b"x", audio_format="wav",
+                duration_sec=float(index + 1), source_task_id=None,
+            )
+            made.append(sample)
+        await s.flush()
+        # Stamp distinct times: created_at defaults would otherwise land inside
+        # the same transaction and the order would be arbitrary.
+        base = dt.datetime(2026, 8, 3, 12, 0, tzinfo=dt.timezone.utc)
+        for index, sample in enumerate(made):
+            sample.created_at = base + dt.timedelta(hours=index)
+        await s.commit()
+
+        listed = await repo.list_voice_samples(sp.id)
+
+    assert [x.duration_sec for x in listed] == [3.0, 2.0, 1.0], (
+        "expected newest-first; got " + repr([x.created_at for x in listed])
+    )
+    stamps = [x.created_at for x in listed]
+    assert stamps == sorted(stamps, reverse=True), stamps
