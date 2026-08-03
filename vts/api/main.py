@@ -91,7 +91,7 @@ from vts.db.repo import Repo
 from vts.pipeline.rerender import rerender_transcript
 from vts.pipeline.steps.transcription import effective_language
 from vts.services.auth import AuthenticatedUser
-from vts.services.media import probe_duration
+from vts.services.media import probe_duration, probe_media
 from vts.services.media_kind import media_content_type, media_kind
 from vts.services.push import (
     SubscriptionPayload,
@@ -104,8 +104,9 @@ from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
 from vts.services import task_status as _ts
 from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
-from vts.services.upload_session import UploadSession
-from vts.services.upload_set import UploadSetError, classify_suffixes
+from vts.services.upload_order import resolve_order
+from vts.services.upload_session import UploadSession, part_name
+from vts.services.upload_set import UploadSetError, classify_suffixes, verify_probes
 
 
 def can_pause_task(status: TaskStatus) -> bool:
@@ -722,6 +723,11 @@ def _serve_text(
         media_type=plain_media_type,
         headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"},
     )
+
+
+def _user_hash_dir(username: str) -> str:
+    from vts.services.storage import user_hash
+    return user_hash(username)
 
 
 def _find_media_file(artifact_dir: str | None) -> Path | None:
@@ -2597,6 +2603,87 @@ def create_app() -> FastAPI:
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
         uid, meta = _load_owned_session(settings, user, upload_id)
+
+        if meta.get("files"):
+            media_dir = Path(settings.artifacts_root) / _user_hash_dir(user.username) / str(uid) / "media"
+            # Every part must be complete before anything else is worth doing.
+            for entry in meta["files"]:
+                part = UploadSession.part_path_for(
+                    settings.artifacts_root, user.username, uid, entry["index"], entry["suffix"]
+                )
+                if UploadSession.received_bytes(part) != entry["total_size"]:
+                    raise HTTPException(
+                        status_code=409, detail=f"Upload incomplete: {entry['filename']}"
+                    )
+
+            finals = await asyncio.to_thread(
+                UploadSession.finalize_multi, settings.artifacts_root, user.username, uid, meta
+            )
+
+            try:
+                probes = await asyncio.to_thread(
+                    lambda: [(e["filename"], probe_media(p)) for e, p in zip(meta["files"], finals)]
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            try:
+                verify_probes(meta["kind"], probes)
+            except UploadSetError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            entries = [
+                {
+                    "filename": entry["filename"],
+                    "creation_time": probe.creation_time,
+                    "last_modified": entry.get("last_modified"),
+                    "index": entry["index"],
+                    "duration_sec": probe.duration_sec,
+                }
+                for entry, (_, probe) in zip(meta["files"], probes)
+            ]
+            ordered, order_source = resolve_order(entries)
+
+            # Rename to concat order: a later task globs the finals in name
+            # order, so the index in the name IS the order (vts-vm0). Staging
+            # names are in SELECTION order, and resolve_order's result may be a
+            # permutation of that — a naive one-pass rename can collide (renaming
+            # A onto a name B still occupies destroys B), so go through
+            # temporary `ordered.NNN.*` names first.
+            def _rename_to_concat_order() -> None:
+                renamed: list[Path] = []
+                for position, item in enumerate(ordered):
+                    suffix = Path(item["filename"]).suffix.lower()
+                    current = media_dir / part_name(item["index"], suffix)
+                    target = media_dir / f"ordered.{position:03d}{suffix}"
+                    current.rename(target)
+                    renamed.append(target)
+                for position, path in enumerate(renamed):
+                    path.rename(media_dir / part_name(position, path.suffix))
+
+            await asyncio.to_thread(_rename_to_concat_order)
+
+            options = dict(meta["options"])
+            options["source_files"] = [
+                {"name": item["filename"], "offset_sec": 0.0, "duration_sec": item["duration_sec"]}
+                for item in ordered
+            ]
+            options["source_files_order"] = order_source
+            options["source_files_kind"] = meta["kind"]
+
+            repo = Repo(session)
+            artifact = task_dir(settings.artifacts_root, user.username, uid)
+            task = await repo.create_task(
+                user_id=uuid.UUID(user.id),
+                source_url=f"file://{ordered[0]['filename']}",
+                options=options,
+                artifact_dir=str(artifact),
+                task_id=uid,
+                source_title=meta.get("display_name"),
+            )
+            await session.commit()
+            return await _enqueue_uploaded_task(task, repo, redis, settings)
+
         part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
         if UploadSession.received_bytes(part) != meta["total_size"]:
             raise HTTPException(status_code=409, detail="Upload incomplete")
