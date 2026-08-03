@@ -113,13 +113,26 @@ def test_unreadable_prod_config_falls_back_to_the_local_one(tmp_path, monkeypatc
 
     unreadable = tmp_path / "prod-config.yaml"
     unreadable.write_text("environment:\n  productive: true\n", encoding="utf-8")
-    unreadable.chmod(0o000)
 
     local = tmp_path / "config.yaml"
     local.write_text("environment:\n  productive: false\n", encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(pristine, "_DEFAULT_CONFIG_PATH", unreadable)
+
+    # Raise the PermissionError directly instead of relying on chmod(0o000):
+    # the container runs its tests as root, and root ignores mode bits, so
+    # read_text() simply SUCCEEDED there and the fallback branch was never
+    # reached. That made the test pass locally as an unprivileged user and
+    # fail in CI — the environment decided the outcome, not the code.
+    real_read_text = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self == unreadable:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
 
     # Must not raise, and must fall through to the local file rather than
     # silently inheriting prod's settings.
