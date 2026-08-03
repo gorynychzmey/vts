@@ -25,6 +25,16 @@ def _media_name(suffix: str) -> str:
     return f"audio.original{suffix}"
 
 
+def part_name(index: int, suffix: str) -> str:
+    """Indexed staging name, e.g. audio.original.000.mp4.
+
+    The single-file session used a fixed `audio.original<suffix>`, so N files in
+    one session would overwrite each other. The index IS the concat order, so
+    globbing the finals in name order gives the right sequence (vts-vm0).
+    """
+    return f"audio.original.{index:03d}{suffix}"
+
+
 class UploadSession:
     @staticmethod
     def _dir(artifacts_root: Path, username: str, upload_id: uuid.UUID) -> Path:
@@ -111,6 +121,94 @@ class UploadSession:
         except OSError:
             pass
         return final
+
+    @classmethod
+    def part_path_for(
+        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID,
+        index: int, suffix: str,
+    ) -> Path:
+        return cls._dir(artifacts_root, username, upload_id) / "media" / f"{part_name(index, suffix)}.part"
+
+    @classmethod
+    def init_multi(
+        cls,
+        artifacts_root: Path,
+        username: str,
+        *,
+        user_id: str,
+        upload_id: uuid.UUID,
+        files: list[dict],
+        kind: str,
+        options: dict,
+        display_name: str | None,
+        created_at: str,
+    ) -> Path:
+        """Stage N parts under one session. `files` is already in concat order."""
+        d = cls._dir(artifacts_root, username, upload_id)
+        media = d / "media"
+        media.mkdir(parents=True, exist_ok=True)
+
+        entries = []
+        for index, item in enumerate(files):
+            (media / f"{part_name(index, item['suffix'])}.part").touch(exist_ok=True)
+            entries.append({
+                "index": index,
+                "filename": item["filename"],
+                "suffix": item["suffix"],
+                "total_size": item["total_size"],
+                "last_modified": item.get("last_modified"),
+                "received": 0,
+            })
+
+        meta = {
+            "upload_id": str(upload_id),
+            "user_id": user_id,
+            "username": username,
+            "kind": kind,
+            "files": entries,
+            "total_size": sum(e["total_size"] for e in entries),
+            "options": options,
+            "display_name": display_name,
+            "created_at": created_at,
+        }
+        cls.meta_path(artifacts_root, username, upload_id).write_text(
+            json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8"
+        )
+        return d
+
+    @staticmethod
+    def append_chunk_at(part_path: Path, meta_path: Path, data: bytes, index: int) -> int:
+        with open(part_path, "ab") as f:
+            f.write(data)
+        new_size = part_path.stat().st_size
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            for entry in meta.get("files", []):
+                if entry.get("index") == index:
+                    entry["received"] = new_size
+                    break
+            meta_path.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+        return new_size
+
+    @classmethod
+    def finalize_multi(
+        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID, meta: dict
+    ) -> list[Path]:
+        """Rename every staging part to its final name, in index order."""
+        media = cls._dir(artifacts_root, username, upload_id) / "media"
+        finals: list[Path] = []
+        for entry in sorted(meta.get("files", []), key=lambda e: e["index"]):
+            final = media / part_name(entry["index"], entry["suffix"])
+            part = media / f"{final.name}.part"
+            part.rename(final)  # same dir/volume -> atomic
+            finals.append(final)
+        try:
+            cls.meta_path(artifacts_root, username, upload_id).unlink()
+        except OSError:
+            pass
+        return finals
 
 
 def find_abandoned_sessions(artifacts_root: Path, *, ttl_seconds: int) -> dict[uuid.UUID, Path]:
