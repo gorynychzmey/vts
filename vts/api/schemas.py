@@ -4,7 +4,14 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, field_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class PromptRef(BaseModel):
@@ -162,6 +169,21 @@ def _default_prompts() -> list["PromptRef"]:
 
 class TaskCreateRequest(BaseModel):
     url: str = Field(min_length=3)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        """Reject non-http(s) and internal targets before anything is queued.
+
+        The worker fetches this with yt-dlp from inside the podman network, so
+        an unchecked URL is a server-side request primitive (vts-h45).
+        """
+        from vts.services.source_url import InvalidSourceUrl, validate_source_url
+
+        try:
+            return validate_source_url(value)
+        except InvalidSourceUrl as exc:
+            raise ValueError(str(exc)) from exc
     language: str | None = None
     audio_only: bool = False
     transcript: bool = Field(default=True, validation_alias=AliasChoices("transcript", "do_transcribe"))

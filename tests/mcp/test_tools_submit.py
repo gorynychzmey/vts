@@ -43,13 +43,13 @@ async def test_submit_video_strips_whitespace(tmp_path: Path) -> None:
     repo = FakeRepo()
     bus = FakeBus()
     result = await submit_video(
-        url="  https://x/abc  ",
+        url="  https://example.com/abc  ",
         user=user,
         repo=repo,
         bus=bus,
         artifacts_root=tmp_path,
     )
-    assert repo.tasks[result.task_id].source_url == "https://x/abc"
+    assert repo.tasks[result.task_id].source_url == "https://example.com/abc"
 
 
 async def test_submit_video_rejects_blank_url(tmp_path: Path) -> None:
@@ -76,7 +76,7 @@ async def test_submit_video_defaults_match_web_pipeline(tmp_path: Path) -> None:
     repo = FakeRepo()
     bus = FakeBus()
     result = await submit_video(
-        url="https://x/abc",
+        url="https://example.com/abc",
         user=user,
         repo=repo,
         bus=bus,
@@ -100,7 +100,7 @@ async def test_submit_video_passes_through_explicit_options(tmp_path: Path) -> N
     repo = FakeRepo()
     bus = FakeBus()
     result = await submit_video(
-        url="https://x/abc",
+        url="https://example.com/abc",
         user=user,
         repo=repo,
         bus=bus,
@@ -130,7 +130,7 @@ async def test_submit_video_diarize_true_reaches_options(tmp_path: Path) -> None
     repo = FakeRepo()
     bus = FakeBus()
     await submit_video(
-        url="https://x/abc",
+        url="https://example.com/abc",
         user=user,
         repo=repo,
         bus=bus,
@@ -145,7 +145,7 @@ async def test_submit_video_diarize_defaults_false(tmp_path: Path) -> None:
     repo = FakeRepo()
     bus = FakeBus()
     await submit_video(
-        url="https://x/abc",
+        url="https://example.com/abc",
         user=user,
         repo=repo,
         bus=bus,
@@ -164,7 +164,7 @@ async def test_submit_video_rejects_diarize_without_transcript(tmp_path: Path) -
     bus = FakeBus()
     with pytest.raises(HTTPException) as exc:
         await submit_video(
-            url="https://x/abc",
+            url="https://example.com/abc",
             user=user,
             repo=repo,
             bus=bus,
@@ -186,7 +186,7 @@ async def test_submit_video_rejects_prompts_without_transcript(tmp_path: Path) -
     bus = FakeBus()
     with pytest.raises(HTTPException) as exc:
         await submit_video(
-            url="https://x/abc",
+            url="https://example.com/abc",
             user=user,
             repo=repo,
             bus=bus,
@@ -206,7 +206,7 @@ async def test_submit_video_rejects_bad_prompt_ref(tmp_path: Path) -> None:
     bus = FakeBus()
     with pytest.raises(HTTPException) as exc:
         await submit_video(
-            url="https://x/abc",
+            url="https://example.com/abc",
             user=user,
             repo=repo,
             bus=bus,

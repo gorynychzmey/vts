@@ -32,7 +32,7 @@ def test_task_summary_shape() -> None:
         task_id=uuid.uuid4(),
         status="completed",
         title="hi",
-        url="https://x",
+        url="https://example.com",
         created_at=datetime.now(tz=timezone.utc),
         updated_at=datetime.now(tz=timezone.utc),
     )

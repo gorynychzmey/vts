@@ -156,7 +156,7 @@ async def test_submit_with_valid_delivery_lands_in_options(tmp_path: Path, setti
     )
 
     result = await submit_video(
-        url="https://x/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
+        url="https://example.com/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
         delivery=[{"deliver_to": "out", "variant": "raw"}],
     )
 
@@ -171,7 +171,7 @@ async def test_submit_rejects_unknown_target(tmp_path: Path):
     bus = FakeBus()
     with pytest.raises(HTTPException) as exc:
         await submit_video(
-            url="https://x/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
+            url="https://example.com/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
             delivery=[{"deliver_to": "does-not-exist"}],
         )
     assert exc.value.status_code == 422
@@ -192,7 +192,7 @@ async def test_submit_rejects_target_whose_adapter_is_unavailable(
 
     with pytest.raises(HTTPException) as exc:
         await submit_video(
-            url="https://x/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
+            url="https://example.com/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
             delivery=[{"deliver_to": "out"}],
         )
     assert exc.value.status_code == 422
@@ -217,7 +217,7 @@ async def test_preset_delivery_survives_missing_adapter(tmp_path: Path, settings
     monkeypatch.setattr(registry, "_CACHE", {}, raising=False)  # plugin gone
 
     result = await submit_video(
-        url="https://x/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
+        url="https://example.com/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
         preset={"source": "user", "id": str(preset.id)},
     )
 
@@ -237,7 +237,7 @@ async def test_explicit_delivery_replaces_preset_delivery(tmp_path: Path, settin
     )
 
     result = await submit_video(
-        url="https://x/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
+        url="https://example.com/abc", user=user, repo=repo, bus=bus, artifacts_root=tmp_path,
         preset={"source": "user", "id": str(preset.id)},
         delivery=[{"deliver_to": "explicit"}],
     )

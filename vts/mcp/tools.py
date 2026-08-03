@@ -35,6 +35,7 @@ from vts.services.preset_registry import (
     system_preset_keys,
 )
 from vts.services.prompt_registry import list_system_prompts, parse_ref, ref_to_dict
+from vts.services.source_url import InvalidSourceUrl, validate_source_url
 from vts.services.prompt_results import resolve_result_path
 from vts.services.storage import task_dir
 from vts.services.task_progress import summary_progress_for_task
@@ -127,6 +128,13 @@ async def submit_video(
     """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
+    # This path does NOT build a TaskCreateRequest, so it needs its own call to
+    # the shared validator — validating only the Pydantic schema would leave
+    # MCP as an open server-side request primitive (vts-h45).
+    try:
+        url = validate_source_url(url)
+    except InvalidSourceUrl as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     # Delivery inherited from a preset (if any). Kept separate from an explicit
     # `delivery` because only the explicit one is validated up-front: a preset
     # naming a target whose plugin is missing must park, not fail the submit.

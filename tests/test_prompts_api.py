@@ -10,18 +10,18 @@ from tests.conftest import _TEST_USER_ID
 
 
 def test_task_create_defaults_to_summary():
-    req = TaskCreateRequest(url="https://x/y")
+    req = TaskCreateRequest(url="https://example.com/y")
     assert req.prompts == [PromptRef(source="system", id="summary")]
 
 
 def test_task_create_empty_prompts_allowed_without_summary():
-    req = TaskCreateRequest(url="https://x/y", prompts=[])
+    req = TaskCreateRequest(url="https://example.com/y", prompts=[])
     assert req.prompts == []
 
 
 def test_non_empty_prompts_requires_transcript():
     with pytest.raises(ValidationError):
-        TaskCreateRequest(url="https://x/y", transcript=False,
+        TaskCreateRequest(url="https://example.com/y", transcript=False,
                           prompts=[PromptRef(source="system", id="summary")])
 
 

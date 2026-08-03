@@ -40,7 +40,7 @@ async def test_submit_video_with_user_preset_expands_options(
         },
     )
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
         preset={"source": "user", "id": str(preset.id)},
     )
@@ -56,7 +56,7 @@ async def test_submit_video_with_system_default_preset(
 ) -> None:
     repo = FakeRepo()
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
         preset={"source": "system", "id": "default"},
     )
@@ -77,7 +77,7 @@ async def test_submit_video_caller_params_override_preset(
          "prompts": [{"source": "system", "id": "summary"}]},
     )
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
         language="de",
         preset={"source": "user", "id": str(preset.id)},
@@ -91,7 +91,7 @@ async def test_submit_video_user_preset_not_found(
     repo = FakeRepo()
     with pytest.raises(HTTPException) as exc:
         await tools.submit_video(
-            url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+            url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
             artifacts_root=tmp_path,
             preset={"source": "user", "id": str(uuid.uuid4())},
         )
@@ -104,7 +104,7 @@ async def test_submit_video_unknown_system_preset(
     repo = FakeRepo()
     with pytest.raises(HTTPException) as exc:
         await tools.submit_video(
-            url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+            url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
             artifacts_root=tmp_path,
             preset={"source": "system", "id": "nope"},
         )
@@ -116,7 +116,7 @@ async def test_submit_video_no_preset_unchanged(
 ) -> None:
     repo = FakeRepo()
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
     )
     assert repo.last_options == {
@@ -142,7 +142,7 @@ async def test_submit_video_with_preset_diarize_survives_expansion(
         {"transcript": True, "diarize": True, "prompts": [{"source": "system", "id": "summary"}]},
     )
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
         preset={"source": "user", "id": str(preset.id)},
     )
@@ -159,7 +159,7 @@ async def test_submit_video_preset_drops_unknown_user_prompt(
         {"transcript": True, "prompts": [{"source": "user", "id": str(uuid.uuid4())}]},
     )
     await tools.submit_video(
-        url="https://x/y", user=fake_user, repo=repo, bus=fake_bus,
+        url="https://example.com/y", user=fake_user, repo=repo, bus=fake_bus,
         artifacts_root=tmp_path,
         preset={"source": "user", "id": str(preset.id)},
     )

@@ -35,6 +35,21 @@ _cfg.get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
+def _no_dns_in_source_url_validation(monkeypatch):
+    """Keep URL validation off the network during tests.
+
+    validate_source_url() resolves hostnames in production, because that is
+    what catches a public name pointed at a private address. Letting the suite
+    do real lookups would make it slow, flaky, and dependent on working DNS
+    (it would fail offline and in a sandboxed CI runner). The scheme,
+    literal-address and internal-name rules — which carry the security
+    behaviour under test — still run. Tests that specifically exercise
+    resolution call validate_source_url(..., resolve=True) themselves.
+    """
+    monkeypatch.setattr("vts.services.source_url._resolve", lambda host: [])
+
+
+@pytest.fixture(autouse=True)
 def _isolate_settings_per_test(monkeypatch):
     """Per-test: re-assert the yaml monkey-patch and clear the lru_cache
     before and after each test so monkeypatch.setenv changes are seen by

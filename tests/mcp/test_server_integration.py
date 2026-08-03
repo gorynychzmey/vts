@@ -35,7 +35,7 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
     task = FakeTask(
         id=uuid.uuid4(),
         user_id=uuid.UUID(user.id),
-        source_url="https://x/abc",
+        source_url="https://example.com/abc",
         source_title="Test video",
         status=TaskStatus.completed,
         created_at=datetime.now(tz=timezone.utc),
@@ -72,5 +72,5 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
     assert len(data.tasks) == 1
     summary = data.tasks[0]
     assert summary.title == "Test video"
-    assert summary.url == "https://x/abc"
+    assert summary.url == "https://example.com/abc"
     assert summary.status == "completed"
