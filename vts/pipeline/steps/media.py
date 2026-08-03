@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -8,6 +9,8 @@ from vts.db.repo import Repo
 from vts.services.downloader import download_video_and_audio
 from vts.services.media import (
     build_segments,
+    concat_to_audio_16k_mono,
+    concat_video_stream_copy,
     detect_silence_points,
     export_segments,
     extract_audio_16k_mono,
@@ -174,6 +177,53 @@ class ExtractAudioStep(Step):
             return True
         if output.exists():
             return True
+
+        log_path = st.dirs["logs"] / "task.log"
+        source_files = (st.task_options or {}).get("source_files") or []
+
+        if source_files:
+            # A multi-file set (vts-vm0). Parts are named audio.original.NNN.*
+            # where NNN is the concat order, so sorting by name IS the order.
+            parts = sorted(
+                p for p in st.dirs["media"].glob("audio.original.*")
+                if not p.name.endswith(".probe.json") and not p.name.endswith(".part")
+            )
+            if len(parts) != len(source_files):
+                raise RuntimeError(
+                    f"Expected {len(source_files)} uploaded parts, found {len(parts)}"
+                )
+
+            work = st.dirs["media"] / "concat_work"
+            durations = await asyncio.to_thread(
+                concat_to_audio_16k_mono, parts, output, log_path, work
+            )
+
+            # Record real boundaries now that the durations are known.
+            offset = 0.0
+            updated = []
+            for entry, duration in zip(source_files, durations):
+                item = dict(entry)
+                item["offset_sec"] = round(offset, 3)
+                item["duration_sec"] = round(duration, 3)
+                updated.append(item)
+                offset += duration
+            # JSON column: reassign, never mutate in place.
+            options = dict(st.task_options or {})
+            options["source_files"] = updated
+            st.task_options = options
+
+            if options.get("source_files_kind") == "video":
+                # The player resolves media via _find_media_file, which prefers
+                # video.mkv — without this a video set would play one part.
+                await asyncio.to_thread(
+                    concat_video_stream_copy, parts, st.dirs["media"] / "video.mkv", log_path, work
+                )
+
+            shutil.rmtree(work, ignore_errors=True)
+            st.logger.info("audio extraction finished (multi-file set, %d parts)", len(parts))
+            await ctx.persist_task_options(st.task_id, options)
+            return True
+
         audio_file = next(st.dirs["media"].glob("audio.original.*"), None)
         if not audio_file:
             raise RuntimeError("Missing downloaded audio file")
@@ -181,15 +231,9 @@ class ExtractAudioStep(Step):
             extract_audio_16k_mono,
             audio_file,
             output,
-            st.dirs["logs"] / "task.log",
+            log_path,
         )
         st.logger.info("audio extraction finished")
-        await ctx.bus.publish_event(
-            user_id=st.user_id,
-            task_id=str(st.task_id),
-            event="phase",
-            data={"phase": "extract_audio", "status": "done"},
-        )
         return True
 
 

@@ -214,3 +214,17 @@ class PipelineContext:
             options["detected_language_confidence"] = float(confidence)
             task.options = options
             await session.commit()
+
+    async def persist_task_options(self, task_id: uuid.UUID, options: dict) -> None:
+        """Write back options the pipeline computed (e.g. source_files offsets).
+
+        JSON column: the caller passes a fresh dict and this reassigns it —
+        mutating in place would not be seen by SQLAlchemy (vts-vm0).
+        """
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            task.options = dict(options)
+            await session.commit()
