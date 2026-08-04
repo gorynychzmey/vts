@@ -333,12 +333,23 @@
             <option value="url" data-i18n="filters.type_url">Link</option>
             <option value="file" data-i18n="filters.type_file">Upload</option>
           </select>
-          <input type="date" id="filter-from" class="filter-date"
-                 aria-label="Created from" data-i18n-aria-label="filters.from" />
-          <input type="date" id="filter-to" class="filter-date"
-                 aria-label="Created to" data-i18n-aria-label="filters.to" />
-          <button type="button" id="filter-clear" class="btn-text ghost hidden"
-                  data-i18n="filters.clear">Clear</button>
+          <span class="filter-range">
+            <input type="date" id="filter-from" class="filter-date"
+                   title="Created from" aria-label="Created from"
+                   data-i18n-title="filters.from" data-i18n-aria-label="filters.from" />
+            <span class="filter-range-dash" aria-hidden="true">—</span>
+            <input type="date" id="filter-to" class="filter-date"
+                   title="Created to" aria-label="Created to"
+                   data-i18n-title="filters.to" data-i18n-aria-label="filters.to" />
+          </span>
+          <button type="button" id="filter-clear" class="icon-btn ghost hidden"
+                  title="Clear filters" aria-label="Clear filters"
+                  data-i18n-title="filters.clear" data-i18n-aria-label="filters.clear">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12" />
+              <path d="M6 18L18 6" />
+            </svg>
+          </button>
         </div>
         <button id="new-tasks-banner" class="new-tasks-banner" type="button" hidden>
           <span data-i18n="tasks.new_above">New tasks ↑</span>

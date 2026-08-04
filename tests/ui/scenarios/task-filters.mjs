@@ -72,6 +72,48 @@ export async function run() {
     if (!(await isVisible(page, "#filter-clear"))) {
       failures.push("Clear should appear once a filter is set");
     }
+    // Clear is an ICON button: its label lives in the tooltip/aria-label, not
+    // in textContent — applyI18n sets textContent and would wipe the SVG.
+    const clearShape = await page.evaluate(() => {
+      const b = document.getElementById("filter-clear");
+      return {
+        svgs: b.querySelectorAll("svg").length,
+        // applyI18n moves `title` into the styled data-tooltip bubble and
+        // drops `title` — the native tooltip never shows on touch.
+        tooltip: b.getAttribute("data-tooltip") || b.getAttribute("title") || "",
+        text: (b.textContent || "").trim(),
+      };
+    });
+    if (clearShape.svgs !== 1) {
+      failures.push(`Clear must keep its icon, found ${clearShape.svgs} svg(s)`);
+    }
+    if (!clearShape.tooltip) {
+      failures.push("Clear needs a tooltip, since it has no visible label");
+    }
+    if (clearShape.text) {
+      failures.push(`Clear should carry no text label, got "${clearShape.text}"`);
+    }
+
+    // The date pair reads as a RANGE: a dash sits between the two inputs and
+    // the group wraps as one unit.
+    const rangeShape = await page.evaluate(() => {
+      const group = document.querySelector(".filter-range");
+      if (!group) return null;
+      return {
+        dates: group.querySelectorAll('input[type="date"]').length,
+        dash: (group.querySelector(".filter-range-dash")?.textContent || "").trim(),
+      };
+    });
+    if (!rangeShape) {
+      failures.push("no .filter-range group around the date inputs");
+    } else {
+      if (rangeShape.dates !== 2) {
+        failures.push(`expected 2 date inputs in the range group, got ${rangeShape.dates}`);
+      }
+      if (!rangeShape.dash) {
+        failures.push("the date range needs a visible separator, or it reads as two unrelated fields");
+      }
+    }
 
     // --- search is debounced, not one request per keystroke ----------------
     seen.length = 0;

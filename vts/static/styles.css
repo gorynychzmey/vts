@@ -2317,6 +2317,19 @@ dialog:not([open]) {
   font-size: 0.85rem;
 }
 
+/* The two date inputs and their dash wrap as ONE unit: splitting "from — to"
+   across a line break would lose the very cue that marks it as a range. */
+.task-filters .filter-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.task-filters .filter-range-dash {
+  opacity: 0.6;
+}
+
 .task-empty {
   margin: 0.5rem 0;
   font-size: 0.9rem;
