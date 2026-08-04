@@ -10,6 +10,7 @@ from vts.db.repo import Repo
 from vts.services.downloader import download_video_and_audio
 from vts.services.media import (
     build_segments,
+    concat_audio_stream_copy,
     concat_to_audio_16k_mono,
     concat_video_stream_copy,
     detect_silence_points,
@@ -251,9 +252,35 @@ class ExtractAudioStep(Step):
                     # never checked for matching sample rate/codec (unlike the
                     # video branch, which is safe to stream-copy because
                     # verify_probes enforces a matching audio_signature there).
-                    pending_combined = work / "pending.audio.combined.wav"
-                    shutil.copyfile(pending_audio, pending_combined)
-                    os.replace(pending_combined, st.dirs["media"] / "audio.combined.wav")
+                    # Prefer a stream copy of the originals: that is what the
+                    # user uploaded and what they should hear. Codec must match
+                    # (a mismatch silently yields a wrong-duration file, so
+                    # concat_audio_stream_copy checks it rather than trusting
+                    # ffmpeg's exit code). On any mismatch fall back to the
+                    # 16 kHz mono concat — a quality question for audio, never
+                    # a reason to reject the upload (vts-08q).
+                    suffix = parts[0].suffix.lower()
+                    pending_combined = work / f"pending.audio.combined{suffix}"
+                    try:
+                        await asyncio.to_thread(
+                            concat_audio_stream_copy,
+                            parts, pending_combined, log_path, work,
+                        )
+                        combined_name = f"audio.combined{suffix}"
+                    except ValueError as exc:
+                        # Same phrase as the video rejection in the API layer,
+                        # so both cases are greppable when we measure how often
+                        # mixed-format sets actually occur (vts-3ow).
+                        st.logger.warning(
+                            "upload set rejected as incompatible: kind=audio "
+                            "files=%d reason=%s (falling back to the 16 kHz "
+                            "mono concat, upload not rejected)",
+                            len(parts), exc,
+                        )
+                        pending_combined = work / "pending.audio.combined.wav"
+                        shutil.copyfile(pending_audio, pending_combined)
+                        combined_name = "audio.combined.wav"
+                    os.replace(pending_combined, st.dirs["media"] / combined_name)
 
                 # Persist before the final audio move: if this fails, the
                 # audio still doesn't exist at its final name, so a retry

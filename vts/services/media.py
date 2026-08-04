@@ -372,3 +372,54 @@ def concat_video_stream_copy(
          "-c", "copy", str(output)],
         log_path,
     )
+
+
+def concat_audio_stream_copy(
+    inputs: list[Path], output: Path, log_path: Path, work_dir: Path
+) -> None:
+    """Join audio parts without re-encoding, preserving the original quality.
+
+    The transcription pipeline needs 16 kHz mono, but that is not what the user
+    uploaded and not what they should have to listen to. When the parts share a
+    codec this joins them as-is, so the player serves the original encoding
+    (vts-08q).
+
+    Codec is the ONLY hard requirement, and it is checked here rather than by a
+    caller — unlike `concat_video_stream_copy`, whose compatibility gate runs at
+    finalize. Measured on real files:
+
+      - same codec, differing sample rate/channels: duration correct, pitch
+        shifts ~0.7% (an 880 Hz tone came back at 874 Hz) — inaudible, and far
+        better than dropping the whole set to 16 kHz mono.
+      - DIFFERENT codecs (opus + mp3): 1181 seconds of output for 4 seconds of
+        input, with NO ffmpeg error whatsoever.
+
+    That last case is why this raises on a codec mismatch instead of trusting
+    ffmpeg's exit code. Callers are expected to catch ValueError and fall back
+    to the normalised 16 kHz mono concat — a mismatch is a quality question for
+    audio, never a reason to reject the upload.
+    """
+    if not inputs:
+        raise RuntimeError("No input files to concatenate")
+
+    codecs = [(item, probe_media(item).audio_codec) for item in inputs]
+    first_name, first_codec = codecs[0]
+    for name, codec in codecs[1:]:
+        if codec != first_codec:
+            raise ValueError(
+                f"{name.name} is {codec}, but {first_name.name} is {first_codec}. "
+                "Audio parts must share a codec to be joined without re-encoding."
+            )
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if len(inputs) == 1:
+        shutil.copyfile(inputs[0], output)
+        return
+
+    list_path = work_dir / "concat_audio_copy.txt"
+    _write_concat_list(inputs, list_path)
+    run_ffmpeg(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+         "-c", "copy", str(output)],
+        log_path,
+    )

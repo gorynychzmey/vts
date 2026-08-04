@@ -148,6 +148,17 @@ stream-copied `video.mkv`, because the player resolves media through
 markers inside the transcript text, which would reach the LLM and surface as
 noise in the summary.
 
+An audio set is joined by stream copy when its parts share a codec, so the
+player serves the encoding the user uploaded rather than the 16 kHz mono the
+transcription pipeline needs. A codec mismatch falls back to that normalised
+concat instead of refusing the upload — for audio the mismatch costs only
+playback quality, since transcription normalises everything anyway. Codec is
+the only hard requirement: differing sample rate or channel count shifts pitch
+by ~0.7% (measured: an 880 Hz tone came back at 874 Hz), which is inaudible and
+better than dropping the whole set to 16 kHz. The check is on probed
+parameters, never on ffmpeg's exit code — stream-copying opus with mp3 yields
+1181 seconds of output for 4 seconds of input and reports no error at all.
+
 The alternative — a `files` table with per-file ASR — was rejected: it costs a
 schema migration and a DAG rework, and it is worse for the result, because
 diarizing each file separately cannot link the same speaker across files
