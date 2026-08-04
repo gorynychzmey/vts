@@ -6,10 +6,12 @@ that only checked the exit code would pass on a broken file (vts-vm0).
 """
 from __future__ import annotations
 
+import pytest
 import subprocess
 from pathlib import Path
 
 from vts.services.media import (
+    concat_audio_stream_copy,
     concat_to_audio_16k_mono,
     concat_video_stream_copy,
     probe_duration,
@@ -97,3 +99,87 @@ def test_audio_concat_respects_input_order(tmp_path):
     durations = concat_to_audio_16k_mono([long, short], out, tmp_path / "log.txt", tmp_path)
     assert abs(durations[0] - 3.0) < 0.2
     assert abs(durations[1] - 1.0) < 0.2
+
+
+def _audio_codec(path: Path) -> str:
+    return subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_audio_stream_copy_preserves_the_original_encoding(tmp_path):
+    """A set of same-codec parts joins without re-encoding (vts-08q).
+
+    Measured: opus 48k stereo parts of 1+2+3s stream-copy to 6.026s with the
+    codec, sample rate and channel count intact. That is the whole point —
+    the player should serve what the user uploaded, not the 16 kHz mono copy
+    the transcription pipeline needs.
+    """
+    inputs = []
+    for index, seconds in enumerate((1, 2), start=1):
+        path = tmp_path / f"p{index}.opus"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi",
+             "-i", f"sine=frequency={440 * index}:duration={seconds}:sample_rate=48000",
+             "-ac", "2", "-c:a", "libopus", "-b:a", "64k", str(path)],
+            capture_output=True, check=True,
+        )
+        inputs.append(path)
+
+    out = tmp_path / "combined.opus"
+    concat_audio_stream_copy(inputs, out, tmp_path / "log.txt", tmp_path)
+
+    assert out.exists()
+    # Duration, not the exit code: ffmpeg stays silent on a broken concat.
+    assert abs(probe_duration(out) - 3.0) < 0.2
+    assert _audio_codec(out) == "opus"
+
+
+def test_audio_stream_copy_rejects_mixed_codecs(tmp_path):
+    """Refuse rather than produce the silent catastrophe.
+
+    Measured: concatenating opus with mp3 by stream copy yields 1181 seconds
+    for 4 seconds of input, and ffmpeg reports NO error at all. So the guard
+    must be a parameter check, never a returncode check.
+    """
+    opus = tmp_path / "a.opus"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+         "-c:a", "libopus", str(opus)],
+        capture_output=True, check=True,
+    )
+    mp3 = tmp_path / "b.mp3"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=660:duration=2",
+         "-c:a", "libmp3lame", str(mp3)],
+        capture_output=True, check=True,
+    )
+
+    with pytest.raises(ValueError, match="b.mp3"):
+        concat_audio_stream_copy([opus, mp3], tmp_path / "out.opus",
+                                 tmp_path / "log.txt", tmp_path)
+
+
+def test_audio_stream_copy_allows_differing_sample_rate(tmp_path):
+    """Codec is the only hard requirement (vts-08q).
+
+    Differing sample rate/channels shifts pitch by ~0.7% (measured: an 880 Hz
+    tone came back at 874 Hz) — below the threshold of noticing, and far
+    better than falling back to 16 kHz mono for the whole set.
+    """
+    parts = []
+    for index, (rate, channels) in enumerate(((48000, 2), (44100, 1)), start=1):
+        path = tmp_path / f"r{index}.opus"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi",
+             "-i", f"sine=frequency=440:duration=2:sample_rate={rate}",
+             "-ac", str(channels), "-c:a", "libopus", str(path)],
+            capture_output=True, check=True,
+        )
+        parts.append(path)
+
+    out = tmp_path / "mixed.opus"
+    concat_audio_stream_copy(parts, out, tmp_path / "log.txt", tmp_path)
+    assert abs(probe_duration(out) - 4.0) < 0.2

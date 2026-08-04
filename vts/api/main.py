@@ -734,7 +734,10 @@ def _find_media_file(artifact_dir: str | None) -> Path | None:
     if not artifact_dir:
         return None
     media_dir = Path(artifact_dir) / "media"
-    for pattern in ("video.mkv", "audio.combined.wav", "audio.original.*"):
+    # audio.combined.* rather than a fixed .wav: a stream-copied set keeps the
+    # uploaded encoding, so the extension varies (vts-08q). It must still come
+    # after video.mkv and before the raw parts.
+    for pattern in ("video.mkv", "audio.combined.*", "audio.original.*"):
         matches = sorted(
             p for p in (media_dir.glob(pattern) if media_dir.exists() else [])
             # Skip our own probe sidecar (audio.original.*.probe.json), which
@@ -2713,6 +2716,24 @@ def create_app() -> FastAPI:
                 try:
                     verify_probes(meta["kind"], probes)
                 except UploadSetError as exc:
+                    # Log the rejection with the parameters that clashed, so we
+                    # can answer "how often do real users hit this?" before
+                    # deciding whether re-encoding (vts-3ow) is worth building.
+                    # Without this the only signal is a user complaint.
+                    logging.getLogger(__name__).warning(
+                        "upload set rejected as incompatible: kind=%s files=%d reason=%s parts=%s",
+                        meta["kind"],
+                        len(probes),
+                        exc,
+                        [
+                            {
+                                "name": name,
+                                "video": probe.video_signature() if probe.has_video else None,
+                                "audio": probe.audio_signature(),
+                            }
+                            for name, probe in probes
+                        ],
+                    )
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
 
                 entries = [

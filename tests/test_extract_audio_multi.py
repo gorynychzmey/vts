@@ -263,8 +263,6 @@ async def test_audio_partial_failure_leaves_no_combined_artefact(tmp_path, monke
     the step's own completion marker (audio_16k.wav) must not leave a stray
     combined file behind for a retry to trip over.
     """
-    import shutil as shutil_module
-
     import vts.pipeline.steps.media as media_module
     from vts.pipeline.steps.media import ExtractAudioStep
 
@@ -282,21 +280,18 @@ async def test_audio_partial_failure_leaves_no_combined_artefact(tmp_path, monke
     st = _State(dirs, options)
     ctx = _Ctx()
 
-    real_copyfile = shutil_module.copyfile
-    calls = {"n": 0}
+    # The combined artefact is now produced by concat_audio_stream_copy
+    # (vts-08q), so that is what has to fail here — patching shutil.copyfile
+    # would no longer be reached on the happy path.
+    def _boom(*a, **kw):
+        raise RuntimeError("simulated crash building the combined audio")
 
-    def _flaky_copyfile(src, dst, *a, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("simulated crash copying audio.combined.wav")
-        return real_copyfile(src, dst, *a, **kw)
-
-    monkeypatch.setattr(media_module.shutil, "copyfile", _flaky_copyfile)
+    monkeypatch.setattr(media_module, "concat_audio_stream_copy", _boom)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
         await ExtractAudioStep().run(ctx, st)
 
-    assert not (dirs["media"] / "audio.combined.wav").exists()
+    assert not list(dirs["media"].glob("audio.combined.*"))
     assert not (dirs["media"] / "audio_16k.wav").exists(), (
         "audio_16k.wav must not exist after a partial failure — its presence "
         "would make a retry's early-return guard declare the step done"
@@ -332,3 +327,88 @@ async def test_single_file_task_is_unaffected(tmp_path):
     ]
     assert phase_done_events, "single-file extract_audio must publish a phase/done event"
     assert phase_done_events[-1]["data"]["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_audio_set_falls_back_when_codecs_differ(tmp_path, monkeypatch):
+    """Mismatched codecs must degrade to 16 kHz mono, not reject the upload.
+
+    Video sets refuse an incompatible set; audio must not, because the
+    transcription pipeline normalises everything anyway — the only thing at
+    stake is playback quality (vts-08q).
+    """
+    import subprocess
+
+    import vts.pipeline.steps.media as media_module
+    from vts.pipeline.steps.media import ExtractAudioStep
+
+    dirs = ensure_task_dirs(tmp_path)
+    # Deliberately different codecs: opus + mp3. Stream-copying these produces
+    # a 1181-second file with no ffmpeg error, which is why the guard exists.
+    for name, codec, freq in (
+        ("audio.original.000.opus", "libopus", 440),
+        ("audio.original.001.mp3", "libmp3lame", 880),
+    ):
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi",
+             f"-i", f"sine=frequency={freq}:duration=2", "-c:a", codec,
+             str(dirs["media"] / name)],
+            capture_output=True, check=True,
+        )
+
+    options = {
+        "source_files_kind": "audio",
+        "source_files": [
+            {"name": "a.opus", "offset_sec": 0.0, "duration_sec": 2.0},
+            {"name": "b.mp3", "offset_sec": 0.0, "duration_sec": 2.0},
+        ],
+    }
+    st = _State(dirs, options)
+    await ExtractAudioStep().run(_Ctx(), st)
+
+    # The upload is NOT rejected: the step completes and produces the fallback.
+    combined = list(dirs["media"].glob("audio.combined.*"))
+    assert len(combined) == 1, combined
+    assert combined[0].name == "audio.combined.wav", (
+        "a codec mismatch must fall back to the normalised concat, not "
+        f"stream-copy into {combined[0].name}"
+    )
+    # And the duration is right — the broken 1181s concat must not have run.
+    assert abs(probe_duration(combined[0]) - 4.0) < 0.3
+
+
+@pytest.mark.asyncio
+async def test_audio_set_stream_copies_when_codecs_match(tmp_path):
+    """The point of the feature: same-codec parts keep their own encoding."""
+    import subprocess
+
+    from vts.pipeline.steps.media import ExtractAudioStep
+
+    dirs = ensure_task_dirs(tmp_path)
+    for index, (name, freq) in enumerate(
+        (("audio.original.000.opus", 440), ("audio.original.001.opus", 880))
+    ):
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi",
+             f"-i", f"sine=frequency={freq}:duration=2:sample_rate=48000",
+             "-ac", "2", "-c:a", "libopus", str(dirs["media"] / name)],
+            capture_output=True, check=True,
+        )
+
+    options = {
+        "source_files_kind": "audio",
+        "source_files": [
+            {"name": "a.opus", "offset_sec": 0.0, "duration_sec": 2.0},
+            {"name": "b.opus", "offset_sec": 0.0, "duration_sec": 2.0},
+        ],
+    }
+    st = _State(dirs, options)
+    await ExtractAudioStep().run(_Ctx(), st)
+
+    combined = list(dirs["media"].glob("audio.combined.*"))
+    assert len(combined) == 1, combined
+    assert combined[0].name == "audio.combined.opus", (
+        "matching codecs must be stream-copied, preserving the upload's "
+        f"encoding — got {combined[0].name}"
+    )
+    assert abs(probe_duration(combined[0]) - 4.0) < 0.3
