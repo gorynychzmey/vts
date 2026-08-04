@@ -61,6 +61,19 @@ header p {
   margin-left: auto;
 }
 
+/* The header sits on the page background (#f6f4ef), not on a card (#fffdf6),
+   and the default ghost fill (#efe9db) is only ~7 levels darker than it — the
+   buttons faded into the backdrop. Inside cards the same fill has enough
+   contrast, so darken the border/background only here (vts-nr4). */
+.header-version .icon-btn.ghost {
+  background: #e4dcc9;
+  border: 1px solid #cfc5ad;
+}
+
+.header-version .icon-btn.ghost:hover {
+  background: #d9cfb8;
+}
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--line);
@@ -182,9 +195,20 @@ input[type="file"] {
 
 .url-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0, 1fr), not 1fr: a `1fr` track floors at the item's min-content
+     width, and a file input's is its "Choose file / no file selected" chrome
+     (~298px), which is wider than a phone's form. That pushed the whole card
+     past the screen as soon as the File tab was picked (vts-nr4). */
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.55rem;
   align-items: stretch;
+}
+
+/* The native control still reports a large intrinsic width inside its track;
+   let it shrink to whatever the track gives it. */
+.url-row input[type="file"] {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .form-error {
@@ -1279,6 +1303,34 @@ input[type="file"] {
     flex: 1 1 0;
   }
 
+  /* The strip overshot the card by only a few px, so it scrolled just far
+     enough to slice the last button in half — the worst of both worlds. The
+     scroller holds the runtime label AND the button row, so both have to give:
+     spread the row across the full width and let the buttons shed a few px.
+     They then fit outright and the scroller sits idle (vts-nr4). */
+  .task-right-bottom {
+    gap: 0.3rem;
+  }
+
+  .task-right-bottom .task-actions-inline {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: space-between;
+    gap: 0.15rem;
+  }
+
+  .task-right-bottom .task-actions-inline .icon-btn {
+    flex: 0 1 auto;
+    min-width: 1.75rem;
+  }
+
+  /* The runtime clock only needs its digits; its 3rem floor was pushing the
+     buttons out of the row. */
+  .task-right-bottom .task-runtime {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
   .task-right-bottom::-webkit-scrollbar {
     display: none;
   }
@@ -1928,6 +1980,17 @@ dialog:not([open]) {
   min-width: 0;
   background: var(--bg-card, #fff);
   color: inherit;
+}
+
+/* These sit in the flex .task-title-row next to a long, greedy title. Flex
+   items default to shrinkable, so the pencil was squeezed from its 2.25rem
+   square down to ~16px and read as a squashed, foreign-looking control
+   (vts-nr4). Pin them at their icon-button size. */
+.task-edit-name-btn,
+.task-name-ok-btn,
+.task-name-cancel-btn,
+.task-player-btn {
+  flex: 0 0 auto;
 }
 
 .task-edit-name-btn svg,

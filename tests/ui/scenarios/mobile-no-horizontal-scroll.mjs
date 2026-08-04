@@ -113,6 +113,39 @@ export async function run() {
         if (r.escapes.length) {
           failures.push(`[${locale}@${width}] elements past the viewport edge: ${r.escapes.join(", ")}`);
         }
+
+        // Switching to the File tab swaps the URL input for a native file
+        // input, whose min-content width is its "Choose file / no file chosen"
+        // chrome (~298px) — wider than a phone form. A `1fr` grid track floors
+        // at that, so the card burst its bounds the moment File was picked.
+        // The radio itself is display:none (styled through its label).
+        await page.click("label:has(#source-type-file)");
+        await page.waitForTimeout(300);
+        const f = await page.evaluate((vw) => {
+          const de = document.scrollingElement || document.documentElement;
+          const before = de.scrollLeft;
+          de.scrollLeft = 9999;
+          const maxScrollLeft = de.scrollLeft;
+          de.scrollLeft = before;
+          const form = document.getElementById("task-form");
+          const row = document.querySelector(".url-row");
+          return {
+            maxScrollLeft,
+            formOverflow: form ? form.scrollWidth - form.clientWidth : 0,
+            rowRight: row ? Math.round(row.getBoundingClientRect().right) : 0,
+            vw,
+          };
+        }, width);
+        if (f.maxScrollLeft !== 0) {
+          failures.push(`[${locale}@${width}] FILE mode: page scrolls horizontally by ${f.maxScrollLeft}px`);
+        }
+        if (f.formOverflow > 0) {
+          failures.push(`[${locale}@${width}] FILE mode: #task-form content overflows by ${f.formOverflow}px`);
+        }
+        if (f.rowRight > f.vw + 0.5) {
+          failures.push(`[${locale}@${width}] FILE mode: .url-row right edge ${f.rowRight} past viewport ${f.vw}`);
+        }
+
         await page.close();
       }
       await context.close();
