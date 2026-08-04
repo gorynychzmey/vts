@@ -47,6 +47,9 @@ class OkAdapter:
     def secret_keys(self) -> list[str]:
         return []
 
+    def connection_fields(self) -> list[str]:
+        return []
+
     async def deliver(self, payload, target):
         return DeliveryResult(external_id="doc9", external_url="http://o/doc9")
 
@@ -58,6 +61,9 @@ class BoomAdapter:
         return {}
 
     def secret_keys(self) -> list[str]:
+        return []
+
+    def connection_fields(self) -> list[str]:
         return []
 
     async def deliver(self, payload, target):

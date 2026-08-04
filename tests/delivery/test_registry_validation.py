@@ -23,6 +23,7 @@ class _Base:
 
     def config_schema(self): return {"type": "object"}
     def secret_keys(self): return ["token"]
+    def connection_fields(self): return ["base_url"]
     async def deliver(self, payload, target): return DeliveryResult()
 
 
@@ -98,6 +99,7 @@ def test_missing_contract_version_is_rejected(monkeypatch):
 
         def config_schema(self): return {}
         def secret_keys(self): return []
+        def connection_fields(self): return []
         async def deliver(self, payload, target): return DeliveryResult()
 
     ok, bad = _discover(monkeypatch, fake=NoVersion)

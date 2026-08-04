@@ -54,6 +54,8 @@ class FakeDeliveryTarget:
     adapter: str
     config_json: dict[str, Any]
     secrets_enc: bytes | None = None
+    # Set on targets (points at a credential); unused on credentials themselves.
+    credential_id: uuid.UUID | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
@@ -68,6 +70,7 @@ class FakeRepo:
         self.default_presets: dict[uuid.UUID, dict | None] = {}
         self.last_options: dict[str, Any] | None = None
         self.delivery_targets: dict[uuid.UUID, Any] = {}
+        self.delivery_credentials: dict[uuid.UUID, Any] = {}
 
     async def create_task(
         self,
@@ -90,13 +93,68 @@ class FakeRepo:
 
     # ---- DeliveryTarget CRUD (mirrors vts.db.repo.Repo delivery methods) ----
 
-    async def create_delivery_target(
+    async def create_delivery_credential(
         self, user_id: uuid.UUID, *, name: str, adapter: str,
         config: dict, secrets_enc: bytes | None,
     ) -> "FakeDeliveryTarget":
-        target = FakeDeliveryTarget(
+        credential = FakeDeliveryTarget(
             id=uuid.uuid4(), user_id=user_id, name=name, adapter=adapter,
             config_json=config, secrets_enc=secrets_enc,
+        )
+        self.delivery_credentials[credential.id] = credential
+        return credential
+
+    async def list_delivery_credentials(self, user_id: uuid.UUID) -> list["FakeDeliveryTarget"]:
+        return [c for c in self.delivery_credentials.values() if c.user_id == user_id]
+
+    async def get_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> "FakeDeliveryTarget | None":
+        c = self.delivery_credentials.get(credential_id)
+        return c if c is not None and c.user_id == user_id else None
+
+    async def count_targets_for_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> int:
+        return sum(
+            1 for t in self.delivery_targets.values()
+            if t.user_id == user_id and getattr(t, "credential_id", None) == credential_id
+        )
+
+    async def update_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> "FakeDeliveryTarget | None":
+        c = await self.get_delivery_credential(user_id, credential_id)
+        if c is None:
+            return None
+        if name is not None:
+            c.name = name
+        if config is not None:
+            c.config_json = config
+        if clear_secrets:
+            c.secrets_enc = None
+        elif secrets_enc is not None:
+            c.secrets_enc = secrets_enc
+        return c
+
+    async def delete_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> bool:
+        c = await self.get_delivery_credential(user_id, credential_id)
+        if c is None:
+            return False
+        del self.delivery_credentials[credential_id]
+        return True
+
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        credential_id: uuid.UUID, config: dict,
+    ) -> "FakeDeliveryTarget":
+        target = FakeDeliveryTarget(
+            id=uuid.uuid4(), user_id=user_id, name=name, adapter=adapter,
+            config_json=config, credential_id=credential_id,
         )
         self.delivery_targets[target.id] = target
         return target
@@ -121,7 +179,7 @@ class FakeRepo:
     async def update_delivery_target(
         self, user_id: uuid.UUID, target_id: uuid.UUID, *,
         name: str | None, config: dict | None,
-        secrets_enc: bytes | None, clear_secrets: bool,
+        credential_id: uuid.UUID | None = None,
     ) -> "FakeDeliveryTarget | None":
         t = await self.get_delivery_target(user_id, target_id)
         if t is None:
@@ -130,10 +188,8 @@ class FakeRepo:
             t.name = name
         if config is not None:
             t.config_json = config
-        if clear_secrets:
-            t.secrets_enc = None
-        elif secrets_enc is not None:
-            t.secrets_enc = secrets_enc
+        if credential_id is not None:
+            t.credential_id = credential_id
         return t
 
     async def delete_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> bool:

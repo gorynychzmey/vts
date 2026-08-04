@@ -59,12 +59,15 @@ async def test_enqueue_creates_attempt_per_target(session):
     u = User(id=uuid.uuid4(), username=f"u-{uuid.uuid4().hex[:8]}")
     session.add(u)
     await session.flush()
-    await repo.create_delivery_target(
-        u.id, name="out", adapter="fake",
-        config={"default_variant": "summary"}, secrets_enc=None)
+    cred = await repo.create_delivery_credential(
+        u.id, name="conn", adapter="fake", config={}, secrets_enc=None)
+    target = await repo.create_delivery_target(
+        u.id, name="out", adapter="fake", credential_id=cred.id,
+        config={"default_variant": "summary"})
     t = Task(
         id=uuid.uuid4(), user_id=u.id, source_url="http://x",
-        options={"delivery": [{"deliver_to": "out"}]},
+        # deliver_to carries the target's ID, not its name (vts-929).
+        options={"delivery": [{"deliver_to": str(target.id)}]},
         artifact_dir="/tmp/x", status=TaskStatus.completed)
     session.add(t)
     await session.flush()

@@ -13,6 +13,7 @@ from vts.db.models import (
     ApiToken,
     AsrSegment,
     DeliveryAttempt,
+    DeliveryCredential,
     DeliveryStatus,
     DeliveryTarget,
     MatchDecision,
@@ -668,13 +669,89 @@ class Repo:
     # DeliveryTarget CRUD
     # ------------------------------------------------------------------
 
-    async def create_delivery_target(
+    async def create_delivery_credential(
         self, user_id: uuid.UUID, *, name: str, adapter: str,
         config: dict, secrets_enc: bytes | None,
+    ) -> DeliveryCredential:
+        credential = DeliveryCredential(
+            user_id=user_id, name=name, adapter=adapter,
+            config_json=config, secrets_enc=secrets_enc)
+        self.session.add(credential)
+        await self.session.flush()
+        return credential
+
+    async def list_delivery_credentials(self, user_id: uuid.UUID) -> list[DeliveryCredential]:
+        stmt = (select(DeliveryCredential)
+                .where(DeliveryCredential.user_id == user_id)
+                .order_by(DeliveryCredential.created_at.desc()))
+        return list(await self.session.scalars(stmt))
+
+    async def get_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> DeliveryCredential | None:
+        return await self.session.scalar(
+            select(DeliveryCredential).where(
+                DeliveryCredential.id == credential_id,
+                DeliveryCredential.user_id == user_id))
+
+    async def get_delivery_credential_by_name(
+        self, user_id: uuid.UUID, name: str
+    ) -> DeliveryCredential | None:
+        return await self.session.scalar(
+            select(DeliveryCredential).where(
+                DeliveryCredential.user_id == user_id,
+                DeliveryCredential.name == name))
+
+    async def count_targets_for_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> int:
+        """How many targets hang off this credential.
+
+        Surfaced to callers so deleting a credential in use can be refused
+        with a count instead of an opaque foreign-key error.
+        """
+        stmt = (select(func.count())
+                .select_from(DeliveryTarget)
+                .where(DeliveryTarget.user_id == user_id,
+                       DeliveryTarget.credential_id == credential_id))
+        return int(await self.session.scalar(stmt) or 0)
+
+    async def update_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> DeliveryCredential | None:
+        credential = await self.get_delivery_credential(user_id, credential_id)
+        if credential is None:
+            return None
+        if name is not None:
+            credential.name = name
+        if config is not None:
+            credential.config_json = config
+        if clear_secrets:
+            credential.secrets_enc = None
+        elif secrets_enc is not None:
+            credential.secrets_enc = secrets_enc
+        await self.session.flush()
+        return credential
+
+    async def delete_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> bool:
+        credential = await self.get_delivery_credential(user_id, credential_id)
+        if credential is None:
+            return False
+        await self.session.delete(credential)
+        await self.session.flush()
+        return True
+
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        credential_id: uuid.UUID, config: dict,
     ) -> DeliveryTarget:
         target = DeliveryTarget(
             user_id=user_id, name=name, adapter=adapter,
-            config_json=config, secrets_enc=secrets_enc)
+            credential_id=credential_id, config_json=config)
         self.session.add(target)
         await self.session.flush()
         return target
@@ -698,7 +775,7 @@ class Repo:
     async def update_delivery_target(
         self, user_id: uuid.UUID, target_id: uuid.UUID, *,
         name: str | None, config: dict | None,
-        secrets_enc: bytes | None, clear_secrets: bool,
+        credential_id: uuid.UUID | None = None,
     ) -> DeliveryTarget | None:
         target = await self.get_delivery_target(user_id, target_id)
         if target is None:
@@ -707,10 +784,8 @@ class Repo:
             target.name = name
         if config is not None:
             target.config_json = config
-        if clear_secrets:
-            target.secrets_enc = None
-        elif secrets_enc is not None:
-            target.secrets_enc = secrets_enc
+        if credential_id is not None:
+            target.credential_id = credential_id
         await self.session.flush()
         return target
 

@@ -43,6 +43,9 @@ from vts.api.schemas import (
     BatchResultOut,
     DeliveryOut,
     DeliveryRetryRequest,
+    DeliveryCredentialCreate,
+    DeliveryCredentialOut,
+    DeliveryCredentialUpdate,
     DeliveryTargetCreate,
     DeliveryTargetOut,
     DeliveryTargetUpdate,
@@ -2112,29 +2115,181 @@ def create_app() -> FastAPI:
         rows = await repo.list_delivery_targets(uuid.UUID(user.id))
         return [_delivery_target_out(row) for row in rows]
 
+    def _adapter_or_400(name: str):
+        from vts.delivery.registry import UnknownAdapter, get_adapter
+
+        try:
+            return get_adapter(name)
+        except UnknownAdapter as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown delivery adapter: {name}"
+            ) from exc
+
+    async def _credential_for_target_or_400(repo, user_id: uuid.UUID, credential_id: str, adapter: str):
+        """Resolve and sanity-check the credential a target hangs off.
+
+        Validated here rather than left to the foreign key so the caller gets a
+        reason: a missing credential and one belonging to a different adapter
+        are different mistakes, and neither should surface as an IntegrityError.
+        """
+        try:
+            cred_uuid = uuid.UUID(str(credential_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="credential_id must be a UUID"
+            ) from exc
+        credential = await repo.get_delivery_credential(user_id, cred_uuid)
+        if credential is None:
+            raise HTTPException(status_code=404, detail="Delivery credential not found")
+        if credential.adapter != adapter:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"credential is for adapter {credential.adapter!r}, "
+                    f"but the target uses {adapter!r}"
+                ),
+            )
+        return credential
+
+    def _validate_merged_or_422(adapter, credential, config: dict) -> None:
+        """Validate the MERGED config against the adapter's schema.
+
+        The merge is what the adapter will actually receive; validating a
+        target's own half would reject every valid target, since required
+        connection fields such as `base_url` live on the credential.
+        """
+        from vts.services.delivery_config import DeliveryConfigInvalid, validate_config
+
+        merged = dict((credential.config_json or {}) if credential else {})
+        merged.update(config or {})
+        try:
+            validate_config(adapter, merged)
+        except DeliveryConfigInvalid as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/delivery-credentials", response_model=list[DeliveryCredentialOut])
+    async def list_delivery_credentials_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> list[DeliveryCredentialOut]:
+        from vts.services.delivery_submit import delivery_credential_view
+
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        rows = await repo.list_delivery_credentials(uid)
+        out = []
+        for row in rows:
+            used_by = await repo.count_targets_for_credential(uid, row.id)
+            out.append(DeliveryCredentialOut(
+                **delivery_credential_view(row, settings, used_by=used_by)
+            ))
+        return out
+
+    @app.post("/api/delivery-credentials", response_model=DeliveryCredentialOut)
+    async def create_delivery_credential_endpoint(
+        payload: DeliveryCredentialCreate,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryCredentialOut:
+        from vts.services.delivery_submit import delivery_credential_view
+
+        _adapter_or_400(payload.adapter)
+        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
+        repo = Repo(session)
+        row = await repo.create_delivery_credential(
+            uuid.UUID(user.id),
+            name=payload.name.strip(),
+            adapter=payload.adapter,
+            config=payload.config,
+            secrets_enc=secrets_enc,
+        )
+        await session.commit()
+        return DeliveryCredentialOut(**delivery_credential_view(row, settings))
+
+    @app.get("/api/delivery-credentials/{credential_id}", response_model=DeliveryCredentialOut)
+    async def get_delivery_credential_endpoint(
+        credential_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryCredentialOut:
+        from vts.services.delivery_submit import delivery_credential_view
+
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        row = await repo.get_delivery_credential(uid, credential_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Delivery credential not found")
+        used_by = await repo.count_targets_for_credential(uid, row.id)
+        return DeliveryCredentialOut(
+            **delivery_credential_view(row, settings, used_by=used_by)
+        )
+
+    @app.put("/api/delivery-credentials/{credential_id}", response_model=DeliveryCredentialOut)
+    async def update_delivery_credential_endpoint(
+        credential_id: uuid.UUID,
+        payload: DeliveryCredentialUpdate,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryCredentialOut:
+        from vts.services.delivery_submit import delivery_credential_view
+
+        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        row = await repo.update_delivery_credential(
+            uid, credential_id,
+            name=payload.name, config=payload.config,
+            secrets_enc=secrets_enc, clear_secrets=payload.clear_secrets,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Delivery credential not found")
+        await session.commit()
+        used_by = await repo.count_targets_for_credential(uid, row.id)
+        return DeliveryCredentialOut(
+            **delivery_credential_view(row, settings, used_by=used_by)
+        )
+
+    @app.delete("/api/delivery-credentials/{credential_id}", status_code=204)
+    async def delete_delivery_credential_endpoint(
+        credential_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> Response:
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        if await repo.get_delivery_credential(uid, credential_id) is None:
+            raise HTTPException(status_code=404, detail="Delivery credential not found")
+        # Checked before deleting so the caller gets a count instead of the
+        # RESTRICT foreign key firing as a 500.
+        used_by = await repo.count_targets_for_credential(uid, credential_id)
+        if used_by:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Credential is used by {used_by} delivery target(s)",
+            )
+        await repo.delete_delivery_credential(uid, credential_id)
+        await session.commit()
+        return Response(status_code=204)
+
     @app.post("/api/delivery-targets", response_model=DeliveryTargetOut)
     async def create_delivery_target_endpoint(
         payload: DeliveryTargetCreate,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> DeliveryTargetOut:
-        from vts.delivery.registry import UnknownAdapter, get_adapter
-
-        try:
-            get_adapter(payload.adapter)
-        except UnknownAdapter as exc:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown delivery adapter: {payload.adapter}"
-            ) from exc
-
-        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
+        adapter = _adapter_or_400(payload.adapter)
         repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        credential = await _credential_for_target_or_400(
+            repo, uid, payload.credential_id, payload.adapter
+        )
+        _validate_merged_or_422(adapter, credential, payload.config)
         row = await repo.create_delivery_target(
-            uuid.UUID(user.id),
+            uid,
             name=payload.name.strip(),
             adapter=payload.adapter,
+            credential_id=credential.id,
             config=payload.config,
-            secrets_enc=secrets_enc,
         )
         await session.commit()
         return _delivery_target_out(row)
@@ -2158,15 +2313,31 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
     ) -> DeliveryTargetOut:
-        secrets_enc = _encrypt_secrets_or_400(payload.secrets) if payload.secrets else None
         repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        existing = await repo.get_delivery_target(uid, target_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Delivery target not found")
+
+        adapter = _adapter_or_400(existing.adapter)
+        credential = await _credential_for_target_or_400(
+            repo, uid,
+            payload.credential_id or existing.credential_id,
+            existing.adapter,
+        )
+        # Validate against what the target WILL be, not what it was: an update
+        # that only moves the target to another credential still has to produce
+        # a config the adapter accepts.
+        _validate_merged_or_422(
+            adapter, credential,
+            payload.config if payload.config is not None else existing.config_json,
+        )
+
         row = await repo.update_delivery_target(
-            uuid.UUID(user.id),
-            target_id,
+            uid, target_id,
             name=payload.name,
             config=payload.config,
-            secrets_enc=secrets_enc,
-            clear_secrets=payload.clear_secrets,
+            credential_id=credential.id,
         )
         if row is None:
             raise HTTPException(status_code=404, detail="Delivery target not found")

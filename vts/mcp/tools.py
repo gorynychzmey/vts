@@ -13,6 +13,7 @@ from vts.db.models import TaskStatus
 from vts.mcp.cursor import decode_cursor, encode_cursor
 from vts.mcp.schemas import (
     DeliveryStatusInfo,
+    DeliveryCredentialInfo,
     DeliveryTargetInfo,
     PresetInfo,
     ProgressCounts,
@@ -390,52 +391,197 @@ async def get_prompt_result(
 
 
 class _RepoDeliveryLike(Protocol):
-    async def create_delivery_target(
+    async def create_delivery_credential(
         self, user_id: uuid.UUID, *, name: str, adapter: str,
         config: dict, secrets_enc: bytes | None,
     ) -> Any: ...
+    async def list_delivery_credentials(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def get_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> Any | None: ...
+    async def count_targets_for_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> int: ...
+    async def update_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID, *,
+        name: str | None, config: dict | None,
+        secrets_enc: bytes | None, clear_secrets: bool,
+    ) -> Any | None: ...
+    async def delete_delivery_credential(
+        self, user_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> bool: ...
+    async def create_delivery_target(
+        self, user_id: uuid.UUID, *, name: str, adapter: str,
+        credential_id: uuid.UUID, config: dict,
+    ) -> Any: ...
     async def list_delivery_targets(self, user_id: uuid.UUID) -> list[Any]: ...
-    async def get_delivery_target_by_name(self, user_id: uuid.UUID, name: str) -> Any | None: ...
+    async def get_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> Any | None: ...
     async def update_delivery_target(
         self, user_id: uuid.UUID, target_id: uuid.UUID, *,
         name: str | None, config: dict | None,
-        secrets_enc: bytes | None, clear_secrets: bool,
+        credential_id: uuid.UUID | None,
     ) -> Any | None: ...
     async def delete_delivery_target(self, user_id: uuid.UUID, target_id: uuid.UUID) -> bool: ...
 
 
-async def create_delivery_target(
-    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
-    name: str, adapter: str, config: dict | None = None,
-    secrets: dict[str, str] | None = None,
-) -> DeliveryTargetInfo:
-    """Create a delivery target. Secrets are encrypted at rest and never returned."""
+def _encrypt_or_400(secrets: dict[str, str], settings: Any) -> bytes:
     from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
-    from vts.delivery.registry import UnknownAdapter, get_adapter
-    from vts.services.delivery_submit import delivery_target_view
 
-    if not name or not name.strip():
-        raise HTTPException(status_code=422, detail="name is required")
     try:
-        get_adapter(adapter)
+        return encrypt_secrets(secrets, load_secrets_key(settings))
+    except SecretsKeyMissing as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
+        ) from exc
+
+
+def _adapter_or_400(adapter: str):
+    from vts.delivery.registry import UnknownAdapter, get_adapter
+
+    try:
+        return get_adapter(adapter)
     except UnknownAdapter as exc:
         raise HTTPException(
             status_code=400, detail=f"Unknown delivery adapter: {adapter}"
         ) from exc
 
-    secrets_enc = None
-    if secrets:
-        try:
-            secrets_enc = encrypt_secrets(secrets, load_secrets_key(settings))
-        except SecretsKeyMissing as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
-            ) from exc
 
-    row = await repo.create_delivery_target(
+def _uuid_or_422(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field} must be a UUID") from exc
+
+
+async def create_delivery_credential(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
+    name: str, adapter: str, config: dict | None = None,
+    secrets: dict[str, str] | None = None,
+) -> DeliveryCredentialInfo:
+    """Create a connection. Secrets are encrypted at rest and never returned."""
+    from vts.services.delivery_submit import delivery_credential_view
+
+    if not name or not name.strip():
+        raise HTTPException(status_code=422, detail="name is required")
+    _adapter_or_400(adapter)
+    secrets_enc = _encrypt_or_400(secrets, settings) if secrets else None
+    row = await repo.create_delivery_credential(
         uuid.UUID(user.id), name=name.strip(), adapter=adapter,
         config=config or {}, secrets_enc=secrets_enc,
+    )
+    return DeliveryCredentialInfo(**delivery_credential_view(row, settings))
+
+
+async def list_delivery_credentials(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any
+) -> list[DeliveryCredentialInfo]:
+    """List the caller's connections. Secret values are never included."""
+    from vts.services.delivery_submit import delivery_credential_view
+
+    uid = uuid.UUID(user.id)
+    rows = await repo.list_delivery_credentials(uid)
+    out = []
+    for row in rows:
+        used_by = await repo.count_targets_for_credential(uid, row.id)
+        out.append(DeliveryCredentialInfo(
+            **delivery_credential_view(row, settings, used_by=used_by)
+        ))
+    return out
+
+
+async def update_delivery_credential(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
+    credential_id: str, name: str | None = None, config: dict | None = None,
+    secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+) -> DeliveryCredentialInfo:
+    """Update a connection. Omitting `secrets` keeps the stored ones."""
+    from vts.services.delivery_submit import delivery_credential_view
+
+    secrets_enc = _encrypt_or_400(secrets, settings) if secrets else None
+    uid = uuid.UUID(user.id)
+    cid = _uuid_or_422(credential_id, "credential_id")
+    row = await repo.update_delivery_credential(
+        uid, cid, name=name, config=config,
+        secrets_enc=secrets_enc, clear_secrets=clear_secrets,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Delivery credential not found")
+    used_by = await repo.count_targets_for_credential(uid, row.id)
+    return DeliveryCredentialInfo(
+        **delivery_credential_view(row, settings, used_by=used_by)
+    )
+
+
+async def delete_delivery_credential(
+    *, user: _UserLike, repo: _RepoDeliveryLike, credential_id: str
+) -> dict[str, Any]:
+    """Delete a connection, unless targets still reference it."""
+    uid = uuid.UUID(user.id)
+    cid = _uuid_or_422(credential_id, "credential_id")
+    if await repo.get_delivery_credential(uid, cid) is None:
+        raise HTTPException(status_code=404, detail="Delivery credential not found")
+    used_by = await repo.count_targets_for_credential(uid, cid)
+    if used_by:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Credential is used by {used_by} delivery target(s)",
+        )
+    await repo.delete_delivery_credential(uid, cid)
+    return {"deleted": True, "id": str(cid)}
+
+
+async def _resolve_credential_or_error(
+    repo: _RepoDeliveryLike, uid: uuid.UUID, credential_id: str, adapter: str
+) -> Any:
+    """Resolve a target's credential, rejecting a missing or mismatched one.
+
+    Checked here rather than left to the foreign key so the agent is told what
+    is wrong instead of receiving an integrity error.
+    """
+    cid = _uuid_or_422(credential_id, "credential_id")
+    credential = await repo.get_delivery_credential(uid, cid)
+    if credential is None:
+        raise HTTPException(status_code=404, detail="Delivery credential not found")
+    if credential.adapter != adapter:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"credential is for adapter {credential.adapter!r}, "
+                f"but the target uses {adapter!r}"
+            ),
+        )
+    return credential
+
+
+def _validate_merged_or_422(adapter: Any, credential: Any, config: dict | None) -> None:
+    from vts.services.delivery_config import DeliveryConfigInvalid, validate_config
+
+    merged = dict((credential.config_json or {}) if credential else {})
+    merged.update(config or {})
+    try:
+        validate_config(adapter, merged)
+    except DeliveryConfigInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def create_delivery_target(
+    *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
+    name: str, adapter: str, credential_id: str, config: dict | None = None,
+) -> DeliveryTargetInfo:
+    """Create a delivery target hanging off an existing connection."""
+    from vts.services.delivery_submit import delivery_target_view
+
+    if not name or not name.strip():
+        raise HTTPException(status_code=422, detail="name is required")
+    adapter_obj = _adapter_or_400(adapter)
+    uid = uuid.UUID(user.id)
+    credential = await _resolve_credential_or_error(repo, uid, credential_id, adapter)
+    _validate_merged_or_422(adapter_obj, credential, config)
+
+    row = await repo.create_delivery_target(
+        uid, name=name.strip(), adapter=adapter,
+        credential_id=credential.id, config=config or {},
     )
     return DeliveryTargetInfo(**delivery_target_view(row, settings))
 
@@ -443,7 +589,7 @@ async def create_delivery_target(
 async def list_delivery_targets(
     *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any
 ) -> list[DeliveryTargetInfo]:
-    """List the caller's delivery targets. Secret values are never included."""
+    """List the caller's delivery targets."""
     from vts.services.delivery_submit import delivery_target_view
 
     rows = await repo.list_delivery_targets(uuid.UUID(user.id))
@@ -453,29 +599,30 @@ async def list_delivery_targets(
 async def update_delivery_target(
     *, user: _UserLike, repo: _RepoDeliveryLike, settings: Any,
     target_id: str, name: str | None = None, config: dict | None = None,
-    secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+    credential_id: str | None = None,
 ) -> DeliveryTargetInfo:
-    """Update a delivery target. Omitting `secrets` keeps the stored ones."""
-    from vts.core.secrets import SecretsKeyMissing, encrypt_secrets, load_secrets_key
+    """Update a delivery target."""
     from vts.services.delivery_submit import delivery_target_view
 
-    secrets_enc = None
-    if secrets:
-        try:
-            secrets_enc = encrypt_secrets(secrets, load_secrets_key(settings))
-        except SecretsKeyMissing as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="VTS_SECRETS_KEY is not configured; cannot store delivery secrets",
-            ) from exc
-    try:
-        tid = uuid.UUID(target_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="target_id must be a UUID") from exc
+    uid = uuid.UUID(user.id)
+    tid = _uuid_or_422(target_id, "target_id")
+    existing = await repo.get_delivery_target(uid, tid)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Delivery target not found")
+
+    adapter_obj = _adapter_or_400(existing.adapter)
+    credential = await _resolve_credential_or_error(
+        repo, uid, str(credential_id or existing.credential_id), existing.adapter
+    )
+    # Validate what the target WILL be: moving it to another credential must
+    # still leave the adapter with a config it accepts.
+    _validate_merged_or_422(
+        adapter_obj, credential,
+        config if config is not None else existing.config_json,
+    )
 
     row = await repo.update_delivery_target(
-        uuid.UUID(user.id), tid, name=name, config=config,
-        secrets_enc=secrets_enc, clear_secrets=clear_secrets,
+        uid, tid, name=name, config=config, credential_id=credential.id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Delivery target not found")

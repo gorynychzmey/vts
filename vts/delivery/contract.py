@@ -18,7 +18,13 @@ from typing import Any, Protocol, runtime_checkable
 #: check in the registry becomes a lie.
 #: On a MAJOR bump, plugin CODE must be reviewed, not merely rebuilt — a
 #: breaking change can affect adapter logic, not just signatures.
-CONTRACT_VERSION = (1, 0)
+#: 1.1 added connection_fields() (vts-929). Made a REQUIRED Protocol member
+#: rather than an optional getattr, by explicit decision: no plugins exist
+#: yet — in-tree vts-outline is the only adapter — so nothing can be broken
+#: by requiring it, and an optional member would leave the core guessing at
+#: the connection/parameter split forever. Once third-party plugins exist,
+#: the add-only rule above applies again in full.
+CONTRACT_VERSION = (1, 1)
 
 
 class DeliveryError(Exception):
@@ -72,6 +78,26 @@ class DeliveryAdapter(Protocol):
 
     def config_schema(self) -> dict: ...
     def secret_keys(self) -> list[str]: ...
+
+    def connection_fields(self) -> list[str]:
+        """Names of the fields (config AND secret) that identify a CONNECTION.
+
+        Everything else this adapter declares is a per-destination parameter.
+        The core stores connection fields once, in a shared credential, and
+        keeps parameters on each target, so two destinations on the same
+        server do not duplicate the endpoint or its token (vts-929).
+
+        The split is declared HERE, by the adapter, and never inferred by the
+        core: "a credential is a URL plus a token" happens to fit Outline, but
+        delivery to a local folder has no connection at all, S3 splits as
+        keys+region+bucket, and email as SMTP host+login vs recipients.
+        Hard-coding any one of those shapes into the core would freeze it
+        around today's single plugin.
+
+        Return an empty list if this adapter needs no connection; the core
+        then requires no credential for its targets.
+        """
+        ...
     async def deliver(
         self, payload: DeliveryPayload, target: DeliveryTargetConfig
     ) -> DeliveryResult: ...

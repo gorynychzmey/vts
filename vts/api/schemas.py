@@ -111,18 +111,57 @@ class DeliveryRetryRequest(BaseModel):
     target_id: UUID | None = None
 
 
-class DeliveryTargetCreate(BaseModel):
+class DeliveryCredentialCreate(BaseModel):
+    """One connection to an external system: endpoint plus secrets (vts-929)."""
+
     name: str = Field(min_length=1, max_length=255)
     adapter: str = Field(min_length=1, max_length=64)
     config: dict = Field(default_factory=dict)
     secrets: dict[str, str] | None = None
 
 
-class DeliveryTargetUpdate(BaseModel):
+class DeliveryCredentialUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     config: dict | None = None
     secrets: dict[str, str] | None = None
     clear_secrets: bool = False
+
+    @model_validator(mode="after")
+    def _validate_name(self) -> "DeliveryCredentialUpdate":
+        if self.name is not None and not self.name.strip():
+            raise ValueError("name must not be blank")
+        self.name = self.name.strip() if self.name is not None else None
+        return self
+
+
+class DeliveryCredentialOut(BaseModel):
+    id: str
+    name: str
+    adapter: str
+    config: dict
+    # Presence markers only — {"api_token": {"set": true}}. Secret VALUES are
+    # write-only and must never appear in a response.
+    secrets: dict[str, dict]
+    # False when this credential's adapter plugin is not loaded right now.
+    adapter_available: bool
+    # How many targets reference this credential. Deleting one that is in use
+    # is refused, so the count is what makes that refusal actionable.
+    used_by: int = 0
+
+
+class DeliveryTargetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    adapter: str = Field(min_length=1, max_length=64)
+    # Mandatory: a target is only ever the per-destination half of a config;
+    # the connection always comes from a credential (vts-929).
+    credential_id: str = Field(min_length=1)
+    config: dict = Field(default_factory=dict)
+
+
+class DeliveryTargetUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    config: dict | None = None
+    credential_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_name(self) -> "DeliveryTargetUpdate":
@@ -136,10 +175,8 @@ class DeliveryTargetOut(BaseModel):
     id: str
     name: str
     adapter: str
+    credential_id: str
     config: dict
-    # Presence markers only — {"api_token": {"set": true}}. Secret VALUES are
-    # write-only and must never appear in a response.
-    secrets: dict[str, dict]
     # False when this target's adapter plugin is not loaded right now. The target
     # is still listed (settings must survive a plugin being temporarily absent);
     # it simply cannot be picked for a new task until the adapter is back.

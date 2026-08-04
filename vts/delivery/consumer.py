@@ -17,6 +17,7 @@ from vts.core.secrets import decrypt_secrets, load_secrets_key
 from vts.db.models import DeliveryAttempt, utcnow
 from vts.db.repo import Repo
 from vts.delivery.contract import DeliveryTargetConfig
+from vts.services.delivery_config import merge_config
 from vts.delivery.queue import backoff_seconds
 from vts.delivery.registry import UnknownAdapter, get_adapter
 from vts.delivery.resolve import resolve_variant
@@ -47,11 +48,18 @@ async def process_one_delivery(session_factory, settings, attempt_id) -> None:
                 if attempt.target_id
                 else None
             )
+            # Secrets and the endpoint now live on the credential the target
+            # points at; the adapter still receives one flat view (vts-929).
+            credential = (
+                await repo.get_delivery_credential(task.user_id, target.credential_id)
+                if target is not None
+                else None
+            )
             secrets: dict[str, str] = {}
-            if target is not None and target.secrets_enc:
-                secrets = decrypt_secrets(target.secrets_enc, load_secrets_key(settings))
+            if credential is not None and credential.secrets_enc:
+                secrets = decrypt_secrets(credential.secrets_enc, load_secrets_key(settings))
             cfg = DeliveryTargetConfig(
-                config=(target.config_json if target else {}) or {}, secrets=secrets
+                config=merge_config(credential, target), secrets=secrets
             )
 
             result = await adapter.deliver(payload, cfg)

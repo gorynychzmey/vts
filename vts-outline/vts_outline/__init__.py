@@ -37,7 +37,11 @@ class OutlineAdapter:
     # iff the major matches and this minor is <= the core's, so an adapter
     # asking for the lowest version it actually needs keeps working as the
     # core gains backwards-compatible additions.
-    contract_version = (1, 0)
+    #
+    # 1.1, not 1.0: this adapter declares connection_fields(), which a 1.0
+    # core does not know to call — it would keep the endpoint and token on
+    # every target and the credential split would silently not happen.
+    contract_version = (1, 1)
 
     def __init__(
         self,
@@ -75,6 +79,15 @@ class OutlineAdapter:
 
     def secret_keys(self) -> list[str]:
         return ["api_token"]
+
+    def connection_fields(self) -> list[str]:
+        """base_url + api_token identify the Outline instance and who we are
+        on it; collection_id and default_variant are per-destination choices.
+
+        This is what lets two collections on one Outline share a single
+        endpoint and token instead of duplicating both (vts-929).
+        """
+        return ["base_url", "api_token"]
 
     # -- rendering --------------------------------------------------------
 

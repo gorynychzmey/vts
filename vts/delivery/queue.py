@@ -10,6 +10,7 @@ is defensive and must not fail the task, which is already `completed`.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime
 
 logger = logging.getLogger("vts.delivery")
@@ -33,12 +34,21 @@ async def enqueue_deliveries(repo, task, *, max_attempts: int, now: datetime) ->
     for item in spec:
         if not isinstance(item, dict):
             continue
-        name = item.get("deliver_to")
-        if not name:
+        ref = item.get("deliver_to")
+        if not ref:
             continue
-        target = await repo.get_delivery_target_by_name(task.user_id, name)
+        # `deliver_to` holds the target's id, not its name (vts-929), so a
+        # rename between submit and completion cannot orphan this delivery.
+        try:
+            target_id = uuid.UUID(str(ref))
+        except ValueError:
+            logger.warning(
+                "delivery ref %r on task %s is not a target id; skipping", ref, task.id
+            )
+            continue
+        target = await repo.get_delivery_target(task.user_id, target_id)
         if target is None:
-            logger.warning("delivery target %r not found for task %s; skipping", name, task.id)
+            logger.warning("delivery target %r not found for task %s; skipping", ref, task.id)
             continue
         variant = item.get("variant") or (target.config_json or {}).get("default_variant", "summary")
         await repo.create_delivery_attempt(

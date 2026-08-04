@@ -73,13 +73,27 @@ class PresetInfo(BaseModel):
     options: dict
 
 
-class DeliveryTargetInfo(BaseModel):
-    """One delivery target. Secret VALUES are never included."""
+class DeliveryCredentialInfo(BaseModel):
+    """One connection to an external system. Secret VALUES are never included."""
     id: str
     name: str
     adapter: str
     config: dict
     secrets: dict[str, dict]  # {key: {"set": bool}} — presence only
+    adapter_available: bool
+    used_by: int = 0  # how many targets reference this connection
+
+
+class DeliveryTargetInfo(BaseModel):
+    """One delivery target: a destination hanging off a connection.
+
+    Secrets live on the connection (see DeliveryCredentialInfo), not here.
+    """
+    id: str
+    name: str
+    adapter: str
+    credential_id: str
+    config: dict
     adapter_available: bool
 
 

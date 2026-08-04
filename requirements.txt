@@ -18,3 +18,7 @@ fastmcp>=3.3,<4
 authlib>=1.6,<2
 itsdangerous>=2.2,<3
 cryptography==50.0.0
+# Validates a delivery target's merged config against the adapter's
+# config_schema (vts-929). Present transitively via fastmcp, but depended on
+# directly here so an unrelated mcp change cannot silently remove it.
+jsonschema>=4.26,<5

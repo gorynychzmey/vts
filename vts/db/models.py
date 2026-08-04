@@ -216,8 +216,20 @@ class Preset(Base):
     )
 
 
-class DeliveryTarget(Base):
-    __tablename__ = "delivery_targets"
+class DeliveryCredential(Base):
+    """One CONNECTION to an external system: endpoint plus its secrets.
+
+    Split out of DeliveryTarget (vts-929) so that several destinations on the
+    same server share one endpoint and one token. Two Outline instances with
+    two collections each used to mean four targets duplicating base_url and
+    api_token four times, making token rotation a four-row edit that is easy
+    to get half-done.
+
+    Which fields live here versus on the target is declared by the adapter's
+    connection_fields(), never inferred by the core.
+    """
+
+    __tablename__ = "delivery_credentials"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -233,8 +245,38 @@ class DeliveryTarget(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_delivery_credentials_user_name"),
+        Index("ix_delivery_credentials_user", "user_id"),
+    )
+
+
+class DeliveryTarget(Base):
+    __tablename__ = "delivery_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    adapter: Mapped[str] = mapped_column(String(64), nullable=False)
+    # RESTRICT, not SET NULL: the reference is mandatory, so a credential that
+    # still has targets must not be deletable out from under them. The repo
+    # turns this into a clear 409 instead of an IntegrityError.
+    credential_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("delivery_credentials.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_delivery_targets_user_name"),
         Index("ix_delivery_targets_user", "user_id"),
+        Index("ix_delivery_targets_credential", "credential_id"),
     )
 
 

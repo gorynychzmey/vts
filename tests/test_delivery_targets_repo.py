@@ -52,39 +52,112 @@ async def _user(session: AsyncSession) -> User:
 # ---------------------------------------------------------------------------
 
 
+async def _credential(repo, user_id, *, name="outline-main", config=None, secrets_enc=b"blob"):
+    return await repo.create_delivery_credential(
+        user_id, name=name, adapter="outline",
+        config=config if config is not None else {"base_url": "https://o.example/api"},
+        secrets_enc=secrets_enc)
+
+
 @pytest.mark.asyncio
 async def test_create_and_get_by_name(session):
     repo = Repo(session)
     u = await _user(session)
+    cred = await _credential(repo, u.id)
     t = await repo.create_delivery_target(
         u.id, name="outline-meetings", adapter="outline",
-        config={"collection_id": "c1"}, secrets_enc=b"blob")
+        credential_id=cred.id, config={"collection_id": "c1"})
     await session.commit()
     got = await repo.get_delivery_target_by_name(u.id, "outline-meetings")
     assert got is not None and got.id == t.id
-    assert got.secrets_enc == b"blob"
+    assert got.credential_id == cred.id
 
 
 @pytest.mark.asyncio
-async def test_update_without_secret_keeps_old(session):
+async def test_update_without_secret_keeps_credential_secret(session):
+    """Editing a target must not touch the connection's secret.
+
+    Secrets moved to the credential (vts-929), so a target update has no way
+    to disturb them — this pins that separation.
+    """
     repo = Repo(session)
     u = await _user(session)
+    cred = await _credential(repo, u.id, secrets_enc=b"old")
     t = await repo.create_delivery_target(
-        u.id, name="t", adapter="outline", config={"a": 1}, secrets_enc=b"old")
+        u.id, name="t", adapter="outline", credential_id=cred.id, config={"a": 1})
     await session.commit()
     updated = await repo.update_delivery_target(
-        u.id, t.id, name=None, config={"a": 2}, secrets_enc=None, clear_secrets=False)
+        u.id, t.id, name=None, config={"a": 2})
+    assert updated.config_json == {"a": 2}
+    got = await repo.get_delivery_credential(u.id, cred.id)
+    assert got.secrets_enc == b"old"
+
+
+@pytest.mark.asyncio
+async def test_update_credential_without_secret_keeps_old(session):
+    repo = Repo(session)
+    u = await _user(session)
+    cred = await _credential(repo, u.id, secrets_enc=b"old")
+    await session.commit()
+    updated = await repo.update_delivery_credential(
+        u.id, cred.id, name=None, config={"a": 2},
+        secrets_enc=None, clear_secrets=False)
     assert updated.config_json == {"a": 2}
     assert updated.secrets_enc == b"old"  # preserved
 
 
 @pytest.mark.asyncio
-async def test_update_clear_secrets(session):
+async def test_update_credential_clear_secrets(session):
     repo = Repo(session)
     u = await _user(session)
-    t = await repo.create_delivery_target(
-        u.id, name="t", adapter="outline", config={}, secrets_enc=b"old")
+    cred = await _credential(repo, u.id, secrets_enc=b"old")
     await session.commit()
-    updated = await repo.update_delivery_target(
-        u.id, t.id, name=None, config=None, secrets_enc=None, clear_secrets=True)
+    updated = await repo.update_delivery_credential(
+        u.id, cred.id, name=None, config=None,
+        secrets_enc=None, clear_secrets=True)
     assert updated.secrets_enc is None
+
+
+@pytest.mark.asyncio
+async def test_count_targets_for_credential(session):
+    """The count is what lets a delete be refused with a reason instead of
+    surfacing the RESTRICT foreign key as a 500."""
+    repo = Repo(session)
+    u = await _user(session)
+    cred = await _credential(repo, u.id)
+    assert await repo.count_targets_for_credential(u.id, cred.id) == 0
+    for i in range(2):
+        await repo.create_delivery_target(
+            u.id, name=f"t{i}", adapter="outline",
+            credential_id=cred.id, config={"collection_id": f"c{i}"})
+    await session.commit()
+    assert await repo.count_targets_for_credential(u.id, cred.id) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_targets_share_one_credential(session):
+    """The point of the split: two destinations, one endpoint and one token.
+
+    Before vts-929 each target carried its own copy of base_url and the
+    token, so rotating it meant editing every row.
+    """
+    repo = Repo(session)
+    u = await _user(session)
+    cred = await _credential(repo, u.id, secrets_enc=b"tok")
+    a = await repo.create_delivery_target(
+        u.id, name="meetings", adapter="outline",
+        credential_id=cred.id, config={"collection_id": "c1"})
+    b = await repo.create_delivery_target(
+        u.id, name="notes", adapter="outline",
+        credential_id=cred.id, config={"collection_id": "c2"})
+    await session.commit()
+
+    assert a.credential_id == b.credential_id == cred.id
+    # Rotating the token is ONE edit and both targets see it.
+    await repo.update_delivery_credential(
+        u.id, cred.id, name=None, config=None,
+        secrets_enc=b"rotated", clear_secrets=False)
+    await session.commit()
+    for target in (a, b):
+        got = await repo.get_delivery_credential(u.id, target.credential_id)
+        assert got.secrets_enc == b"rotated"

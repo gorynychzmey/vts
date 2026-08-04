@@ -18,8 +18,10 @@ def filter_prompt_refs(prompts: list[dict], valid_user_ids: set[str]) -> list[di
 def filter_delivery_refs(delivery: Any) -> list[dict]:
     """Normalise a preset's `delivery` list to {deliver_to[, variant]} entries.
 
-    Presets reference targets by NAME only — the target row holds the adapter
-    config and the (encrypted) secrets. Anything else in an entry is dropped, so
+    Presets reference targets by ID only (vts-929) — the target row holds the
+    adapter config, and its credential holds the endpoint and the (encrypted)
+    secrets. An id rather than a name means renaming a target cannot silently
+    break every preset pointing at it. Anything else in an entry is dropped, so
     a hand-edited preset can never smuggle secrets in through this path.
     """
     out: list[dict] = []

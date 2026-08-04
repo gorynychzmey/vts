@@ -10,6 +10,7 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
 from vts.mcp.schemas import (
+    DeliveryCredentialInfo,
     DeliveryStatusInfo,
     DeliveryTargetInfo,
     PresetInfo,
@@ -23,9 +24,11 @@ from vts.mcp.schemas import (
     WaitResult,
 )
 from vts.mcp.tools import (
+    create_delivery_credential,
     create_delivery_target,
     create_preset,
     create_prompt,
+    delete_delivery_credential,
     delete_delivery_target,
     delete_preset,
     delete_prompt,
@@ -34,6 +37,7 @@ from vts.mcp.tools import (
     get_prompt_result,
     get_status,
     get_transcript,
+    list_delivery_credentials,
     list_delivery_targets,
     list_presets,
     list_prompts,
@@ -41,6 +45,7 @@ from vts.mcp.tools import (
     retry_delivery,
     set_default_preset,
     submit_video,
+    update_delivery_credential,
     update_delivery_target,
     update_preset,
     update_prompt,
@@ -122,11 +127,15 @@ def build_mcp_server() -> FastMCP:
                 pipeline options. The preset fills any field you leave at its
                 default; explicit params above override the preset.
             delivery: Optional destinations for the result, each
-                {"deliver_to": "<target name>", "variant": "raw"|"redacted"|"summary"}.
+                {"deliver_to": "<target id>", "variant": "raw"|"redacted"|"summary"}.
                 Targets are managed with the delivery-target tools; reference
-                them by name. Omitting `variant` uses the target's configured
-                default. An unknown target name, or one whose adapter plugin is
-                not currently installed, is rejected with 422.
+                them by ID (from list_delivery_targets), not by name, so that
+                renaming a target never breaks a queued task. `variant` picks
+                which artifact to send: "raw" is the ASR transcript,
+                "redacted" the segment-prompt-polished transcript, "summary"
+                the final summary. Omitting `variant` uses the target's
+                configured default. An unknown target id, or one whose adapter
+                plugin is not currently installed, is rejected with 422.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -307,26 +316,99 @@ def build_mcp_server() -> FastMCP:
             user, settings = await mcp_authenticate(session)
             return await list_delivery_targets(user=user, repo=Repo(session), settings=settings)
 
-    @mcp.tool(name="create_delivery_target")
-    async def _create_delivery_target(
+    @mcp.tool(name="list_delivery_credentials")
+    async def _list_delivery_credentials() -> list[DeliveryCredentialInfo]:
+        """List the caller's delivery connections.
+
+        A connection holds an endpoint and its credentials; several targets can
+        share one, so rotating a token is a single edit. Secret values are never
+        returned — each shows only whether it is set. `used_by` counts the
+        targets referencing it.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            return await list_delivery_credentials(
+                user=user, repo=Repo(session), settings=settings
+            )
+
+    @mcp.tool(name="create_delivery_credential")
+    async def _create_delivery_credential(
         name: str, adapter: str, config: dict | None = None,
         secrets: dict[str, str] | None = None,
-    ) -> DeliveryTargetInfo:
-        """Create a delivery target: a named destination for task results.
+    ) -> DeliveryCredentialInfo:
+        """Create a connection: where to deliver and who to authenticate as.
 
         Args:
-            name: Unique name for this target; tasks reference it by this name.
+            name: Unique name for this connection, for humans to recognise it.
             adapter: Installed adapter to deliver through (e.g. "outline").
-            config: Non-secret adapter settings (e.g. base_url, collection_id).
+            config: Non-secret connection settings (e.g. base_url).
             secrets: Sensitive values (e.g. {"api_token": "..."}). Encrypted at
                 rest and never returned by any tool.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, settings = await mcp_authenticate(session)
-            result = await create_delivery_target(
+            result = await create_delivery_credential(
                 user=user, repo=Repo(session), settings=settings,
                 name=name, adapter=adapter, config=config, secrets=secrets,
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="update_delivery_credential")
+    async def _update_delivery_credential(
+        credential_id: str, name: str | None = None, config: dict | None = None,
+        secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+    ) -> DeliveryCredentialInfo:
+        """Update a connection. Omitting `secrets` keeps the stored ones;
+        pass clear_secrets=True to remove them."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            result = await update_delivery_credential(
+                user=user, repo=Repo(session), settings=settings,
+                credential_id=credential_id, name=name, config=config,
+                secrets=secrets, clear_secrets=clear_secrets,
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="delete_delivery_credential")
+    async def _delete_delivery_credential(credential_id: str) -> dict[str, Any]:
+        """Delete a connection. Refused while targets still reference it."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            result = await delete_delivery_credential(
+                user=user, repo=Repo(session), credential_id=credential_id
+            )
+            await session.commit()
+            return result
+
+    @mcp.tool(name="create_delivery_target")
+    async def _create_delivery_target(
+        name: str, adapter: str, credential_id: str, config: dict | None = None,
+    ) -> DeliveryTargetInfo:
+        """Create a delivery target: one destination for task results.
+
+        Args:
+            name: Unique name for this target, for humans to recognise it.
+                Tasks reference the target by its ID, not this name, so
+                renaming it later never breaks anything.
+            adapter: Installed adapter to deliver through (e.g. "outline").
+            credential_id: ID of the connection to deliver through, from
+                list_delivery_credentials. Required — the endpoint and its
+                secrets always live on a connection, never on the target.
+            config: Per-destination settings (e.g. collection_id,
+                default_variant). Connection settings belong on the credential.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, settings = await mcp_authenticate(session)
+            result = await create_delivery_target(
+                user=user, repo=Repo(session), settings=settings,
+                name=name, adapter=adapter, credential_id=credential_id, config=config,
             )
             await session.commit()
             return result
@@ -334,16 +416,16 @@ def build_mcp_server() -> FastMCP:
     @mcp.tool(name="update_delivery_target")
     async def _update_delivery_target(
         target_id: str, name: str | None = None, config: dict | None = None,
-        secrets: dict[str, str] | None = None, clear_secrets: bool = False,
+        credential_id: str | None = None,
     ) -> DeliveryTargetInfo:
-        """Update a delivery target. Omitting `secrets` keeps the stored ones;
-        pass clear_secrets=True to remove them."""
+        """Update a delivery target. Pass credential_id to point it at another
+        connection; secrets are managed through the connection itself."""
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, settings = await mcp_authenticate(session)
             result = await update_delivery_target(
                 user=user, repo=Repo(session), settings=settings, target_id=target_id,
-                name=name, config=config, secrets=secrets, clear_secrets=clear_secrets,
+                name=name, config=config, credential_id=credential_id,
             )
             await session.commit()
             return result

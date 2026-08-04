@@ -13,31 +13,32 @@ class DeliveryValidationError(ValueError):
     """A submitted delivery list cannot be honoured. Carries a user-facing message."""
 
 
-def delivery_target_view(target: Any, settings: Any) -> dict:
-    """Serialise a DeliveryTarget for an API/MCP response, WITHOUT secret values.
+def delivery_credential_view(credential: Any, settings: Any, *, used_by: int = 0) -> dict:
+    """Serialise a DeliveryCredential, WITHOUT secret values.
 
-    Shared by REST and MCP so the two surfaces cannot drift on the one rule that
-    matters here: secrets are write-only. Only presence booleans are emitted.
+    Shared by REST and MCP so the two surfaces cannot drift on the one rule
+    that matters here: secrets are write-only. Only presence booleans are
+    emitted.
 
-    A target whose adapter is not loaded still serialises — settings outlive a
-    temporarily missing plugin. Its secret key names then come from what is
-    stored, since the adapter is no longer there to declare them.
+    A credential whose adapter is not loaded still serialises — settings
+    outlive a temporarily missing plugin. Its secret key names then come from
+    what is stored, since the adapter is no longer there to declare them.
     """
     from vts.delivery.registry import UnknownAdapter, get_adapter
 
     adapter_available = True
     try:
-        keys = list(get_adapter(target.adapter).secret_keys())
+        keys = list(get_adapter(credential.adapter).secret_keys())
     except UnknownAdapter:
         adapter_available = False
         keys = []
 
     stored: dict[str, str] = {}
-    if target.secrets_enc:
+    if credential.secrets_enc:
         try:
             from vts.core.secrets import decrypt_secrets, load_secrets_key
 
-            stored = decrypt_secrets(target.secrets_enc, load_secrets_key(settings))
+            stored = decrypt_secrets(credential.secrets_enc, load_secrets_key(settings))
         except Exception:
             # No key configured or an undecryptable blob: never fail the read,
             # never leak. Presence stays unknown-but-safe.
@@ -46,11 +47,36 @@ def delivery_target_view(target: Any, settings: Any) -> dict:
         keys = list(stored)
 
     return {
+        "id": str(credential.id),
+        "name": credential.name,
+        "adapter": credential.adapter,
+        "config": credential.config_json or {},
+        "secrets": {k: {"set": bool(stored.get(k))} for k in keys},
+        "adapter_available": adapter_available,
+        "used_by": used_by,
+    }
+
+
+def delivery_target_view(target: Any, settings: Any) -> dict:
+    """Serialise a DeliveryTarget for an API/MCP response.
+
+    Secrets no longer live here — they belong to the credential this target
+    references (vts-929), which is serialised by delivery_credential_view.
+    """
+    from vts.delivery.registry import UnknownAdapter, get_adapter
+
+    adapter_available = True
+    try:
+        get_adapter(target.adapter)
+    except UnknownAdapter:
+        adapter_available = False
+
+    return {
         "id": str(target.id),
         "name": target.name,
         "adapter": target.adapter,
+        "credential_id": str(target.credential_id),
         "config": target.config_json or {},
-        "secrets": {k: {"set": bool(stored.get(k))} for k in keys},
         "adapter_available": adapter_available,
     }
 
@@ -58,9 +84,13 @@ def delivery_target_view(target: Any, settings: Any) -> dict:
 async def validate_delivery_refs(
     repo: Any, user_id: uuid.UUID, delivery: list[dict] | None
 ) -> list[dict]:
-    """Resolve each `deliver_to` to one of the user's targets.
+    """Resolve each `deliver_to` (a target UUID) to one of the user's targets.
 
-    Raises DeliveryValidationError when a name is unknown, or when the target's
+    `deliver_to` carries the target's id, never its name (vts-929): a name is
+    for humans and may be changed at will, and a rename must not silently
+    orphan queued tasks and presets that referenced the old one.
+
+    Raises DeliveryValidationError when the id is unknown, or when the target's
     adapter is not loaded right now. Both are checked HERE, on an EXPLICIT
     submit, so the caller finds out immediately instead of at completion.
 
@@ -78,23 +108,29 @@ async def validate_delivery_refs(
     for item in delivery:
         if not isinstance(item, dict):
             raise DeliveryValidationError("each delivery entry must be an object")
-        name = item.get("deliver_to")
-        if not name:
+        ref = item.get("deliver_to")
+        if not ref:
             raise DeliveryValidationError("delivery entry requires 'deliver_to'")
+        try:
+            target_id = uuid.UUID(str(ref))
+        except ValueError as exc:
+            raise DeliveryValidationError(
+                f"deliver_to must be a delivery target id (UUID), got {ref!r}"
+            ) from exc
 
-        target = await repo.get_delivery_target_by_name(user_id, str(name))
+        target = await repo.get_delivery_target(user_id, target_id)
         if target is None:
-            raise DeliveryValidationError(f"Unknown delivery target: {name}")
+            raise DeliveryValidationError(f"Unknown delivery target: {ref}")
 
         try:
             get_adapter(target.adapter)
         except UnknownAdapter as exc:
             raise DeliveryValidationError(
-                f"Delivery target {name!r} uses adapter {target.adapter!r}, "
+                f"Delivery target {target.name!r} uses adapter {target.adapter!r}, "
                 "which is not available right now"
             ) from exc
 
-        entry: dict = {"deliver_to": str(name)}
+        entry: dict = {"deliver_to": str(target_id)}
         variant = item.get("variant")
         if variant:
             entry["variant"] = str(variant)

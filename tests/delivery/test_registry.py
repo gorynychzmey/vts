@@ -10,6 +10,7 @@ class FakeAdapter:
     contract_version = (1, 0)
     def config_schema(self): return {"type": "object"}
     def secret_keys(self): return ["token"]
+    def connection_fields(self): return ["base_url"]
     async def deliver(self, payload, target): return DeliveryResult()
 
 
