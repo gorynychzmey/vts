@@ -356,3 +356,74 @@ async def test_finalize_retry_after_crash_between_rename_passes_succeeds(client,
     assert names == ["audio.original.000.m4a", "audio.original.001.m4a"]
     assert not list(real_media_dir.glob("ordered.*")), "ordered.* leftovers must be recovered"
     assert not list(real_media_dir.glob("*.part"))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finalize_creates_exactly_one_task(client, tmp_path, monkeypatch):
+    """Two simultaneous finalize calls on one session must not race (vts-hh1).
+
+    Nothing serialized `uploads_finalize` by upload_id, so two concurrent
+    POSTs could both pass the completeness check and both run
+    `_rename_to_concat_order`, whose check-then-act (`if exists(): rename()`)
+    is not safe to interleave. The DB primary key (Task.id == upload_id) was
+    the only backstop, so the loser surfaced as an IntegrityError rather
+    than a clean response.
+
+    The race window is real but narrow, so it is widened deterministically
+    here: `probe_media` yields to the event loop, which lets the second
+    request run the whole unprotected prefix while the first is suspended
+    mid-probe. Without a lock this reliably reproduces; with one the second
+    request simply waits.
+
+    Asserted: exactly one Task row exists, both responses agree on its id,
+    and neither reports a primary-key crash.
+    """
+    import asyncio
+
+    from vts.api.main import probe_media as real_probe
+
+    def _probe_with_yield(path):
+        # probe_media is called via asyncio.to_thread in a lambda; making it
+        # block briefly is enough to overlap the two requests in real time.
+        import time
+
+        time.sleep(0.05)
+        return real_probe(path)
+
+    monkeypatch.setattr("vts.api.main.probe_media", _probe_with_yield)
+
+    a = _make_audio(tmp_path / "a.m4a", 1, 440, creation="2026-08-01T10:00:00.000000Z")
+    b = _make_audio(tmp_path / "b.m4a", 1, 880, creation="2026-08-01T10:05:00.000000Z")
+    upload_id = await _upload_set(client, [("b.m4a", b), ("a.m4a", a)])
+
+    r1, r2 = await asyncio.gather(
+        client.post(f"/api/uploads/{upload_id}/finalize", headers=_HEADERS),
+        client.post(f"/api/uploads/{upload_id}/finalize", headers=_HEADERS),
+        return_exceptions=True,
+    )
+
+    for r in (r1, r2):
+        assert not isinstance(r, BaseException), f"finalize raised instead of responding: {r!r}"
+
+    ok = [r for r in (r1, r2) if r.status_code == 200]
+    assert ok, f"both finalize calls failed: {r1.status_code} {r1.text} / {r2.status_code} {r2.text}"
+
+    # Whatever the losing request does, it must not be a primary-key crash
+    # leaking through as a 500.
+    for r in (r1, r2):
+        assert r.status_code < 500, f"finalize crashed with {r.status_code}: {r.text}"
+
+    # Both winners must describe the SAME task — one upload, one task.
+    ids = {r.json()["id"] for r in ok}
+    assert len(ids) == 1, f"concurrent finalize produced multiple tasks: {ids}"
+
+    media_dir = Path(ok[0].json()["media_path"]).parent
+    names = sorted(
+        p.name for p in media_dir.glob("audio.original.*")
+        if not p.name.endswith(".probe.json")
+    )
+    assert names == ["audio.original.000.m4a", "audio.original.001.m4a"], (
+        f"concurrent renames corrupted the media set: {names}"
+    )
+    assert not list(media_dir.glob("ordered.*"))
+    assert not list(media_dir.glob("*.part"))

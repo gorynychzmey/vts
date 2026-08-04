@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -2541,6 +2542,36 @@ def create_app() -> FastAPI:
                 return entry
         raise HTTPException(status_code=404, detail=f"No file at index {index}")
 
+    async def _lock_upload(session: AsyncSession, upload_id: uuid.UUID) -> None:
+        """Serialize work for one upload_id across concurrent requests and
+        workers (vts-hh1).
+
+        Two simultaneous finalize calls on the same session used to run the
+        whole probe/rename sequence in parallel: both passed the completeness
+        check, then both ran `_rename_to_concat_order`, whose per-file
+        check-then-act (`if exists(): rename()`) is not safe to interleave —
+        the loser hits FileNotFoundError renaming a file the winner already
+        moved, or worse lands one part's bytes under another part's name.
+
+        `pg_advisory_xact_lock` rather than a Redis lock with a TTL: the
+        critical section runs ffprobe over every part of the set and has no
+        bounded duration, so any TTL short enough to self-heal after a crash
+        is also short enough to expire mid-finalize and re-open the very race
+        it was meant to close. A transaction-scoped advisory lock has no TTL
+        to tune — Postgres drops it when the transaction ends, including when
+        the connection dies, so a crashed worker cannot wedge the upload.
+
+        The lock is released by the caller's commit/rollback, i.e. exactly at
+        the end of the request. Each request gets its own session (and so its
+        own connection), so this genuinely serializes them.
+
+        The 128-bit UUID is folded into the signed 64-bit key the advisory
+        lock API takes. A collision only means two unrelated uploads briefly
+        serialize against each other, which is harmless.
+        """
+        key = int.from_bytes(upload_id.bytes[:8], "big", signed=True)
+        await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
     @app.get("/api/uploads/{upload_id}/offset", response_model=UploadOffsetOut)
     async def uploads_offset(
         upload_id: str,
@@ -2605,6 +2636,46 @@ def create_app() -> FastAPI:
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
+        # Parse the id WITHOUT requiring the sidecar to still be on disk:
+        # a successful finalize unlinks it, so _load_owned_session would 404
+        # a legitimate retry before the already-finalized check below could
+        # answer it. Ownership is still enforced — get_task_for_user filters
+        # by user_id, and _load_owned_session runs (and 404s) as before for
+        # anything that is not an already-finalized upload of this user's.
+        try:
+            uid = uuid.UUID(upload_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Upload not found")
+
+        # Serialize the whole finalize sequence per upload_id (vts-hh1).
+        # Taken BEFORE the sidecar is read, so the loser of a race reads it
+        # only after the winner has committed and unlinked it, and therefore
+        # observes the finished state rather than a stale snapshot taken
+        # before the winner started.
+        await _lock_upload(session, uid)
+
+        # An already-finalized upload is not an error: the loser of a
+        # concurrent pair (or a client retry after a dropped response) should
+        # get the task that exists, not a primary-key crash or a 404 from the
+        # sidecar the winner has already unlinked. Checked under the lock, so
+        # "does a task exist" cannot change while we look.
+        existing_repo = Repo(session)
+        existing = await existing_repo.get_task_for_user(uuid.UUID(user.id), uid)
+        if existing is not None:
+            # No set_committed_value(..., "steps", []) here, unlike the
+            # freshly-created path below: get_task_for_user eagerly loads the
+            # real steps, and a retry may well arrive after the pipeline has
+            # started producing them.
+            queue_positions = await _get_cached_queue_positions(
+                redis, existing_repo, settings.redis_prefix
+            )
+            lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
+            asr_progress = await existing_repo.get_asr_progress_for_tasks([existing.id])
+            summary_progress = {existing.id: summary_progress_for_task(existing)}
+            return serialize_task(
+                existing, queue_positions, asr_progress, summary_progress, lane_positions
+            )
+
         uid, meta = _load_owned_session(settings, user, upload_id)
 
         if meta.get("files"):

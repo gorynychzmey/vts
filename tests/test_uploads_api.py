@@ -248,3 +248,28 @@ async def test_foreign_session_is_404(client):
     assert r2.status_code == 404
     fin2 = await client.post(f"/api/uploads/{hijack_id}/finalize")
     assert fin2.status_code == 404
+
+
+async def test_repeat_finalize_returns_the_same_task(client):
+    """A second finalize for an already-finalized single-file upload must
+    return the existing task, not 404 or a primary-key crash (vts-hh1).
+
+    UploadSession.finalize unlinks the upload.json sidecar, so once the
+    first call succeeds _load_owned_session can no longer find the session.
+    Without the under-the-lock "does a task already exist" check, a client
+    retry after a dropped response — or the loser of two concurrent
+    finalize calls — would get a 404 for an upload that actually succeeded.
+    """
+    uid = await _init(client)
+    await client.patch(f"/api/uploads/{uid}?offset=0", content=b"abcdef")
+
+    first = await client.post(f"/api/uploads/{uid}/finalize")
+    assert first.status_code == 200, first.text
+
+    second = await client.post(f"/api/uploads/{uid}/finalize")
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first.json()["id"]
+
+    # Exactly one task must exist for this upload.
+    tasks = (await client.get("/api/tasks")).json()
+    assert [t["id"] for t in tasks].count(first.json()["id"]) == 1
