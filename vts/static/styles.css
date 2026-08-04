@@ -2211,3 +2211,84 @@ dialog:not([open]) {
   font-size: 0.85rem;
   opacity: 0.7;
 }
+
+/* Delivery management (vts-j2kh) ------------------------------------------ */
+
+.delivery-dialog {
+  max-width: 46rem;
+}
+
+.delivery-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.delivery-section h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.delivery-section-hint,
+.delivery-empty-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.delivery-meta {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.delivery-unavailable {
+  font-size: 0.75rem;
+  color: var(--danger, #c0392b);
+}
+
+.delivery-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.delivery-field,
+.delivery-adapter-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+
+.delivery-field-label {
+  opacity: 0.8;
+}
+
+/* The variant picker sits inside a row that is itself a <label>, so it needs
+   to stay clickable without toggling the row's checkbox. */
+.delivery-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.delivery-row .delivery-variant {
+  margin-left: auto;
+  font-size: 0.75rem;
+}
+
+/* Wide content must scroll inside its own box rather than widening the page
+   (vts-nr4: horizontal overflow on mobile). */
+.delivery-sections {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* `hidden` must win over the display rule this class sets. A bare `display`
+   has the same specificity as the browser's [hidden] default and therefore
+   beats it, so the delivery selector stayed visible with zero destinations
+   even though el.hidden was correctly true. Caught by the browser verifier,
+   not by any unit test — the attribute was right, the cascade was not. */
+.prompt-select-field[hidden] {
+  display: none;
+}

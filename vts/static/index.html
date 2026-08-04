@@ -87,6 +87,13 @@
                 </svg>
                 <span data-i18n="speakers.registry.open">Manage voices</span>
               </button>
+              <button type="button" id="delivery-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 12l18-8-8 18-2-8z" />
+                  <path d="M11 14l4-4" />
+                </svg>
+                <span data-i18n="delivery.manage.open">Manage delivery</span>
+              </button>
               <button type="button" id="tokens-btn">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="8" cy="14" r="4" />
@@ -261,6 +268,10 @@
             <div class="prompt-select-field">
               <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
               <div class="prompt-select" id="prompt-select"></div>
+            </div>
+            <div class="prompt-select-field delivery-select-field" id="delivery-select-field" hidden>
+              <span class="prompt-select-label" data-i18n="new_task.delivery">Deliver to</span>
+              <div class="prompt-select" id="delivery-select"></div>
             </div>
             <label
               class="language-control"
@@ -683,6 +694,10 @@
           <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
           <div class="prompt-select" id="preset-edit-prompts"></div>
         </div>
+        <div class="prompt-select-field delivery-select-field" id="preset-delivery-field" hidden>
+          <span class="prompt-select-label" data-i18n="new_task.delivery">Deliver to</span>
+          <div class="prompt-select" id="preset-edit-delivery"></div>
+        </div>
         <div class="prompt-form-actions">
           <button type="submit" id="preset-submit-btn" class="btn-text primary"
                   data-i18n="preset.manage.edit">Edit</button>
@@ -690,6 +705,83 @@
                   data-i18n="prompts.manage.reset">Reset</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="delivery-dialog" class="tokens-dialog delivery-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="delivery.manage.title">Manage delivery</h2>
+        <button type="button" id="delivery-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+
+      <p class="delivery-empty-hint" id="delivery-no-adapters" hidden
+         data-i18n="delivery.no_adapters">
+        No delivery plugins are installed, so there is nothing to configure yet.
+      </p>
+
+      <div class="delivery-sections">
+        <section class="delivery-section">
+          <h3 data-i18n="delivery.credentials.title">Connections</h3>
+          <p class="delivery-section-hint" data-i18n="delivery.credentials.hint">
+            Where to deliver and how to authenticate. Several destinations can share one.
+          </p>
+          <div id="delivery-credentials-list" class="tokens-list prompts-list"></div>
+
+          <form id="delivery-credential-form" class="tokens-create-form prompt-form">
+            <input type="hidden" id="delivery-credential-edit-id" value="" />
+            <input type="text" id="delivery-credential-name" name="name" required
+                   maxlength="255" autocomplete="off"
+                   data-i18n-placeholder="delivery.form.name" placeholder="Name" />
+            <label class="delivery-adapter-label">
+              <span data-i18n="delivery.form.adapter">Adapter</span>
+              <select id="delivery-credential-adapter"></select>
+            </label>
+            <div id="delivery-credential-fields" class="delivery-fields"></div>
+            <div class="prompt-form-actions">
+              <button type="submit" id="delivery-credential-submit"
+                      class="btn-text primary"
+                      data-i18n="delivery.credentials.create">Create connection</button>
+              <button type="button" id="delivery-credential-cancel"
+                      class="btn-text ghost hidden"
+                      data-i18n="prompts.manage.reset">Reset</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="delivery-section">
+          <h3 data-i18n="delivery.targets.title">Destinations</h3>
+          <p class="delivery-section-hint" data-i18n="delivery.targets.hint">
+            One destination per place results should land. Pick the connection it uses.
+          </p>
+          <div id="delivery-targets-list" class="tokens-list prompts-list"></div>
+
+          <form id="delivery-target-form" class="tokens-create-form prompt-form">
+            <input type="hidden" id="delivery-target-edit-id" value="" />
+            <input type="text" id="delivery-target-name" name="name" required
+                   maxlength="255" autocomplete="off"
+                   data-i18n-placeholder="delivery.form.name" placeholder="Name" />
+            <label class="delivery-adapter-label">
+              <span data-i18n="delivery.form.connection">Connection</span>
+              <select id="delivery-target-credential"></select>
+            </label>
+            <div id="delivery-target-fields" class="delivery-fields"></div>
+            <div class="prompt-form-actions">
+              <button type="submit" id="delivery-target-submit"
+                      class="btn-text primary"
+                      data-i18n="delivery.targets.create">Create destination</button>
+              <button type="button" id="delivery-target-cancel"
+                      class="btn-text ghost hidden"
+                      data-i18n="prompts.manage.reset">Reset</button>
+            </div>
+          </form>
+        </section>
+      </div>
     </dialog>
 
     <dialog id="restart-final-dialog" class="tokens-dialog">

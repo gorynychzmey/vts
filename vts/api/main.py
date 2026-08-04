@@ -43,6 +43,8 @@ from vts.api.schemas import (
     BatchResultOut,
     DeliveryOut,
     DeliveryRetryRequest,
+    DeliveryAdapterOut,
+    DeliveryAdaptersOut,
     DeliveryCredentialCreate,
     DeliveryCredentialOut,
     DeliveryCredentialUpdate,
@@ -1562,6 +1564,42 @@ _ALLOWED_UPLOAD_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
+def _normalize_delivery_json(delivery: str | None) -> list[dict]:
+    """Parse the `delivery` form field of an upload into entry dicts.
+
+    Uploads carry their options as form fields / JSON sidecars rather than a
+    request model, so `delivery` arrives as a JSON string and needs the same
+    shape check the URL path gets from DeliveryRef. Ownership and adapter
+    availability are validated later, by validate_delivery_refs, exactly as on
+    the URL path.
+    """
+    if not delivery:
+        return []
+    try:
+        raw = json.loads(delivery)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="delivery must be valid JSON") from exc
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=422, detail="delivery must be a JSON list")
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=422, detail="each delivery entry must be an object")
+        ref = entry.get("deliver_to")
+        if not ref:
+            raise HTTPException(status_code=422, detail="delivery entry requires 'deliver_to'")
+        item: dict = {"deliver_to": str(ref)}
+        variant = entry.get("variant")
+        if variant:
+            if variant not in ("raw", "redacted", "summary"):
+                raise HTTPException(
+                    status_code=422, detail=f"invalid delivery variant: {variant!r}"
+                )
+            item["variant"] = str(variant)
+        out.append(item)
+    return out
+
+
 def _normalize_prompts_json(prompts: str | None) -> list[dict]:
     from vts.services.prompt_registry import parse_ref, ref_to_dict
     if prompts is None:
@@ -2167,6 +2205,37 @@ def create_app() -> FastAPI:
         except DeliveryConfigInvalid as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/api/delivery-adapters", response_model=DeliveryAdaptersOut)
+    async def list_delivery_adapters_endpoint(
+        user: AuthenticatedUser = Depends(get_current_user),
+    ) -> DeliveryAdaptersOut:
+        """Installed delivery adapters and the shape of their settings.
+
+        The UI builds credential and target forms from this: `config_schema`
+        says which fields exist, `connection_fields` says which of them belong
+        to the shared connection rather than the individual destination.
+        """
+        from vts.delivery.registry import incompatible_adapters, list_adapters
+
+        out: list[DeliveryAdapterOut] = []
+        for name, adapter in sorted(list_adapters().items()):
+            try:
+                out.append(DeliveryAdapterOut(
+                    name=name,
+                    config_schema=adapter.config_schema() or {},
+                    secret_keys=list(adapter.secret_keys()),
+                    connection_fields=list(adapter.connection_fields()),
+                ))
+            except Exception as exc:  # noqa: BLE001 - third-party plugin code
+                # One misbehaving plugin must not cost the operator the whole
+                # list, same isolation rule the registry applies at load time.
+                logging.getLogger(__name__).warning(
+                    "delivery adapter %r failed to describe itself: %s", name, exc
+                )
+        return DeliveryAdaptersOut(
+            adapters=out, incompatible=incompatible_adapters()
+        )
+
     @app.get("/api/delivery-credentials", response_model=list[DeliveryCredentialOut])
     async def list_delivery_credentials_endpoint(
         user: AuthenticatedUser = Depends(get_current_user),
@@ -2539,12 +2608,14 @@ def create_app() -> FastAPI:
         transcript: bool = Form(default=True),
         diarize: bool = Form(default=False),
         prompts: str | None = Form(default=None),
+        delivery: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> TaskOut:
         normalized_prompts = _normalize_prompts_json(prompts)
+        normalized_delivery = _normalize_delivery_json(delivery)
         if normalized_prompts and not transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
         if diarize and not transcript:
@@ -2554,8 +2625,23 @@ def create_app() -> FastAPI:
         if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
             raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
 
+        from vts.services.delivery_submit import (
+            DeliveryValidationError,
+            validate_delivery_refs,
+        )
+
         repo = Repo(session)
         effective_user_id = uuid.UUID(user.id)
+        # Same rule as the URL path: an explicit submit naming an unknown
+        # target or an unavailable adapter fails now, before the bytes are
+        # written, rather than at delivery time.
+        try:
+            normalized_delivery = await validate_delivery_refs(
+                repo, effective_user_id, normalized_delivery
+            )
+        except DeliveryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         task_id = uuid.uuid4()
         artifact = task_dir(settings.artifacts_root, user.username, task_id)
         artifact.mkdir(parents=True, exist_ok=True)
@@ -2579,6 +2665,7 @@ def create_app() -> FastAPI:
             # dropping it here silently overrode the user's choice (vts-552).
             "diarize": diarize,
             "prompts": normalized_prompts,
+            "delivery": normalized_delivery,
         }
         task = await repo.create_task(
             user_id=effective_user_id,
@@ -2607,6 +2694,7 @@ def create_app() -> FastAPI:
     async def uploads_init(
         payload: UploadInitRequest,
         user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
         settings: Settings = Depends(get_settings_dep),
     ) -> UploadInitOut:
         if payload.files:
@@ -2630,6 +2718,9 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=422, detail="prompts require transcript")
             if payload.diarize and not payload.transcript:
                 raise HTTPException(status_code=422, detail="diarize requires transcript")
+            normalized_delivery = await _validated_delivery(
+                session, user, _normalize_delivery_json(payload.delivery)
+            )
 
             upload_id = uuid.uuid4()
             options = {
@@ -2638,6 +2729,7 @@ def create_app() -> FastAPI:
                 "transcript": payload.transcript,
                 "diarize": payload.diarize,
                 "prompts": normalized_prompts,
+                "delivery": normalized_delivery,
             }
             # Order is resolved at finalize, once creation_time can be probed
             # from the actual bytes. Index here is just selection order.
@@ -2674,6 +2766,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail="prompts require transcript")
         if payload.diarize and not payload.transcript:
             raise HTTPException(status_code=422, detail="diarize requires transcript")
+        normalized_delivery = await _validated_delivery(
+            session, user, _normalize_delivery_json(payload.delivery)
+        )
         upload_id = uuid.uuid4()
         options = {
             "language": payload.language or None,
@@ -2686,6 +2781,7 @@ def create_app() -> FastAPI:
             # key is not the same as false here (vts-552).
             "diarize": payload.diarize,
             "prompts": normalized_prompts,
+            "delivery": normalized_delivery,
         }
         UploadSession.init(
             settings.artifacts_root, user.username,
@@ -2696,6 +2792,27 @@ def create_app() -> FastAPI:
             created_at=datetime.now(tz=timezone.utc).isoformat(),
         )
         return UploadInitOut(upload_id=str(upload_id), chunk_size=settings.upload_chunk_bytes)
+
+    async def _validated_delivery(session, user, entries: list[dict]) -> list[dict]:
+        """Validate delivery refs for an upload, as the URL path does.
+
+        Checked at INIT rather than at finalize: the user is standing in front
+        of the form now, whereas a finalize failure would arrive after the
+        whole file had been uploaded.
+        """
+        from vts.services.delivery_submit import (
+            DeliveryValidationError,
+            validate_delivery_refs,
+        )
+
+        if not entries:
+            return []
+        try:
+            return await validate_delivery_refs(
+                Repo(session), uuid.UUID(user.id), entries
+            )
+        except DeliveryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def _load_owned_session(settings, user, upload_id_str: str):
         try:

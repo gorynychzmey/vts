@@ -111,6 +111,28 @@ class DeliveryRetryRequest(BaseModel):
     target_id: UUID | None = None
 
 
+class DeliveryAdapterOut(BaseModel):
+    """What the UI needs to render forms for one installed adapter.
+
+    The core does not know which fields mean what; the adapter declares its
+    schema and which of its fields form the connection, and the UI splits the
+    credential form from the target form on that basis (vts-929).
+    """
+
+    name: str
+    config_schema: dict
+    secret_keys: list[str]
+    connection_fields: list[str]
+
+
+class DeliveryAdaptersOut(BaseModel):
+    adapters: list[DeliveryAdapterOut]
+    # Adapters that were found but refused at load time, name -> reason
+    # (vts-9y7). Surfaced so an operator can see WHY a target's plugin is
+    # unavailable instead of watching it silently vanish.
+    incompatible: dict[str, str] = Field(default_factory=dict)
+
+
 class DeliveryCredentialCreate(BaseModel):
     """One connection to an external system: endpoint plus secrets (vts-929)."""
 
@@ -475,6 +497,10 @@ class UploadInitRequest(BaseModel):
     transcript: bool = True
     diarize: bool = False
     prompts: str | None = None
+    # JSON list of {deliver_to: "<target uuid>", variant?}, matching `prompts`
+    # above: this flow carries its options as a sidecar rather than a request
+    # model, so the list arrives encoded (vts-j2kh).
+    delivery: str | None = None
     display_name: str | None = None
     # When present, this is a multi-file set and `filename`/`total_size` above
     # are ignored. Absent means the existing single-file flow (vts-vm0).

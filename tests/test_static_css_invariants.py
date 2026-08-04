@@ -46,3 +46,34 @@ def test_hidden_utility_still_means_display_none() -> None:
         ".hidden no longer maps to display:none — the task-name-edit "
         ":not(.hidden) guard assumes it does"
     )
+
+
+def test_prompt_select_field_display_rule_respects_hidden() -> None:
+    """Regression (vts-j2kh): `.prompt-select-field { display: inline-flex }`
+    has the same specificity as the browser's `[hidden]` default, so it won —
+    the delivery selector stayed visible even with zero destinations, despite
+    `el.hidden` being correctly set. Any rule that sets `display` on
+    `.prompt-select-field` must be answered by a `[hidden] { display: none }`
+    rule (the same fix `.task-name-edit` needed).
+
+    A unit test cannot see this: the attribute was right, only the cascade
+    was wrong. It took the browser verifier to catch it.
+    """
+    css = STYLES.read_text(encoding="utf-8")
+    sets_display = [
+        selector
+        for selector, body in _rule_blocks(css, ".prompt-select-field")
+        if re.search(r"(^|[\s;])display\s*:", body)
+    ]
+    assert sets_display, "expected .prompt-select-field to set display"
+
+    guarded = [
+        selector
+        for selector, body in _rule_blocks(css, ".prompt-select-field")
+        if "[hidden]" in selector and "none" in body
+    ]
+    assert guarded, (
+        "`.prompt-select-field` sets `display` but nothing restores "
+        "`[hidden] { display: none }`, so hiding the selector has no effect: "
+        f"{sets_display}"
+    )

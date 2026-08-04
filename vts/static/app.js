@@ -21,6 +21,16 @@ const adminResetBtn = document.getElementById("admin-reset-btn");
 const appVersionLabel = document.getElementById("app-version");
 const refreshBtn = document.getElementById("refresh-btn");
 const promptSelect = document.getElementById("prompt-select");
+
+// Delivery state (vts-j2kh). Declared up here, not next to the delivery code
+// far below: bootstrap's loadPresets() -> applyPresetOptions() reads it, and a
+// `const` declared later would be in its temporal dead zone at that point.
+const deliveryState = {
+  adapters: [],
+  incompatible: {},
+  credentials: [],
+  targets: [],
+};
 const presetSelect = document.getElementById("preset-select");
 const presetSaveBtn = document.getElementById("preset-save-btn");
 const presetDanglingHint = document.getElementById("preset-dangling-hint");
@@ -2353,6 +2363,7 @@ async function uploadFileChunked(file, fields) {
         transcript: fields.transcript,
         diarize: fields.diarize,
         prompts: fields.prompts,
+        delivery: fields.delivery,
         display_name: fields.display_name || null,
       }),
       headers: {
@@ -2451,6 +2462,7 @@ async function uploadFilesChunked(files, fields) {
         transcript: fields.transcript,
         diarize: fields.diarize,
         prompts: fields.prompts,
+        delivery: fields.delivery,
         display_name: fields.display_name || null,
       }),
       headers: {
@@ -2784,6 +2796,14 @@ function applyPresetOptions(options) {
     renderPromptMultiselect(promptSelect, promptsCache, filtered);
   }
   syncSummaryToggle();
+  // A preset that names destinations should select them here too, otherwise
+  // picking the preset would silently drop the delivery it was saved with.
+  renderDeliveryMultiselect(
+    deliverySelect,
+    (opts.delivery || []).filter((d) =>
+      deliveryTargetsList().some((t) => t.id === d.deliver_to)
+    )
+  );
   return dangling;
 }
 
@@ -3023,6 +3043,7 @@ async function createTask(event) {
         transcript: form.transcript.checked,
         diarize: form.diarize.checked,
         prompts: JSON.stringify(getSelectedPrompts()),
+        delivery: JSON.stringify(selectedDeliveryRefs(deliverySelect)),
         display_name: "",
       };
       if (selected.length > 1) {
@@ -3045,6 +3066,7 @@ async function createTask(event) {
           fd.append("transcript", fields.transcript ? "true" : "false");
           fd.append("diarize", fields.diarize ? "true" : "false");
           fd.append("prompts", fields.prompts);
+          fd.append("delivery", fields.delivery);
           created = await uploadFileWithProgress(fd);
         }
       }
@@ -3056,7 +3078,8 @@ async function createTask(event) {
         transcript: form.transcript.checked,
         diarize: form.diarize.checked,
         speaker_no_manual_stop: form.speaker_no_manual_stop.checked,
-        prompts: getSelectedPrompts()
+        prompts: getSelectedPrompts(),
+        delivery: selectedDeliveryRefs(deliverySelect)
       };
       created = await api("/api/tasks", {
         method: "POST",
@@ -3077,6 +3100,7 @@ async function createTask(event) {
   form.reset();
   form.transcript.checked = true;
   resetPromptSelection();
+  resetDeliverySelection();
   syncSummaryToggle();
   syncSourceType();
   if (created && created.id) {
@@ -5382,6 +5406,13 @@ function fillPresetForm(preset) {
       flat: true,
     });
   }
+  // Destinations that no longer exist are dropped rather than rendered as
+  // ghost rows: the preset keeps working, and re-saving prunes them.
+  renderPresetDeliverySelect(
+    (opts.delivery || []).filter((d) =>
+      deliveryTargetsList().some((t) => t.id === d.deliver_to)
+    )
+  );
   setPresetFormMode(preset.id);
   presetNameInput?.focus();
 }
@@ -5565,6 +5596,7 @@ presetForm?.addEventListener("submit", async (event) => {
     diarize: !!(presetEditDiarize && presetEditDiarize.checked),
     speaker_no_manual_stop: !!(presetEditSpeakerNoManualStop && presetEditSpeakerNoManualStop.checked),
     prompts: getSelectedFrom(presetEditPrompts),
+    delivery: selectedDeliveryRefs(presetDeliverySelect),
   };
   try {
     let resp;
@@ -5967,10 +5999,706 @@ async function bootstrap() {
   }, { rootMargin: "200px" });
   const _sentinelEl = document.getElementById("task-sentinel");
   if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
+  await loadDeliveryEntities();
+  renderDeliverySelectors();
   await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();
   await loadUploadConfig();
 }
+
+// ---------------------------------------------------------------------------
+// Delivery: connections (credentials) and destinations (targets) — vts-j2kh
+//
+// The browser cannot import adapters, so /api/delivery-adapters serves each
+// adapter's JSON Schema plus the names of the fields that form its CONNECTION.
+// Forms are generated from that: connection fields go on the credential,
+// everything else on the target. The core never assumes what a connection is
+// (vts-929) and neither does this UI.
+// ---------------------------------------------------------------------------
+
+const deliveryDialog = document.getElementById("delivery-dialog");
+const deliverySelect = document.getElementById("delivery-select");
+const deliverySelectField = document.getElementById("delivery-select-field");
+const presetDeliverySelect = document.getElementById("preset-edit-delivery");
+const presetDeliveryField = document.getElementById("preset-delivery-field");
+
+/** Destinations known right now.
+ *
+ * Bootstrap calls loadPresets() -> applyPresetOptions() before delivery data
+ * has been fetched, so every reader must tolerate "not loaded yet" rather
+ * than assume an array is already in place.
+ */
+function deliveryTargetsList() {
+  return Array.isArray(deliveryState.targets) ? deliveryState.targets : [];
+}
+
+function deliveryAdapter(name) {
+  return deliveryState.adapters.find((a) => a.name === name) || null;
+}
+
+/** Schema properties split into connection fields and per-destination ones. */
+function splitSchemaFields(adapter, { connection }) {
+  if (!adapter) return [];
+  const schema = adapter.config_schema || {};
+  const props = schema.properties || {};
+  const required = new Set(schema.required || []);
+  const isConnection = new Set(adapter.connection_fields || []);
+  const secrets = new Set(adapter.secret_keys || []);
+
+  const out = [];
+  for (const [name, spec] of Object.entries(props)) {
+    if (isConnection.has(name) !== connection) continue;
+    out.push({
+      name,
+      spec: spec || {},
+      required: required.has(name),
+      secret: secrets.has(name),
+    });
+  }
+  // Secret keys are declared separately from config_schema, so an adapter may
+  // list a secret that has no schema entry (Outline's api_token does exactly
+  // this). Without these the credential form would have no password field.
+  if (connection) {
+    for (const key of secrets) {
+      if (!isConnection.has(key)) continue;
+      if (out.some((f) => f.name === key)) continue;
+      out.push({ name: key, spec: { type: "string" }, required: false, secret: true });
+    }
+  }
+  return out;
+}
+
+/** Build one input for a schema property. Returns the element to read from. */
+function buildSchemaInput(field, value) {
+  const spec = field.spec || {};
+  let input;
+  if (Array.isArray(spec.enum)) {
+    input = document.createElement("select");
+    // A non-required enum needs an empty choice, else the first option is
+    // silently submitted for a field the user never touched.
+    if (!field.required) {
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "—";
+      input.appendChild(blank);
+    }
+    for (const option of spec.enum) {
+      const el = document.createElement("option");
+      el.value = String(option);
+      el.textContent = String(option);
+      input.appendChild(el);
+    }
+    if (value !== undefined && value !== null) input.value = String(value);
+  } else if (spec.type === "boolean") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(value);
+  } else if (spec.type === "integer" || spec.type === "number") {
+    input = document.createElement("input");
+    input.type = "number";
+    if (spec.type === "integer") input.step = "1";
+    if (value !== undefined && value !== null) input.value = String(value);
+  } else if (spec.type === "object" || spec.type === "array") {
+    // No guessing at a widget for a composite type: an editor that cannot
+    // represent the value would silently drop part of it. Show the JSON.
+    input = document.createElement("textarea");
+    input.rows = 3;
+    input.dataset.json = "1";
+    if (value !== undefined) input.value = JSON.stringify(value, null, 2);
+  } else {
+    input = document.createElement("input");
+    input.type = field.secret ? "password" : "text";
+    if (value !== undefined && value !== null) input.value = String(value);
+  }
+  input.dataset.field = field.name;
+  if (field.secret) input.dataset.secret = "1";
+  if (field.required) input.required = true;
+  if (spec.description) input.title = spec.description;
+  return input;
+}
+
+function renderSchemaFields(container, adapter, { connection, values, secretsSet }) {
+  if (!container) return;
+  container.innerHTML = "";
+  const fields = splitSchemaFields(adapter, { connection });
+  for (const field of fields) {
+    const row = document.createElement("label");
+    row.className = "delivery-field";
+
+    const label = document.createElement("span");
+    label.className = "delivery-field-label";
+    label.textContent = field.name + (field.required ? " *" : "");
+
+    const input = buildSchemaInput(field, (values || {})[field.name]);
+    if (field.secret) {
+      // Values of stored secrets are never served; only whether one is set.
+      const isSet = Boolean((secretsSet || {})[field.name]?.set);
+      input.placeholder = isSet
+        ? t("delivery.secret.set")
+        : t("delivery.secret.unset");
+    }
+    row.append(label, input);
+    container.appendChild(row);
+  }
+}
+
+/** Read a generated form back into a config object (+ secrets separately). */
+function readSchemaFields(container) {
+  const config = {};
+  const secrets = {};
+  if (!container) return { config, secrets };
+  container.querySelectorAll("[data-field]").forEach((input) => {
+    const name = input.dataset.field;
+    let value;
+    if (input.type === "checkbox") {
+      value = input.checked;
+    } else if (input.dataset.json === "1") {
+      const raw = (input.value || "").trim();
+      if (!raw) return;
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        // Leave it out rather than send something the adapter cannot read;
+        // the server validates against the schema and will say what is wrong.
+        return;
+      }
+    } else if (input.type === "number") {
+      const raw = (input.value || "").trim();
+      if (raw === "") return;
+      value = Number(raw);
+    } else {
+      const raw = input.value || "";
+      // An untouched password field means "keep what is stored", not "clear".
+      if (raw === "") return;
+      value = raw;
+    }
+    if (input.dataset.secret === "1") {
+      secrets[name] = value;
+    } else {
+      config[name] = value;
+    }
+  });
+  return { config, secrets };
+}
+
+async function loadDeliveryAdapters() {
+  try {
+    const body = await api("/api/delivery-adapters");
+    deliveryState.adapters = body.adapters || [];
+    deliveryState.incompatible = body.incompatible || {};
+  } catch (err) {
+    console.error("Failed to load delivery adapters", err);
+    deliveryState.adapters = [];
+    deliveryState.incompatible = {};
+  }
+}
+
+async function loadDeliveryEntities() {
+  try {
+    const [credentials, targets] = await Promise.all([
+      api("/api/delivery-credentials"),
+      api("/api/delivery-targets"),
+    ]);
+    // Array.isArray, not `|| []`: api() returns a STRING for a non-JSON
+    // response, and a string is truthy — it would survive the fallback and
+    // then blow up in `for...of` / `.some()` at the call sites.
+    deliveryState.credentials = Array.isArray(credentials) ? credentials : [];
+    deliveryState.targets = Array.isArray(targets) ? targets : [];
+  } catch (err) {
+    console.error("Failed to load delivery settings", err);
+    deliveryState.credentials = [];
+    deliveryState.targets = [];
+  }
+}
+
+function deliveryRowActions(onEdit, onDelete) {
+  const actions = document.createElement("div");
+  actions.className = "prompts-actions";
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "icon-btn ghost";
+  edit.setAttribute("data-tooltip", t("delivery.form.save"));
+  edit.setAttribute("aria-label", t("delivery.form.save"));
+  // innerHTML, not textContent: applyI18n would wipe an SVG child, and these
+  // buttons are icon-only (see the prompts list for the same construction).
+  edit.innerHTML = ICON_EDIT;
+  edit.addEventListener("click", onEdit);
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "icon-btn ghost danger";
+  del.setAttribute("data-tooltip", t("prompts.manage.delete"));
+  del.setAttribute("aria-label", t("prompts.manage.delete"));
+  del.innerHTML = ICON_DELETE;
+  del.addEventListener("click", onDelete);
+  actions.append(edit, del);
+  return actions;
+}
+
+function renderDeliveryCredentials() {
+  const list = document.getElementById("delivery-credentials-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const cred of deliveryState.credentials) {
+    const row = document.createElement("div");
+    row.className = "tokens-row prompts-row";
+
+    const main = document.createElement("div");
+    main.className = "tokens-meta prompts-meta";
+    const name = document.createElement("span");
+    name.className = "tokens-name prompt-name";
+    name.textContent = cred.name;
+    const meta = document.createElement("span");
+    meta.className = "delivery-meta";
+    meta.textContent = cred.adapter
+      + " · " + t("delivery.used_by", { count: cred.used_by || 0 });
+    main.append(name, meta);
+    if (!cred.adapter_available) {
+      const warn = document.createElement("span");
+      warn.className = "delivery-unavailable";
+      warn.textContent = t("delivery.adapter_missing");
+      main.appendChild(warn);
+    }
+
+    row.append(main, deliveryRowActions(
+      () => editDeliveryCredential(cred),
+      () => deleteDeliveryCredential(cred),
+    ));
+    list.appendChild(row);
+  }
+}
+
+function renderDeliveryTargets() {
+  const list = document.getElementById("delivery-targets-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const target of deliveryTargetsList()) {
+    const row = document.createElement("div");
+    row.className = "tokens-row prompts-row";
+
+    const main = document.createElement("div");
+    main.className = "tokens-meta prompts-meta";
+    const name = document.createElement("span");
+    name.className = "tokens-name prompt-name";
+    name.textContent = target.name;
+    const cred = deliveryState.credentials.find((c) => c.id === target.credential_id);
+    const meta = document.createElement("span");
+    meta.className = "delivery-meta";
+    meta.textContent = target.adapter + " · " + (cred ? cred.name : "—");
+    main.append(name, meta);
+    if (!target.adapter_available) {
+      const warn = document.createElement("span");
+      warn.className = "delivery-unavailable";
+      warn.textContent = t("delivery.adapter_missing");
+      main.appendChild(warn);
+    }
+
+    row.append(main, deliveryRowActions(
+      () => editDeliveryTarget(target),
+      () => deleteDeliveryTarget(target),
+    ));
+    list.appendChild(row);
+  }
+}
+
+function fillAdapterSelect() {
+  const select = document.getElementById("delivery-credential-adapter");
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = "";
+  for (const adapter of deliveryState.adapters) {
+    const option = document.createElement("option");
+    option.value = adapter.name;
+    option.textContent = adapter.name;
+    select.appendChild(option);
+  }
+  if (previous && deliveryAdapter(previous)) select.value = previous;
+}
+
+/** Connections offered for a target, filtered to the target's adapter: an
+ *  Outline token cannot authenticate an S3 destination, and the server
+ *  rejects the mismatch anyway. */
+function fillCredentialSelect(adapterName, selectedId) {
+  const select = document.getElementById("delivery-target-credential");
+  if (!select) return;
+  select.innerHTML = "";
+  const usable = deliveryState.credentials.filter(
+    (c) => !adapterName || c.adapter === adapterName
+  );
+  for (const cred of usable) {
+    const option = document.createElement("option");
+    option.value = cred.id;
+    option.textContent = cred.name + " (" + cred.adapter + ")";
+    select.appendChild(option);
+  }
+  if (selectedId) select.value = selectedId;
+}
+
+function resetDeliveryCredentialForm() {
+  document.getElementById("delivery-credential-edit-id").value = "";
+  document.getElementById("delivery-credential-name").value = "";
+  document.getElementById("delivery-credential-submit").textContent =
+    t("delivery.credentials.create");
+  document.getElementById("delivery-credential-cancel").classList.add("hidden");
+  const adapterName = document.getElementById("delivery-credential-adapter")?.value;
+  renderSchemaFields(
+    document.getElementById("delivery-credential-fields"),
+    deliveryAdapter(adapterName),
+    { connection: true, values: {}, secretsSet: {} },
+  );
+}
+
+function resetDeliveryTargetForm() {
+  document.getElementById("delivery-target-edit-id").value = "";
+  document.getElementById("delivery-target-name").value = "";
+  document.getElementById("delivery-target-submit").textContent =
+    t("delivery.targets.create");
+  document.getElementById("delivery-target-cancel").classList.add("hidden");
+  const cred = deliveryState.credentials[0];
+  fillCredentialSelect(cred ? cred.adapter : null, cred ? cred.id : null);
+  renderSchemaFields(
+    document.getElementById("delivery-target-fields"),
+    deliveryAdapter(cred ? cred.adapter : null),
+    { connection: false, values: {}, secretsSet: {} },
+  );
+}
+
+function editDeliveryCredential(cred) {
+  document.getElementById("delivery-credential-edit-id").value = cred.id;
+  document.getElementById("delivery-credential-name").value = cred.name;
+  const adapterSelect = document.getElementById("delivery-credential-adapter");
+  if (adapterSelect) adapterSelect.value = cred.adapter;
+  document.getElementById("delivery-credential-submit").textContent =
+    t("delivery.form.save");
+  document.getElementById("delivery-credential-cancel").classList.remove("hidden");
+  renderSchemaFields(
+    document.getElementById("delivery-credential-fields"),
+    deliveryAdapter(cred.adapter),
+    { connection: true, values: cred.config || {}, secretsSet: cred.secrets || {} },
+  );
+}
+
+function editDeliveryTarget(target) {
+  document.getElementById("delivery-target-edit-id").value = target.id;
+  document.getElementById("delivery-target-name").value = target.name;
+  fillCredentialSelect(target.adapter, target.credential_id);
+  document.getElementById("delivery-target-submit").textContent =
+    t("delivery.form.save");
+  document.getElementById("delivery-target-cancel").classList.remove("hidden");
+  renderSchemaFields(
+    document.getElementById("delivery-target-fields"),
+    deliveryAdapter(target.adapter),
+    { connection: false, values: target.config || {}, secretsSet: {} },
+  );
+}
+
+/** Pull the server's message out of an api() error.
+ *
+ * api() throws Error("<status>: <body>") where body is the JSON error
+ * envelope, so the useful part (e.g. "Credential is used by 2 delivery
+ * target(s)") needs digging out. Falls back to a generic message. */
+function deliveryErrorText(err, fallbackKey) {
+  const raw = String(err?.message || "");
+  const jsonStart = raw.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (parsed && parsed.detail) return String(parsed.detail);
+    } catch {
+      // fall through to the generic message
+    }
+  }
+  return t(fallbackKey);
+}
+
+async function deleteDeliveryCredential(cred) {
+  if (!window.confirm(t("delivery.credentials.confirm_delete", { name: cred.name }))) {
+    return;
+  }
+  try {
+    await api(`/api/delivery-credentials/${cred.id}`, { method: "DELETE" });
+  } catch (err) {
+    // A connection still in use comes back as 409 with a count. Surface the
+    // server's message rather than a generic failure: the fix is "remove
+    // those destinations first", which the count tells the user.
+    window.alert(deliveryErrorText(err, "delivery.credentials.delete_failed"));
+    return;
+  }
+  await refreshDeliveryManager();
+}
+
+async function deleteDeliveryTarget(target) {
+  if (!window.confirm(t("delivery.targets.confirm_delete", { name: target.name }))) {
+    return;
+  }
+  try {
+    await api(`/api/delivery-targets/${target.id}`, { method: "DELETE" });
+  } catch (err) {
+    window.alert(deliveryErrorText(err, "delivery.targets.delete_failed"));
+    return;
+  }
+  await refreshDeliveryManager();
+}
+
+async function refreshDeliveryManager() {
+  await loadDeliveryEntities();
+  renderDeliveryCredentials();
+  renderDeliveryTargets();
+  resetDeliveryCredentialForm();
+  resetDeliveryTargetForm();
+  renderDeliverySelectors();
+}
+
+// --- selectors in the new-task card and in a preset -------------------------
+
+/** One selectable destination: a checkbox plus its own variant picker.
+ *
+ * The variant is PER destination, not one setting for the whole task: two
+ * collections on the same Outline can legitimately receive different
+ * artifacts, which is the case vts-929 exists to support.
+ */
+function buildDeliveryRow(target, selected) {
+  const chosen = selected.find((d) => d.deliver_to === target.id) || null;
+  const label = document.createElement("label");
+  label.className = "prompt-row delivery-row";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = Boolean(chosen);
+  checkbox.dataset.targetId = target.id;
+  // A destination whose plugin is not loaded cannot be submitted (the server
+  // rejects it with 422), so it is shown but not selectable.
+  checkbox.disabled = !target.adapter_available;
+
+  const name = document.createElement("span");
+  name.className = "prompt-name";
+  name.textContent = target.name;
+
+  const variant = document.createElement("select");
+  variant.className = "delivery-variant";
+  variant.dataset.variantFor = target.id;
+  variant.disabled = !target.adapter_available;
+  for (const value of ["", "raw", "redacted", "summary"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value ? t(`delivery.variant.${value}`) : t("delivery.variant.default");
+    variant.appendChild(option);
+  }
+  variant.value = chosen?.variant || "";
+  // Clicking the variant picker must not toggle the row's checkbox.
+  variant.addEventListener("click", (event) => event.preventDefault());
+
+  label.append(checkbox, name, variant);
+  if (!target.adapter_available) {
+    const warn = document.createElement("span");
+    warn.className = "delivery-unavailable";
+    warn.textContent = t("delivery.adapter_missing");
+    label.appendChild(warn);
+  }
+  return label;
+}
+
+function renderDeliveryMultiselect(container, selected) {
+  if (!container) return;
+  const chosen = Array.isArray(selected) ? selected : [];
+  container.innerHTML = "";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "prompt-select-toggle";
+  toggle.setAttribute("aria-haspopup", "true");
+  toggle.setAttribute("aria-expanded", "false");
+
+  const summary = document.createElement("span");
+  summary.className = "prompt-select-summary";
+  const caret = document.createElement("span");
+  caret.className = "prompt-select-caret";
+  caret.textContent = "▾";
+  caret.setAttribute("aria-hidden", "true");
+  toggle.append(summary, caret);
+
+  const popover = document.createElement("div");
+  popover.className = "prompt-select-popover";
+  popover.hidden = true;
+  for (const target of deliveryTargetsList()) {
+    popover.appendChild(buildDeliveryRow(target, chosen));
+  }
+
+  toggle.addEventListener("click", () => togglePromptPopover(container));
+  popover.addEventListener("change", () => updateDeliverySummary(container));
+
+  container.append(toggle, popover);
+  updateDeliverySummary(container);
+}
+
+function updateDeliverySummary(container) {
+  const summary = container?.querySelector(".prompt-select-summary");
+  if (!summary) return;
+  const count = container.querySelectorAll(
+    '.prompt-select-popover input[type="checkbox"]:checked'
+  ).length;
+  summary.textContent = count
+    ? t("delivery.selected_count", { count })
+    : t("delivery.none_selected");
+}
+
+/** Read a delivery selector into the API's `delivery` list.
+ *  deliver_to carries the target's ID, never its name (vts-929). */
+function selectedDeliveryRefs(container) {
+  if (!container) return [];
+  const out = [];
+  container
+    .querySelectorAll('.prompt-select-popover input[type="checkbox"]:checked')
+    .forEach((cb) => {
+      const id = cb.dataset.targetId;
+      const variant = container.querySelector(`[data-variant-for="${id}"]`)?.value || "";
+      const entry = { deliver_to: id };
+      if (variant) entry.variant = variant;
+      out.push(entry);
+    });
+  return out;
+}
+
+/** Selectors stay hidden until at least one destination exists, so a user
+ *  with no plugins never sees an empty control they cannot act on. */
+function renderDeliverySelectors() {
+  const has = deliveryTargetsList().length > 0;
+  if (deliverySelectField) deliverySelectField.hidden = !has;
+  if (presetDeliveryField) presetDeliveryField.hidden = !has;
+  if (has) {
+    renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
+  }
+}
+
+function renderPresetDeliverySelect(selected) {
+  if (presetDeliveryField) {
+    presetDeliveryField.hidden = deliveryTargetsList().length === 0;
+  }
+  renderDeliveryMultiselect(presetDeliverySelect, selected || []);
+}
+
+function resetDeliverySelection() {
+  renderDeliveryMultiselect(deliverySelect, []);
+}
+
+// --- wiring -----------------------------------------------------------------
+
+document.getElementById("delivery-btn")?.addEventListener("click", async () => {
+  if (!deliveryDialog) return;
+  await loadDeliveryAdapters();
+  fillAdapterSelect();
+  await refreshDeliveryManager();
+
+  const noAdapters = document.getElementById("delivery-no-adapters");
+  const sections = deliveryDialog.querySelector(".delivery-sections");
+  const none = deliveryState.adapters.length === 0;
+  if (noAdapters) noAdapters.hidden = !none;
+  if (sections) sections.hidden = none;
+
+  if (typeof deliveryDialog.showModal === "function") {
+    deliveryDialog.showModal();
+  } else {
+    deliveryDialog.setAttribute("open", "");
+  }
+});
+
+document.getElementById("delivery-close-btn")?.addEventListener("click", () => {
+  deliveryDialog?.close();
+});
+
+document.getElementById("delivery-credential-cancel")?.addEventListener("click", () => {
+  resetDeliveryCredentialForm();
+});
+
+document.getElementById("delivery-target-cancel")?.addEventListener("click", () => {
+  resetDeliveryTargetForm();
+});
+
+document.getElementById("delivery-credential-adapter")?.addEventListener("change", (event) => {
+  renderSchemaFields(
+    document.getElementById("delivery-credential-fields"),
+    deliveryAdapter(event.target.value),
+    { connection: true, values: {}, secretsSet: {} },
+  );
+});
+
+document.getElementById("delivery-target-credential")?.addEventListener("change", (event) => {
+  const cred = deliveryState.credentials.find((c) => c.id === event.target.value);
+  renderSchemaFields(
+    document.getElementById("delivery-target-fields"),
+    deliveryAdapter(cred?.adapter),
+    { connection: false, values: {}, secretsSet: {} },
+  );
+});
+
+document.getElementById("delivery-credential-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editId = document.getElementById("delivery-credential-edit-id").value;
+  const name = document.getElementById("delivery-credential-name").value.trim();
+  const adapterName = document.getElementById("delivery-credential-adapter").value;
+  if (!name || !adapterName) return;
+
+  const { config, secrets } = readSchemaFields(
+    document.getElementById("delivery-credential-fields")
+  );
+  const payload = { name, config };
+  // Omitting `secrets` keeps the stored ones; sending {} would be a no-op
+  // anyway, but being explicit avoids ever clearing them by accident.
+  if (Object.keys(secrets).length) payload.secrets = secrets;
+
+  try {
+    if (editId) {
+      await api(`/api/delivery-credentials/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api("/api/delivery-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, adapter: adapterName }),
+      });
+    }
+  } catch (err) {
+    window.alert(deliveryErrorText(err, "delivery.credentials.save_failed"));
+    return;
+  }
+  await refreshDeliveryManager();
+});
+
+document.getElementById("delivery-target-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editId = document.getElementById("delivery-target-edit-id").value;
+  const name = document.getElementById("delivery-target-name").value.trim();
+  const credentialId = document.getElementById("delivery-target-credential").value;
+  if (!name || !credentialId) return;
+  const cred = deliveryState.credentials.find((c) => c.id === credentialId);
+
+  const { config } = readSchemaFields(
+    document.getElementById("delivery-target-fields")
+  );
+  const payload = { name, config, credential_id: credentialId };
+
+  try {
+    if (editId) {
+      await api(`/api/delivery-targets/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api("/api/delivery-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, adapter: cred?.adapter }),
+      });
+    }
+  } catch (err) {
+    window.alert(deliveryErrorText(err, "delivery.targets.save_failed"));
+    return;
+  }
+  await refreshDeliveryManager();
+});
 
 void bootstrap();
