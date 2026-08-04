@@ -509,22 +509,35 @@ input[type="file"] {
   color: #fff;
 }
 
+/* A hairline outline on every ghost icon button. The fill alone is close to
+   both the card and the page background, so the buttons read as floating
+   glyphs; the border gives them an edge without shouting. Enabled and disabled
+   differ in BORDER, not just opacity — a flat 0.45 alpha made "greyed out" and
+   "just low contrast" look the same (vts-nr4). */
 .icon-btn.ghost {
   background: #efe9db;
   color: var(--ink);
+  border: 1px solid #d5cbb4;
 }
 
 .icon-btn.ghost:hover {
   background: #e6dece;
+  border-color: #c2b699;
 }
 
 .icon-btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
+/* Disabled: no fill and NO border at all. The outline is what marks a button as
+   actionable, so dropping it (rather than dimming it) is the clearest possible
+   "not available right now". */
+.icon-btn.ghost:disabled,
 .icon-btn.ghost:disabled:hover {
-  background: #efe9db;
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
 }
 
 .icon-btn.danger {
@@ -735,6 +748,34 @@ input[type="file"] {
 .header-menu button {
   white-space: normal;
   line-height: 1.3;
+  /* Icon + label on one baseline-ish row; `align-items: start` keeps the icon
+     against the FIRST line when a long label wraps, rather than floating to the
+     middle of a two-line row. */
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.header-menu button > svg {
+  /* Icons must not shrink when the label wraps. */
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-top: 0.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-soft);
+}
+
+.header-menu button:hover > svg {
+  color: var(--ink);
+}
+
+.header-menu button > span {
+  min-width: 0;
 }
 
 /* Keeps the "notifications on" state visible now that this is a text row. */

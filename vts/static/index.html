@@ -46,33 +46,56 @@
                 <path d="M3 18h18" />
               </svg>
             </button>
+            <!-- The label lives in an inner <span data-i18n>, NOT on the button:
+                 applyI18n() assigns textContent to the [data-i18n] element, which
+                 would wipe out a sibling <svg>. Icons are the ones these entries
+                 carried when they were toolbar buttons (vts-nr4). -->
             <div class="btn-menu header-menu" id="header-menu">
-              <button
-                id="push-toggle-btn"
-                class="hidden"
-                type="button"
-                data-i18n="action.enable_notifications"
-              >Enable notifications</button>
-              <button
-                type="button"
-                id="prompts-btn"
-                data-i18n="prompts.manage.open"
-              >Manage prompts</button>
-              <button
-                type="button"
-                id="presets-btn"
-                data-i18n="preset.manage.open"
-              >Manage presets</button>
-              <button
-                type="button"
-                id="speaker-registry-btn"
-                data-i18n="speakers.registry.open"
-              >Manage voices</button>
-              <button
-                type="button"
-                id="tokens-btn"
-                data-i18n="tokens.open"
-              >Manage API tokens</button>
+              <button id="push-toggle-btn" class="hidden" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                  <path d="M10 21a2 2 0 0 0 4 0" />
+                </svg>
+                <span data-i18n="action.enable_notifications">Enable notifications</span>
+              </button>
+              <button type="button" id="prompts-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 5h16" />
+                  <path d="M4 10h16" />
+                  <path d="M4 15h10" />
+                  <path d="M16 18l2 2 4-4" />
+                </svg>
+                <span data-i18n="prompts.manage.open">Manage prompts</span>
+              </button>
+              <button type="button" id="presets-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h16" />
+                  <path d="M4 12h16" />
+                  <path d="M4 18h16" />
+                  <circle cx="8" cy="6" r="2" />
+                  <circle cx="16" cy="12" r="2" />
+                  <circle cx="8" cy="18" r="2" />
+                </svg>
+                <span data-i18n="preset.manage.open">Manage presets</span>
+              </button>
+              <button type="button" id="speaker-registry-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2a4 4 0 0 0-4 4v4a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4z" />
+                  <path d="M6 11a6 6 0 0 0 12 0" />
+                  <path d="M12 17v4" />
+                  <path d="M9 21h6" />
+                </svg>
+                <span data-i18n="speakers.registry.open">Manage voices</span>
+              </button>
+              <button type="button" id="tokens-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="8" cy="14" r="4" />
+                  <path d="M11 11l9-9" />
+                  <path d="M16 6l3 3" />
+                  <path d="M19 4l2 2" />
+                </svg>
+                <span data-i18n="tokens.open">Manage API tokens</span>
+              </button>
             </div>
           </div>
           <button

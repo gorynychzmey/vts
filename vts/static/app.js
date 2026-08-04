@@ -5722,9 +5722,10 @@ function setPushButtonState(state) {
       : t("action.enable_notifications");
   pushToggleBtn.title = label;
   pushToggleBtn.setAttribute("aria-label", label);
-  // It is a labelled row in the header menu now, not an icon — the state has to
-  // read from the text itself (vts-nr4).
-  pushToggleBtn.textContent = label;
+  // Write into the label span, never the button: the button also holds an <svg>
+  // icon that assigning textContent would destroy (vts-nr4).
+  const pushLabel = pushToggleBtn.querySelector("span");
+  if (pushLabel) pushLabel.textContent = label;
   pushToggleBtn.classList.toggle("push-active", state === "subscribed");
   pushToggleBtn.disabled = state === "pending";
 }
