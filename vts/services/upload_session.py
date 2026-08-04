@@ -25,6 +25,19 @@ def _media_name(suffix: str) -> str:
     return f"audio.original{suffix}"
 
 
+def part_name(index: int, suffix: str) -> str:
+    """Indexed staging name, e.g. audio.original.000.mp4.
+
+    The single-file session used a fixed `audio.original<suffix>`, so N files in
+    one session would overwrite each other. The index IS the concat order, so
+    globbing the finals in name order gives the right sequence (vts-vm0).
+
+    Note: zero-padding assumes file count << 1000 (1000+ files would sort
+    incorrectly: 1000.mp4 < 099.mp4). The API layer enforces upload_max_files.
+    """
+    return f"audio.original.{index:03d}{suffix}"
+
+
 class UploadSession:
     @staticmethod
     def _dir(artifacts_root: Path, username: str, upload_id: uuid.UUID) -> Path:
@@ -111,6 +124,142 @@ class UploadSession:
         except OSError:
             pass
         return final
+
+    @classmethod
+    def part_path_for(
+        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID,
+        index: int, suffix: str,
+    ) -> Path:
+        return cls._dir(artifacts_root, username, upload_id) / "media" / f"{part_name(index, suffix)}.part"
+
+    @classmethod
+    def init_multi(
+        cls,
+        artifacts_root: Path,
+        username: str,
+        *,
+        user_id: str,
+        upload_id: uuid.UUID,
+        files: list[dict],
+        kind: str,
+        options: dict,
+        display_name: str | None,
+        created_at: str,
+    ) -> Path:
+        """Stage N parts under one session. `files` is already in concat order."""
+        d = cls._dir(artifacts_root, username, upload_id)
+        media = d / "media"
+        media.mkdir(parents=True, exist_ok=True)
+
+        entries = []
+        for index, item in enumerate(files):
+            (media / f"{part_name(index, item['suffix'])}.part").touch(exist_ok=True)
+            entries.append({
+                "index": index,
+                "filename": item["filename"],
+                "suffix": item["suffix"],
+                "total_size": item["total_size"],
+                "last_modified": item.get("last_modified"),
+                "received": 0,
+            })
+
+        meta = {
+            "upload_id": str(upload_id),
+            "user_id": user_id,
+            "username": username,
+            "kind": kind,
+            "files": entries,
+            "total_size": sum(e["total_size"] for e in entries),
+            "options": options,
+            "display_name": display_name,
+            "created_at": created_at,
+        }
+        cls.meta_path(artifacts_root, username, upload_id).write_text(
+            json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8"
+        )
+        return d
+
+    @staticmethod
+    def append_chunk_at(part_path: Path, meta_path: Path, data: bytes, index: int) -> int:
+        with open(part_path, "ab") as f:
+            f.write(data)
+        new_size = part_path.stat().st_size
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            for entry in meta.get("files", []):
+                if entry.get("index") == index:
+                    entry["received"] = new_size
+                    break
+            meta_path.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+        return new_size
+
+    @classmethod
+    def finalize_multi(
+        cls, artifacts_root: Path, username: str, upload_id: uuid.UUID, meta: dict,
+        *, remove_meta: bool = True,
+    ) -> list[Path]:
+        """Rename every staging part to its final name, in index order.
+
+        Pre-checks that all expected .part files exist before renaming any of them,
+        so the session is left intact and retryable on any error.
+
+        Idempotent / resumable (vts-vm0 blocker 2): a retried finalize call
+        can land here again after a first call already renamed some or all
+        `.part` files away (a crash further down the pipeline — probing,
+        verify_probes, the concat-order reorder, or the Task-row commit —
+        does not undo this rename). An entry whose `.part` is missing but
+        whose final name already exists at the declared size is treated as
+        already finalized rather than missing: without this, every retry
+        past this point would raise "missing staging file" and the caller
+        would turn that into a 409 forever, even though the bytes are safe
+        on disk under their final name.
+
+        `remove_meta=False` keeps the `upload.json` sidecar alive after the
+        rename. The caller (uploads_finalize) still has probing, set
+        validation and a concat-order rename ahead of it before a Task row
+        exists — all of which can fail or the process can die mid-way. The
+        sidecar is what makes a session findable/retryable and what makes
+        find_abandoned_sessions() treat the directory as live rather than
+        eligible for GC (vts-vm0); unlinking it here, before that work is
+        done, would strand the upload with no way back if anything after
+        this call fails. The default stays True so Task 5's tests and any
+        other caller that finalizes in one uninterruptible step keep their
+        existing behaviour.
+        """
+        media = cls._dir(artifacts_root, username, upload_id) / "media"
+        entries = sorted(meta.get("files", []), key=lambda e: e["index"])
+
+        # Verify every entry has either its .part staging file, or is already
+        # finalized (final name exists at the declared size) — genuinely
+        # missing otherwise (atomic-ish: either all resolve, or none rename).
+        missing = []
+        for entry in entries:
+            final = media / part_name(entry["index"], entry["suffix"])
+            part = media / f"{final.name}.part"
+            if part.exists():
+                continue
+            if final.exists() and final.stat().st_size == entry["total_size"]:
+                continue
+            missing.append(str(part))
+        if missing:
+            raise RuntimeError(f"Cannot finalize: missing staging file(s): {', '.join(missing)}")
+
+        # All parts resolve; now rename whichever ones are still staged.
+        finals: list[Path] = []
+        for entry in entries:
+            final = media / part_name(entry["index"], entry["suffix"])
+            part = media / f"{final.name}.part"
+            if part.exists():
+                part.rename(final)  # same dir/volume -> atomic
+            finals.append(final)
+        if remove_meta:
+            try:
+                cls.meta_path(artifacts_root, username, upload_id).unlink()
+            except OSError:
+                pass
+        return finals
 
 
 def find_abandoned_sessions(artifacts_root: Path, *, ttl_seconds: int) -> dict[uuid.UUID, Path]:

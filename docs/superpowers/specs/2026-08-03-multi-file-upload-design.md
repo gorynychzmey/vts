@@ -179,16 +179,24 @@ Measured behaviour across every container in `_ALLOWED_UPLOAD_SUFFIXES`:
 
 | container | `creation_time` |
 |---|---|
-| mp4, mkv, mov, flv, m4v | present |
+| mp4, mkv, webm, mov, flv, m4v | present |
 | m4a, mp3 | present |
-| **webm, avi, wmv, ts** | **absent** |
+| **avi, wmv, ts** | **absent** |
 | **ogg, opus, wav** | **absent** |
 
-So `creation_time` is available in 5 of 9 video containers and 2 of 8 audio
-ones. The absent four video containers were checked for an alternative date key
-under both `format_tags` and `stream_tags` — there is none. In practice this is
-survivable: phone and camera recordings, which is what arrives as "parts of one
-recording", are mp4/mov/mkv.
+So `creation_time` is available in 6 of 9 video containers and 2 of 8 audio
+ones. The absent containers were checked for an alternative date key under both
+`format_tags` and `stream_tags` — there is none.
+
+(An earlier draft of this table listed webm as absent. That was a measurement
+error: the probe file had been built with h264+aac, which WebM does not permit,
+so ffmpeg produced no file at all and the empty result was misread as "the
+container cannot store it". Re-measured with each container's native codecs —
+VP9+Vorbis for webm — it carries the tag like the rest.)
+
+In practice the gap is survivable: phone and camera recordings, which is what
+arrives as "parts of one recording", are mp4/mov/mkv. The audio side is the
+real exposure, since opus is what Telegram and WhatsApp voice messages use.
 
 This matters: opus is what Telegram and WhatsApp voice messages use, i.e. the
 most likely "several parts of one conversation" case, and for those files
@@ -288,9 +296,9 @@ Both rejections happen at `init`, before any bytes are transferred.
 ## Risks
 
 - **Ordering is unfixable without re-upload.** Accepted: the order and its
-  source are shown, so a wrong result is at least explicable. The exposure is
-  wider than audio alone — `creation_time` is also missing from webm, avi, wmv
-  and ts — so those fall to `lastModified`, then to filename order.
+  source are shown, so a wrong result is at least explicable. Beyond the audio
+  containers, `creation_time` is also missing from avi, wmv and ts, so those
+  fall to `lastModified`, then to filename order.
 - **Peak disk doubles** during extract (originals + combined WAV), and for a
   video set roughly triples (originals + `video.mkv` + WAV). Bounded by the
   2 GiB set limit.

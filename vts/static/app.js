@@ -1146,6 +1146,25 @@ function renderTaskAboutDialog(task) {
   } else {
     sourceUrlEl.removeAttribute("href");
   }
+  // A set was joined into one recording; list the parts and say which rule
+  // decided their order, since the user cannot change it (vts-vm0).
+  const sourceFiles = Array.isArray(options.source_files) ? options.source_files : [];
+  const filesEl = q(".about-source-files");
+  if (filesEl) {
+    if (sourceFiles.length > 1) {
+      // Assumes the closed enum resolve_order() returns (vts/services/upload_order.py):
+      // "creation_time" | "last_modified" | "filename", with an unconditional
+      // filename fallback. Adding a fourth order value means adding its
+      // about.order_* key to all three locale files too, or it renders raw.
+      const orderKey = `about.order_${options.source_files_order || "filename"}`;
+      const lines = sourceFiles.map((f, i) => `${i + 1}. ${f.name}`);
+      filesEl.textContent = `${t("about.source_files")} (${t(orderKey)}): ${lines.join("; ")}`;
+      filesEl.classList.remove("hidden");
+    } else {
+      filesEl.textContent = "";
+      filesEl.classList.add("hidden");
+    }
+  }
   q(".about-created").textContent = task.created_at
     ? new Date(task.created_at).toLocaleString()
     : "";
@@ -2398,6 +2417,104 @@ async function uploadFileChunked(file, fields) {
   }
 }
 
+async function uploadFilesChunked(files, fields) {
+  const btn = document.getElementById("submit-btn");
+  const icon = btn && btn.querySelector(".submit-icon");
+  const ring = btn && btn.querySelector(".submit-progress");
+  const fill = ring && ring.querySelector(".submit-progress-fill");
+  const circumference = 56.55;
+  // Aggregate progress: sum of bytes sent across the whole set over the sum
+  // of all file sizes, so the ring advances monotonically across files
+  // instead of restarting at 0 each time a file finishes (vts-vm0).
+  const grandTotal = files.reduce((sum, f) => sum + f.size, 0);
+  let sentBefore = 0; // bytes confirmed sent for files completed so far
+  const setProgress = (r) => { if (fill) fill.style.strokeDashoffset = circumference * (1 - r); };
+  // Declared out here so the catch below can release the ownIds claim.
+  let uploadId = null;
+
+  if (btn) btn.disabled = true;
+  if (icon) icon.classList.add("hidden");
+  if (ring) ring.classList.remove("hidden");
+  setProgress(0); // determinate from the start
+
+  try {
+    const init = await api("/api/uploads/init", {
+      method: "POST",
+      body: JSON.stringify({
+        files: files.map((f) => ({
+          filename: f.name,
+          total_size: f.size,
+          last_modified: f.lastModified || null,
+        })),
+        language: fields.language || null,
+        audio_only: fields.audio_only,
+        transcript: fields.transcript,
+        diarize: fields.diarize,
+        prompts: fields.prompts,
+        display_name: fields.display_name || null,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-User": state.authUser,
+      },
+    });
+    uploadId = init.upload_id;
+    // Same "claim before the SSE event can arrive" reasoning as the
+    // single-file chunked path above (vts-3iw / vts-vm0).
+    state.taskPaging.ownIds.add(uploadId);
+    const chunkSize = init.chunk_size || 8388608;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      let offset = 0;
+      while (offset < file.size) {
+        const slice = file.slice(offset, Math.min(offset + chunkSize, file.size));
+        const buf = await slice.arrayBuffer();
+        let resp;
+        try {
+          resp = await api(`/api/uploads/${uploadId}?offset=${offset}&index=${index}`, {
+            method: "PATCH",
+            body: buf,
+            headers: {
+              "Content-Type": "application/offset+octet-stream",
+              "X-Forwarded-User": state.authUser,
+            },
+          });
+        } catch (err) {
+          // On offset conflict or transient error, re-sync from the server.
+          const off = await api(`/api/uploads/${uploadId}/offset?index=${index}`, {
+            headers: { "X-Forwarded-User": state.authUser },
+          });
+          offset = off.received;
+          setProgress(grandTotal ? (sentBefore + offset) / grandTotal : 1);
+          continue;
+        }
+        offset = resp.received;
+        setProgress(grandTotal ? (sentBefore + offset) / grandTotal : 1);
+      }
+      sentBefore += file.size;
+    }
+
+    // Return the created task: the caller prepends it straight onto the list,
+    // same as the single-file chunked path (vts-3iw).
+    const task = await api(`/api/uploads/${uploadId}/finalize`, {
+      method: "POST",
+      headers: { "X-Forwarded-User": state.authUser },
+    });
+    setProgress(1);
+    return task;
+  } catch (err) {
+    // Release the claim made at init: with no task to render, nothing else
+    // would ever drop it (vts-3iw).
+    if (uploadId) state.taskPaging.ownIds.delete(uploadId);
+    throw err;
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.classList.remove("hidden");
+    if (ring) ring.classList.add("hidden");
+  }
+}
+
 let promptsCache = [];
 
 function promptDisplayName(prompt) {
@@ -2884,11 +3001,18 @@ async function createTask(event) {
   let created = null;
   try {
     if (isFile && fileInput) {
-      const file = fileInput.files[0];
-      // Probe one byte before starting: a stale file reference fails here with
-      // a clear message instead of mid-upload (covers the single-shot XHR path,
-      // which reads the file natively and only reports a generic network error).
-      await file.slice(0, 1).arrayBuffer();
+      const selected = Array.from(fileInput.files || []);
+      if (!selected.length) {
+        showTaskFormError(t("upload.file_unreadable"));
+        return;
+      }
+      // Probe one byte of each before starting: a stale file reference fails
+      // here with a clear message instead of mid-upload (covers the
+      // single-shot XHR path, which reads the file natively and only reports
+      // a generic network error).
+      for (const file of selected) {
+        await file.slice(0, 1).arrayBuffer();
+      }
       // audio_only is a yt-dlp download hint: DownloadStep skips the download
       // entirely for an uploaded file, so the flag is meaningless here. Drop it
       // at the boundary rather than clearing the control — the form keeps the
@@ -2901,20 +3025,28 @@ async function createTask(event) {
         prompts: JSON.stringify(getSelectedPrompts()),
         display_name: "",
       };
-      const threshold = uploadConfig && Number.isFinite(uploadConfig.chunked_threshold_bytes)
-        ? uploadConfig.chunked_threshold_bytes
-        : Infinity; // no config -> always single-shot (unchanged behavior)
-      if (file.size > threshold) {
-        created = await uploadFileChunked(file, fields);
+      if (selected.length > 1) {
+        // A set of 2+ files is always a multi-file recording: upload it as
+        // one session with per-file chunking (vts-vm0). Only a single
+        // selection takes the existing single-shot/chunked-by-threshold path.
+        created = await uploadFilesChunked(selected, fields);
       } else {
-        const fd = new FormData();
-        fd.append("file", file);
-        if (fields.language) fd.append("language", fields.language);
-        fd.append("audio_only", fields.audio_only ? "true" : "false");
-        fd.append("transcript", fields.transcript ? "true" : "false");
-        fd.append("diarize", fields.diarize ? "true" : "false");
-        fd.append("prompts", fields.prompts);
-        created = await uploadFileWithProgress(fd);
+        const file = selected[0];
+        const threshold = uploadConfig && Number.isFinite(uploadConfig.chunked_threshold_bytes)
+          ? uploadConfig.chunked_threshold_bytes
+          : Infinity; // no config -> always single-shot (unchanged behavior)
+        if (file.size > threshold) {
+          created = await uploadFileChunked(file, fields);
+        } else {
+          const fd = new FormData();
+          fd.append("file", file);
+          if (fields.language) fd.append("language", fields.language);
+          fd.append("audio_only", fields.audio_only ? "true" : "false");
+          fd.append("transcript", fields.transcript ? "true" : "false");
+          fd.append("diarize", fields.diarize ? "true" : "false");
+          fd.append("prompts", fields.prompts);
+          created = await uploadFileWithProgress(fd);
+        }
       }
     } else {
       const payload = {

@@ -138,6 +138,29 @@ That is not worth what it costs conceptually. `process_task` executes one step a
 
 Decision (2026-08-03): **keep the pipeline sequential.** Revisit only if other steps appear that genuinely want to run concurrently — at that point the executor work is justified by more than one case and the concept changes once, deliberately, rather than being bent for a single optimisation. The speedup is real and orthogonal to making diarization itself faster, so it remains available if that day comes.
 
+**A multi-file upload is joined into one recording, not tracked as N files.**
+`extract_audio` normalises every uploaded part to 16 kHz mono and concatenates
+them into the single `audio_16k.wav` that the rest of the DAG already consumes,
+so nothing downstream knows a set arrived. A video set additionally gets a
+stream-copied `video.mkv`, because the player resolves media through
+`_find_media_file`, which prefers it. File boundaries live in
+`Task.options.source_files` as `{name, offset_sec, duration_sec}` — never as
+markers inside the transcript text, which would reach the LLM and surface as
+noise in the summary.
+
+The alternative — a `files` table with per-file ASR — was rejected: it costs a
+schema migration and a DAG rework, and it is worse for the result, because
+diarizing each file separately cannot link the same speaker across files
+whereas one continuous recording links them for free.
+
+Concat order is resolved server-side with no user step: container
+`creation_time`, then the browser's `lastModified`, then natural filename sort.
+The last rule is load-bearing rather than a formality — six of the nine
+supported video containers carry `creation_time` (mp4, mkv, webm, mov, flv,
+m4v); only avi, wmv and ts do not, alongside ogg, opus and wav on the audio
+side. opus is what Telegram and WhatsApp voice messages use, so it is exactly
+the case filename order has to rescue.
+
 **llama.cpp HTTP server as baseline API.** The LLM client in [`vts/services/summarizer.py`](../vts/services/summarizer.py) talks to four endpoints — `GET /props`, `POST /tokenize`, `POST /detokenize`, `POST /chat/completions`. Only the last is in the OpenAI standard. The other three are needed because token budgeting (Stage A/B/C adaptive ratios) requires an authoritative token count on the *server's* tokenizer, not a guess from a local tiktoken-style heuristic. OpenAI-compatible servers that lack `/tokenize` must supply a local tokenizer file via `llm_tokenizer_path` (see [LLM_BACKENDS.md](LLM_BACKENDS.md)).
 
 **Sliding-window summarization with optional packing.** `summarize_windows` slides a `window_tokens` window (default ≈ 2000 tokens) over the transcript with 15% overlap, producing one note per window. A single-shot summary over the full transcript is impossible above the LLM's context size and unstable below it. Two stages also let each window's output be checked for quality (compression ratio, redundancy, number/date/unit mismatches) independently — see the metrics schema below. When the concatenated window notes plus the final prompt would exceed `summary_n_ctx - summary_safety_margin`, `pack_window_notes` (Stage B) batches and re-compresses them before `summarize_final` runs.

@@ -61,9 +61,23 @@ def _make(path: Path, *, video: bool, seconds: int = 1, size: str = "320x240",
     if video:
         cmd += ["-f", "lavfi", "-i", f"testsrc=size={size}:rate={rate}:duration={seconds}"]
     cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}:sample_rate={sample_rate}"]
+    # Each container takes its own codecs: WebM permits only VP8/VP9 with
+    # Vorbis/Opus, and wav is PCM. Muxing h264+aac into webm produces NO FILE
+    # at all — which is how an early measurement mistook "could not build the
+    # file" for "the container cannot store creation_time".
+    name = str(path)
     if video:
-        cmd += ["-c:v", "libx264", "-preset", "ultrafast"]
-    cmd += ["-c:a", "aac", "-ar", str(sample_rate), "-shortest"]
+        if name.endswith(".webm"):
+            cmd += ["-c:v", "libvpx-vp9"]
+        else:
+            cmd += ["-c:v", "libx264", "-preset", "ultrafast"]
+    if name.endswith(".webm"):
+        cmd += ["-c:a", "libvorbis"]
+    elif name.endswith(".wav"):
+        cmd += ["-c:a", "pcm_s16le"]
+    else:
+        cmd += ["-c:a", "aac"]
+    cmd += ["-ar", str(sample_rate), "-shortest"]
     if creation:
         cmd += ["-metadata", f"creation_time={creation}"]
     cmd += [str(path)]
@@ -96,9 +110,22 @@ def test_probe_reads_creation_time_when_present(tmp_path):
 
 
 def test_probe_returns_none_creation_time_when_absent(tmp_path):
-    # webm carries no creation_time at all — measured, see the spec's table.
-    f = _make(tmp_path / "c.webm", video=True)
+    """A container that genuinely cannot store the tag must probe as None.
+
+    wav is used because it really does drop creation_time: the assertion holds
+    even though the tag is explicitly SET on the ffmpeg command line, so the
+    test cannot pass merely because nobody asked for the tag.
+    """
+    f = _make(tmp_path / "c.wav", video=False, creation="2026-08-01T10:00:00.000000Z")
     assert probe_media(f).creation_time is None
+
+
+def test_probe_reads_creation_time_from_webm(tmp_path):
+    """webm DOES carry creation_time. Pinned because an early measurement
+    claimed otherwise: that probe used h264+aac, which WebM cannot mux, so no
+    file was produced and the empty output was misread as unsupported."""
+    f = _make(tmp_path / "c.webm", video=True, creation="2026-08-01T10:00:00.000000Z")
+    assert probe_media(f).creation_time == "2026-08-01T10:00:00.000000Z"
 
 
 def test_signatures_match_for_identical_parameters(tmp_path):
@@ -255,7 +282,7 @@ git commit -m "feat(media): probe_media — duration, creation_time, stream sign
 Order is decided server-side with no user step, so the fallback chain has to be
 right: container creation_time, then the browser's lastModified, then natural
 filename sort. Measured container coverage is in the spec — ogg/opus/wav and
-webm/avi/wmv/ts carry no creation_time at all, and opus is what Telegram and
+avi/wmv/ts carry no creation_time at all, and opus is what Telegram and
 WhatsApp voice messages use, so the filename rule is load-bearing.
 """
 from __future__ import annotations
@@ -353,8 +380,8 @@ server-side with no user step — so the fallback chain matters. Preference:
   3. natural filename sort — digit runs compared numerically
 
 Step 3 is load-bearing rather than a formality: ogg/opus/wav and
-webm/avi/wmv/ts carry no `creation_time` at all (measured — see the spec), and
-opus is exactly what Telegram and WhatsApp voice messages use.
+avi/wmv/ts carry no `creation_time` at all (measured — see the spec), and opus
+is exactly what Telegram and WhatsApp voice messages use.
 """
 from __future__ import annotations
 
@@ -1073,11 +1100,13 @@ git commit -m "feat(uploads): indexed multi-part staging in UploadSession (vts-v
 
 ---
 
-### Task 6: API — init, patch, offset, finalize for sets
+### Task 6: API — init, patch, offset for sets
+
+(`uploads_finalize` is NOT part of this task — sets are finalized in Task 7.)
 
 **Files:**
 - Modify: `vts/api/schemas.py` (near `UploadInitRequest`, line 420)
-- Modify: `vts/api/main.py` (`uploads_init` 2424, `uploads_offset` 2474, `uploads_patch` 2485, `uploads_finalize` 2507)
+- Modify: `vts/api/main.py` (`uploads_init` 2424, `uploads_offset` 2474, `uploads_patch` 2485)
 - Modify: `vts/core/config.py` (add `upload_max_files` near `max_upload_bytes`, line 329)
 - Test: `tests/test_uploads_multi_api.py` (create)
 
@@ -2425,8 +2454,8 @@ whereas one continuous recording links them for free.
 
 Concat order is resolved server-side with no user step: container
 `creation_time`, then the browser's `lastModified`, then natural filename sort.
-The last rule is load-bearing rather than a formality — ogg, opus, wav, webm,
-avi, wmv and ts carry no `creation_time` at all, and opus is what Telegram and
+The last rule is load-bearing rather than a formality — ogg, opus, wav, avi,
+wmv and ts carry no `creation_time` at all, and opus is what Telegram and
 WhatsApp voice messages use.
 ```
 

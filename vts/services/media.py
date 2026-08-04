@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypedDict
 
@@ -55,6 +56,81 @@ def probe_duration(path: Path) -> float:
     if raw is None:
         return 0.0
     return float(raw)
+
+
+@dataclass(frozen=True)
+class MediaProbe:
+    """What one ffprobe call tells us about an uploaded file (vts-vm0).
+
+    Ordering wants `creation_time`; video concat compatibility wants the stream
+    parameters. One probe serves both.
+    """
+
+    duration_sec: float
+    creation_time: str | None
+    has_video: bool
+    video_codec: str | None
+    width: int | None
+    height: int | None
+    frame_rate: str | None
+    audio_codec: str | None
+    sample_rate: int | None
+    channels: int | None
+
+    def video_signature(self) -> tuple:
+        return (self.video_codec, self.width, self.height, self.frame_rate)
+
+    def audio_signature(self) -> tuple:
+        return (self.audio_codec, self.sample_rate, self.channels)
+
+
+def probe_media(path: Path) -> MediaProbe:
+    """Inspect `path` with a single ffprobe call.
+
+    Raises RuntimeError when ffprobe cannot read the file — the caller turns
+    that into a task failure naming the file (vts-vm0).
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration:format_tags=creation_time"
+                         ":stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels",
+        "-of", "json", str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stderr or "").strip().splitlines()[-3:])
+        raise RuntimeError(f"ffprobe failed for {path.name}{': ' + tail if tail else ''}")
+    payload = json.loads(proc.stdout or "{}")
+    fmt = payload.get("format", {}) or {}
+    streams = payload.get("streams", []) or []
+
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    raw_duration = fmt.get("duration")
+    try:
+        duration = float(raw_duration) if raw_duration is not None else 0.0
+    except (TypeError, ValueError):
+        duration = 0.0
+
+    def _int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return MediaProbe(
+        duration_sec=duration,
+        creation_time=(fmt.get("tags") or {}).get("creation_time"),
+        has_video=video is not None,
+        video_codec=(video or {}).get("codec_name"),
+        width=_int((video or {}).get("width")),
+        height=_int((video or {}).get("height")),
+        frame_rate=(video or {}).get("r_frame_rate"),
+        audio_codec=(audio or {}).get("codec_name"),
+        sample_rate=_int((audio or {}).get("sample_rate")),
+        channels=_int((audio or {}).get("channels")),
+    )
 
 
 def extract_audio_16k_mono(input_file: Path, output_wav: Path, log_path: Path) -> None:
@@ -222,3 +298,77 @@ def export_segments(
         if progress_cb is not None:
             progress_cb(idx, total)
     return specs
+
+
+def _write_concat_list(inputs: list[Path], list_path: Path) -> None:
+    """ffmpeg's concat demuxer input list. Single quotes are escaped per its
+    own quoting rules, so a filename containing one cannot break the list."""
+    lines = []
+    for item in inputs:
+        escaped = str(item.resolve()).replace("'", r"'\''")
+        lines.append(f"file '{escaped}'")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def concat_to_audio_16k_mono(
+    inputs: list[Path], output_wav: Path, log_path: Path, work_dir: Path
+) -> list[float]:
+    """Normalise each input to 16 kHz mono PCM, then join in the given order.
+
+    Returns each input's duration, in the same order, so the caller can record
+    file-boundary offsets. Normalising first is what makes heterogeneous
+    sources safe to concatenate: verified, mp3 44.1k stereo + wav 48k mono +
+    ogg 22k stereo of 2+3+1s produce exactly 6.000s (vts-vm0).
+    """
+    if not inputs:
+        raise RuntimeError("No input files to concatenate")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    normalized: list[Path] = []
+    durations: list[float] = []
+    for index, item in enumerate(inputs):
+        target = work_dir / f"norm_{index:03d}.wav"
+        if not target.exists():
+            extract_audio_16k_mono(item, target, log_path)
+        normalized.append(target)
+        durations.append(probe_duration(target))
+
+    if len(normalized) == 1:
+        shutil.copyfile(normalized[0], output_wav)
+        return durations
+
+    list_path = work_dir / "concat_audio.txt"
+    _write_concat_list(normalized, list_path)
+    run_ffmpeg(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+         "-c", "copy", str(output_wav)],
+        log_path,
+    )
+    return durations
+
+
+def concat_video_stream_copy(
+    inputs: list[Path], output: Path, log_path: Path, work_dir: Path
+) -> None:
+    """Join video parts without re-encoding.
+
+    Callers MUST have verified parameter compatibility first
+    (vts.services.upload_set.verify_probes): stream-copying mismatched inputs
+    silently produces a wrong-duration file, and for differing audio sample
+    rates ffmpeg does not even report an error (vts-vm0).
+    """
+    if not inputs:
+        raise RuntimeError("No input files to concatenate")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if len(inputs) == 1:
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(inputs[0]), "-c", "copy", str(output)], log_path)
+        return
+
+    list_path = work_dir / "concat_video.txt"
+    _write_concat_list(inputs, list_path)
+    run_ffmpeg(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+         "-c", "copy", str(output)],
+        log_path,
+    )

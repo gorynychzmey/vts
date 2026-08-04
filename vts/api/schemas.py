@@ -417,20 +417,45 @@ class UploadConfigOut(BaseModel):
     max_upload_bytes: int
 
 
-class UploadInitRequest(BaseModel):
+class UploadFileSpec(BaseModel):
     filename: str
     total_size: int
+    # File.lastModified from the browser, epoch ms. Used only as the second
+    # ordering signal, after the container's own creation_time (vts-vm0).
+    last_modified: int | None = None
+
+
+class UploadInitRequest(BaseModel):
+    # Required for the legacy single-file flow; a multi-file request (`files`
+    # non-empty) leaves these at their defaults and is not lying about a
+    # filename/size it doesn't have — the handler never reads them in that
+    # branch. The model validator below still requires them when `files` is
+    # absent, so the single-file contract hasn't changed (vts-vm0).
+    filename: str = ""
+    total_size: int = 0
     language: str | None = None
     audio_only: bool = False
     transcript: bool = True
     diarize: bool = False
     prompts: str | None = None
     display_name: str | None = None
+    # When present, this is a multi-file set and `filename`/`total_size` above
+    # are ignored. Absent means the existing single-file flow (vts-vm0).
+    files: list[UploadFileSpec] | None = None
+
+    @model_validator(mode="after")
+    def _require_legacy_fields_or_files(self) -> "UploadInitRequest":
+        if self.files:
+            return self
+        if not self.filename or self.total_size <= 0:
+            raise ValueError("filename and total_size are required when files is absent")
+        return self
 
 
 class UploadInitOut(BaseModel):
     upload_id: str
     chunk_size: int
+    files: list[dict] | None = None
 
 
 class UploadOffsetOut(BaseModel):
