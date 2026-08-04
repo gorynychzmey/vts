@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Text, delete, func, select, tuple_, update
+from sqlalchemy import Text, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
@@ -131,6 +131,45 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    @staticmethod
+    def _apply_task_filters(
+        stmt,
+        *,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        source_type: str | None = None,
+    ):
+        """Narrow a Task query by search text, creation date and source type.
+
+        Shared by the cursor page and the legacy list so the two cannot drift.
+        These only NARROW the set — the cursor/order logic is untouched, the
+        same contract `status` already follows.
+        """
+        if q:
+            # Escape the LIKE wildcards, otherwise a literal "%" or "_" typed
+            # by the user silently becomes a pattern and matches far too much.
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            needle = f"%{escaped}%"
+            stmt = stmt.where(
+                or_(
+                    Task.source_title.ilike(needle, escape="\\"),
+                    Task.source_url.ilike(needle, escape="\\"),
+                )
+            )
+        if created_from is not None:
+            stmt = stmt.where(Task.created_at >= created_from)
+        if created_to is not None:
+            stmt = stmt.where(Task.created_at <= created_to)
+        if source_type == "file":
+            # Uploads are recorded as file://<name>; everything else is a URL
+            # the pipeline downloads. There is no separate column for this —
+            # the prefix is what the rest of the codebase keys on too.
+            stmt = stmt.where(Task.source_url.startswith("file://"))
+        elif source_type == "url":
+            stmt = stmt.where(~Task.source_url.startswith("file://"))
+        return stmt
+
     async def list_tasks_page(
         self,
         user_id: uuid.UUID,
@@ -140,6 +179,10 @@ class Repo:
         order: str = "desc",
         limit: int,
         status: TaskStatus | None = None,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        source_type: str | None = None,
     ) -> list[Task]:
         """Cursor page of a user's tasks within the open interval
         ``after < (created_at, id) < before`` (either bound optional), with an
@@ -149,8 +192,9 @@ class Repo:
         created_at timestamps never cause a skipped or duplicated row.
         ``order`` selects which end ``limit`` cuts from: ``desc`` (newest
         first, for paging downward) or ``asc`` (oldest first, for pulling
-        the tasks adjacent to a head cursor). ``status`` only narrows the
-        set — the cursor/order logic is unchanged.
+        the tasks adjacent to a head cursor). ``status`` and the ``q`` /
+        ``created_from`` / ``created_to`` / ``source_type`` filters only
+        narrow the set — the cursor/order logic is unchanged.
         """
         key = tuple_(Task.created_at, Task.id)
         stmt = (
@@ -160,6 +204,10 @@ class Repo:
         )
         if status is not None:
             stmt = stmt.where(Task.status == status)
+        stmt = self._apply_task_filters(
+            stmt, q=q, created_from=created_from,
+            created_to=created_to, source_type=source_type,
+        )
         if before is not None:
             stmt = stmt.where(key < tuple_(*before))
         if after is not None:

@@ -3223,16 +3223,20 @@ def create_app() -> FastAPI:
         after_ts: datetime | None = None,
         after_id: uuid.UUID | None = None,
         order: str = "desc",
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        source_type: str | None = None,
         user: AuthenticatedUser = Depends(get_current_user),
         session: AsyncSession = Depends(get_session_dep),
         redis: Redis = Depends(get_redis),
         settings: Settings = Depends(get_settings_dep),
     ) -> list[TaskOut] | list[TaskCompactOut]:
-        """List tasks owned by the current user, newest first. Use
-        `limit`/`offset` (legacy) or the cursor params
-        `before_ts`/`before_id` (older than) and `after_ts`/`after_id`
-        (newer than) with `order=desc|asc` to paginate; `compact=true`
-        for slim records (ChatGPT Custom Actions cap ~30KB)."""
+        """List tasks owned by the current user, newest first. Paginate with
+        `limit`/`offset` or the cursors `before_ts`/`before_id` and
+        `after_ts`/`after_id` plus `order`; `compact=true` for slim records.
+        Filter with `q` (title or URL), `created_from`/`created_to`, and
+        `source_type` (`file` or `url`)."""
         if limit is not None and limit < 0:
             raise HTTPException(status_code=422, detail="limit must be non-negative")
         if offset < 0:
@@ -3241,6 +3245,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail="limit must be <= 500")
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=422, detail="order must be 'asc' or 'desc'")
+        if source_type is not None and source_type not in ("file", "url"):
+            raise HTTPException(
+                status_code=422, detail="source_type must be 'file' or 'url'"
+            )
+        if created_from is not None and created_to is not None and created_from > created_to:
+            # Rejected rather than returning an empty list: an inverted range
+            # is a caller mistake, and silently returning nothing looks like
+            # "you have no tasks".
+            raise HTTPException(
+                status_code=422, detail="created_from must not be after created_to"
+            )
         if (before_ts is None) != (before_id is None):
             raise HTTPException(status_code=422, detail="before_ts and before_id must be supplied together")
         if (after_ts is None) != (after_id is None):
@@ -3250,13 +3265,25 @@ def create_app() -> FastAPI:
         if before is not None and after is not None and not (after < before):
             raise HTTPException(status_code=422, detail="after cursor must be older than before cursor")
         repo = Repo(session)
-        if before is not None or after is not None:
+        filters = {
+            "q": q,
+            "created_from": created_from,
+            "created_to": created_to,
+            "source_type": source_type,
+        }
+        filtering = any(v is not None and v != "" for v in filters.values())
+        if before is not None or after is not None or filtering:
+            # A filtered request goes through the cursor query even without a
+            # cursor: it is the only one that knows the filters, and it
+            # degrades to "newest first, limited" when no cursor is given —
+            # which is exactly what the legacy branch did.
             tasks = await repo.list_tasks_page(
                 uuid.UUID(user.id),
                 before=before,
                 after=after,
                 order=order,
                 limit=limit if limit is not None else settings.tasks_page_size,
+                **filters,
             )
         else:
             tasks = await repo.list_tasks_for_user(

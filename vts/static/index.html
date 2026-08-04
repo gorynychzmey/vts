@@ -316,10 +316,37 @@
             </svg>
           </button>
         </div>
+        <div id="task-filters" class="task-filters">
+          <input
+            type="search"
+            id="filter-q"
+            class="filter-search"
+            autocomplete="off"
+            placeholder="Search name or link"
+            aria-label="Search tasks"
+            data-i18n-placeholder="filters.search"
+            data-i18n-aria-label="filters.search"
+          />
+          <select id="filter-type" class="filter-type" aria-label="Source type"
+                  data-i18n-aria-label="filters.type">
+            <option value="" data-i18n="filters.type_any">Any source</option>
+            <option value="url" data-i18n="filters.type_url">Link</option>
+            <option value="file" data-i18n="filters.type_file">Upload</option>
+          </select>
+          <input type="date" id="filter-from" class="filter-date"
+                 aria-label="Created from" data-i18n-aria-label="filters.from" />
+          <input type="date" id="filter-to" class="filter-date"
+                 aria-label="Created to" data-i18n-aria-label="filters.to" />
+          <button type="button" id="filter-clear" class="btn-text ghost hidden"
+                  data-i18n="filters.clear">Clear</button>
+        </div>
         <button id="new-tasks-banner" class="new-tasks-banner" type="button" hidden>
           <span data-i18n="tasks.new_above">New tasks ↑</span>
           <span id="new-tasks-count" class="new-tasks-count"></span>
         </button>
+        <p id="task-empty" class="task-empty" hidden data-i18n="filters.no_matches">
+          No tasks match these filters.
+        </p>
         <div id="task-list" class="task-list"></div>
         <div id="task-sentinel" class="task-sentinel" hidden>
           <span class="task-sentinel-spinner" aria-hidden="true"></span>

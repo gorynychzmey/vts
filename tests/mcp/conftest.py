@@ -327,12 +327,33 @@ class FakeRepo:
         order: str = "desc",
         limit: int = 20,
         status: Any = None,
+        q: str | None = None,
+        created_from: Any = None,
+        created_to: Any = None,
+        source_type: str | None = None,
     ) -> list[FakeTask]:
         items = [t for t in self.tasks.values() if t.user_id == user_id]
         if status is not None:
             # Real repo receives a TaskStatus enum; FakeTask.status is a str.
             want = getattr(status, "value", status)
             items = [t for t in items if t.status == want]
+        # Mirror the real filters (vts-rhx) rather than ignoring them, so a
+        # test asserting a filtered MCP page actually exercises the filter.
+        if q:
+            needle = q.lower()
+            items = [
+                t for t in items
+                if needle in (t.source_title or "").lower()
+                or needle in (t.source_url or "").lower()
+            ]
+        if created_from is not None:
+            items = [t for t in items if t.created_at >= created_from]
+        if created_to is not None:
+            items = [t for t in items if t.created_at <= created_to]
+        if source_type == "file":
+            items = [t for t in items if (t.source_url or "").startswith("file://")]
+        elif source_type == "url":
+            items = [t for t in items if not (t.source_url or "").startswith("file://")]
         items.sort(key=lambda t: (t.created_at, str(t.id)), reverse=(order == "desc"))
         if before is not None:
             b_ts, b_id = before

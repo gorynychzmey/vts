@@ -262,6 +262,10 @@ class _RepoListLike(Protocol):
         order: str = "desc",
         limit: int = 20,
         status: Any = None,
+        q: str | None = None,
+        created_from: Any = None,
+        created_to: Any = None,
+        source_type: str | None = None,
     ) -> list[Any]: ...
 
 
@@ -272,15 +276,25 @@ async def list_tasks(
     status: Literal["queued", "running", "waiting", "paused", "completed", "archived", "failed", "canceled"] | None = None,
     limit: int = 20,
     cursor: str | None = None,
+    q: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    source_type: Literal["file", "url"] | None = None,
 ) -> TaskPage:
     """List the caller's tasks newest-first, one page at a time.
 
     Pages on the immutable ``created_at`` cursor. Pass ``cursor`` (the
-    ``next_cursor`` from a prior page) to fetch the next page; ``status``
-    optionally narrows the set.
+    ``next_cursor`` from a prior page) to fetch the next page. ``status``,
+    ``q`` (matches title or URL), ``created_from``/``created_to`` and
+    ``source_type`` optionally narrow the set; keep them identical across
+    pages, since changing a filter changes what the cursor points into.
     """
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    if created_from is not None and created_to is not None and created_from > created_to:
+        raise HTTPException(
+            status_code=422, detail="created_from must not be after created_to"
+        )
     before = None
     if cursor:
         try:
@@ -294,6 +308,10 @@ async def list_tasks(
         order="desc",
         limit=limit,
         status=status_enum,
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        source_type=source_type,
     )
     summaries = [
         TaskSummary(

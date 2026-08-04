@@ -22,6 +22,18 @@ const appVersionLabel = document.getElementById("app-version");
 const refreshBtn = document.getElementById("refresh-btn");
 const promptSelect = document.getElementById("prompt-select");
 
+// Task-list filter state (vts-rhx). Hoisted next to the other early module
+// state because loadFirstPage() reads it during bootstrap; a `const` declared
+// down with the filter code would be in its temporal dead zone by then.
+const FILTERS_STORAGE_KEY = "vts.taskFilters";
+
+const filterInputs = {
+  q: document.getElementById("filter-q"),
+  type: document.getElementById("filter-type"),
+  from: document.getElementById("filter-from"),
+  to: document.getElementById("filter-to"),
+};
+
 // Delivery state (vts-j2kh). Declared up here, not next to the delivery code
 // far below: bootstrap's loadPresets() -> applyPresetOptions() reads it, and a
 // `const` declared later would be in its temporal dead zone at that point.
@@ -2072,6 +2084,7 @@ function renderTasks(tasks) {
   taskList.innerHTML = "";
   tasks.forEach((task) => appendTaskCard(task));
   updateQueueWatcher(tasks);
+  if (typeof updateEmptyState === "function") updateEmptyState();
 }
 
 function cursorOf(taskEl) {
@@ -2157,12 +2170,12 @@ async function loadNewer() {
   if (p.loading || !p.head) return;
   const myEpoch = p.epoch;
   p.loading = true;
-  const q = new URLSearchParams({
+  const q = appendFilterParams(new URLSearchParams({
     limit: String(p.pageSize),
     order: "asc",
     after_ts: p.head.ts,
     after_id: p.head.id,
-  });
+  }));
   try {
     let tasks;
     try {
@@ -2212,7 +2225,8 @@ async function loadFirstPage() {
   try {
     let tasks;
     try {
-      tasks = await api(`/api/tasks?limit=${p.pageSize}`);
+      const q1 = appendFilterParams(new URLSearchParams({ limit: String(p.pageSize) }));
+      tasks = await api(`/api/tasks?${q1.toString()}`);
     } catch (err) {
       if (myEpoch !== p.epoch) return; // superseded by a newer reset; don't clobber its DOM
       taskList.textContent = err.message;
@@ -2238,12 +2252,12 @@ async function loadNextPage() {
   const myEpoch = p.epoch;
   p.loading = true;
   updateSentinel();
-  const q = new URLSearchParams({
+  const q = appendFilterParams(new URLSearchParams({
     limit: String(p.pageSize),
     order: "desc",
     before_ts: p.tail.ts,
     before_id: p.tail.id,
-  });
+  }));
   try {
     let tasks;
     try {
@@ -3113,7 +3127,11 @@ async function createTask(event) {
     // Claim it before rendering, so a task_status event still in flight for
     // this task cannot flag it as new (vts-3iw).
     state.taskPaging.ownIds.add(String(created.id));
-    prependTaskCard(created);
+    // A newly submitted task can fall outside the active filter; showing it
+    // anyway would put a row in the list that a reload then removes.
+    if (typeof taskMatchesFilters !== "function" || taskMatchesFilters(created)) {
+      prependTaskCard(created);
+    }
     updateHeadTail();
     forgetOwnTask(created.id);
     void refreshQueuePositions();
@@ -5997,6 +6015,10 @@ async function bootstrap() {
   // Load prompts before the first task render so per-prompt finalize step
   // labels resolve to names (not the raw "finalize:user:<uuid>") on first paint.
   await loadPrompts();
+  // Restore BEFORE the first task fetch, so the initial request already
+  // carries the filters a reload is expected to preserve. Restoring after
+  // refreshAll() would load an unfiltered list and then contradict it.
+  restoreFilters();
   await refreshAll();
   // Infinite scroll: observe the sentinel once at bootstrap (refreshAll()
   // re-runs on user switches, so wiring here avoids duplicate observers).
@@ -6733,6 +6755,153 @@ document.getElementById("delivery-target-form")?.addEventListener("submit", asyn
     return;
   }
   await refreshDeliveryManager();
+});
+
+// ---------------------------------------------------------------------------
+// Task list filters — name / date / type (vts-rhx, VOS-84b)
+//
+// The filters narrow the same server-side cursor query the list already pages
+// over, so filtering and infinite scroll compose: changing a filter resets
+// paging (via the existing epoch mechanism) and every subsequent page carries
+// the same filters.
+//
+// Kept in sessionStorage, not localStorage: a filter should survive a page
+// reload (Victor, 2026-08-04) but a fresh tab must start unfiltered, so a
+// half-empty list is never a mystery left over from days ago.
+// ---------------------------------------------------------------------------
+
+function currentFilters() {
+  return {
+    q: (filterInputs.q?.value || "").trim(),
+    source_type: filterInputs.type?.value || "",
+    created_from: filterInputs.from?.value || "",
+    created_to: filterInputs.to?.value || "",
+  };
+}
+
+function hasActiveFilters() {
+  return Object.values(currentFilters()).some((v) => v !== "");
+}
+
+/** Append the active filters to a task-list query.
+ *
+ * A <input type="date"> yields "YYYY-MM-DD". `created_to` is pushed to the END
+ * of that day, otherwise picking the same day for both bounds matches only
+ * tasks created exactly at midnight — which reads as "the filter is broken".
+ */
+function appendFilterParams(params) {
+  const f = currentFilters();
+  if (f.q) params.set("q", f.q);
+  if (f.source_type) params.set("source_type", f.source_type);
+  if (f.created_from) params.set("created_from", `${f.created_from}T00:00:00`);
+  if (f.created_to) params.set("created_to", `${f.created_to}T23:59:59`);
+  return params;
+}
+
+function saveFilters() {
+  try {
+    const f = currentFilters();
+    if (Object.values(f).every((v) => v === "")) {
+      window.sessionStorage.removeItem(FILTERS_STORAGE_KEY);
+    } else {
+      window.sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(f));
+    }
+  } catch {
+    // Private mode / storage disabled: filtering still works, it just does
+    // not survive a reload. Never break the list over this.
+  }
+}
+
+function restoreFilters() {
+  let saved = null;
+  try {
+    saved = JSON.parse(window.sessionStorage.getItem(FILTERS_STORAGE_KEY) || "null");
+  } catch {
+    saved = null;
+  }
+  if (saved && typeof saved === "object") {
+    if (filterInputs.q) filterInputs.q.value = saved.q || "";
+    if (filterInputs.type) filterInputs.type.value = saved.source_type || "";
+    if (filterInputs.from) filterInputs.from.value = saved.created_from || "";
+    if (filterInputs.to) filterInputs.to.value = saved.created_to || "";
+  }
+  syncFilterChrome();
+}
+
+function syncFilterChrome() {
+  const clearBtn = document.getElementById("filter-clear");
+  if (clearBtn) clearBtn.classList.toggle("hidden", !hasActiveFilters());
+}
+
+/** Show "nothing matches" only when a filter is what emptied the list —
+ *  a genuinely empty account is not a filtering problem. */
+function updateEmptyState() {
+  const empty = document.getElementById("task-empty");
+  if (!empty) return;
+  const noCards = !taskList.querySelector(".task");
+  empty.hidden = !(noCards && hasActiveFilters());
+}
+
+/** Does this task belong in the list as currently filtered?
+ *
+ * SSE delivers events for EVERY task of the user, so without this a task
+ * excluded by the filter would pop into a filtered list on its next update.
+ * Mirrors the server's predicates; the server stays the authority for what a
+ * page contains.
+ */
+function taskMatchesFilters(task) {
+  const f = currentFilters();
+  if (f.source_type) {
+    const isFile = String(task.source_url || "").startsWith("file://");
+    if (f.source_type === "file" && !isFile) return false;
+    if (f.source_type === "url" && isFile) return false;
+  }
+  if (f.q) {
+    const needle = f.q.toLowerCase();
+    const haystack = `${task.source_title || ""} ${task.source_url || ""}`.toLowerCase();
+    if (!haystack.includes(needle)) return false;
+  }
+  if (f.created_from && task.created_at) {
+    if (new Date(task.created_at) < new Date(`${f.created_from}T00:00:00`)) return false;
+  }
+  if (f.created_to && task.created_at) {
+    if (new Date(task.created_at) > new Date(`${f.created_to}T23:59:59`)) return false;
+  }
+  return true;
+}
+
+let filterDebounceTimer = null;
+
+function applyFilters() {
+  saveFilters();
+  syncFilterChrome();
+  // loadFirstPage() bumps the epoch, which discards any page fetch already in
+  // flight for the previous filter set — reusing that instead of inventing a
+  // second reset path.
+  void loadFirstPage();
+}
+
+function onFilterChanged({ debounce = false } = {}) {
+  if (filterDebounceTimer) window.clearTimeout(filterDebounceTimer);
+  if (!debounce) {
+    applyFilters();
+    return;
+  }
+  // Typing must not fire a request per keystroke.
+  filterDebounceTimer = window.setTimeout(applyFilters, 300);
+}
+
+filterInputs.q?.addEventListener("input", () => onFilterChanged({ debounce: true }));
+filterInputs.type?.addEventListener("change", () => onFilterChanged());
+filterInputs.from?.addEventListener("change", () => onFilterChanged());
+filterInputs.to?.addEventListener("change", () => onFilterChanged());
+
+document.getElementById("filter-clear")?.addEventListener("click", () => {
+  if (filterInputs.q) filterInputs.q.value = "";
+  if (filterInputs.type) filterInputs.type.value = "";
+  if (filterInputs.from) filterInputs.from.value = "";
+  if (filterInputs.to) filterInputs.to.value = "";
+  onFilterChanged();
 });
 
 void bootstrap();

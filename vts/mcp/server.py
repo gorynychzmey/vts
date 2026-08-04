@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -170,14 +171,26 @@ def build_mcp_server() -> FastMCP:
         ] | None = None,
         limit: int = 20,
         cursor: str | None = None,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        source_type: Literal["file", "url"] | None = None,
     ) -> TaskPage:
         """List the calling user's tasks, newest first, in pages.
 
         Returns up to `limit` tasks (max 100) plus `next_cursor` and `has_more`.
         To fetch the next page, call again with `cursor` set to the
         `next_cursor` from the previous response. When `has_more` is false (or
-        `next_cursor` is null) there are no more tasks. Optionally filter by
-        `status`.
+        `next_cursor` is null) there are no more tasks.
+
+        Filters, all optional and combinable:
+            status: only tasks in this pipeline state.
+            q: free text matched against the task's title AND its URL, so a
+                remembered fragment of either finds the task.
+            created_from / created_to: bound the creation time, inclusive.
+            source_type: "file" for uploads, "url" for links.
+        Keep filters identical across pages of one walk — changing a filter
+        changes the set the cursor points into.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -185,6 +198,8 @@ def build_mcp_server() -> FastMCP:
             return await list_tasks(
                 user=user, repo=Repo(session),
                 status=status, limit=limit, cursor=cursor,
+                q=q, created_from=created_from, created_to=created_to,
+                source_type=source_type,
             )
 
     @mcp.tool(name="get_status")
