@@ -127,13 +127,16 @@ def build_mcp_server() -> FastMCP:
                 pipeline options. The preset fills any field you leave at its
                 default; explicit params above override the preset.
             delivery: Optional destinations for the result, each
-                {"deliver_to": "<target id>", "variant": "raw"|"redacted"|"summary"}.
+                {"deliver_to": "<target id>", "variant": "<artifact>"}.
                 Targets are managed with the delivery-target tools; reference
                 them by ID (from list_delivery_targets), not by name, so that
                 renaming a target never breaks a queued task. `variant` picks
                 which artifact to send: "raw" is the ASR transcript,
                 "redacted" the segment-prompt-polished transcript, "summary"
-                the final summary. Omitting `variant` uses the target's
+                the final summary, and a prompt ref like "user:<prompt-uuid>"
+                the rendered output of that prompt — which then has to be
+                among `prompts`, or the delivery would wait on an artifact
+                nothing produces. Omitting `variant` uses the target's
                 configured default. An unknown target id, or one whose adapter
                 plugin is not currently installed, is rejected with 422.
         """

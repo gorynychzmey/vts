@@ -1592,9 +1592,15 @@ def _normalize_delivery_json(delivery: str | None) -> list[dict]:
         variant = entry.get("variant")
         if variant:
             if variant not in ("raw", "redacted", "summary"):
-                raise HTTPException(
-                    status_code=422, detail=f"invalid delivery variant: {variant!r}"
-                )
+                # May also be a prompt ref like "user:<uuid>" (vts-as1i).
+                from vts.services.prompt_registry import parse_ref
+
+                try:
+                    parse_ref(str(variant))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422, detail=f"invalid delivery variant: {variant!r}"
+                    ) from exc
             item["variant"] = str(variant)
         out.append(item)
     return out

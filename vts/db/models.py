@@ -291,7 +291,10 @@ class DeliveryAttempt(Base):
         UUID(as_uuid=True), ForeignKey("delivery_targets.id", ondelete="SET NULL"), nullable=True
     )
     adapter: Mapped[str] = mapped_column(String(64), nullable=False)
-    variant: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 64, not 32: besides "raw"/"redacted"/"summary" this now holds a prompt
+    # ref like "user:<uuid>" (vts-as1i), which is 41 characters — the old
+    # width would have failed the insert.
+    variant: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[DeliveryStatus] = mapped_column(
         Enum(DeliveryStatus, name="delivery_status", native_enum=False),
         nullable=False, default=DeliveryStatus.pending,

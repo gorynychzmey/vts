@@ -145,6 +145,50 @@ export async function run() {
       failures.push(`expected a per-destination variant picker, got ${variantPickers}`);
     }
 
+    // --- a user prompt's result is offerable as a variant (vts-as1i) ------
+    // The default stub carries one user prompt ("Memo", id u1). It must be
+    // listed, and DISABLED until that prompt is selected: the server rejects
+    // delivering a prompt that will not run, so offering it as selectable
+    // would be a trap.
+    const memoBefore = await page.$$eval(
+      "#delivery-select .delivery-variant option",
+      (els) => els.filter((o) => o.value === "user:u1")
+                  .map((o) => ({ text: o.textContent, disabled: o.disabled })),
+    );
+    if (memoBefore.length !== 1) {
+      failures.push(`expected the user prompt as a variant option, got ${JSON.stringify(memoBefore)}`);
+    } else if (!memoBefore[0].disabled) {
+      failures.push("a prompt that is not selected must not be selectable as a variant");
+    }
+
+    // Selecting the prompt enables it.
+    await clickReal(page, "#prompt-select .prompt-select-toggle");
+    await page.waitForTimeout(150);
+    const promptBox = await page.$('#prompt-select input[data-source="user"][data-id="u1"]');
+    if (!promptBox) {
+      failures.push("no checkbox for the user prompt in #prompt-select");
+    } else {
+      await promptBox.click();
+      await page.waitForTimeout(200);
+      const memoAfter = await page.$$eval(
+        "#delivery-select .delivery-variant option",
+        (els) => els.filter((o) => o.value === "user:u1").map((o) => o.disabled),
+      );
+      if (memoAfter.length !== 1 || memoAfter[0] !== false) {
+        failures.push(`selecting the prompt should enable its variant option, got ${JSON.stringify(memoAfter)}`);
+      }
+    }
+
+    // system:summary is deliberately NOT offered as a ref: it is already
+    // reachable as the plain "summary" option.
+    const dupSummary = await page.$$eval(
+      "#delivery-select .delivery-variant option",
+      (els) => els.filter((o) => o.value === "system:summary").length,
+    );
+    if (dupSummary !== 0) {
+      failures.push("system:summary must not be duplicated as a prompt ref");
+    }
+
     // No horizontal overflow (vts-nr4).
     const overflow = await page.evaluate(() =>
       document.documentElement.scrollWidth - document.documentElement.clientWidth);

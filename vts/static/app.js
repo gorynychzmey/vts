@@ -2654,7 +2654,13 @@ function renderPromptMultiselect(container, prompts, selectedRefs, opts = {}) {
   }
 
   toggle.addEventListener("click", () => togglePromptPopover(container));
-  popover.addEventListener("change", () => updatePromptSelectSummary(container));
+  popover.addEventListener("change", () => {
+    updatePromptSelectSummary(container);
+    // The delivery picker offers each user prompt's result, greyed out until
+    // that prompt is selected — so toggling a prompt has to refresh it, or
+    // the enabled/disabled state goes stale (vts-as1i).
+    if (container === promptSelect) refreshDeliveryVariantOptions();
+  });
 
   container.append(toggle, popover);
   updatePromptSelectSummary(container);
@@ -6484,6 +6490,25 @@ function buildDeliveryRow(target, selected) {
     option.textContent = value ? t(`delivery.variant.${value}`) : t("delivery.variant.default");
     variant.appendChild(option);
   }
+  // A prompt's own output can be delivered too (vts-as1i). Only USER prompts
+  // are offered: "system:summary" is already reachable as the plain "summary"
+  // option, and two ways to say the same thing would only confuse.
+  //
+  // The server rejects delivering a prompt that is not also selected for the
+  // task, so these options are shown as disabled until their prompt is
+  // ticked in the Prompts control — visible, but not a trap.
+  const selectedPrompts = getSelectedPrompts();
+  for (const prompt of promptsCache) {
+    if (prompt.source !== "user") continue;
+    const ref = `${prompt.source}:${prompt.id}`;
+    const option = document.createElement("option");
+    option.value = ref;
+    option.textContent = promptDisplayName(prompt);
+    option.disabled = !selectedPrompts.some(
+      (p) => p.source === prompt.source && p.id === prompt.id
+    );
+    variant.appendChild(option);
+  }
   variant.value = chosen?.variant || "";
   // Clicking the variant picker must not toggle the row's checkbox.
   variant.addEventListener("click", (event) => event.preventDefault());
@@ -6561,6 +6586,15 @@ function selectedDeliveryRefs(container) {
 
 /** Selectors stay hidden until at least one destination exists, so a user
  *  with no plugins never sees an empty control they cannot act on. */
+/** Re-render the destination selector so each row's variant picker reflects
+ *  the CURRENT prompt selection, preserving what the user already chose. */
+function refreshDeliveryVariantOptions() {
+  if (!deliverySelect || !deliveryTargetsList().length) return;
+  const wasOpen = deliverySelect.classList.contains("open");
+  renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
+  if (wasOpen) setPromptPopoverOpen(deliverySelect, true);
+}
+
 function renderDeliverySelectors() {
   const has = deliveryTargetsList().length > 0;
   if (deliverySelectField) deliverySelectField.hidden = !has;

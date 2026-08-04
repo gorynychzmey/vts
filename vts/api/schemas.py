@@ -65,10 +65,31 @@ class PresetRef(BaseModel):
 
 
 class DeliveryRef(BaseModel):
-    """A preset's reference to a delivery target: name only, never secrets."""
+    """A reference to a delivery target by ID, never secrets."""
 
     deliver_to: str = Field(min_length=1)
-    variant: Literal["raw", "redacted", "summary"] | None = None
+    # Not a Literal: besides the three fixed artifacts, `variant` may address
+    # a prompt result as "source:id" (vts-as1i). Validated below rather than
+    # by the type, so the error names what was wrong.
+    variant: str | None = None
+
+    @field_validator("variant")
+    @classmethod
+    def _validate_variant(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value in ("raw", "redacted", "summary"):
+            return value
+        from vts.services.prompt_registry import parse_ref
+
+        try:
+            parse_ref(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"variant must be raw/redacted/summary or a prompt ref "
+                f"like 'user:<uuid>', got {value!r}"
+            ) from exc
+        return value
 
 
 class PresetOptions(BaseModel):
@@ -262,6 +283,18 @@ class TaskCreateRequest(BaseModel):
             raise ValueError("prompts require transcript")
         if any(d.variant == "summary" for d in self.delivery) and not self.prompts:
             raise ValueError("delivery variant 'summary' requires prompts")
+        # Delivering a prompt's result requires that prompt to actually run,
+        # otherwise the delivery is queued for an artifact nothing will ever
+        # produce and only fails much later, at delivery time (vts-as1i).
+        selected = {f"{p.source}:{p.id}" for p in self.prompts}
+        for entry in self.delivery:
+            variant = entry.variant or ""
+            if ":" not in variant:
+                continue
+            if variant not in selected:
+                raise ValueError(
+                    f"delivery variant {variant!r} needs that prompt selected"
+                )
         if self.diarize and not self.transcript:
             raise ValueError("diarize requires transcript")
         if self.speaker_no_manual_stop and not self.diarize:

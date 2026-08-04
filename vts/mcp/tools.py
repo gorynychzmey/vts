@@ -210,6 +210,19 @@ async def submit_video(
         raise HTTPException(
             status_code=422, detail="delivery variant 'summary' requires prompts"
         )
+    # Same rule as the REST path: delivering a prompt's result requires that
+    # prompt to run, or the delivery waits forever on an artifact nothing
+    # produces (vts-as1i).
+    selected_refs = {f"{p.get('source')}:{p.get('id')}" for p in norm}
+    for entry in delivery_refs:
+        variant = str(entry.get("variant") or "")
+        if ":" not in variant:
+            continue
+        if variant not in selected_refs:
+            raise HTTPException(
+                status_code=422,
+                detail=f"delivery variant {variant!r} needs that prompt selected",
+            )
 
     task_id = uuid.uuid4()
     artifact = task_dir(artifacts_root, user.username, task_id)

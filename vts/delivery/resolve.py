@@ -35,7 +35,52 @@ def _read(path: Path | None, *, variant: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _resolve_prompt_variant(task, variant: str) -> DeliveryPayload:
+    """Deliver the rendered output of one prompt run against this task.
+
+    Reuses the addressing the MCP/REST result endpoints already use, so a
+    delivery names a prompt result exactly the way everything else does.
+    """
+    from vts.services.prompt_registry import parse_ref
+    from vts.services.prompt_results import resolve_result_path
+
+    try:
+        source, ref_id = parse_ref(variant)
+    except ValueError as exc:
+        raise VariantUnavailable(f"unknown variant: {variant}") from exc
+
+    path = resolve_result_path(task, source, ref_id)
+    if not path:
+        # Not an error the pipeline should die on: the prompt may simply not
+        # have run for this task (it was deselected, or the task predates the
+        # prompt). VariantUnavailable is what the consumer already handles.
+        raise VariantUnavailable(f"{variant}: no result recorded for this task")
+
+    content = _read(Path(path), variant=variant)
+    return DeliveryPayload(
+        task_id=str(task.id),
+        variant=variant,
+        content=content,
+        # Prompt results are rendered by an LLM against a markdown-shaped
+        # instruction, the same as the summary variant.
+        content_format="markdown",
+        task=_task_meta(task),
+    )
+
+
+def is_prompt_variant(variant: str) -> bool:
+    """True when `variant` addresses a prompt result rather than a fixed file.
+
+    The three fixed variants are bare words; a prompt result is addressed the
+    way the rest of the codebase already addresses one — "source:id", e.g.
+    "user:<uuid>" (vts-as1i).
+    """
+    return isinstance(variant, str) and ":" in variant
+
+
 def resolve_variant(task, variant: str) -> DeliveryPayload:
+    if is_prompt_variant(variant):
+        return _resolve_prompt_variant(task, variant)
     if variant not in VALID_VARIANTS:
         raise VariantUnavailable(f"unknown variant: {variant}")
 
