@@ -3865,6 +3865,8 @@ async function refreshAll() {
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+  const hdrBtn = document.getElementById("header-menu-btn");
+  if (hdrBtn) hdrBtn.setAttribute("aria-expanded", "false");
   // Close any open prompt-select popover whose container does not contain the click.
   document.querySelectorAll(".prompt-select.open").forEach((container) => {
     if (!container.contains(event.target)) {
@@ -5720,6 +5722,9 @@ function setPushButtonState(state) {
       : t("action.enable_notifications");
   pushToggleBtn.title = label;
   pushToggleBtn.setAttribute("aria-label", label);
+  // It is a labelled row in the header menu now, not an icon — the state has to
+  // read from the text itself (vts-nr4).
+  pushToggleBtn.textContent = label;
   pushToggleBtn.classList.toggle("push-active", state === "subscribed");
   pushToggleBtn.disabled = state === "pending";
 }
@@ -5829,6 +5834,34 @@ async function togglePush() {
 
 if (pushToggleBtn) {
   pushToggleBtn.addEventListener("click", togglePush);
+}
+
+// ---------- Header burger menu ----------
+
+const headerMenuBtn = document.getElementById("header-menu-btn");
+const headerMenu = document.getElementById("header-menu");
+if (headerMenuBtn && headerMenu) {
+  headerMenuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = headerMenu.classList.contains("open");
+    document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+    if (!isOpen) {
+      // Same fixed-position placement the task cards' menus use: measure the
+      // trigger, then right-align the panel to it so a wide menu never hangs
+      // off the screen edge.
+      const rect = headerMenuBtn.getBoundingClientRect();
+      headerMenu.style.top = `${rect.bottom + 4}px`;
+      headerMenu.style.left = "0px";
+      headerMenu.classList.add("open");
+      headerMenu.style.left = `${Math.max(8, rect.right - headerMenu.offsetWidth)}px`;
+    }
+    headerMenuBtn.setAttribute("aria-expanded", String(!isOpen));
+  });
+  // Each entry opens a dialog; leaving the menu up behind it looks stuck.
+  headerMenu.addEventListener("click", () => {
+    headerMenu.classList.remove("open");
+    headerMenuBtn.setAttribute("aria-expanded", "false");
+  });
 }
 
 // ---------- Share target: pending file handoff from service worker ----------

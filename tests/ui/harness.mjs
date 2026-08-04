@@ -119,6 +119,16 @@ export async function clickReal(page, selector) {
   await page.click(selector);
 }
 
+// The header's manage entries (prompts, presets, voices, tokens, notifications)
+// live inside the burger menu, so they are not clickable until it is open
+// (vts-nr4). Opens the menu, then clicks the entry.
+export async function openFromHeaderMenu(page, itemSelector) {
+  await page.click("#header-menu-btn");
+  await page.waitForTimeout(150);
+  await page.click(itemSelector);
+  await page.waitForTimeout(200);
+}
+
 const SHOT_DIR = "/tmp/vts-ui-verify";
 export async function screenshot(page, name) {
   fs.mkdirSync(SHOT_DIR, { recursive: true });

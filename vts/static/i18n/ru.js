@@ -3,6 +3,7 @@ window.__VTS_I18N.ru = {
 "header.title": "Транскрибация и суммаризация видео",
 "header.subtitle": "Поставьте URL в очередь, следите за пайплайном и проверяйте артефакты транскрипта и сводки.",
 "header.version": "Версия:",
+"header.menu": "Меню",
 "context.authenticated": "Аутентифицирован:",
 "context.acting_as": "Работаю как:",
 "context.admin_suffix": " (админ)",

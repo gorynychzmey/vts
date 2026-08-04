@@ -3,6 +3,7 @@ window.__VTS_I18N.de = {
 "header.title": "Video transkribieren und zusammenfassen",
 "header.subtitle": "URL in die Warteschlange stellen, Pipeline beobachten und Transkript-/Summary-Artefakte prüfen.",
 "header.version": "Version:",
+"header.menu": "Menü",
 "context.authenticated": "Authentifiziert:",
 "context.acting_as": "Arbeitet als:",
 "context.admin_suffix": " (Admin)",

@@ -47,9 +47,18 @@ header p {
 
 .header-version {
   margin: -0.7rem 0 1.2rem;
-  display: inline-flex;
+  display: flex;
   gap: 0.45rem;
-  align-items: baseline;
+  align-items: center;
+  /* Version label plus a row of icon buttons: on a 320px screen these do not
+     fit on one line, and inline-flex refused to wrap them (vts-nr4). */
+  flex-wrap: wrap;
+}
+
+/* Version text stays left; the controls sit against the right edge, which is
+   where a header's actions are expected and uses the empty middle. */
+.header-version .header-menu-wrapper {
+  margin-left: auto;
 }
 
 .card {
@@ -200,10 +209,24 @@ input[type="file"] {
   background: #fff;
   padding: 0.55rem 0.9rem;
   font-size: 0.85rem;
+  /* Translated labels are much longer than the English ones (de:
+     "Nicht für Nachbearbeitung anhalten" needs ~274px against a ~151px grid
+     cell). Allow the pill to be narrower than its text and let the label wrap
+     instead of spilling out of the cell (vts-nr4). */
+  min-width: 0;
 }
 
 .option-pill input {
   margin: 0;
+  /* Checkbox must keep its size while the label text takes the slack. */
+  flex: 0 0 auto;
+}
+
+.option-pill > span {
+  min-width: 0;
+  /* `break-word`, not `anywhere`: the latter split "Nachbearbeitung" mid-word
+     even though the line had room to wrap normally. */
+  overflow-wrap: break-word;
 }
 
 .language-control {
@@ -517,16 +540,23 @@ input[type="file"] {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 0.35rem);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Anchored to the trigger's right edge rather than centred on it. A centred
+     bubble (`left: 50%` + `translateX(-50%)`) is laid out as a max-content box
+     starting half-way across the trigger: on a narrow control that box sticks
+     out far past it, and since `transform` moves only the painted pixels, the
+     original box is what widens the scrollable area. That gave the whole page a
+     horizontal scrollbar with nothing visibly out of place — and it did so even
+     while the bubble was invisible (vts-nr4). */
+  right: 0;
   /* Wrap rather than nowrap: a single-line bubble on a long string is wider
      than its container, which clips the text and inflates the scrollWidth of
      any scrollable ancestor (that was the stray scrollbar under the presets
      dialog, vts-7rj). max-content keeps short labels on one line. */
   white-space: normal;
   width: max-content;
-  max-width: 16rem;
-  text-align: center;
+  /* Never let a bubble be wider than the screen. */
+  max-width: min(16rem, calc(100vw - 2rem));
+  text-align: left;
   /* Styled like the browser's native tooltip — light surface, dark text and a
      dark hairline border — so our bubbles and any remaining native `title`
      read as the same thing. */
@@ -539,29 +569,30 @@ input[type="file"] {
   padding: 0.3rem 0.5rem;
   border-radius: 6px;
   opacity: 0;
+  /* `opacity: 0` alone still leaves the bubble participating in layout, so an
+     always-present tooltip kept widening the scrollable area of its ancestors
+     even though nothing was on screen. `visibility: hidden` removes it from
+     that calculation; it is flipped back on hover/focus below. */
+  visibility: hidden;
   pointer-events: none;
   /* No delay on the way OUT (hide immediately when the pointer leaves); the
      show-delay lives on the trigger rule below. */
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, visibility 0.12s ease;
   transition-delay: 0s;
   z-index: 50;
 }
-/* Right-aligned action buttons: a centred bubble on the last button still
-   overhangs the container edge, so anchor these to the button's right edge. */
-.prompts-actions [data-tooltip]::after {
-  left: auto;
-  right: 0;
-  transform: none;
-  text-align: left;
-}
-/* Form controls sitting on a container's left edge (the option pills and the
-   language control): a centred bubble spills off that edge and gets clipped, so
-   anchor those to the control's left edge instead. */
-.options-row > .option-pill[data-tooltip]::after,
-.options-row > .language-control[data-tooltip]::after {
+/* (Right-aligned action buttons used to need an explicit right anchor here;
+   that is the global default now.) */
+
+/* Controls sitting near a narrow container's LEFT edge need the opposite
+   anchor: right-anchoring a ~256px bubble on a pill that starts just inside the
+   preset dialog pushes it off that dialog's left edge instead. Anchor these to
+   the control's left edge so the bubble opens inwards. The new-task form is
+   wide enough that its own pills are fine either way. */
+.preset-edit-options > .option-pill[data-tooltip]::after,
+.preset-edit-options > .language-control[data-tooltip]::after {
   left: 0;
   right: auto;
-  transform: none;
   text-align: left;
 }
 
@@ -605,6 +636,7 @@ input[type="file"] {
 [data-tooltip]:focus-visible::after,
 [data-tooltip]:active::after {
   opacity: 1;
+  visibility: visible;
   /* Dwell before showing, so tooltips don't flash the moment the pointer sweeps
      across a button. No delay on hide (base rule) — leaving is instant. */
   transition-delay: 0.5s;
@@ -628,6 +660,20 @@ input[type="file"] {
 .btn-menu-wrapper {
   display: inline-flex;
 }
+
+/* The header burger sits in a baseline-aligned row next to the version text;
+   without this it rides high against the label. */
+.header-menu-wrapper {
+  align-self: center;
+}
+
+.header-menu {
+  /* Labels here are full sentences in some locales ("Browser-Benachrichtigungen
+     bei Aufgabenabschluss aktivieren"), so let rows wrap instead of forcing the
+     panel wider than a phone screen. */
+  max-width: min(20rem, calc(100vw - 1rem));
+}
+
 
 .btn-menu {
   position: fixed;
@@ -659,12 +705,35 @@ input[type="file"] {
   white-space: nowrap;
 }
 
+/* Must come after `.btn-menu button` (same specificity, later wins): header
+   entries are full sentences in some locales, so they wrap instead of being
+   cut off at the panel edge. */
+.header-menu button {
+  white-space: normal;
+  line-height: 1.3;
+}
+
+/* Keeps the "notifications on" state visible now that this is a text row. */
+.header-menu button.push-active {
+  font-weight: 600;
+}
+
+.header-menu button.hidden {
+  display: none;
+}
+
 .btn-menu button:hover {
   background: #f5f0e8;
 }
 
 .task-list {
   display: grid;
+  /* An implicit `auto` track is sized to the widest card's max-content, so a
+     long title/URL made the track (and the page) wider than the viewport no
+     matter how many min-width:0 the card's own flex chain carried — the track,
+     not the container, was the floor. minmax(0, 1fr) caps it at the container
+     so the cards can actually shrink (vts-nr4). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.7rem;
 }
 
@@ -748,6 +817,10 @@ input[type="file"] {
   display: flex;
   justify-content: space-between;
   gap: 0.7rem;
+  /* Flex items default to min-width:auto, which refuses to shrink below the
+     content's max-content width. Without this the row propagates the long
+     title/URL width straight back up to the card. */
+  min-width: 0;
   padding: 0.75rem 0.8rem;
   background: #fff8e8;
   /* Was clipped by the parent's overflow before; now rounds itself so the
@@ -861,6 +934,10 @@ input[type="file"] {
   align-items: flex-end;
   gap: 0.3rem;
   flex-shrink: 0;
+  /* The action toolbar below is a horizontal scroller; it can only clip if its
+     ancestors are allowed to be narrower than it. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .task-right-bottom {
@@ -1156,15 +1233,23 @@ input[type="file"] {
   .task-right {
     flex-direction: row;
     align-items: center;
-    flex-wrap: nowrap;
+    /* Wrap rather than nowrap: sharing one line with the status chip left the
+       action toolbar ~150px for ~295px of buttons, so most of them could only
+       be reached by scrolling a stub of a strip. Letting it drop to its own
+       line gives the toolbar the card's full width, and on a card with few
+       actions nothing wraps at all (vts-nr4). */
+    flex-wrap: wrap;
     width: 100%;
     justify-content: space-between;
+    gap: 0.35rem 0.5rem;
     overflow: hidden;
   }
 
   .task-toolbar-wrap {
     position: relative;
-    flex-shrink: 1;
+    /* Take the whole line once wrapped, so the scroller is as wide as the card
+       instead of the leftovers next to the status chip. */
+    flex: 1 1 100%;
     min-width: 0;
   }
 
@@ -1187,22 +1272,15 @@ input[type="file"] {
   .task-right-bottom {
     overflow-x: auto;
     scrollbar-width: none;
+    min-width: 0;
+    /* The scroller must be free to be narrower than its buttons; without an
+       explicit basis it takes its max-content width from .task-actions-inline
+       and nothing ever scrolls. */
+    flex: 1 1 0;
   }
 
   .task-right-bottom::-webkit-scrollbar {
     display: none;
-  }
-
-  /* The mobile toolbar is a horizontal scroller (and .task-right clips), so a
-     bubble anchored above a button is cut off no matter what the card does.
-     Anchoring to the row's own right edge keeps a long label inside the
-     viewport instead of pushing the scroller wider. */
-  .task-right-bottom [data-tooltip]::after,
-  .task-actions-inline [data-tooltip]::after {
-    left: auto;
-    right: 0;
-    transform: none;
-    text-align: left;
   }
 
   .url-row {
@@ -1216,14 +1294,32 @@ input[type="file"] {
     align-items: stretch;
   }
 
+  /* A pill whose label cannot fit half the row (de: "Nicht für Nachbearbeitung
+     anhalten") takes the full width instead of hyphen-free mid-word breaks like
+     "Nachbearbeitu / ng". The others stay paired two-up (vts-nr4). */
+  #speaker-no-manual-stop-pill {
+    grid-column: 1 / -1;
+  }
+
   .preset-field {
     grid-column: 1 / -1;
     flex-wrap: nowrap;
+    min-width: 0;
   }
 
   .preset-field #preset-select {
     flex: 1 1 auto;
     min-width: 0;
+  }
+
+  /* "Als Preset speichern" is far wider than the English label; let it wrap
+     and shrink rather than push the form wider than the screen. */
+  .preset-field #preset-save-btn {
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
   }
 
   .prompt-select-field {

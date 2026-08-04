@@ -3,15 +3,13 @@
 // selecting a speaker loads its fragments, inline rename, delete-with-confirm
 // naming the fragment count for a speaker, delete-with-confirm for a fragment,
 // and that each fragment's <audio> src points at the sample audio endpoint.
-import {
-  startStubServer,
+import { startStubServer,
   launch,
   openPage,
   isVisible,
   dialogOpen,
   clickReal,
-  screenshot,
-} from "../harness.mjs";
+  screenshot, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "speaker-registry-dialog";
 
@@ -59,7 +57,7 @@ export async function run() {
       failures.push("no #speaker-registry-btn in header");
       return failures;
     }
-    await clickReal(page, "#speaker-registry-btn");
+    await openFromHeaderMenu(page, "#speaker-registry-btn");
     await page.waitForTimeout(250);
     if (!(await dialogOpen(page, "speaker-registry-dialog"))) {
       failures.push("speaker-registry-dialog did not open on #speaker-registry-btn click");

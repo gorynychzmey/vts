@@ -3,6 +3,7 @@ window.__VTS_I18N.en = {
 "header.title": "Video Transcribe & Summarize",
 "header.subtitle": "Queue URL, monitor pipeline, inspect transcript and summary artifacts.",
 "header.version": "Version:",
+"header.menu": "Menu",
 "context.authenticated": "Authenticated:",
 "context.acting_as": "Working as:",
 "context.admin_suffix": " (admin)",

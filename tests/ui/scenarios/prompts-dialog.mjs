@@ -2,7 +2,7 @@
 // (Edit/Delete/Duplicate), not text buttons, so a long prompt name is not
 // clipped. Opens from #prompts-btn, asserts the user row name fits, the
 // action cluster uses .icon-btn (and zero .btn-text), then screenshots.
-import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot } from "../harness.mjs";
+import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "prompts-dialog";
 
@@ -22,7 +22,7 @@ export async function run() {
       failures.push("no #prompts-btn in header");
       return failures;
     }
-    await clickReal(page, "#prompts-btn");
+    await openFromHeaderMenu(page, "#prompts-btn");
     await page.waitForTimeout(200);
     if (!(await dialogOpen(page, "prompts-dialog"))) {
       failures.push("prompts-dialog did not open on #prompts-btn click");

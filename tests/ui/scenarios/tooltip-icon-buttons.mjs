@@ -6,7 +6,7 @@
 // Captures readable desktop (1100px) + mobile (375px) screenshots into /tmp.
 import { chromium } from "playwright";
 import fs from "fs";
-import { startStubServer } from "../harness.mjs";
+import { startStubServer, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "tooltip-icon-buttons";
 
@@ -87,8 +87,7 @@ export async function run() {
     await desktop.goto(baseUrl, { waitUntil: "networkidle" });
     await desktop.waitForTimeout(300);
 
-    await desktop.click("#prompts-btn");
-    await desktop.waitForTimeout(200);
+    await openFromHeaderMenu(desktop, "#prompts-btn");
     failures.push(...await checkDialog(desktop, "#prompts-list", "prompts/desktop"));
     // Leave a hover bubble showing for the screenshot.
     await desktop.hover("#prompts-list .prompts-actions .icon-btn[data-tooltip]");
@@ -97,8 +96,7 @@ export async function run() {
     await desktop.click("#prompts-close-btn").catch(() => {});
     await desktop.waitForTimeout(150);
 
-    await desktop.click("#presets-btn");
-    await desktop.waitForTimeout(200);
+    await openFromHeaderMenu(desktop, "#presets-btn");
     failures.push(...await checkDialog(desktop, "#presets-list", "presets/desktop"));
     await desktop.hover("#presets-list .prompts-actions .icon-btn[data-tooltip]");
     await desktop.waitForTimeout(150);
@@ -110,8 +108,7 @@ export async function run() {
     await mobile.goto(baseUrl, { waitUntil: "networkidle" });
     await mobile.waitForTimeout(300);
 
-    await mobile.click("#presets-btn");
-    await mobile.waitForTimeout(200);
+    await openFromHeaderMenu(mobile, "#presets-btn");
     failures.push(...await checkDialog(mobile, "#presets-list", "presets/mobile"));
     // Focus the button so the bubble shows (simulated tap) for the screenshot.
     await mobile.$eval("#presets-list .prompts-actions .icon-btn[data-tooltip]", (b) => b.focus());
@@ -120,8 +117,7 @@ export async function run() {
     await mobile.click("#presets-close-btn").catch(() => {});
     await mobile.waitForTimeout(150);
 
-    await mobile.click("#prompts-btn");
-    await mobile.waitForTimeout(200);
+    await openFromHeaderMenu(mobile, "#prompts-btn");
     failures.push(...await checkDialog(mobile, "#prompts-list", "prompts/mobile"));
     await mobile.$eval("#prompts-list .prompts-actions .icon-btn[data-tooltip]", (b) => b.focus());
     await mobile.waitForTimeout(150);

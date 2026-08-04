@@ -3,15 +3,13 @@
 // with "create new" pinned first and a sort toggle; a merge button per person
 // whose confirmation names both sides in the right direction; and that the
 // picker dialog stays display:none while closed.
-import {
-  startStubServer,
+import { startStubServer,
   launch,
   openPage,
   isVisible,
   dialogOpen,
   clickReal,
-  screenshot,
-} from "../harness.mjs";
+  screenshot, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "speaker-move-merge";
 
@@ -59,8 +57,7 @@ export async function run() {
       );
     }
 
-    await clickReal(page, "#speaker-registry-btn");
-    await page.waitForTimeout(250);
+    await openFromHeaderMenu(page, "#speaker-registry-btn");
     if (!(await dialogOpen(page, "speaker-registry-dialog"))) {
       failures.push("registry dialog did not open");
       return failures;

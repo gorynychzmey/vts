@@ -5,7 +5,7 @@
 //  1. On open, the close button's tooltip must NOT be visible (opacity 0).
 //  2. Even if shown, its bubble must not be clipped by the dialog boundary.
 import {
-  startStubServer, launch, openPage, clickReal, dialogOpen,
+  startStubServer, launch, openPage, clickReal, dialogOpen, openFromHeaderMenu,
 } from "../harness.mjs";
 
 export const name = "dialog-tooltip-on-open";
@@ -165,10 +165,12 @@ export async function run() {
     // shows the tooltip — the bug is the pointer path), then assert not stuck.
     await page.keyboard.press("Escape");
     await page.waitForTimeout(200);
-    const promptsSel = "#prompts-btn";
+    // The prompts entry lives in the header burger menu now (vts-nr4), so the
+    // pointer path to its dialog goes through that menu. The trigger that keeps
+    // focus on close is the burger button itself.
+    const promptsSel = "#header-menu-btn";
     if (await page.$(promptsSel)) {
-      await clickReal(page, promptsSel);
-      await page.waitForTimeout(300);
+      await openFromHeaderMenu(page, "#prompts-btn");
       await clickReal(page, "#prompts-close-btn");
       await page.waitForTimeout(800); // past the show-delay, so a stuck :focus would show
       const stuck = await tooltipOpacity(page, promptsSel);

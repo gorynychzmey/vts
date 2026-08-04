@@ -25,86 +25,56 @@
         <div class="header-version">
           <span class="context-label" data-i18n="header.version">Version:</span>
           <span id="app-version" class="mono">-</span>
-          <button
-            id="push-toggle-btn"
-            class="icon-btn ghost hidden"
-            type="button"
-            title="Enable browser notifications when tasks finish"
-            aria-label="Enable notifications"
-            data-i18n-title="action.enable_notifications"
-            data-i18n-aria-label="action.enable_notifications"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-              <path d="M10 21a2 2 0 0 0 4 0" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            id="prompts-btn"
-            class="icon-btn ghost"
-            data-i18n-title="prompts.manage.open"
-            data-i18n-aria-label="prompts.manage.open"
-            title="Manage prompts"
-            aria-label="Manage prompts"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 5h16" />
-              <path d="M4 10h16" />
-              <path d="M4 15h10" />
-              <path d="M16 18l2 2 4-4" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            id="presets-btn"
-            class="icon-btn ghost"
-            data-i18n-title="preset.manage.open"
-            data-i18n-aria-label="preset.manage.open"
-            title="Manage presets"
-            aria-label="Manage presets"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6h16" />
-              <path d="M4 12h16" />
-              <path d="M4 18h16" />
-              <circle cx="8" cy="6" r="2" />
-              <circle cx="16" cy="12" r="2" />
-              <circle cx="8" cy="18" r="2" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            id="speaker-registry-btn"
-            class="icon-btn ghost"
-            data-i18n-title="speakers.registry.open"
-            data-i18n-aria-label="speakers.registry.open"
-            title="Manage voices"
-            aria-label="Manage voices"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2a4 4 0 0 0-4 4v4a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4z" />
-              <path d="M6 11a6 6 0 0 0 12 0" />
-              <path d="M12 17v4" />
-              <path d="M9 21h6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            id="tokens-btn"
-            class="icon-btn ghost"
-            data-i18n-title="tokens.open"
-            data-i18n-aria-label="tokens.open"
-            title="Manage API tokens"
-            aria-label="API tokens"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="8" cy="14" r="4" />
-              <path d="M11 11l9-9" />
-              <path d="M16 6l3 3" />
-              <path d="M19 4l2 2" />
-            </svg>
-          </button>
+          <!-- Everything except Log out lives behind this burger: five icon
+               buttons plus the version label did not fit one line on a phone
+               and forced the header to overflow (vts-nr4). -->
+          <div class="btn-menu-wrapper header-menu-wrapper">
+            <button
+              type="button"
+              id="header-menu-btn"
+              class="icon-btn ghost"
+              aria-haspopup="true"
+              aria-expanded="false"
+              data-i18n-title="header.menu"
+              data-i18n-aria-label="header.menu"
+              title="Menu"
+              aria-label="Menu"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18" />
+                <path d="M3 12h18" />
+                <path d="M3 18h18" />
+              </svg>
+            </button>
+            <div class="btn-menu header-menu" id="header-menu">
+              <button
+                id="push-toggle-btn"
+                class="hidden"
+                type="button"
+                data-i18n="action.enable_notifications"
+              >Enable notifications</button>
+              <button
+                type="button"
+                id="prompts-btn"
+                data-i18n="prompts.manage.open"
+              >Manage prompts</button>
+              <button
+                type="button"
+                id="presets-btn"
+                data-i18n="preset.manage.open"
+              >Manage presets</button>
+              <button
+                type="button"
+                id="speaker-registry-btn"
+                data-i18n="speakers.registry.open"
+              >Manage voices</button>
+              <button
+                type="button"
+                id="tokens-btn"
+                data-i18n="tokens.open"
+              >Manage API tokens</button>
+            </div>
+          </div>
           <button
             type="button"
             id="logout-btn"

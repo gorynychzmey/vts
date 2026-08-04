@@ -2,7 +2,7 @@
 // <dialog> must keep the UA display:none — a prior bug leaked dialogs visible),
 // opens from #presets-btn, renders system + user rows from /api/presets, marks
 // the user's default preset, and closes via #presets-close-btn.
-import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot } from "../harness.mjs";
+import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "presets-dialog";
 
@@ -49,8 +49,7 @@ export async function run() {
       failures.push("no #presets-btn in header");
       return failures;
     }
-    await clickReal(page, "#presets-btn");
-    await page.waitForTimeout(200);
+    await openFromHeaderMenu(page, "#presets-btn");
     if (!(await dialogOpen(page, "presets-dialog"))) {
       failures.push("presets-dialog did not open on #presets-btn click");
       return failures;
