@@ -75,6 +75,21 @@ def test_satisfies_delivery_adapter_protocol():
     assert isinstance(OutlineAdapter(), DeliveryAdapter)
 
 
+def test_is_actually_loadable_by_the_core_registry():
+    """Protocol conformance alone does not mean the core will load it.
+
+    Since vts-9y7 the registry also enforces min-compatibility
+    (plugin.major == core.major and plugin.minor <= core.minor), so an
+    adapter can satisfy the Protocol and still be refused. This asserts the
+    property that matters in production: the real core accepts this adapter.
+    """
+    from vts.delivery import registry
+
+    adapter = OutlineAdapter()
+    assert registry._version_problem(adapter.contract_version) is None
+    assert registry._compatibility_problem(adapter.contract_version) is None
+
+
 def test_metadata():
     adapter = OutlineAdapter()
     assert adapter.name == "outline"

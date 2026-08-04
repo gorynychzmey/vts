@@ -5,6 +5,9 @@ from vts.delivery.contract import DeliveryResult
 
 class FakeAdapter:
     name = "fake"
+    # Required since vts-9y7: the registry refuses adapters that do not
+    # declare which contract they were built against.
+    contract_version = (1, 0)
     def config_schema(self): return {"type": "object"}
     def secret_keys(self): return ["token"]
     async def deliver(self, payload, target): return DeliveryResult()
@@ -13,8 +16,9 @@ class FakeAdapter:
 @pytest.fixture(autouse=True)
 def _reset_cache(monkeypatch):
     monkeypatch.setattr(registry, "_CACHE", None, raising=False)
-    monkeypatch.setattr(registry, "_load_from_entry_points",
-                        lambda: {"fake": FakeAdapter()})
+    monkeypatch.setattr(registry, "_INCOMPATIBLE", None, raising=False)
+    monkeypatch.setattr(registry, "_discover",
+                        lambda: ({"fake": FakeAdapter()}, {}))
 
 
 def test_list_adapters_returns_registered():

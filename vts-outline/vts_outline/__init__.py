@@ -33,6 +33,12 @@ class OutlineAdapter:
 
     name = "outline"
 
+    # Minimum core contract this adapter needs (vts-9y7). The core loads it
+    # iff the major matches and this minor is <= the core's, so an adapter
+    # asking for the lowest version it actually needs keeps working as the
+    # core gains backwards-compatible additions.
+    contract_version = (1, 0)
+
     def __init__(
         self,
         transport: httpx.AsyncBaseTransport | None = None,
