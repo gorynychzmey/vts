@@ -323,6 +323,21 @@ class Settings(BaseSettings):
     # only reappears on a restart, so polling often would spin for nothing.
     delivery_adapter_wait_seconds: int = 300
 
+    # Delivery plugin loader (vts-j8gz). Sources are objects, so they are set
+    # in YAML or as JSON in the env — deliberately NOT via the CSV shorthand,
+    # which only produces lists of strings.
+    #
+    # Each entry: {"repo": "owner/name", "token_env": "VTS_PLUGIN_TOKEN_X"}.
+    # `token_env` is the NAME of an environment variable, never the token
+    # itself, so the secret stays in the host env file and out of config.
+    # Empty means a public repository, which needs no token at all.
+    delivery_plugin_sources: list[dict[str, str]] = []
+    delivery_plugin_cache_dir: Path = Path("/opt/vts/state/plugins")
+    # Belongs to load-time validation rather than the loader: when true, an
+    # adapter refused for contract incompatibility is fatal instead of merely
+    # logged. Default soft, so one bad plugin cannot stop the service.
+    delivery_plugin_contract_strict: bool = False
+
     # Chunked upload settings
     upload_chunked_threshold_bytes: int = 52_428_800
     upload_chunk_bytes: int = 8_388_608

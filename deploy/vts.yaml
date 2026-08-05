@@ -13,9 +13,7 @@ metadata:
     io.containers.autoupdate/worker: "registry"
 spec:
   restartPolicy: Always
-  # Migrations run to completion before webapi/worker start. This is the whole
-  # reason the pod exists ahead of the plugin loader (vts-9y7), whose bootstrap
-  # will become a second initContainer right here.
+  # initContainers run to completion, in order, before webapi/worker start.
   initContainers:
     - name: migrate
       image: ghcr.io/gorynychzmey/vts:latest
@@ -30,6 +28,24 @@ spec:
           mountPath: /opt/vts
         - name: vts-data
           mountPath: /srv/vts-data
+    # Installs delivery adapter plugins into /opt/vts/state/plugins/site,
+    # which webapi and worker carry on their PYTHONPATH (vts-j8gz). Writes to
+    # the shared opt-vts volume, so no extra volume is needed.
+    #
+    # Exits 0 on an unreachable GitHub by design: a failing initContainer
+    # would stop the pod, so a network blip would cost transcription over a
+    # delivery feature. The containers then start with whatever is cached.
+    - name: plugins
+      image: ghcr.io/gorynychzmey/vts:latest
+      env:
+        - name: VTS_ROLE
+          value: plugins
+      envFrom:
+        - configMapRef:
+            name: vts-env
+      volumeMounts:
+        - name: opt-vts
+          mountPath: /opt/vts
   containers:
     - name: webapi
       image: ghcr.io/gorynychzmey/vts:latest
@@ -42,6 +58,11 @@ spec:
         # while both exist.
         - name: VTS_SKIP_MIGRATIONS
           value: "1"
+        # Where the plugins initContainer installs adapter wheels. Without
+        # this the entry-point discovery finds nothing and every delivery
+        # target reports its adapter as unavailable.
+        - name: PYTHONPATH
+          value: /opt/vts/state/plugins/site
       envFrom:
         - configMapRef:
             name: vts-env
@@ -58,6 +79,10 @@ spec:
       env:
         - name: VTS_ROLE
           value: worker
+        # The worker is what actually runs deliveries, so it needs the
+        # adapters on its path just as much as webapi does.
+        - name: PYTHONPATH
+          value: /opt/vts/state/plugins/site
       envFrom:
         - configMapRef:
             name: vts-env

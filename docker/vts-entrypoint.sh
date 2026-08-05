@@ -60,6 +60,17 @@ run_migrate() {
   echo "migrations applied"
 }
 
+# Run-once role for the pod's second initContainer: install delivery adapter
+# plugins into the shared cache before api and worker start (vts-j8gz).
+#
+# Never fails the pod on a network problem — the loader itself exits 0 for
+# anything that is not operator-fixable, because an unreachable GitHub must
+# not cost us transcription.
+run_plugins() {
+  python -m vts.delivery.loader
+  echo "plugin loader finished"
+}
+
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
@@ -77,8 +88,11 @@ case "${VTS_ROLE:-webapi}" in
   migrate)
     run_migrate
     ;;
+  plugins)
+    run_plugins
+    ;;
   *)
-    echo "Unsupported VTS_ROLE='${VTS_ROLE:-}'. Use webapi, worker, both, or migrate." >&2
+    echo "Unsupported VTS_ROLE='${VTS_ROLE:-}'. Use webapi, worker, both, migrate, or plugins." >&2
     exit 1
     ;;
 esac
