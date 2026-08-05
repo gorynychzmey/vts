@@ -146,8 +146,22 @@ class DeliveryAdapterOut(BaseModel):
     connection_fields: list[str]
 
 
+class DeliveryVariantOut(BaseModel):
+    """One choice for WHICH artifact of a task a target delivers."""
+
+    #: What goes into a target's `default_variant`: a fixed name ("raw",
+    #: "redacted", "summary") or a prompt ref ("user:<uuid>").
+    value: str
+    label: str
+
+
 class DeliveryAdaptersOut(BaseModel):
     adapters: list[DeliveryAdapterOut]
+    # Offered by the CORE, not by any adapter (vts-6fya): which artifact to
+    # deliver is the core's decision, and the valid values include the
+    # caller's own prompts — something a plugin's static schema could never
+    # enumerate. Per-user, so this response must not be cached across users.
+    variants: list[DeliveryVariantOut] = Field(default_factory=list)
     # Adapters that were found but refused at load time, name -> reason
     # (vts-9y7). Surfaced so an operator can see WHY a target's plugin is
     # unavailable instead of watching it silently vanish.

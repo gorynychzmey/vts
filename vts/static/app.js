@@ -42,6 +42,7 @@ const deliveryState = {
   incompatible: {},
   credentials: [],
   targets: [],
+  variants: [],
 };
 const presetSelect = document.getElementById("preset-select");
 const presetSaveBtn = document.getElementById("preset-save-btn");
@@ -2668,13 +2669,7 @@ function renderPromptMultiselect(container, prompts, selectedRefs, opts = {}) {
   }
 
   toggle.addEventListener("click", () => togglePromptPopover(container));
-  popover.addEventListener("change", () => {
-    updatePromptSelectSummary(container);
-    // The delivery picker offers each user prompt's result, greyed out until
-    // that prompt is selected — so toggling a prompt has to refresh it, or
-    // the enabled/disabled state goes stale (vts-as1i).
-    if (container === promptSelect) refreshDeliveryVariantOptions();
-  });
+  popover.addEventListener("change", () => updatePromptSelectSummary(container));
 
   container.append(toggle, popover);
   updatePromptSelectSummary(container);
@@ -6215,6 +6210,9 @@ async function loadDeliveryAdapters() {
     const body = await api("/api/delivery-adapters");
     deliveryState.adapters = body.adapters || [];
     deliveryState.incompatible = body.incompatible || {};
+    // Offered by the core, not by any adapter (vts-6fya) — includes this
+    // user's own prompts, so it cannot come from a plugin's static schema.
+    deliveryState.variants = Array.isArray(body.variants) ? body.variants : [];
   } catch (err) {
     console.error("Failed to load delivery adapters", err);
     deliveryState.adapters = [];
@@ -6376,6 +6374,25 @@ function resetDeliveryCredentialForm() {
   );
 }
 
+/** Fill the target form's variant picker from the core-supplied list. */
+function fillVariantSelect(selected) {
+  const select = document.getElementById("delivery-target-variant");
+  if (!select) return;
+  select.innerHTML = "";
+  for (const variant of deliveryState.variants || []) {
+    const option = document.createElement("option");
+    option.value = variant.value;
+    option.textContent = variant.label.startsWith("delivery.variant.")
+      ? t(variant.label)
+      : variant.label;
+    select.appendChild(option);
+  }
+  // "summary" is the core's own fallback when a target names no variant
+  // (see vts/delivery/queue.py), so the form opens on the same choice the
+  // backend would have made.
+  select.value = selected || "summary";
+}
+
 function resetDeliveryTargetForm() {
   document.getElementById("delivery-target-edit-id").value = "";
   document.getElementById("delivery-target-name").value = "";
@@ -6383,6 +6400,7 @@ function resetDeliveryTargetForm() {
     t("delivery.targets.create");
   document.getElementById("delivery-target-cancel").classList.add("hidden");
   const cred = deliveryState.credentials[0];
+  fillVariantSelect("summary");
   fillCredentialSelect(cred ? cred.adapter : null, cred ? cred.id : null);
   renderSchemaFields(
     document.getElementById("delivery-target-fields"),
@@ -6409,6 +6427,7 @@ function editDeliveryCredential(cred) {
 function editDeliveryTarget(target) {
   document.getElementById("delivery-target-edit-id").value = target.id;
   document.getElementById("delivery-target-name").value = target.name;
+  fillVariantSelect((target.config || {}).default_variant);
   fillCredentialSelect(target.adapter, target.credential_id);
   document.getElementById("delivery-target-submit").textContent =
     t("delivery.form.save");
@@ -6485,14 +6504,23 @@ async function refreshDeliveryManager() {
  * collections on the same Outline can legitimately receive different
  * artifacts, which is the case vts-929 exists to support.
  */
+/** One selectable destination.
+ *
+ * No per-delivery variant picker: which artifact a destination receives is a
+ * property OF THE DESTINATION, set once when the target is configured
+ * (vts-6fya). Sending two different artifacts to the same place is not a use
+ * case — that is what a second target is for. The delivery entry is therefore
+ * just {deliver_to}; the API still accepts an explicit `variant`, the UI
+ * simply no longer sets one.
+ */
 function buildDeliveryRow(target, selected) {
-  const chosen = selected.find((d) => d.deliver_to === target.id) || null;
+  const chosen = selected.some((d) => d.deliver_to === target.id);
   const label = document.createElement("label");
   label.className = "prompt-row delivery-row";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
-  checkbox.checked = Boolean(chosen);
+  checkbox.checked = chosen;
   checkbox.dataset.targetId = target.id;
   // A destination whose plugin is not loaded cannot be submitted (the server
   // rejects it with 422), so it is shown but not selectable.
@@ -6502,38 +6530,13 @@ function buildDeliveryRow(target, selected) {
   name.className = "prompt-name";
   name.textContent = target.name;
 
-  const variant = document.createElement("select");
-  variant.className = "delivery-variant";
-  variant.dataset.variantFor = target.id;
-  variant.disabled = !target.adapter_available;
-  for (const value of ["", "raw", "redacted", "summary"]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value ? t(`delivery.variant.${value}`) : t("delivery.variant.default");
-    variant.appendChild(option);
-  }
-  // A prompt's own output can be delivered too (vts-as1i). Only USER prompts
-  // are offered: "system:summary" is already reachable as the plain "summary"
-  // option, and two ways to say the same thing would only confuse.
-  //
-  // The server rejects delivering a prompt that is not also selected for the
-  // task, so these options are shown as disabled until their prompt is
-  // ticked in the Prompts control — visible, but not a trap.
-  const selectedPrompts = getSelectedPrompts();
-  for (const prompt of promptsCache) {
-    if (prompt.source !== "user") continue;
-    const ref = `${prompt.source}:${prompt.id}`;
-    const option = document.createElement("option");
-    option.value = ref;
-    option.textContent = promptDisplayName(prompt);
-    option.disabled = !selectedPrompts.some(
-      (p) => p.source === prompt.source && p.id === prompt.id
-    );
-    variant.appendChild(option);
-  }
-  variant.value = chosen?.variant || "";
-  // Clicking the variant picker must not toggle the row's checkbox.
-  variant.addEventListener("click", (event) => event.preventDefault());
+  // What this destination will send, so the choice is visible at the point of
+  // use without being editable here.
+  const variant = document.createElement("span");
+  variant.className = "delivery-row-variant";
+  variant.textContent = deliveryVariantLabel(
+    (target.config || {}).default_variant || "summary"
+  );
 
   label.append(checkbox, name, variant);
   if (!target.adapter_available) {
@@ -6543,6 +6546,16 @@ function buildDeliveryRow(target, selected) {
     label.appendChild(warn);
   }
   return label;
+}
+
+/** Human name for a variant value, for display only. */
+function deliveryVariantLabel(value) {
+  const known = (deliveryState.variants || []).find((v) => v.value === value);
+  if (known) {
+    // Fixed variants carry an i18n key; a prompt carries its own name.
+    return known.label.startsWith("delivery.variant.") ? t(known.label) : known.label;
+  }
+  return value;
 }
 
 function renderDeliveryMultiselect(container, selected) {
@@ -6597,26 +6610,15 @@ function selectedDeliveryRefs(container) {
   container
     .querySelectorAll('.prompt-select-popover input[type="checkbox"]:checked')
     .forEach((cb) => {
-      const id = cb.dataset.targetId;
-      const variant = container.querySelector(`[data-variant-for="${id}"]`)?.value || "";
-      const entry = { deliver_to: id };
-      if (variant) entry.variant = variant;
-      out.push(entry);
+      // Just the destination: the variant belongs to the target itself
+      // (vts-6fya), so nothing here overrides it.
+      out.push({ deliver_to: cb.dataset.targetId });
     });
   return out;
 }
 
 /** Selectors stay hidden until at least one destination exists, so a user
  *  with no plugins never sees an empty control they cannot act on. */
-/** Re-render the destination selector so each row's variant picker reflects
- *  the CURRENT prompt selection, preserving what the user already chose. */
-function refreshDeliveryVariantOptions() {
-  if (!deliverySelect || !deliveryTargetsList().length) return;
-  const wasOpen = deliverySelect.classList.contains("open");
-  renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
-  if (wasOpen) setPromptPopoverOpen(deliverySelect, true);
-}
-
 function renderDeliverySelectors() {
   const has = deliveryTargetsList().length > 0;
   if (deliverySelectField) deliverySelectField.hidden = !has;
@@ -6734,6 +6736,11 @@ document.getElementById("delivery-target-form")?.addEventListener("submit", asyn
   const { config } = readSchemaFields(
     document.getElementById("delivery-target-fields")
   );
+  // A core-owned key living in the same config blob as the adapter's own
+  // settings; the server strips it before validating against the plugin
+  // schema (vts-6fya).
+  const variant = document.getElementById("delivery-target-variant")?.value;
+  if (variant) config.default_variant = variant;
   const payload = { name, config, credential_id: credentialId };
 
   try {

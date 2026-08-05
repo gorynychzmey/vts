@@ -134,9 +134,12 @@ async def test_enqueue_then_consume_delivers_with_decrypted_secret(
     # The adapter sees ONE flat config: the connection field from the
     # credential and the per-destination field from the target, merged
     # (vts-929). Plugins stay unaware that the two are stored apart.
-    assert rec.configs == [
-        {"base_url": "https://rec.example", "default_variant": "raw"}
-    ]
+    #
+    # `default_variant` is NOT among them even though the target stores it
+    # (vts-6fya): choosing which artifact to send is the core's job, and the
+    # adapter already has the resolved content in `payload`. It was delivered
+    # as "raw" — asserted above — purely from that stored value.
+    assert rec.configs == [{"base_url": "https://rec.example"}]
 
 
 @pytest.mark.asyncio

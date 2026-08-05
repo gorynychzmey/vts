@@ -17,7 +17,7 @@ from vts.core.secrets import decrypt_secrets, load_secrets_key
 from vts.db.models import DeliveryAttempt, utcnow
 from vts.db.repo import Repo
 from vts.delivery.contract import DeliveryTargetConfig
-from vts.services.delivery_config import merge_config
+from vts.services.delivery_config import merge_config, strip_core_fields
 from vts.delivery.queue import backoff_seconds
 from vts.delivery.registry import UnknownAdapter, get_adapter
 from vts.delivery.resolve import resolve_variant
@@ -58,8 +58,12 @@ async def process_one_delivery(session_factory, settings, attempt_id) -> None:
             secrets: dict[str, str] = {}
             if credential is not None and credential.secrets_enc:
                 secrets = decrypt_secrets(credential.secrets_enc, load_secrets_key(settings))
+            # Core-owned keys are stripped: the adapter never declared
+            # `default_variant` and has no use for it — it already receives the
+            # resolved content in `payload` (vts-6fya).
             cfg = DeliveryTargetConfig(
-                config=merge_config(credential, target), secrets=secrets
+                config=strip_core_fields(merge_config(credential, target)),
+                secrets=secrets,
             )
 
             result = await adapter.deliver(payload, cfg)

@@ -24,8 +24,6 @@ class FakeAdapter:
             "properties": {
                 "base_url": {"type": "string"},
                 "collection_id": {"type": "string"},
-                "default_variant": {"type": "string",
-                                    "enum": ["raw", "redacted", "summary"]},
             },
             "required": ["base_url", "collection_id"],
         }
@@ -55,9 +53,7 @@ async def test_lists_installed_adapter_with_its_schema(client, monkeypatch):
     assert adapter["connection_fields"] == ["base_url", "api_token"]
     # The schema is passed through verbatim; the UI renders fields from it.
     assert adapter["config_schema"]["required"] == ["base_url", "collection_id"]
-    assert adapter["config_schema"]["properties"]["default_variant"]["enum"] == [
-        "raw", "redacted", "summary"
-    ]
+    assert set(adapter["config_schema"]["properties"]) == {"base_url", "collection_id"}
 
 
 @pytest.mark.asyncio
@@ -68,7 +64,65 @@ async def test_empty_when_no_plugins_are_installed(client, monkeypatch):
 
     resp = await client.get("/api/delivery-adapters")
     assert resp.status_code == 200
-    assert resp.json() == {"adapters": [], "incompatible": {}}
+    body = resp.json()
+    assert body["adapters"] == []
+    assert body["incompatible"] == {}
+    # Variants come from the CORE, so they are offered even with no plugin
+    # installed — they describe the task's artifacts, not an adapter.
+    assert [v["value"] for v in body["variants"]] == ["raw", "redacted", "summary"]
+
+
+@pytest.mark.asyncio
+async def test_variants_are_core_owned_and_include_the_users_prompts(client, monkeypatch):
+    """The reason the core serves this list (vts-6fya): valid variants include
+    the caller's own prompt results, which no static plugin schema could ever
+    enumerate — that is exactly how the hard-coded enum in vts-outline went
+    stale once prompt-result delivery landed."""
+    monkeypatch.setattr(registry, "_CACHE", {"fake": FakeAdapter()}, raising=False)
+    monkeypatch.setattr(registry, "_INCOMPATIBLE", {}, raising=False)
+
+    created = await client.post(
+        "/api/prompts", json={"name": "Action items", "system_prompt": "list actions"}
+    )
+    assert created.status_code == 200, created.text
+    prompt_id = created.json()["id"]
+
+    body = (await client.get("/api/delivery-adapters")).json()
+    values = [v["value"] for v in body["variants"]]
+    assert values[:3] == ["raw", "redacted", "summary"]
+    assert f"user:{prompt_id}" in values, "a user prompt must be offerable as a variant"
+
+    # The adapter says nothing about variants any more.
+    schema = body["adapters"][0]["config_schema"]
+    assert "default_variant" not in schema.get("properties", {})
+
+
+@pytest.mark.asyncio
+async def test_prompt_variants_are_per_user(client, authed_app, monkeypatch):
+    """The response became user-specific the moment prompts entered it, so it
+    must never carry another user's prompts (nor be cached across users)."""
+    monkeypatch.setattr(registry, "_CACHE", {"fake": FakeAdapter()}, raising=False)
+    monkeypatch.setattr(registry, "_INCOMPATIBLE", {}, raising=False)
+
+    import uuid as _uuid
+
+    from vts.db.models import Prompt, User
+
+    _app, factory = authed_app
+    stranger_prompt = _uuid.uuid4()
+    async with factory() as session:
+        other = User(id=_uuid.uuid4(), username=f"other-{_uuid.uuid4().hex[:6]}")
+        session.add(other)
+        await session.flush()
+        session.add(Prompt(
+            id=stranger_prompt, user_id=other.id,
+            name="Someone else's prompt", system_prompt="secret",
+        ))
+        await session.commit()
+
+    body = (await client.get("/api/delivery-adapters")).json()
+    values = [v["value"] for v in body["variants"]]
+    assert f"user:{stranger_prompt}" not in values, "leaked another user's prompt"
 
 
 @pytest.mark.asyncio

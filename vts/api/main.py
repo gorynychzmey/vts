@@ -45,6 +45,7 @@ from vts.api.schemas import (
     DeliveryRetryRequest,
     DeliveryAdapterOut,
     DeliveryAdaptersOut,
+    DeliveryVariantOut,
     DeliveryCredentialCreate,
     DeliveryCredentialOut,
     DeliveryCredentialUpdate,
@@ -2211,9 +2212,33 @@ def create_app() -> FastAPI:
         except DeliveryConfigInvalid as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    async def _delivery_variant_choices(session, user) -> list[DeliveryVariantOut]:
+        """Which artifacts a target can deliver, for THIS user.
+
+        Owned by the core, never by an adapter (vts-6fya): the fixed three are
+        core artifacts, and the prompt entries are per-user, so no plugin
+        schema could enumerate them. Labels are keys the UI localises rather
+        than finished text, since the server does not know the user's locale.
+        """
+        from vts.delivery.resolve import VALID_VARIANTS
+
+        choices = [
+            DeliveryVariantOut(value=name, label=f"delivery.variant.{name}")
+            for name in VALID_VARIANTS
+        ]
+        # Only USER prompts: the system summary is already covered by the
+        # "summary" variant above, so listing it again would offer the same
+        # artifact under two names.
+        for row in await Repo(session).list_prompts(uuid.UUID(user.id)):
+            choices.append(
+                DeliveryVariantOut(value=f"user:{row.id}", label=row.name)
+            )
+        return choices
+
     @app.get("/api/delivery-adapters", response_model=DeliveryAdaptersOut)
     async def list_delivery_adapters_endpoint(
         user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
     ) -> DeliveryAdaptersOut:
         """Installed delivery adapters and the shape of their settings.
 
@@ -2239,7 +2264,9 @@ def create_app() -> FastAPI:
                     "delivery adapter %r failed to describe itself: %s", name, exc
                 )
         return DeliveryAdaptersOut(
-            adapters=out, incompatible=incompatible_adapters()
+            adapters=out,
+            incompatible=incompatible_adapters(),
+            variants=await _delivery_variant_choices(session, user),
         )
 
     @app.get("/api/delivery-credentials", response_model=list[DeliveryCredentialOut])

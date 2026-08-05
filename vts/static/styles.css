@@ -2340,3 +2340,13 @@ dialog:not([open]) {
 .task-empty[hidden] {
   display: none;
 }
+
+/* The variant a destination sends, shown next to its name in the picker.
+   Read-only here: it is a property of the target, edited in the delivery
+   dialog (vts-6fya). */
+.delivery-row-variant {
+  margin-left: auto;
+  font-size: 0.75rem;
+  opacity: 0.7;
+  white-space: nowrap;
+}

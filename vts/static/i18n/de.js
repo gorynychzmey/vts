@@ -58,6 +58,7 @@ window.__VTS_I18N.de = {
 "delivery.targets.save_failed": "Ziel konnte nicht gespeichert werden.",
 "delivery.form.name": "Name",
 "delivery.form.adapter": "Adapter",
+"delivery.form.variant": "Senden",
 "delivery.form.connection": "Verbindung",
 "delivery.form.save": "Speichern",
 "delivery.used_by": "verwendet von {count}",

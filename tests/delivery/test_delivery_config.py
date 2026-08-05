@@ -141,3 +141,51 @@ def test_broken_schema_blames_the_adapter_not_the_user():
     with pytest.raises(DeliveryConfigInvalid) as exc:
         validate_config(BadSchema(), {"anything": 1})
     assert "schema" in str(exc.value).lower()
+
+
+# --- core-owned fields (vts-6fya) -------------------------------------------
+
+
+def test_core_fields_are_stripped_before_the_adapter_sees_them():
+    """`default_variant` is chosen and resolved by the core; an adapter never
+    declared it and has no use for it — it receives the resolved content."""
+    from vts.services.delivery_config import strip_core_fields
+
+    cleaned = strip_core_fields(
+        {"base_url": "u", "collection_id": "c", "default_variant": "summary"}
+    )
+    assert cleaned == {"base_url": "u", "collection_id": "c"}
+
+
+def test_strip_core_fields_does_not_mutate_its_input():
+    from vts.services.delivery_config import strip_core_fields
+
+    original = {"base_url": "u", "default_variant": "raw"}
+    strip_core_fields(original)
+    assert original == {"base_url": "u", "default_variant": "raw"}
+
+
+def test_strict_schema_does_not_reject_a_core_owned_field():
+    """The trap this guards: a target legitimately stores default_variant in
+    the same config blob as the adapter's settings. A plugin with
+    additionalProperties:false would have rejected the whole target for a key
+    the CORE put there — and the user would have been blamed for it.
+
+    Outline's schema is permissive, so this would have stayed invisible until
+    some third-party plugin tightened its own.
+    """
+    class Strict(_Adapter):
+        def config_schema(self) -> dict:
+            return {
+                "type": "object",
+                "properties": {
+                    "base_url": {"type": "string"},
+                    "collection_id": {"type": "string"},
+                },
+                "required": ["base_url", "collection_id"],
+                "additionalProperties": False,
+            }
+
+    validate_config(
+        Strict(), {"base_url": "u", "collection_id": "c", "default_variant": "summary"}
+    )

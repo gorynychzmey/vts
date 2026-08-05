@@ -58,6 +58,7 @@ window.__VTS_I18N.en = {
 "delivery.targets.save_failed": "Could not save this destination.",
 "delivery.form.name": "Name",
 "delivery.form.adapter": "Adapter",
+"delivery.form.variant": "Send",
 "delivery.form.connection": "Connection",
 "delivery.form.save": "Save",
 "delivery.used_by": "used by {count}",

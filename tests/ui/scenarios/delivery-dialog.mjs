@@ -20,7 +20,6 @@ const ADAPTERS = {
         properties: {
           base_url: { type: "string" },
           collection_id: { type: "string" },
-          default_variant: { type: "string", enum: ["raw", "redacted", "summary"] },
         },
         required: ["base_url", "collection_id"],
       },
@@ -29,6 +28,13 @@ const ADAPTERS = {
     },
   ],
   incompatible: {},
+  // Served by the core, not by any adapter (vts-6fya).
+  variants: [
+    { value: "raw", label: "delivery.variant.raw" },
+    { value: "redacted", label: "delivery.variant.redacted" },
+    { value: "summary", label: "delivery.variant.summary" },
+    { value: "user:u1", label: "Memo" },
+  ],
 };
 
 const CREDENTIALS = [
@@ -108,12 +114,8 @@ export async function run() {
       (els) => els.map((e) => ({ name: e.dataset.field, tag: e.tagName })),
     );
     const targetNames = targetFields.map((f) => f.name).sort();
-    if (JSON.stringify(targetNames) !== JSON.stringify(["collection_id", "default_variant"])) {
+    if (JSON.stringify(targetNames) !== JSON.stringify(["collection_id"])) {
       failures.push(`destination form should hold the non-connection fields, got ${JSON.stringify(targetNames)}`);
-    }
-    const variant = targetFields.find((f) => f.name === "default_variant");
-    if (variant && variant.tag !== "SELECT") {
-      failures.push(`an enum field must render as a <select>, got <${variant.tag}>`);
     }
     if (credNames.includes("collection_id") || targetNames.includes("base_url")) {
       failures.push("connection and destination fields leaked across the two forms");
@@ -135,59 +137,57 @@ export async function run() {
     if (!(await isVisible(page, "#delivery-select-field"))) {
       failures.push("'Deliver to' selector should be visible when a destination exists");
     }
-    // Each row carries its OWN variant picker: two destinations on one server
-    // may legitimately receive different artifacts (vts-929).
+    // --- the variant belongs to the TARGET, not to each delivery (vts-6fya)
+    // The picker that used to sit on every row is gone: which artifact a
+    // destination sends is configured once, on the target itself. A row shows
+    // it read-only so the choice is visible at the point of use.
     await clickReal(page, "#delivery-select .prompt-select-toggle");
     await page.waitForTimeout(150);
-    const variantPickers = await page.$$eval(
-      "#delivery-select .delivery-variant", (els) => els.length);
-    if (variantPickers !== 1) {
-      failures.push(`expected a per-destination variant picker, got ${variantPickers}`);
+
+    const rowPickers = await page.$$eval(
+      "#delivery-select select.delivery-variant", (els) => els.length);
+    if (rowPickers !== 0) {
+      failures.push(`per-delivery variant picker should be gone, found ${rowPickers}`);
+    }
+    const shown = await page.$$eval(
+      "#delivery-select .delivery-row-variant", (els) => els.map((e) => e.textContent.trim()));
+    if (shown.length !== 1) {
+      failures.push(`expected the row to show its target's variant, got ${JSON.stringify(shown)}`);
     }
 
-    // --- a user prompt's result is offerable as a variant (vts-as1i) ------
-    // The default stub carries one user prompt ("Memo", id u1). It must be
-    // listed, and DISABLED until that prompt is selected: the server rejects
-    // delivering a prompt that will not run, so offering it as selectable
-    // would be a trap.
-    const memoBefore = await page.$$eval(
-      "#delivery-select .delivery-variant option",
-      (els) => els.filter((o) => o.value === "user:u1")
-                  .map((o) => ({ text: o.textContent, disabled: o.disabled })),
-    );
-    if (memoBefore.length !== 1) {
-      failures.push(`expected the user prompt as a variant option, got ${JSON.stringify(memoBefore)}`);
-    } else if (!memoBefore[0].disabled) {
-      failures.push("a prompt that is not selected must not be selectable as a variant");
+    // The delivery entry carries only the destination now.
+    const refs = await page.evaluate(() => {
+      const box = document.querySelector('#delivery-select input[type="checkbox"]');
+      if (box && !box.checked) box.click();
+      return selectedDeliveryRefs(document.getElementById("delivery-select"));
+    });
+    if (!Array.isArray(refs) || refs.length !== 1) {
+      failures.push(`expected one selected delivery ref, got ${JSON.stringify(refs)}`);
+    } else if ("variant" in refs[0]) {
+      failures.push(`a delivery entry must not carry a variant any more: ${JSON.stringify(refs[0])}`);
     }
 
-    // Selecting the prompt enables it.
-    await clickReal(page, "#prompt-select .prompt-select-toggle");
+    // --- the target form offers the CORE's variant list, prompts included --
+    await openFromHeaderMenu(page, "#delivery-btn");
+    await page.waitForTimeout(300);
+    const variantOptions = await page.$$eval(
+      "#delivery-target-variant option", (els) => els.map((o) => o.value));
+    if (!variantOptions.includes("raw") || !variantOptions.includes("summary")) {
+      failures.push(`target form must offer the fixed variants, got ${JSON.stringify(variantOptions)}`);
+    }
+    // Served by the core because it depends on the USER's prompts — something
+    // no plugin schema could enumerate.
+    if (!variantOptions.includes("user:u1")) {
+      failures.push(`target form must offer a user prompt as a variant, got ${JSON.stringify(variantOptions)}`);
+    }
+    // The adapter no longer declares the field, so it must not appear twice.
+    const schemaVariant = await page.$$eval(
+      "#delivery-target-fields [data-field='default_variant']", (els) => els.length);
+    if (schemaVariant !== 0) {
+      failures.push("default_variant must not come from the adapter schema any more");
+    }
+    await page.keyboard.press("Escape");
     await page.waitForTimeout(150);
-    const promptBox = await page.$('#prompt-select input[data-source="user"][data-id="u1"]');
-    if (!promptBox) {
-      failures.push("no checkbox for the user prompt in #prompt-select");
-    } else {
-      await promptBox.click();
-      await page.waitForTimeout(200);
-      const memoAfter = await page.$$eval(
-        "#delivery-select .delivery-variant option",
-        (els) => els.filter((o) => o.value === "user:u1").map((o) => o.disabled),
-      );
-      if (memoAfter.length !== 1 || memoAfter[0] !== false) {
-        failures.push(`selecting the prompt should enable its variant option, got ${JSON.stringify(memoAfter)}`);
-      }
-    }
-
-    // system:summary is deliberately NOT offered as a ref: it is already
-    // reachable as the plain "summary" option.
-    const dupSummary = await page.$$eval(
-      "#delivery-select .delivery-variant option",
-      (els) => els.filter((o) => o.value === "system:summary").length,
-    );
-    if (dupSummary !== 0) {
-      failures.push("system:summary must not be duplicated as a prompt ref");
-    }
 
     // No horizontal overflow (vts-nr4).
     const overflow = await page.evaluate(() =>

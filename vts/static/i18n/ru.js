@@ -58,6 +58,7 @@ window.__VTS_I18N.ru = {
 "delivery.targets.save_failed": "Не удалось сохранить назначение.",
 "delivery.form.name": "Название",
 "delivery.form.adapter": "Адаптер",
+"delivery.form.variant": "Отправлять",
 "delivery.form.connection": "Подключение",
 "delivery.form.save": "Сохранить",
 "delivery.used_by": "используют: {count}",
