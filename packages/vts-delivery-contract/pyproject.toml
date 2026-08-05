@@ -1,0 +1,25 @@
+[project]
+name = "vts-delivery-contract"
+version = "1.1.0"
+description = "The VTS delivery-adapter contract: what a delivery plugin must implement"
+readme = "README.md"
+requires-python = ">=3.12"
+# Deliberately none: a plugin author installs this to get the contract, and
+# nothing else. Adding a dependency here would push it into every plugin.
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The contract is NOT copied here — it is force-included from the vts tree at
+# build time, so `vts/delivery/contract.py` stays the single source of truth.
+# A second copy would drift silently and make contract_version a lie, which is
+# exactly what the version check exists to prevent.
+[tool.hatch.build.targets.wheel.force-include]
+"../../vts/delivery/contract.py" = "vts/delivery/contract.py"
+"../../vts/delivery/__init__.py" = "vts/delivery/__init__.py"
+
+[tool.hatch.build.targets.sdist.force-include]
+"../../vts/delivery/contract.py" = "vts/delivery/contract.py"
+"../../vts/delivery/__init__.py" = "vts/delivery/__init__.py"
