@@ -2438,14 +2438,47 @@ dialog:not([open]) {
   stroke-width: 2;
 }
 
-.check-btn.check-ok {
-  color: #1a7f4b;
+/* `.icon-btn` prefix is load-bearing, not noise: `.icon-btn.ghost` sets the
+   background with two classes, so a single-class rule here loses the cascade
+   and the button stays neutral (measured — it did).
+
+   Result shows in the BACKGROUND, not the text (Victor, 2026-08-05): the
+   button sits among coloured controls, and tinting only the glyph produced
+   green-on-orange — unreadable. A filled swatch with a white icon reads at a
+   glance and does not depend on the surrounding colour. */
+.icon-btn.check-btn.check-ok {
+  background: #1a7f4b;
   border-color: #1a7f4b;
+  color: #fff;
 }
 
-.check-btn.check-bad {
-  color: var(--danger, #c0392b);
+.icon-btn.check-btn.check-bad {
+  background: var(--danger, #c0392b);
   border-color: var(--danger, #c0392b);
+  color: #fff;
+}
+
+/* The icon inherits the button's colour, so it flips to white with the rest. */
+.icon-btn.check-btn.check-ok svg,
+.icon-btn.check-btn.check-bad svg {
+  stroke: currentColor;
+}
+
+/* Sits inline with the endpoint input rather than on its own row. */
+.delivery-field-with-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.delivery-field-with-check > input,
+.delivery-field-with-check > select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.delivery-field-with-check > .check-btn {
+  flex: 0 0 auto;
 }
 
 /* Inline result, rather than an alert(): a modal would throw the user out of

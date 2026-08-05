@@ -127,6 +127,11 @@ export async function run() {
       "#delivery-credential-fields [data-field]",
       (els) => els.map((e) => ({ name: e.dataset.field, type: e.type, tag: e.tagName })),
     );
+    const shownLabels = await page.$$eval(
+      "#delivery-credential-fields .delivery-field-label", (els) => els.map((e) => e.textContent));
+    if (shownLabels.some((l) => /^(base_url|api_token)\b/.test(l))) {
+      failures.push(`fields must show human labels, got ${JSON.stringify(shownLabels)}`);
+    }
     const credNames = credFields.map((f) => f.name).sort();
     if (JSON.stringify(credNames) !== JSON.stringify(["api_token", "base_url"])) {
       failures.push(`connection form should hold exactly the connection fields, got ${JSON.stringify(credNames)}`);
@@ -176,9 +181,25 @@ export async function run() {
     const failed = await page.evaluate(() => {
       const b = document.getElementById("delivery-check-btn");
       const m = document.getElementById("delivery-check-message");
-      return { bad: b.classList.contains("check-bad"), msg: m.textContent, shown: !m.hidden };
+      return {
+        bad: b.classList.contains("check-bad"),
+        msg: m.textContent, shown: !m.hidden,
+        // The result must show in the BACKGROUND: tinting only the glyph gave
+        // green-on-orange, which was unreadable.
+        bg: getComputedStyle(b).backgroundColor,
+        // Icon-only, so the row beside the input stays compact.
+        text: (b.textContent || "").trim(),
+        tooltip: b.getAttribute("data-tooltip") || "",
+        besideInput: !!document.querySelector(".delivery-field-with-check #delivery-check-btn"),
+      };
     });
     if (!failed.bad) failures.push("a failed check must turn the button red");
+    if (failed.bg === "rgba(0, 0, 0, 0)" || /^rgb\(2[0-9]{2}, 2[0-9]{2}, 2[0-9]{2}\)$/.test(failed.bg)) {
+      failures.push(`the failure state must colour the BACKGROUND, got ${failed.bg}`);
+    }
+    if (failed.text) failures.push(`check button must be icon-only, got text ${JSON.stringify(failed.text)}`);
+    if (!failed.tooltip) failures.push("icon-only button needs a tooltip naming it");
+    if (!failed.besideInput) failures.push("check button should sit beside the endpoint input");
     if (!failed.shown) failures.push("a failed check must show a message");
     // The server sends a CODE; the wording is the UI's, so a diagnosis must
     // appear rather than a generic failure.

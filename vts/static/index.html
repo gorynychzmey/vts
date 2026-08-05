@@ -798,20 +798,6 @@
               <button type="button" id="delivery-credential-cancel"
                       class="btn-text ghost hidden"
                       data-i18n="prompts.manage.reset">Reset</button>
-              <!-- Test the connection before anything is delivered. The label
-                   lives in an inner span: applyI18n assigns textContent to the
-                   [data-i18n] element and would wipe the sibling <svg>. -->
-              <button type="button" id="delivery-check-btn" class="btn-text check-btn hidden">
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="check-icon-ok">
-                  <path d="m5 13 4 4L19 7" />
-                </svg>
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="check-icon-bad" hidden>
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M12 7v6" />
-                  <path d="M12 16h.01" />
-                </svg>
-                <span data-i18n="delivery.check.button">Test connection</span>
-              </button>
             </div>
             <p id="delivery-check-message" class="delivery-check-message" hidden></p>
           </form>

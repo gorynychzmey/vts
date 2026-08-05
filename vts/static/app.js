@@ -6092,6 +6092,23 @@ function splitSchemaFields(adapter, { connection }) {
   return out;
 }
 
+/** Human label for a config field, in the user's language where possible.
+ *
+ * Order matters, and so does why:
+ *   1. an i18n key for a well-known field name — the ONLY multilingual
+ *      option, because the locale lives in the browser and the server never
+ *      sees it, so a plugin's schema string can only ever be one language;
+ *   2. the schema's own `title`, which lets a plugin name a field we do not
+ *      know about (in whatever language it chose);
+ *   3. the raw key, so a field is never unlabelled.
+ */
+function deliveryFieldLabel(field) {
+  const key = `delivery.field.${field.name}`;
+  const translated = t(key);
+  if (translated !== key) return translated;
+  return (field.spec || {}).title || field.name;
+}
+
 /** Build one input for a schema property. Returns the element to read from. */
 function buildSchemaInput(field, value) {
   const spec = field.spec || {};
@@ -6185,9 +6202,14 @@ function renderSchemaFields(container, adapter, { connection, values, secretsSet
 
     const label = document.createElement("span");
     label.className = "delivery-field-label";
-    label.textContent = field.name + (field.required ? " *" : "");
+    label.textContent = deliveryFieldLabel(field) + (field.required ? " *" : "");
 
     const input = buildSchemaInput(field, (values || {})[field.name]);
+    // The check button rides alongside the endpoint field rather than sitting
+    // in the form actions: it tests THAT value, and putting it there keeps it
+    // out of the primary/secondary button row where its colour states would
+    // clash with the submit button (vts-6o37 followup).
+    const attachCheck = connection && field.name === (adapter?.connection_fields || [])[0];
     if (field.secret) {
       // Values of stored secrets are never served; only whether one is set.
       const isSet = Boolean((secretsSet || {})[field.name]?.set);
@@ -6195,7 +6217,14 @@ function renderSchemaFields(container, adapter, { connection, values, secretsSet
         ? t("delivery.secret.set")
         : t("delivery.secret.unset");
     }
-    row.append(label, input);
+    if (attachCheck) {
+      const wrap = document.createElement("span");
+      wrap.className = "delivery-field-with-check";
+      wrap.append(input, buildDeliveryCheckButton());
+      row.append(label, wrap);
+    } else {
+      row.append(label, input);
+    }
     container.appendChild(row);
   }
 }
@@ -6401,7 +6430,6 @@ function resetDeliveryCredentialForm() {
     t("delivery.credentials.create");
   document.getElementById("delivery-credential-cancel").classList.add("hidden");
   resetDeliveryCheck();
-  syncDeliveryCheckButton();
   const adapterName = document.getElementById("delivery-credential-adapter")?.value;
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
@@ -6494,7 +6522,6 @@ function editDeliveryCredential(cred) {
     t("delivery.form.save");
   document.getElementById("delivery-credential-cancel").classList.remove("hidden");
   resetDeliveryCheck();
-  syncDeliveryCheckButton();
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
     deliveryAdapter(cred.adapter),
@@ -6765,7 +6792,36 @@ deliveryDialog?.querySelectorAll("[data-delivery-tab]").forEach((btn) => {
   btn.addEventListener("click", () => showDeliveryTab(btn.dataset.deliveryTab));
 });
 
-// --- connection check (vts-6o37) --------------------------------------------
+// --- connection check (vts-6o37) ---
+
+const ICON_CHECK_OK = '<svg viewBox="0 0 24 24" aria-hidden="true" class="check-icon-ok"><path d="m5 13 4 4L19 7" /></svg>';
+const ICON_CHECK_BAD = '<svg viewBox="0 0 24 24" aria-hidden="true" class="check-icon-bad"><circle cx="12" cy="12" r="9" /><path d="M12 7v6" /><path d="M12 16h.01" /></svg>';
+
+/** The icon-only "test connection" button that sits beside the endpoint field.
+ *
+ * No visible label: it lives inline next to an input, where a word of text
+ * would crowd the row. The name is carried by tooltip and aria-label instead
+ * — and NOT via data-i18n, because applyI18n assigns textContent and would
+ * wipe the inline SVG.
+ */
+function buildDeliveryCheckButton() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "delivery-check-btn";
+  btn.className = "icon-btn ghost check-btn";
+  btn.innerHTML = ICON_CHECK_OK;
+  btn.setAttribute("data-tooltip", t("delivery.check.button"));
+  btn.setAttribute("aria-label", t("delivery.check.button"));
+  // Only meaningful for a SAVED connection: the check runs server-side
+  // against stored secrets, so an unsaved form has no id to check.
+  const editId = document.getElementById("delivery-credential-edit-id")?.value || "";
+  const adapterName = document.getElementById("delivery-credential-adapter")?.value;
+  if (!editId || !deliveryAdapter(adapterName)?.supports_check) {
+    btn.classList.add("hidden");
+  }
+  btn.addEventListener("click", runDeliveryCheck);
+  return btn;
+}
 
 /** Put the check button back to neutral.
  *
@@ -6778,8 +6834,7 @@ function resetDeliveryCheck() {
   const msg = document.getElementById("delivery-check-message");
   if (btn) {
     btn.classList.remove("check-ok", "check-bad");
-    btn.querySelector(".check-icon-ok")?.removeAttribute("hidden");
-    btn.querySelector(".check-icon-bad")?.setAttribute("hidden", "");
+    btn.innerHTML = ICON_CHECK_OK;
   }
   if (msg) {
     msg.hidden = true;
@@ -6802,18 +6857,7 @@ function showDeliveryCheckMessage(text, { error = false } = {}) {
  * something stored: an unsaved form has no id to check. Hence the button only
  * appears while editing an existing connection.
  */
-function syncDeliveryCheckButton() {
-  const btn = document.getElementById("delivery-check-btn");
-  if (!btn) return;
-  const editId = document.getElementById("delivery-credential-edit-id")?.value || "";
-  const adapterName = document.getElementById("delivery-credential-adapter")?.value;
-  const adapter = deliveryAdapter(adapterName);
-  // Hidden for an adapter that cannot be checked (contract 1.1, or nothing to
-  // test) rather than shown-and-failing.
-  btn.classList.toggle("hidden", !editId || !adapter?.supports_check);
-}
-
-document.getElementById("delivery-check-btn")?.addEventListener("click", async () => {
+async function runDeliveryCheck() {
   const btn = document.getElementById("delivery-check-btn");
   const editId = document.getElementById("delivery-credential-edit-id")?.value;
   if (!btn || !editId) return;
@@ -6827,8 +6871,7 @@ document.getElementById("delivery-check-btn")?.addEventListener("click", async (
   } catch (err) {
     btn.disabled = false;
     btn.classList.add("check-bad");
-    btn.querySelector(".check-icon-ok")?.setAttribute("hidden", "");
-    btn.querySelector(".check-icon-bad")?.removeAttribute("hidden");
+    btn.innerHTML = ICON_CHECK_BAD;
     showDeliveryCheckMessage(deliveryErrorText(err, "delivery.check.failed"), { error: true });
     return;
   }
@@ -6840,8 +6883,7 @@ document.getElementById("delivery-check-btn")?.addEventListener("click", async (
     return;
   }
   btn.classList.add("check-bad");
-  btn.querySelector(".check-icon-ok")?.setAttribute("hidden", "");
-  btn.querySelector(".check-icon-bad")?.removeAttribute("hidden");
+  btn.innerHTML = ICON_CHECK_BAD;
   // The server sends a CODE; the wording is ours, so it can be localised.
   // An unknown code still says something useful rather than nothing.
   const known = ["unreachable", "unauthorized", "not_found",
@@ -6851,7 +6893,7 @@ document.getElementById("delivery-check-btn")?.addEventListener("click", async (
     : "delivery.check.failed";
   const detail = body?.detail ? ` (${body.detail})` : "";
   showDeliveryCheckMessage(t(key) + detail, { error: true });
-});
+}
 
 // Any edit invalidates the previous result — Victor's rule, applied to both
 // the success and the failure state.
@@ -6869,7 +6911,6 @@ document.getElementById("delivery-target-cancel")?.addEventListener("click", () 
 });
 
 document.getElementById("delivery-credential-adapter")?.addEventListener("change", (event) => {
-  syncDeliveryCheckButton();
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
     deliveryAdapter(event.target.value),
