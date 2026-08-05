@@ -2420,3 +2420,51 @@ dialog:not([open]) {
   display: flex;
   flex-direction: column;
 }
+
+/* Connection check button (vts-6o37). Neutral until tested; green on success,
+   red on failure, and back to neutral the moment any field changes — a stale
+   result describes settings that no longer exist. */
+.check-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.check-btn svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.check-btn.check-ok {
+  color: #1a7f4b;
+  border-color: #1a7f4b;
+}
+
+.check-btn.check-bad {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
+
+/* Inline result, rather than an alert(): a modal would throw the user out of
+   the form they are still filling in. Also carries the "list unavailable"
+   notice for enumerable fields, which is why it is not check-specific. */
+.delivery-check-message {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.delivery-check-message.is-error {
+  color: var(--danger, #c0392b);
+  opacity: 1;
+}
+
+/* Same cascade trap as elsewhere: a bare `display` beats the [hidden]
+   default, so these must restore it explicitly. */
+.delivery-check-message[hidden],
+.check-btn.hidden {
+  display: none;
+}

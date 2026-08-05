@@ -25,6 +25,8 @@ const ADAPTERS = {
       },
       secret_keys: ["api_token"],
       connection_fields: ["base_url", "api_token"],
+      option_fields: [],
+      supports_check: true,
     },
   ],
   incompatible: {},
@@ -152,6 +154,58 @@ export async function run() {
     const credOptions = await page.$$eval(
       "#delivery-target-credential option", (els) => els.length);
     if (credOptions !== 1) failures.push(`expected 1 connection option, got ${credOptions}`);
+
+    // --- connection check button (vts-6o37) --------------------------------
+    // Hidden on the CREATE form: the check runs server-side against stored
+    // secrets, so there must be something stored to check.
+    if (await isVisible(page, "#delivery-check-btn")) {
+      failures.push("check button must be hidden until a connection is saved");
+    }
+    await clickReal(page, "#delivery-credentials-list .prompts-actions .icon-btn");
+    await page.waitForTimeout(250);
+    if (!(await isVisible(page, "#delivery-check-btn"))) {
+      failures.push("check button should appear when editing a saved connection");
+    }
+
+    await page.route("**/api/delivery-credentials/*/check", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: false, outcome: "unauthorized", detail: "HTTP 401" }) }));
+    await clickReal(page, "#delivery-check-btn");
+    await page.waitForTimeout(400);
+
+    const failed = await page.evaluate(() => {
+      const b = document.getElementById("delivery-check-btn");
+      const m = document.getElementById("delivery-check-message");
+      return { bad: b.classList.contains("check-bad"), msg: m.textContent, shown: !m.hidden };
+    });
+    if (!failed.bad) failures.push("a failed check must turn the button red");
+    if (!failed.shown) failures.push("a failed check must show a message");
+    // The server sends a CODE; the wording is the UI's, so a diagnosis must
+    // appear rather than a generic failure.
+    if (!/authenticate|token/i.test(failed.msg)) {
+      failures.push(`expected a diagnosis for 'unauthorized', got ${JSON.stringify(failed.msg)}`);
+    }
+    if (!failed.msg.includes("HTTP 401")) {
+      failures.push("the adapter's detail should be shown alongside the message");
+    }
+
+    // Any edit invalidates the result — a stale verdict describes settings
+    // that no longer exist.
+    await page.fill("#delivery-credential-name", "edited");
+    await page.waitForTimeout(250);
+    const afterEdit = await page.evaluate(() => {
+      const b = document.getElementById("delivery-check-btn");
+      const m = document.getElementById("delivery-check-message");
+      return { bad: b.classList.contains("check-bad"), ok: b.classList.contains("check-ok"), shown: !m.hidden };
+    });
+    if (afterEdit.bad || afterEdit.ok || afterEdit.shown) {
+      failures.push(`editing a field must reset the check state, got ${JSON.stringify(afterEdit)}`);
+    }
+    await page.unroute("**/api/delivery-credentials/*/check");
+    resetDeliveryFormForLaterAssertions: {
+      await clickReal(page, "#delivery-credential-cancel");
+      await page.waitForTimeout(200);
+    }
 
     await screenshot(page, "delivery-dialog");
     await page.keyboard.press("Escape");

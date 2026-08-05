@@ -2463,13 +2463,22 @@ def create_app() -> FastAPI:
             )
         try:
             options = await asyncio.wait_for(options_fn(field, cfg), timeout=20)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail=f"{credential.adapter}: timed out listing {field}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - network, auth, plugin bug
-            # Degrade rather than block: the UI falls back to free text, so a
-            # dead Outline cannot stop someone configuring a target.
+            # Reported, not silently degraded (Victor, 2026-08-05): an
+            # unreachable system is rare enough that building a free-text
+            # fallback around it costs more than it saves, and a picker that
+            # quietly turns into a text box hides WHY it did.
             logging.getLogger(__name__).info(
                 "adapter %r could not list options for %r: %s", credential.adapter, field, exc
             )
-            return DeliveryOptionsOut(options=[], unavailable=str(exc)[:300])
+            raise HTTPException(
+                status_code=502,
+                detail=f"{credential.adapter}: could not list {field} — {str(exc)[:200]}",
+            ) from exc
 
         return DeliveryOptionsOut(options=[
             DeliveryOptionOut(value=str(o.value), label=str(o.label)) for o in options

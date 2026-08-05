@@ -6096,7 +6096,19 @@ function splitSchemaFields(adapter, { connection }) {
 function buildSchemaInput(field, value) {
   const spec = field.spec || {};
   let input;
-  if (Array.isArray(spec.enum)) {
+  if (Array.isArray(field.options)) {
+    // Values enumerated by the adapter: {value, label} pairs, so the name is
+    // shown while the stable id is stored (vts-6o37). The enum branch below
+    // cannot express this — there value and label are the same string.
+    input = document.createElement("select");
+    for (const option of field.options) {
+      const el = document.createElement("option");
+      el.value = option.value;
+      el.textContent = option.label;
+      input.appendChild(el);
+    }
+    if (value !== undefined && value !== null) input.value = String(value);
+  } else if (Array.isArray(spec.enum)) {
     input = document.createElement("select");
     // A non-required enum needs an empty choice, else the first option is
     // silently submitted for a field the user never touched.
@@ -6141,11 +6153,33 @@ function buildSchemaInput(field, value) {
   return input;
 }
 
-function renderSchemaFields(container, adapter, { connection, values, secretsSet }) {
+/** Ask the adapter to enumerate a field's values, via the core.
+ *
+ * Returns null when the external system could not be reached. There is
+ * deliberately NO free-text fallback (Victor, 2026-08-05) — the caller shows
+ * an explicit message instead, because a picker that quietly becomes a text
+ * box hides why it did, and an empty list is indistinguishable from "there
+ * are none".
+ */
+async function fetchFieldOptions(credentialId, field) {
+  if (!credentialId) return null;
+  try {
+    const body = await api(
+      `/api/delivery-credentials/${credentialId}/options/${encodeURIComponent(field)}`
+    );
+    return Array.isArray(body?.options) ? body.options : [];
+  } catch (err) {
+    return { error: deliveryErrorText(err, "delivery.options.unavailable") };
+  }
+}
+
+function renderSchemaFields(container, adapter, { connection, values, secretsSet, options }) {
   if (!container) return;
   container.innerHTML = "";
   const fields = splitSchemaFields(adapter, { connection });
   for (const field of fields) {
+    // Adapter-enumerated values, when the core managed to fetch them.
+    if (options && Array.isArray(options[field.name])) field.options = options[field.name];
     const row = document.createElement("label");
     row.className = "delivery-field";
 
@@ -6366,6 +6400,8 @@ function resetDeliveryCredentialForm() {
   document.getElementById("delivery-credential-submit").textContent =
     t("delivery.credentials.create");
   document.getElementById("delivery-credential-cancel").classList.add("hidden");
+  resetDeliveryCheck();
+  syncDeliveryCheckButton();
   const adapterName = document.getElementById("delivery-credential-adapter")?.value;
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
@@ -6393,6 +6429,48 @@ function fillVariantSelect(selected) {
   select.value = selected || "summary";
 }
 
+/** Render the target form, turning enumerable fields into pickers.
+ *
+ * Async because the values live in the external system. When it cannot be
+ * reached the field is still rendered (as text) but an explicit message says
+ * so — no silent degradation.
+ */
+async function renderTargetFields(adapter, credentialId, values) {
+  const container = document.getElementById("delivery-target-fields");
+  const notice = document.getElementById("delivery-target-notice");
+  if (notice) {
+    notice.hidden = true;
+    notice.textContent = "";
+  }
+  renderSchemaFields(container, adapter, {
+    connection: false, values: values || {}, secretsSet: {},
+  });
+  if (!adapter || !credentialId) return;
+
+  const enumerable = (adapter.option_fields || []);
+  if (!enumerable.length) return;
+
+  const problems = [];
+  const resolved = {};
+  for (const field of enumerable) {
+    const result = await fetchFieldOptions(credentialId, field);
+    if (result && result.error) {
+      problems.push(`${field}: ${result.error}`);
+    } else if (Array.isArray(result)) {
+      resolved[field] = result;
+    }
+  }
+  if (Object.keys(resolved).length) {
+    renderSchemaFields(container, adapter, {
+      connection: false, values: values || {}, secretsSet: {}, options: resolved,
+    });
+  }
+  if (problems.length && notice) {
+    notice.textContent = problems.join("; ");
+    notice.hidden = false;
+  }
+}
+
 function resetDeliveryTargetForm() {
   document.getElementById("delivery-target-edit-id").value = "";
   document.getElementById("delivery-target-name").value = "";
@@ -6402,10 +6480,8 @@ function resetDeliveryTargetForm() {
   const cred = deliveryState.credentials[0];
   fillVariantSelect("summary");
   fillCredentialSelect(cred ? cred.adapter : null, cred ? cred.id : null);
-  renderSchemaFields(
-    document.getElementById("delivery-target-fields"),
-    deliveryAdapter(cred ? cred.adapter : null),
-    { connection: false, values: {}, secretsSet: {} },
+  void renderTargetFields(
+    deliveryAdapter(cred ? cred.adapter : null), cred ? cred.id : null, {},
   );
 }
 
@@ -6417,6 +6493,8 @@ function editDeliveryCredential(cred) {
   document.getElementById("delivery-credential-submit").textContent =
     t("delivery.form.save");
   document.getElementById("delivery-credential-cancel").classList.remove("hidden");
+  resetDeliveryCheck();
+  syncDeliveryCheckButton();
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
     deliveryAdapter(cred.adapter),
@@ -6432,10 +6510,8 @@ function editDeliveryTarget(target) {
   document.getElementById("delivery-target-submit").textContent =
     t("delivery.form.save");
   document.getElementById("delivery-target-cancel").classList.remove("hidden");
-  renderSchemaFields(
-    document.getElementById("delivery-target-fields"),
-    deliveryAdapter(target.adapter),
-    { connection: false, values: target.config || {}, secretsSet: {} },
+  void renderTargetFields(
+    deliveryAdapter(target.adapter), target.credential_id, target.config || {},
   );
 }
 
@@ -6689,6 +6765,101 @@ deliveryDialog?.querySelectorAll("[data-delivery-tab]").forEach((btn) => {
   btn.addEventListener("click", () => showDeliveryTab(btn.dataset.deliveryTab));
 });
 
+// --- connection check (vts-6o37) --------------------------------------------
+
+/** Put the check button back to neutral.
+ *
+ * Called on ANY edit to the connection form: once a field changes, the last
+ * result describes settings that no longer exist, and a stale green tick is
+ * worse than no tick at all.
+ */
+function resetDeliveryCheck() {
+  const btn = document.getElementById("delivery-check-btn");
+  const msg = document.getElementById("delivery-check-message");
+  if (btn) {
+    btn.classList.remove("check-ok", "check-bad");
+    btn.querySelector(".check-icon-ok")?.removeAttribute("hidden");
+    btn.querySelector(".check-icon-bad")?.setAttribute("hidden", "");
+  }
+  if (msg) {
+    msg.hidden = true;
+    msg.textContent = "";
+    msg.classList.remove("is-error");
+  }
+}
+
+function showDeliveryCheckMessage(text, { error = false } = {}) {
+  const msg = document.getElementById("delivery-check-message");
+  if (!msg) return;
+  msg.textContent = text;
+  msg.classList.toggle("is-error", error);
+  msg.hidden = false;
+}
+
+/** Whether the connection form currently describes a SAVED credential.
+ *
+ * The check runs server-side against stored secrets, so there has to be
+ * something stored: an unsaved form has no id to check. Hence the button only
+ * appears while editing an existing connection.
+ */
+function syncDeliveryCheckButton() {
+  const btn = document.getElementById("delivery-check-btn");
+  if (!btn) return;
+  const editId = document.getElementById("delivery-credential-edit-id")?.value || "";
+  const adapterName = document.getElementById("delivery-credential-adapter")?.value;
+  const adapter = deliveryAdapter(adapterName);
+  // Hidden for an adapter that cannot be checked (contract 1.1, or nothing to
+  // test) rather than shown-and-failing.
+  btn.classList.toggle("hidden", !editId || !adapter?.supports_check);
+}
+
+document.getElementById("delivery-check-btn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("delivery-check-btn");
+  const editId = document.getElementById("delivery-credential-edit-id")?.value;
+  if (!btn || !editId) return;
+
+  resetDeliveryCheck();
+  btn.disabled = true;
+  showDeliveryCheckMessage(t("delivery.check.running"));
+  let body;
+  try {
+    body = await api(`/api/delivery-credentials/${editId}/check`, { method: "POST" });
+  } catch (err) {
+    btn.disabled = false;
+    btn.classList.add("check-bad");
+    btn.querySelector(".check-icon-ok")?.setAttribute("hidden", "");
+    btn.querySelector(".check-icon-bad")?.removeAttribute("hidden");
+    showDeliveryCheckMessage(deliveryErrorText(err, "delivery.check.failed"), { error: true });
+    return;
+  }
+  btn.disabled = false;
+
+  if (body?.ok) {
+    btn.classList.add("check-ok");
+    showDeliveryCheckMessage(t("delivery.check.ok"));
+    return;
+  }
+  btn.classList.add("check-bad");
+  btn.querySelector(".check-icon-ok")?.setAttribute("hidden", "");
+  btn.querySelector(".check-icon-bad")?.removeAttribute("hidden");
+  // The server sends a CODE; the wording is ours, so it can be localised.
+  // An unknown code still says something useful rather than nothing.
+  const known = ["unreachable", "unauthorized", "not_found",
+                 "unexpected_response", "timeout"];
+  const key = known.includes(body?.outcome)
+    ? `delivery.check.outcome.${body.outcome}`
+    : "delivery.check.failed";
+  const detail = body?.detail ? ` (${body.detail})` : "";
+  showDeliveryCheckMessage(t(key) + detail, { error: true });
+});
+
+// Any edit invalidates the previous result — Victor's rule, applied to both
+// the success and the failure state.
+document.getElementById("delivery-credential-form")
+  ?.addEventListener("input", resetDeliveryCheck);
+document.getElementById("delivery-credential-form")
+  ?.addEventListener("change", resetDeliveryCheck);
+
 document.getElementById("delivery-credential-cancel")?.addEventListener("click", () => {
   resetDeliveryCredentialForm();
 });
@@ -6698,6 +6869,7 @@ document.getElementById("delivery-target-cancel")?.addEventListener("click", () 
 });
 
 document.getElementById("delivery-credential-adapter")?.addEventListener("change", (event) => {
+  syncDeliveryCheckButton();
   renderSchemaFields(
     document.getElementById("delivery-credential-fields"),
     deliveryAdapter(event.target.value),
@@ -6707,11 +6879,7 @@ document.getElementById("delivery-credential-adapter")?.addEventListener("change
 
 document.getElementById("delivery-target-credential")?.addEventListener("change", (event) => {
   const cred = deliveryState.credentials.find((c) => c.id === event.target.value);
-  renderSchemaFields(
-    document.getElementById("delivery-target-fields"),
-    deliveryAdapter(cred?.adapter),
-    { connection: false, values: {}, secretsSet: {} },
-  );
+  void renderTargetFields(deliveryAdapter(cred?.adapter), cred?.id, {});
 });
 
 document.getElementById("delivery-credential-form")?.addEventListener("submit", async (event) => {

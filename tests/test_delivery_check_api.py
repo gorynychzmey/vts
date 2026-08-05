@@ -176,21 +176,20 @@ async def test_options_carry_separate_value_and_label(client):
         {"value": "c-1", "label": "Meetings"},
         {"value": "c-2", "label": "Notes"},
     ]
-    assert body["unavailable"] is None
 
 
 @pytest.mark.asyncio
-async def test_unreachable_system_degrades_instead_of_blocking(client):
-    """The external system being down must not make the target form unusable
-    — the UI falls back to typing the id by hand."""
+async def test_unreachable_system_is_reported_not_silently_empty(client):
+    """No free-text fallback, by decision (Victor, 2026-08-05): an
+    unreachable system is rare enough not to design around, and a picker that
+    quietly becomes a text box hides why it did. An empty 200 would be worse
+    still — indistinguishable from "there are no collections"."""
     cid = await _credential(client, config={"base_url": "u", "_options": "down"})
     resp = await client.get(
         f"/api/delivery-credentials/{cid}/options/collection_id", headers=_HEADERS
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["options"] == []
-    assert "unreachable" in body["unavailable"]
+    assert resp.status_code == 502, resp.text
+    assert "unreachable" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

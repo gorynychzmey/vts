@@ -173,9 +173,6 @@ class DeliveryOptionOut(BaseModel):
 
 class DeliveryOptionsOut(BaseModel):
     options: list[DeliveryOptionOut] = Field(default_factory=list)
-    #: Set when the adapter could not be asked (system down, token expired).
-    #: The UI falls back to a free-text field rather than blocking the form.
-    unavailable: str | None = None
 
 
 class DeliveryVariantOut(BaseModel):
