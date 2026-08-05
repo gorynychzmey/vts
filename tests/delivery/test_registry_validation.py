@@ -165,3 +165,37 @@ def test_rejected_adapter_is_not_gettable(monkeypatch):
     _discover(monkeypatch, fake=OtherMajor)
     with pytest.raises(registry.UnknownAdapter):
         registry.get_adapter("fake")
+
+
+# --- published timing budget (vts-6o37 followup) ----------------------------
+
+
+def test_timing_budget_is_published_and_coherent():
+    """The budget an adapter should use must be strictly under the limit the
+    core enforces. If they were equal, a plugin finishing exactly on its own
+    deadline would still be cancelled — and everything it was about to report
+    about the cause would be lost."""
+    from vts.delivery.contract import ADAPTER_CALL_BUDGET_S, INTERACTIVE_CALL_LIMIT_S
+
+    assert ADAPTER_CALL_BUDGET_S < INTERACTIVE_CALL_LIMIT_S, (
+        "the adapter budget must leave headroom under the core's limit"
+    )
+    assert ADAPTER_CALL_BUDGET_S > 0
+
+
+def test_core_enforces_the_published_limit_not_a_literal():
+    """The whole point of publishing it: a plugin author reads the contract to
+    size their HTTP client. A literal in the core would leave them guessing,
+    and the two would drift — the same defect as the hard-coded variant enum
+    a plugin used to carry (vts-6fya)."""
+    import re
+    from pathlib import Path
+
+    from vts.delivery.contract import INTERACTIVE_CALL_LIMIT_S
+
+    source = (Path(__file__).resolve().parents[2] / "vts" / "api" / "main.py").read_text()
+    offenders = re.findall(r"wait_for\([^)]*timeout=\d", source)
+    assert not offenders, (
+        f"interactive adapter calls must use the published limit, not a literal: {offenders}"
+    )
+    assert INTERACTIVE_CALL_LIMIT_S > 0

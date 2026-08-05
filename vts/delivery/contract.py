@@ -32,7 +32,37 @@ from typing import Any, Protocol, runtime_checkable
 #: no longer holds and the add-only rule binds in full. An adapter without
 #: them must keep loading; delivery to a local folder has neither a connection
 #: to test nor an external directory to list.
-CONTRACT_VERSION = (1, 2)
+#: 1.3 published the timing budget for interactive adapter calls (vts-6o37
+#: followup). Adding module constants is backwards compatible, so old adapters
+#: keep loading — but an adapter that IMPORTS them requires 1.3 and must say
+#: so, since the name does not exist on an older core.
+CONTRACT_VERSION = (1, 3)
+
+
+#: How long an adapter may spend inside one interactive call
+#: (`check_connection`, `config_options`) before the core stops waiting.
+#:
+#: Published because it is part of the protocol, not an implementation detail:
+#: an adapter's own HTTP timeout has to fit inside it. Before this, the number
+#: lived as a literal in the core and every plugin had to guess or copy it —
+#: the same defect as the hard-coded variant enum (vts-6fya), where a plugin
+#: duplicated the core's knowledge and went stale the moment the core moved.
+#:
+#: An overrun is not a hang: the core cancels the call. But it IS a silent
+#: degradation — everything the adapter was about to say about the cause is
+#: lost, and the user sees a generic failure instead of "timed out".
+INTERACTIVE_CALL_LIMIT_S = 20.0
+
+#: What an adapter should actually budget for itself. Deliberately lower than
+#: the limit above, so a plugin that finishes just inside its own deadline
+#: still gets its answer back before the core gives up.
+#:
+#: Both are published on purpose: an adapter sets its client timeout from
+#: this one, while the limit explains WHY exceeding it kills the call —
+#: publishing only the budget would leave that unexplained. Adapters should
+#: use this value rather than deriving their own fraction of the limit, which
+#: is a decision every plugin would make differently and some would get wrong.
+ADAPTER_CALL_BUDGET_S = 15.0
 
 
 class DeliveryError(Exception):

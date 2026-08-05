@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import html as _html
 import json
 import logging
@@ -2359,6 +2360,33 @@ def create_app() -> FastAPI:
             **delivery_credential_view(row, settings, used_by=used_by)
         )
 
+    async def _call_adapter_within_budget(awaitable, *, adapter: str, what: str):
+        """Await an interactive adapter call, enforcing the published limit.
+
+        The limit comes from the contract rather than a literal so that plugin
+        authors can read it (vts-6o37 followup): an adapter's own HTTP timeout
+        has to fit inside the core's, and a number that lives only in the core
+        is one every plugin has to guess or copy.
+
+        A call that finishes but eats most of the budget is logged. That is the
+        early warning — by the time it actually overruns, users are already
+        seeing a generic failure instead of a diagnosis, because cancelling the
+        call throws away whatever the adapter was about to report.
+        """
+        from vts.delivery.contract import ADAPTER_CALL_BUDGET_S, INTERACTIVE_CALL_LIMIT_S
+
+        started = time.monotonic()
+        try:
+            return await asyncio.wait_for(awaitable, timeout=INTERACTIVE_CALL_LIMIT_S)
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > ADAPTER_CALL_BUDGET_S:
+                logging.getLogger(__name__).warning(
+                    "adapter %r spent %.1fs on %s, over its %.0fs budget "
+                    "(core gives up at %.0fs)",
+                    adapter, elapsed, what, ADAPTER_CALL_BUDGET_S, INTERACTIVE_CALL_LIMIT_S,
+                )
+
     async def _credential_target_config(repo, uid: uuid.UUID, credential_id: uuid.UUID):
         """Build what an adapter needs to talk to a credential's endpoint.
 
@@ -2414,7 +2442,9 @@ def create_app() -> FastAPI:
                 detail=f"Adapter {credential.adapter!r} does not support connection checks",
             )
         try:
-            result = await asyncio.wait_for(check(cfg), timeout=20)
+            result = await _call_adapter_within_budget(
+                check(cfg), adapter=credential.adapter, what="check_connection"
+            )
         except asyncio.TimeoutError:
             return DeliveryCheckOut(ok=False, outcome=CheckOutcome.timeout.value)
         except Exception as exc:  # noqa: BLE001 - third-party plugin code
@@ -2462,7 +2492,10 @@ def create_app() -> FastAPI:
                 detail=f"Adapter {credential.adapter!r} does not enumerate field options",
             )
         try:
-            options = await asyncio.wait_for(options_fn(field, cfg), timeout=20)
+            options = await _call_adapter_within_budget(
+                options_fn(field, cfg), adapter=credential.adapter,
+                what=f"config_options({field})",
+            )
         except asyncio.TimeoutError as exc:
             raise HTTPException(
                 status_code=504, detail=f"{credential.adapter}: timed out listing {field}"
