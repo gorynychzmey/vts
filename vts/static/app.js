@@ -6653,6 +6653,9 @@ document.getElementById("delivery-btn")?.addEventListener("click", async () => {
   if (noAdapters) noAdapters.hidden = !none;
   if (sections) sections.hidden = none;
 
+  // Always open on connections: a destination cannot exist without one, so
+  // that is where a first-time user has to start.
+  showDeliveryTab("credentials");
   if (typeof deliveryDialog.showModal === "function") {
     deliveryDialog.showModal();
   } else {
@@ -6662,6 +6665,28 @@ document.getElementById("delivery-btn")?.addEventListener("click", async () => {
 
 document.getElementById("delivery-close-btn")?.addEventListener("click", () => {
   deliveryDialog?.close();
+});
+
+/** Show one delivery tab and hide the other.
+ *
+ * `hidden` alone is not enough: `.delivery-section` sets `display`, which has
+ * the same specificity as the browser's [hidden] default and beats it — the
+ * exact trap that left the delivery selector visible with zero destinations
+ * (vts-j2kh). The CSS carries a matching `[hidden] { display: none }` rule;
+ * this only flips the attribute and the button state.
+ */
+function showDeliveryTab(name) {
+  if (!deliveryDialog) return;
+  deliveryDialog.querySelectorAll("[data-delivery-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.deliveryTab === name);
+  });
+  deliveryDialog.querySelectorAll("[data-delivery-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.deliveryPanel !== name;
+  });
+}
+
+deliveryDialog?.querySelectorAll("[data-delivery-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => showDeliveryTab(btn.dataset.deliveryTab));
 });
 
 document.getElementById("delivery-credential-cancel")?.addEventListener("click", () => {

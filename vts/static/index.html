@@ -763,9 +763,19 @@
         No delivery plugins are installed, so there is nothing to configure yet.
       </p>
 
+      <div class="tabs-bar delivery-tabs-bar">
+        <div class="tabs">
+          <button type="button" class="tab-btn active" data-delivery-tab="credentials">
+            <span data-i18n="delivery.credentials.title">Connections</span>
+          </button>
+          <button type="button" class="tab-btn" data-delivery-tab="targets">
+            <span data-i18n="delivery.targets.title">Destinations</span>
+          </button>
+        </div>
+      </div>
+
       <div class="delivery-sections">
-        <section class="delivery-section">
-          <h3 data-i18n="delivery.credentials.title">Connections</h3>
+        <section class="delivery-section" data-delivery-panel="credentials">
           <p class="delivery-section-hint" data-i18n="delivery.credentials.hint">
             Where to deliver and how to authenticate. Several destinations can share one.
           </p>
@@ -792,8 +802,7 @@
           </form>
         </section>
 
-        <section class="delivery-section">
-          <h3 data-i18n="delivery.targets.title">Destinations</h3>
+        <section class="delivery-section" data-delivery-panel="targets" hidden>
           <p class="delivery-section-hint" data-i18n="delivery.targets.hint">
             One destination per place results should land. Pick the connection it uses.
           </p>

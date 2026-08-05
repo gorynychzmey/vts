@@ -86,6 +86,33 @@ export async function run() {
       failures.push("delivery-dialog not visible after open");
     }
 
+    // --- tabs (vts-fepy) ---------------------------------------------------
+    // Opens on connections: a destination cannot exist without one.
+    const activeFirst = await page.$$eval("[data-delivery-tab].active",
+      (els) => els.map((e) => e.dataset.deliveryTab));
+    if (JSON.stringify(activeFirst) !== JSON.stringify(["credentials"])) {
+      failures.push(`dialog should open on the connections tab, got ${JSON.stringify(activeFirst)}`);
+    }
+    if (await isVisible(page, "[data-delivery-panel='targets']")) {
+      failures.push("the destinations panel must be hidden while its tab is inactive");
+    }
+
+    await clickReal(page, "[data-delivery-tab='targets']");
+    await page.waitForTimeout(200);
+    if (!(await isVisible(page, "[data-delivery-panel='targets']"))) {
+      failures.push("destinations panel did not show when its tab was clicked");
+    }
+    // The CLOSED state is the one that bit before: a bare `display` rule
+    // outranks [hidden], so assert the panel is really not visible.
+    if (await isVisible(page, "[data-delivery-panel='credentials']")) {
+      failures.push("connections panel must hide when the destinations tab is active");
+    }
+    await clickReal(page, "[data-delivery-tab='credentials']");
+    await page.waitForTimeout(200);
+    if (!(await isVisible(page, "[data-delivery-panel='credentials']"))) {
+      failures.push("connections panel did not come back");
+    }
+
     // Existing rows render in both lists.
     const credRows = await page.$$eval("#delivery-credentials-list .prompts-row", (e) => e.length);
     if (credRows !== 1) failures.push(`expected 1 connection row, got ${credRows}`);
