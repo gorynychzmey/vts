@@ -115,7 +115,9 @@ def test_installs_a_wheel_and_records_it(tmp_path, wheel):
     assert (site / "dummy_plugin" / "__init__.py").exists(), "wheel was not installed"
 
     manifest = json.loads((tmp_path / "cache" / "manifest.json").read_text())
-    entry = manifest[wheel.name]
+    # Keyed by distribution since the cache-hygiene fix; the wheel filename is
+    # recorded inside the entry rather than used as the key.
+    entry = manifest[loader.distribution_name(wheel.name)]
     assert entry["digest"] == loader._sha256(wheel)
     assert entry["source_repo"] == "o/r"
     assert entry["release"] == "release-1"
@@ -147,7 +149,7 @@ def test_changed_digest_reinstalls(tmp_path, wheel):
     # Same name, different content.
     manifest_path = tmp_path / "cache" / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest[wheel.name]["digest"] = "sha256:" + "0" * 64
+    manifest[loader.distribution_name(wheel.name)]["digest"] = "sha256:" + "0" * 64
     manifest_path.write_text(json.dumps(manifest))
 
     factory = _factory(releases={"o/r": release}, payloads=payloads)
@@ -326,3 +328,89 @@ def test_main_exits_nonzero_on_operator_fixable_config(tmp_path, monkeypatch):
     import vts.core.config as _cfg
     _cfg.get_settings.cache_clear()
     assert loader.main() == 1
+
+
+# --- cache hygiene (vts-6o37 followup) --------------------------------------
+
+
+def test_distribution_name_ignores_the_version():
+    assert loader.distribution_name("vts_outline-0.2.0-py3-none-any.whl") == "vts_outline"
+    assert loader.distribution_name("a_b-1.0.0rc1-py3-none-any.whl") == "a_b"
+
+
+def test_upgrade_removes_the_previous_versions_metadata(tmp_path, wheel):
+    """pip --target overwrites a package's CODE but leaves the old .dist-info
+    behind, and importlib.metadata reads exactly that to find entry points.
+
+    Harmless while the module and entry-point names hold; the moment a plugin
+    renames either, the leftovers give a dangling entry point or a ghost
+    adapter — silent failures in a registry that loads third-party code.
+    """
+    release, payloads = _release_for(wheel)
+    settings = _Settings(tmp_path / "cache", sources=[{"repo": "o/r", "token_env": ""}])
+    assert loader.run(settings, client_factory=_factory(releases={"o/r": release}, payloads=payloads)) == 1
+
+    site = tmp_path / "cache" / "site"
+    # Fake a leftover from an earlier version of the same distribution.
+    stale = site / "dummy_plugin-0.0.1.dist-info"
+    stale.mkdir()
+    (stale / "METADATA").write_text("Name: dummy-plugin\nVersion: 0.0.1\n")
+
+    # Re-install (digest forced to differ so it does not skip).
+    manifest_path = tmp_path / "cache" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["dummy_plugin"]["digest"] = "sha256:" + "0" * 64
+    manifest_path.write_text(json.dumps(manifest))
+    assert loader.run(settings, client_factory=_factory(releases={"o/r": release}, payloads=payloads)) == 1
+
+    assert not stale.exists(), "stale .dist-info from the old version must be removed"
+    remaining = sorted(p.name for p in site.glob("dummy_plugin-*.dist-info"))
+    assert len(remaining) == 1, f"expected exactly one metadata dir, got {remaining}"
+
+
+def test_purge_leaves_other_distributions_alone(tmp_path, wheel):
+    """Several plugins share one site/ directory, so the cleanup must be
+    scoped to the distribution being installed — deleting more broadly would
+    take out a sibling plugin."""
+    release, payloads = _release_for(wheel)
+    settings = _Settings(tmp_path / "cache", sources=[{"repo": "o/r", "token_env": ""}])
+    loader.run(settings, client_factory=_factory(releases={"o/r": release}, payloads=payloads))
+
+    site = tmp_path / "cache" / "site"
+    sibling = site / "other_plugin-1.0.0.dist-info"
+    sibling.mkdir()
+    (sibling / "METADATA").write_text("Name: other-plugin\n")
+
+    loader._purge_stale_metadata(site, "dummy_plugin")
+    assert sibling.exists(), "another plugin's metadata must survive"
+
+
+def test_manifest_holds_one_entry_per_distribution(tmp_path, wheel):
+    """Keyed by distribution, not by wheel filename: the filename carries the
+    version, so every release used to add an entry and the superseded one
+    lingered — the manifest stopped answering "what is installed now"."""
+    release, payloads = _release_for(wheel)
+    settings = _Settings(tmp_path / "cache", sources=[{"repo": "o/r", "token_env": ""}])
+    loader.run(settings, client_factory=_factory(releases={"o/r": release}, payloads=payloads))
+
+    manifest = json.loads((tmp_path / "cache" / "manifest.json").read_text())
+    assert list(manifest) == ["dummy_plugin"]
+    assert manifest["dummy_plugin"]["wheel"] == wheel.name
+
+    # A newer release of the SAME distribution replaces the entry rather than
+    # adding a second one.
+    # A different digest, as a genuinely new build would have — otherwise the
+    # skip-if-present check correctly treats it as already installed.
+    newer_bytes = wheel.read_bytes() + b"\n# rebuilt\n"
+    newer_digest = "sha256:" + __import__("hashlib").sha256(newer_bytes).hexdigest()
+    newer = Release(
+        tag="release-2",
+        assets=[Asset(name="dummy_plugin-9.9.9-py3-none-any.whl",
+                      url="https://api.example/a", digest=newer_digest)],
+    )
+    loader.run(settings, client_factory=_factory(
+        releases={"o/r": newer}, payloads={"dummy_plugin-9.9.9-py3-none-any.whl": newer_bytes}))
+
+    manifest = json.loads((tmp_path / "cache" / "manifest.json").read_text())
+    assert list(manifest) == ["dummy_plugin"], f"one entry per distribution, got {list(manifest)}"
+    assert manifest["dummy_plugin"]["release"] == "release-2"

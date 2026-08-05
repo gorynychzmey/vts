@@ -132,6 +132,45 @@ def write_manifest(cache_dir: Path, manifest: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def distribution_name(wheel_name: str) -> str:
+    """Distribution a wheel belongs to, from its filename.
+
+    Wheel names are `{distribution}-{version}-{python}-{abi}-{platform}.whl`
+    with the distribution normalised to underscores, so everything before the
+    first hyphen identifies the package regardless of version.
+    """
+    return wheel_name.split("-", 1)[0]
+
+
+def _purge_stale_metadata(site_dir: Path, distribution: str) -> None:
+    """Remove `.dist-info` left by earlier versions of this distribution.
+
+    `pip install --target --upgrade` overwrites a package's CODE but does not
+    remove the previous version's metadata: in --target mode pip keeps no
+    record of what is installed and cannot uninstall. The leftovers accumulate
+    and are read by `importlib.metadata`, which is how entry points are found.
+
+    Harmless while a package keeps the same module and entry-point name — the
+    stale metadata points at code that has already been overwritten. It stops
+    being harmless the moment a plugin renames its module (the entry point
+    dangles) or its entry point (a ghost adapter appears alongside the real
+    one). Both are silent failures in a registry that loads third-party code.
+
+    Deliberately scoped to the distribution being installed: deleting anything
+    broader would take out a sibling plugin sharing the same directory.
+    """
+    for stale in site_dir.glob(f"{distribution}-*.dist-info"):
+        if not stale.is_dir():
+            continue
+        try:
+            shutil.rmtree(stale)
+            logger.info("removed stale plugin metadata %s", stale.name)
+        except OSError as exc:
+            # Not fatal: the fresh install still lands, and a leftover
+            # directory is the state we were already living with.
+            logger.warning("could not remove stale metadata %s: %s", stale.name, exc)
+
+
 def install_wheel(wheel: Path, site_dir: Path) -> None:
     """`pip install --target`, with --no-deps.
 
@@ -140,6 +179,9 @@ def install_wheel(wheel: Path, site_dir: Path) -> None:
     shadowing a different version of something the image already provides, and
     adds a second way for the bootstrap to fail. Plugins vendor what they need.
     """
+    # Before, not after: a failed install must not leave the package without
+    # metadata, which would make it invisible to entry-point discovery.
+    _purge_stale_metadata(site_dir, distribution_name(wheel.name))
     result = subprocess.run(
         [
             sys.executable, "-m", "pip", "install",
@@ -175,7 +217,13 @@ def _install_source(
     installed = 0
     with tempfile.TemporaryDirectory() as tmpdir:
         for asset in wheels:
-            recorded = manifest.get(asset.name, {})
+            # Keyed by DISTRIBUTION, not by asset filename: the filename
+            # carries the version, so a new release wrote a second entry and
+            # the superseded one lingered forever. The manifest is supposed to
+            # answer "what is installed now", and with one entry per file it
+            # could not.
+            distribution = distribution_name(asset.name)
+            recorded = manifest.get(distribution, {})
             if asset.digest and recorded.get("digest") == asset.digest:
                 logger.info("plugin %s already installed (%s)", asset.name, asset.digest[:19])
                 continue
@@ -195,7 +243,8 @@ def _install_source(
             install_wheel(target, site_dir)
             # Recorded only after a successful install, so an interrupted run
             # never leaves a half-installed wheel marked as present.
-            manifest[asset.name] = {
+            manifest[distribution] = {
+                "wheel": asset.name,
                 "digest": asset.digest or actual,
                 "release": release.tag,
                 "source_repo": repo,
