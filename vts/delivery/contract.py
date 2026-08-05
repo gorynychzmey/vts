@@ -20,7 +20,7 @@ from typing import Any, Protocol, runtime_checkable
 #: breaking change can affect adapter logic, not just signatures.
 #: 1.1 added connection_fields() (vts-929). Made a REQUIRED Protocol member
 #: rather than an optional getattr, by explicit decision: no plugins exist
-#: yet — in-tree vts-outline is the only adapter — so nothing can be broken
+#: yet — vts-outline was the only adapter — so nothing can be broken
 #: by requiring it, and an optional member would leave the core guessing at
 #: the connection/parameter split forever. Once third-party plugins exist,
 #: the add-only rule above applies again in full.
