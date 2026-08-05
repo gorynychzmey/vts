@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -24,7 +25,14 @@ from typing import Any, Protocol, runtime_checkable
 #: by requiring it, and an optional member would leave the core guessing at
 #: the connection/parameter split forever. Once third-party plugins exist,
 #: the add-only rule above applies again in full.
-CONTRACT_VERSION = (1, 1)
+#: 1.2 added check_connection() and config_options() (vts-6o37). Both are
+#: OPTIONAL, read via getattr rather than declared on the Protocol — the
+#: opposite of the 1.1 decision above, and deliberately so: vts-outline is now
+#: published and installed from a GitHub release, so "no plugins exist yet"
+#: no longer holds and the add-only rule binds in full. An adapter without
+#: them must keep loading; delivery to a local folder has neither a connection
+#: to test nor an external directory to list.
+CONTRACT_VERSION = (1, 2)
 
 
 class DeliveryError(Exception):
@@ -55,6 +63,62 @@ class DeliveryTargetConfig:
     secrets: dict[str, str]
 
 
+class CheckOutcome(str, Enum):
+    """Why a connection check succeeded or failed.
+
+    A code rather than a message: the adapter knows WHAT went wrong, the core
+    knows how to say it in the user's language. Leaving adapters to phrase
+    their own errors would scatter i18n across every plugin and give the same
+    failure a different wording in each.
+    """
+
+    ok = "ok"
+    #: The host does not resolve, or nothing is listening.
+    unreachable = "unreachable"
+    #: Reached it, but the credentials were refused.
+    unauthorized = "unauthorized"
+    #: Reached and authenticated, but the target of the config is not there
+    #: (a missing collection, bucket, folder).
+    not_found = "not_found"
+    #: Answered, but not in a way this adapter understands — often a URL
+    #: pointing at something that is not the expected API.
+    unexpected_response = "unexpected_response"
+    #: Took too long.
+    timeout = "timeout"
+    #: Anything the adapter cannot classify. `detail` carries what it knows.
+    error = "error"
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """What `check_connection` reports back.
+
+    `detail` is optional free text (a status line, an exception message) shown
+    beneath the localised message — useful when the code alone is too coarse
+    to act on. It is NOT localised and must never carry a secret.
+    """
+
+    outcome: CheckOutcome
+    detail: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome is CheckOutcome.ok
+
+
+@dataclass(frozen=True)
+class ConfigOption:
+    """One choice for a config field the adapter can enumerate.
+
+    `value` is stored, `label` is shown. They differ on purpose: an Outline
+    collection is addressed by a stable id but recognised by its name, and a
+    rename must not break a target.
+    """
+
+    value: str
+    label: str
+
+
 @dataclass(frozen=True)
 class DeliveryResult:
     external_id: str | None = None
@@ -78,6 +142,38 @@ class DeliveryAdapter(Protocol):
 
     def config_schema(self) -> dict: ...
     def secret_keys(self) -> list[str]: ...
+
+    # --- optional, contract 1.2 (vts-6o37) --------------------------------
+    #
+    # These are NOT declared as Protocol members on purpose. A runtime
+    # Protocol check requires every member to exist, so declaring them would
+    # stop every already-published adapter from loading — exactly the
+    # backwards-incompatible break the add-only rule forbids. The core reads
+    # them with getattr and simply offers less when they are absent:
+    #
+    #   async def check_connection(
+    #       self, target: DeliveryTargetConfig
+    #   ) -> CheckResult:
+    #       """Prove the endpoint is reachable and the credentials work.
+    #
+    #       Cheap and read-only — it runs from a web request while the user
+    #       waits. Return a CheckResult; do not raise for an expected failure,
+    #       since the outcome code is what the UI turns into a message."""
+    #
+    #   async def config_options(
+    #       self, field: str, target: DeliveryTargetConfig
+    #   ) -> list[ConfigOption]:
+    #       """Enumerate the valid values of one config field.
+    #
+    #       For a field whose values live in the external system (an Outline
+    #       collection, an S3 bucket). Raise if the system cannot be reached —
+    #       the core degrades the field to free text rather than blocking the
+    #       form."""
+    #
+    # An adapter that implements config_options should also list the fields it
+    # can enumerate, so the core need not probe blindly:
+    #
+    #   def option_fields(self) -> list[str]: ...
 
     def connection_fields(self) -> list[str]:
         """Names of the fields (config AND secret) that identify a CONNECTION.

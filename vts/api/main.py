@@ -45,6 +45,9 @@ from vts.api.schemas import (
     DeliveryRetryRequest,
     DeliveryAdapterOut,
     DeliveryAdaptersOut,
+    DeliveryCheckOut,
+    DeliveryOptionOut,
+    DeliveryOptionsOut,
     DeliveryVariantOut,
     DeliveryCredentialCreate,
     DeliveryCredentialOut,
@@ -2251,11 +2254,16 @@ def create_app() -> FastAPI:
         out: list[DeliveryAdapterOut] = []
         for name, adapter in sorted(list_adapters().items()):
             try:
+                # Optional since contract 1.2, read with getattr: an adapter
+                # built against 1.1 has neither, and must keep working.
+                option_fields = getattr(adapter, "option_fields", None)
                 out.append(DeliveryAdapterOut(
                     name=name,
                     config_schema=adapter.config_schema() or {},
                     secret_keys=list(adapter.secret_keys()),
                     connection_fields=list(adapter.connection_fields()),
+                    option_fields=list(option_fields()) if callable(option_fields) else [],
+                    supports_check=callable(getattr(adapter, "check_connection", None)),
                 ))
             except Exception as exc:  # noqa: BLE001 - third-party plugin code
                 # One misbehaving plugin must not cost the operator the whole
@@ -2350,6 +2358,122 @@ def create_app() -> FastAPI:
         return DeliveryCredentialOut(
             **delivery_credential_view(row, settings, used_by=used_by)
         )
+
+    async def _credential_target_config(repo, uid: uuid.UUID, credential_id: uuid.UUID):
+        """Build what an adapter needs to talk to a credential's endpoint.
+
+        The credential is fetched for THIS user: these endpoints reach out to
+        an external system using stored secrets, so an id from the URL must
+        never be enough to probe someone else's Outline.
+        """
+        from vts.core.secrets import decrypt_secrets, load_secrets_key
+        from vts.delivery.contract import DeliveryTargetConfig
+
+        credential = await repo.get_delivery_credential(uid, credential_id)
+        if credential is None:
+            raise HTTPException(status_code=404, detail="Delivery credential not found")
+
+        secrets: dict[str, str] = {}
+        if credential.secrets_enc:
+            try:
+                secrets = decrypt_secrets(credential.secrets_enc, load_secrets_key(settings))
+            except Exception as exc:  # noqa: BLE001 - missing key or bad blob
+                raise HTTPException(
+                    status_code=400,
+                    detail="Stored secrets cannot be read; re-enter them for this connection",
+                ) from exc
+        cfg = DeliveryTargetConfig(config=dict(credential.config_json or {}), secrets=secrets)
+        return credential, cfg
+
+    @app.post(
+        "/api/delivery-credentials/{credential_id}/check",
+        response_model=DeliveryCheckOut,
+    )
+    async def check_delivery_credential_endpoint(
+        credential_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryCheckOut:
+        """Test that a connection actually works, before anything is delivered.
+
+        Without this the first sign of a broken connection is a failed
+        delivery, which may be hours after the settings were saved.
+        """
+        from vts.delivery.contract import CheckOutcome
+
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        credential, cfg = await _credential_target_config(repo, uid, credential_id)
+        adapter = _adapter_or_400(credential.adapter)
+
+        check = getattr(adapter, "check_connection", None)
+        if not callable(check):
+            # A 1.1 adapter, or one with nothing to test. Not an error.
+            raise HTTPException(
+                status_code=501,
+                detail=f"Adapter {credential.adapter!r} does not support connection checks",
+            )
+        try:
+            result = await asyncio.wait_for(check(cfg), timeout=20)
+        except asyncio.TimeoutError:
+            return DeliveryCheckOut(ok=False, outcome=CheckOutcome.timeout.value)
+        except Exception as exc:  # noqa: BLE001 - third-party plugin code
+            # A plugin that raises instead of reporting is a plugin bug, but
+            # the user still deserves an answer rather than a 500.
+            logging.getLogger(__name__).warning(
+                "adapter %r raised during check_connection: %s", credential.adapter, exc
+            )
+            return DeliveryCheckOut(
+                ok=False, outcome=CheckOutcome.error.value, detail=str(exc)[:300]
+            )
+
+        outcome = getattr(result, "outcome", None)
+        return DeliveryCheckOut(
+            ok=bool(getattr(result, "ok", False)),
+            outcome=getattr(outcome, "value", None) or str(outcome or CheckOutcome.error.value),
+            detail=getattr(result, "detail", None),
+        )
+
+    @app.get(
+        "/api/delivery-credentials/{credential_id}/options/{field}",
+        response_model=DeliveryOptionsOut,
+    )
+    async def delivery_field_options_endpoint(
+        credential_id: uuid.UUID,
+        field: str,
+        user: AuthenticatedUser = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session_dep),
+    ) -> DeliveryOptionsOut:
+        """Values an adapter can enumerate for one config field.
+
+        Bound to a CREDENTIAL rather than a target because the list is needed
+        while the target form is still being filled in — the target does not
+        exist yet, but its credential does.
+        """
+        repo = Repo(session)
+        uid = uuid.UUID(user.id)
+        credential, cfg = await _credential_target_config(repo, uid, credential_id)
+        adapter = _adapter_or_400(credential.adapter)
+
+        options_fn = getattr(adapter, "config_options", None)
+        if not callable(options_fn):
+            raise HTTPException(
+                status_code=501,
+                detail=f"Adapter {credential.adapter!r} does not enumerate field options",
+            )
+        try:
+            options = await asyncio.wait_for(options_fn(field, cfg), timeout=20)
+        except Exception as exc:  # noqa: BLE001 - network, auth, plugin bug
+            # Degrade rather than block: the UI falls back to free text, so a
+            # dead Outline cannot stop someone configuring a target.
+            logging.getLogger(__name__).info(
+                "adapter %r could not list options for %r: %s", credential.adapter, field, exc
+            )
+            return DeliveryOptionsOut(options=[], unavailable=str(exc)[:300])
+
+        return DeliveryOptionsOut(options=[
+            DeliveryOptionOut(value=str(o.value), label=str(o.label)) for o in options
+        ])
 
     @app.delete("/api/delivery-credentials/{credential_id}", status_code=204)
     async def delete_delivery_credential_endpoint(

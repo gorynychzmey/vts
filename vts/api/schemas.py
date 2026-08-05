@@ -144,6 +144,38 @@ class DeliveryAdapterOut(BaseModel):
     config_schema: dict
     secret_keys: list[str]
     connection_fields: list[str]
+    #: Fields whose values the adapter can enumerate from the external system
+    #: (contract 1.2). The UI renders these as a picker instead of free text.
+    #: Kept out of `config_schema` so that stays standard JSON Schema.
+    option_fields: list[str] = Field(default_factory=list)
+    #: Whether the adapter implements check_connection, so the UI knows
+    #: whether to offer the button at all.
+    supports_check: bool = False
+
+
+class DeliveryCheckOut(BaseModel):
+    """Result of testing a connection (vts-6o37)."""
+
+    ok: bool
+    #: A CheckOutcome value. The UI maps it to a localised message, so the
+    #: server never sends user-facing prose here.
+    outcome: str
+    #: Optional untranslated context (a status line, an exception message).
+    detail: str | None = None
+
+
+class DeliveryOptionOut(BaseModel):
+    """One enumerated choice for a config field: stored value + shown label."""
+
+    value: str
+    label: str
+
+
+class DeliveryOptionsOut(BaseModel):
+    options: list[DeliveryOptionOut] = Field(default_factory=list)
+    #: Set when the adapter could not be asked (system down, token expired).
+    #: The UI falls back to a free-text field rather than blocking the form.
+    unavailable: str | None = None
 
 
 class DeliveryVariantOut(BaseModel):
