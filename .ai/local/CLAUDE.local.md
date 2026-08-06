@@ -9,9 +9,47 @@
 
   Rules of thumb: docs and *tests* leak as easily as code — use `example.invalid` / RFC5737 addresses in fixtures instead of real hosts, and assert on the *shape* of a message, not on a real hostname. Tracker dumps (`.beads-backups/`), backups and pasted logs are written assuming privacy — never track them. A generic "prod" almost always carries the same meaning as the real hostname, so prefer it.
 
+  Known recurring trap: `internal-standards sync` writes the real local checkout path into `.ai/standards-version.json` (`source_path`) and `.ai/bin/internal-standards`. Both are tracked, and both are kept sanitized as `/path/to/internal-standards` on purpose — restore the placeholder after every sync.
+
   This is worse when paired with a known-unfixed vulnerability: an accurate internal map plus a documented weakness is a bigger gift than either alone. If something must be recorded, put it in the (private) bd issue, not in a tracked file. Precedent: vts-luf4 — a docstring documenting an SSRF residual also described the host's network layout.
 - **Knowledge capture** is a managed shared rule now — see "Knowledge Capture" in `.ai/managed/shared-engineering-policy.md`. vts specifics: what you'd store via `bd remember` also goes to the Cognee `development_knowledge` dataset via `mcp__claude_ai_Cognee__remember(dataset_name="development_knowledge")`, project-tagged `Project: vts (...)`.
+- **Beads guidance lives here, not in `CLAUDE.md`**: `bd setup claude` used to write a `<!-- BEGIN BEADS INTEGRATION -->` block straight into `CLAUDE.md`, which `internal-standards` also generates — two owners, one file, permanent drift (`bd setup claude --check` reported "stale", `standards sync` refused to write). The block was removed with `bd setup claude --remove` and its content moved into this file, which `internal-standards` treats as an authoritative local extension and never regenerates. Do NOT run `bd setup claude` here; it would re-introduce the conflict. The `bd prime` SessionStart/PreCompact hooks in `.claude/settings.json` stay — `--remove` strips those too, so re-add them by hand if you ever run it.
 - **Harness-managed `.claude/settings.json` is local-only**: hooks on this machine append a `worktree.bgIsolation` block and per-machine hook entries (background-setup.sh, inbox-notifier.sh) to `.claude/settings.json` every session. The canonical repo version contains only the shared `bd prime` SessionStart/PreCompact hooks. On a fresh clone, run `git update-index --skip-worktree .claude/settings.json` so local mutations stop showing up in `git status` and stop interrupting commits with stash dances. `.claude/scheduled_tasks.lock` and `.claude/settings.json.old` are gitignored runtime state.
+
+# Beads issue tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` for full workflow context and commands — it is the single source of truth for operational commands, and a SessionStart hook runs it automatically.
+
+```bash
+bd ready                # Find available work
+bd show <id>            # View issue details
+bd update <id> --claim  # Take an issue into work
+bd close <id>           # Complete work
+```
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files.
+- `.beads/` is gitignored, so issue text is private. That makes it the right place for detail which must not ship in this public repo (see the sensitive-data rule above).
+
+## Session completion
+
+When ending a work session, complete ALL of these. Work is NOT complete until `git push` succeeds.
+
+1. **File issues for remaining work** — anything needing follow-up.
+2. **Run quality gates** (if code changed) — tests, linters, builds.
+3. **Update issue status** — close finished work, update in-progress items.
+4. **Push** — this is mandatory:
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** — clear stashes, prune remote branches.
+6. **Verify** — all changes committed AND pushed.
+7. **Hand off** — provide context for the next session.
+
+Never stop before pushing, and never say "ready to push when you are" — that strands work locally. If push fails, resolve and retry until it succeeds. (This overrides the upstream `bd setup` template's more conservative "report proposed commands unless authorized" default, which does not match how this project works.)
 
 # context-mode — MANDATORY routing rules
 

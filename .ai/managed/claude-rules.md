@@ -1,7 +1,7 @@
 <!-- internal-standards:managed -->
 # Claude Rules
 
-Generated from `internal-standards` version `0.1.0`.
+Generated from `internal-standards` version `0.4.0`.
 
 ## Tool-Specific Guidance
 # Claude-Specific Guidance
