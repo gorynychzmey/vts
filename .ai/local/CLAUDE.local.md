@@ -2,6 +2,14 @@
 
 - **Commit + push after every task**: when a task is done, bump the version in `vts/__init__.py`, commit all changed files, and push to `origin/main`.
 - **Build only on explicit request**: never run `/build` or push a `build-X.Y.Z` tag unless the user explicitly asks.
+- **This repo is PUBLIC — check every commit for sensitive data before staging it.** Not a "be careful" reminder: run the check. Before `git commit`, review `git diff --staged` (and `git status` for newly tracked files) for
+  - **Secrets**: keys, passwords, tokens, connection strings with credentials, `.env` contents.
+  - **Internal infrastructure**: hostnames of real hosts (`*.fritz.box` and other LAN names), internal IPs, network topology, which services share a network, host paths that reveal layout, file modes.
+  - **Third-party context**: names of unrelated services/containers running on the same host — they belong to other projects and are not ours to publish.
+
+  Rules of thumb: docs and *tests* leak as easily as code — use `example.invalid` / RFC5737 addresses in fixtures instead of real hosts, and assert on the *shape* of a message, not on a real hostname. Tracker dumps (`.beads-backups/`), backups and pasted logs are written assuming privacy — never track them. A generic "prod" almost always carries the same meaning as the real hostname, so prefer it.
+
+  This is worse when paired with a known-unfixed vulnerability: an accurate internal map plus a documented weakness is a bigger gift than either alone. If something must be recorded, put it in the (private) bd issue, not in a tracked file. Precedent: vts-luf4 — a docstring documenting an SSRF residual also described the host's network layout.
 - **Knowledge capture** is a managed shared rule now — see "Knowledge Capture" in `.ai/managed/shared-engineering-policy.md`. vts specifics: what you'd store via `bd remember` also goes to the Cognee `development_knowledge` dataset via `mcp__claude_ai_Cognee__remember(dataset_name="development_knowledge")`, project-tagged `Project: vts (...)`.
 - **Harness-managed `.claude/settings.json` is local-only**: hooks on this machine append a `worktree.bgIsolation` block and per-machine hook entries (background-setup.sh, inbox-notifier.sh) to `.claude/settings.json` every session. The canonical repo version contains only the shared `bd prime` SessionStart/PreCompact hooks. On a fresh clone, run `git update-index --skip-worktree .claude/settings.json` so local mutations stop showing up in `git status` and stop interrupting commits with stash dances. `.claude/scheduled_tasks.lock` and `.claude/settings.json.old` are gitignored runtime state.
 
