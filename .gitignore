@@ -221,6 +221,10 @@ __marimo__/
 *.db
 .beads-credential-key
 .beads/
+# Issue-tracker dumps. Written assuming a private tracker, so they carry
+# infrastructure detail (hostnames, config paths, file modes) that must not
+# ship in a public repo.
+.beads-backups/
 
 # Editor / IDE
 .vscode/

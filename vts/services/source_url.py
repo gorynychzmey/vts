@@ -6,15 +6,30 @@ diarization sidecar, `169.254.169.254`, or any RFC1918 address would be fetched
 by us, and the difference between refused / timeout / HTTP status is readable
 by the submitter as a network probe.
 
+Deployments may place the worker on a network it shares with unrelated services,
+so treat what this module fails to stop as aimed at whatever the worker can
+reach, not only at VTS's own sidecars.
+
 Two entry points must both use this: /api/tasks (via TaskCreateRequest) and the
 MCP `submit_video` tool, which does not build a TaskCreateRequest at all.
 
 Scope, deliberately: this blocks addresses that are literally internal, and
-resolves hostnames to catch names that point inward. It is not a defence
-against an attacker-controlled DNS name that resolves publicly at check time
-and privately later (DNS rebinding) — that needs the check at connect time,
-inside yt-dlp's socket handling, which we do not control. Given an OAuth
-allow-listed user base, this is the proportionate layer.
+resolves hostnames to catch names that point inward. It checks the URL the user
+submitted, and only that URL. Two ways past it are known and accepted here:
+
+- Redirects (vts-luf4). yt-dlp follows 3xx by default and we set no protocol or
+  redirect limits, so a public URL that passes this check can bounce the worker
+  to an internal one. Blanket-blocking cross-host redirects is not the fix —
+  site -> CDN on another domain is the normal case for real media links.
+- DNS rebinding. An attacker-controlled name that resolves publicly at check
+  time and privately at connect time.
+
+Both need the check where we cannot put it: at connect time, inside yt-dlp's
+socket handling. The real answer to both is network isolation of the download
+itself rather than more URL parsing — yt-dlp runs in-process in the worker
+(see services/downloader.py), which is why it inherits the worker's full reach.
+Tracked separately; until then this module is the proportionate layer for an
+OAuth allow-listed user base, not a boundary to rely on.
 """
 from __future__ import annotations
 

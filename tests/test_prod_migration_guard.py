@@ -29,13 +29,16 @@ def test_prod_is_refused_without_the_opt_in():
     with pytest.raises(ProdMigrationRefused) as excinfo:
         ensure_migration_allowed(
             environment="prod",
-            database_url="postgresql+asyncpg://vts:secret@beelink.fritz.box:5432/vts",
+            database_url="postgresql+asyncpg://vts:secret@db.example.invalid:5432/vts",
             allow_flag=None,
         )
 
     message = str(excinfo.value)
     # The operator must be able to act on it: which database, and how to proceed.
-    assert "beelink.fritz.box" in message, message
+    # The host here is a stand-in on purpose — this repo is public, so tests use
+    # .invalid names rather than real infrastructure hostnames. What is asserted
+    # is that the message names its target at all, which any host proves.
+    assert "db.example.invalid" in message, message
     assert "VTS_ALLOW_PROD_MIGRATIONS=1" in message, message
     # Never echo the password back into a log.
     assert "secret" not in message, message
@@ -45,7 +48,7 @@ def test_prod_is_allowed_with_the_explicit_opt_in():
     """Deploys must still work — the container sets the flag deliberately."""
     ensure_migration_allowed(
         environment="prod",
-        database_url="postgresql+asyncpg://vts:secret@beelink.fritz.box:5432/vts",
+        database_url="postgresql+asyncpg://vts:secret@db.example.invalid:5432/vts",
         allow_flag="1",
     )
 

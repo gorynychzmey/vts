@@ -75,7 +75,7 @@ In `.github/workflows/tests.yml`, change the services.postgres image:
         image: tensorchord/vchord-postgres:pg17-v1.1.1
 ```
 
-Why this exact image, not `pgvector/pgvector`: prod (`beelink.fritz.box`) runs it, and VectorChord ships an extra `vchord` extension a plain pgvector image lacks — a silent dev/prod split otherwise (bd memory `test_environment_parity`).
+Why this exact image, not `pgvector/pgvector`: prod runs it, and VectorChord ships an extra `vchord` extension a plain pgvector image lacks — a silent dev/prod split otherwise (bd memory `test_environment_parity`).
 
 - [ ] **Step 2: Create the extension before schema build in the shared engine helper**
 

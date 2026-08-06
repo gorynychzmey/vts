@@ -242,7 +242,7 @@ top-N. Их десятки, влезают. При отсечке top-N чело
 
 ## Хранилище векторов
 
-Прод (`beelink.fritz.box`, см. `/opt/vts/config/config.yaml`) работает на образе
+Прод (см. `/opt/vts/config/config.yaml`) работает на образе
 `docker.io/tensorchord/vchord-postgres:pg17-v1.1.1` — VectorChord поверх pgvector,
 расширение доступно.
 
