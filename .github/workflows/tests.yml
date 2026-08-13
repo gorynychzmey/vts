@@ -72,6 +72,126 @@ jobs:
           VTS_TEST_DATABASE_URL: postgresql+asyncpg://vts:vts@localhost:5432/vts_test
         run: python -m pytest -q
 
+  # Cheap gate (~10s) so the browser suite only runs when the frontend actually
+  # changed. A job-level `paths:` filter does not exist — `paths` is a
+  # workflow-level trigger filter only — so the decision is computed here and
+  # consumed via `needs`/`if`. Deliberately a few lines of git rather than a
+  # third-party action: this workflow gates releases, and an external action is
+  # a supply-chain dependency in that path (vts-9bcu).
+  changes:
+    name: Detect frontend changes
+    runs-on: ubuntu-latest
+    outputs:
+      ui: ${{ steps.filter.outputs.ui }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Need history to diff against the base; 0 = full clone. The repo is
+          # small enough that this costs a couple of seconds.
+          fetch-depth: 0
+
+      - name: Decide whether the UI suite must run
+        id: filter
+        env:
+          # For a PR, compare against the target branch's merge base. For a push
+          # to main, compare against the commit the push started from.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          # `github.event.before` is all-zeroes on a branch's first push, and a
+          # force-push can leave a base that is no longer reachable. In either
+          # case we cannot compute a range, so fail OPEN and run the suite:
+          # a needless 2-minute run is cheaper than a frontend regression that
+          # CI silently skipped.
+          if [ -z "${BASE_SHA:-}" ] \
+             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "base commit unavailable — running the UI suite unconditionally"
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Comparing ${BASE_SHA}..${{ github.sha }}"
+          changed=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}")
+          echo "$changed" | sed 's/^/  /'
+
+          # tests/ui/** is included so a change to the harness or a scenario is
+          # itself verified, not just changes to the app it drives.
+          if echo "$changed" | grep -qE '^(vts/static/|tests/ui/)'; then
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  ui:
+    name: Browser UI verifier
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: tests/ui
+        run: npm ci
+
+      # harness.mjs calls chromium.launch() with no channel, so Playwright uses
+      # the headless shell (~262MB) rather than full Chrome (~379MB). Installing
+      # only that keeps the cold path meaningfully smaller.
+      - name: Resolve Playwright version
+        id: pw
+        working-directory: tests/ui
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}-headless-shell
+
+      - name: Install Chromium headless shell
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: tests/ui
+        run: npx playwright install --with-deps chromium-headless-shell
+
+      # System libraries are not part of the cached browser directory, so they
+      # must be installed even on a cache hit.
+      - name: Install browser system dependencies
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: tests/ui
+        run: npx playwright install-deps chromium-headless-shell
+
+      # Proves the harness can still detect a planted regression. A green suite
+      # from a harness that cannot fail is worth nothing, so this guards the
+      # guard itself and must run before the suite is believed.
+      - name: Self-check (harness is not a rubber stamp)
+        working-directory: tests/ui
+        run: node self-check.mjs
+
+      - name: Run UI scenarios
+        working-directory: tests/ui
+        run: node run.mjs
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-failure-screenshots
+          path: /tmp/vts-ui-verify/
+          if-no-files-found: ignore
+          retention-days: 7
+
   audit:
     name: pip-audit
     runs-on: ubuntu-latest
