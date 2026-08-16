@@ -1040,6 +1040,28 @@
       </div>
     </dialog>
 
+    <!-- Upload progress toast (Diana): the submit button's ring said only
+         "something is happening". Two bars — files across the set, chunks
+         within the current file. Must stay ABOVE the app.js script tag: app.js
+         has no `defer`, so it resolves this by id at parse time. -->
+    <div id="upload-toast" class="upload-toast" hidden aria-live="polite">
+      <div class="upload-toast-row">
+        <span class="upload-toast-title" id="upload-toast-title"></span>
+        <span class="upload-toast-count mono" id="upload-toast-count"></span>
+      </div>
+      <div class="step-progress local-progress upload-toast-bar" id="upload-toast-files-bar"
+           role="progressbar" aria-valuemin="0" aria-valuemax="100">
+        <div class="step-progress-fill" id="upload-toast-files-fill"></div>
+        <div class="step-progress-text mono" id="upload-toast-files-text">0%</div>
+      </div>
+      <div class="upload-toast-file" id="upload-toast-filename"></div>
+      <div class="step-progress upload-toast-bar" id="upload-toast-chunks-bar"
+           role="progressbar" aria-valuemin="0" aria-valuemax="100">
+        <div class="step-progress-fill" id="upload-toast-chunks-fill"></div>
+        <div class="step-progress-text mono" id="upload-toast-chunks-text">0%</div>
+      </div>
+    </div>
+
     <script src="/static/status-predicates.js?v=__VTS_VERSION__"></script>
     <script src="/static/app.js?v=__VTS_VERSION__"></script>
   </body>

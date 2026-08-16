@@ -1054,7 +1054,15 @@ function parseTaskStats(task) {
     summaryChars: parseNonNegativeInt(stats && stats.summary_chars),
     redactedChars: parseNonNegativeInt(stats && stats.redacted_chars),
     mediaSeconds: parseNonNegativeInt(stats && stats.media_seconds),
-    mediaBytes: parseNonNegativeInt(stats && stats.media_bytes)
+    mediaBytes: parseNonNegativeInt(stats && stats.media_bytes),
+    // How many files the user actually uploaded. Not from `stats` (which
+    // describes the single concatenated media file) but from the options the
+    // finalize step already writes for every multi-file upload — so this works
+    // retroactively on tasks created before this line existed, with no
+    // migration. Single-file and link tasks have no source_files at all.
+    sourceFileCount: Array.isArray(task && task.options && task.options.source_files)
+      ? task.options.source_files.length
+      : 0
   };
 }
 
@@ -1135,6 +1143,12 @@ function renderTaskStats(taskEl) {
   }
   if (Number.isInteger(stats.mediaBytes) && stats.mediaBytes > 0) {
     parts.push(t("stats.media_size", { size: formatMegabytes(stats.mediaBytes) }));
+  }
+  // Only for a genuine multi-file task (Diana): "1 файл" next to every single
+  // upload would be noise, and the count is what disambiguates a task whose
+  // title shows just the first file's name.
+  if (stats.sourceFileCount > 1) {
+    parts.push(t("stats.media_files", { count: stats.sourceFileCount }));
   }
   if (elements.statsTextEl) {
     elements.statsTextEl.textContent = parts.join(" · ");
@@ -2414,7 +2428,103 @@ function syncSourceType() {
   }
 }
 
-function uploadFileWithProgress(fd) {
+// --- Upload progress toast -------------------------------------------------
+//
+// Diana: "неочевидно, сколько файлов загрузилось... сама загрузка не наглядная".
+// The submit button's ring is a single indeterminate-looking arc; this shows
+// the task-style pattern instead — a top bar for the set (N of M files) and a
+// bottom bar for the chunks of the file currently in flight.
+//
+// One shared controller for all three upload paths, so a single-shot upload,
+// a chunked single file and a multi-file session all report the same way.
+// A single file drops the FILES bar entirely (`.single`) and keeps only its own
+// progress under the filename: with nothing to count, two bars would show the
+// same number twice.
+const uploadToast = {
+  el: document.getElementById("upload-toast"),
+  titleEl: document.getElementById("upload-toast-title"),
+  countEl: document.getElementById("upload-toast-count"),
+  filesFill: document.getElementById("upload-toast-files-fill"),
+  filesText: document.getElementById("upload-toast-files-text"),
+  filesBar: document.getElementById("upload-toast-files-bar"),
+  fileNameEl: document.getElementById("upload-toast-filename"),
+  chunksFill: document.getElementById("upload-toast-chunks-fill"),
+  chunksText: document.getElementById("upload-toast-chunks-text"),
+  chunksBar: document.getElementById("upload-toast-chunks-bar"),
+  total: 0,
+
+  // total = number of files in this upload. A total of 1 hides the files bar
+  // and leaves the per-file one.
+  start(total) {
+    if (!this.el) {
+      return;
+    }
+    this.total = Math.max(0, Number(total) || 0);
+    this.el.classList.toggle("single", this.total <= 1);
+    if (this.titleEl) {
+      this.titleEl.textContent = t("upload.toast.title");
+    }
+    this.setFiles(0, 0);
+    this.setChunks(0);
+    if (this.fileNameEl) {
+      this.fileNameEl.textContent = "";
+    }
+    this.el.hidden = false;
+  },
+
+  // done = files fully sent, ratio = fraction of total BYTES sent (smoother
+  // than done/total, which would sit still through a large file).
+  setFiles(done, ratio) {
+    if (!this.el) {
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round((Number(ratio) || 0) * 100)));
+    if (this.filesFill) {
+      this.filesFill.style.width = `${pct}%`;
+    }
+    if (this.filesText) {
+      this.filesText.textContent = `${pct}%`;
+    }
+    if (this.filesBar) {
+      this.filesBar.setAttribute("aria-valuenow", String(pct));
+    }
+    if (this.countEl) {
+      this.countEl.textContent = this.total > 1
+        ? t("upload.toast.files", { done: Math.min(done, this.total), total: this.total })
+        : "";
+    }
+  },
+
+  setCurrentFile(name) {
+    if (this.fileNameEl) {
+      this.fileNameEl.textContent = String(name || "");
+    }
+  },
+
+  setChunks(ratio) {
+    if (!this.el) {
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round((Number(ratio) || 0) * 100)));
+    if (this.chunksFill) {
+      this.chunksFill.style.width = `${pct}%`;
+    }
+    if (this.chunksText) {
+      this.chunksText.textContent = `${pct}%`;
+    }
+    if (this.chunksBar) {
+      this.chunksBar.setAttribute("aria-valuenow", String(pct));
+    }
+  },
+
+  stop() {
+    if (this.el) {
+      this.el.hidden = true;
+    }
+  },
+};
+
+function uploadFileWithProgress(fd, fileName) {
   const btn = document.getElementById("submit-btn");
   const icon = btn && btn.querySelector(".submit-icon");
   const ring = btn && btn.querySelector(".submit-progress");
@@ -2425,9 +2535,14 @@ function uploadFileWithProgress(fd) {
   if (icon) icon.classList.add("hidden");
   if (ring) ring.classList.remove("hidden");
   if (fill) fill.style.strokeDashoffset = circumference;
+  uploadToast.start(1);
+  uploadToast.setCurrentFile(fileName || "");
 
   function setProgress(ratio) {
     if (fill) fill.style.strokeDashoffset = circumference * (1 - ratio);
+    // Single file: the files bar is hidden by `.single`, so the byte progress
+    // goes on the per-file bar under the filename.
+    uploadToast.setChunks(ratio);
   }
 
   return new Promise((resolve, reject) => {
@@ -2456,6 +2571,7 @@ function uploadFileWithProgress(fd) {
     if (icon) icon.classList.remove("hidden");
     if (ring) ring.classList.add("hidden");
     if (fill) fill.style.strokeDashoffset = circumference;
+    uploadToast.stop();
   });
 }
 
@@ -2465,13 +2581,20 @@ async function uploadFileChunked(file, fields) {
   const ring = btn && btn.querySelector(".submit-progress");
   const fill = ring && ring.querySelector(".submit-progress-fill");
   const circumference = 56.55;
-  const setProgress = (r) => { if (fill) fill.style.strokeDashoffset = circumference * (1 - r); };
+  const setProgress = (r) => {
+    if (fill) fill.style.strokeDashoffset = circumference * (1 - r);
+    // One file: the files bar is hidden by `.single`; the byte progress goes
+    // on the per-file bar under the filename.
+    uploadToast.setChunks(r);
+  };
   // Declared out here so the catch below can release the ownIds claim.
   let uploadId = null;
 
   if (btn) btn.disabled = true;
   if (icon) icon.classList.add("hidden");
   if (ring) ring.classList.remove("hidden");
+  uploadToast.start(1);
+  uploadToast.setCurrentFile(file.name);
   setProgress(0); // determinate from the start
 
   try {
@@ -2547,6 +2670,9 @@ async function uploadFileChunked(file, fields) {
     if (btn) btn.disabled = false;
     if (icon) icon.classList.remove("hidden");
     if (ring) ring.classList.add("hidden");
+    // finally, not the success path: a failed or aborted upload must not leave
+    // the toast pinned to the corner forever.
+    uploadToast.stop();
   }
 }
 
@@ -2562,12 +2688,20 @@ async function uploadFilesChunked(files, fields) {
   const grandTotal = files.reduce((sum, f) => sum + f.size, 0);
   let sentBefore = 0; // bytes confirmed sent for files completed so far
   const setProgress = (r) => { if (fill) fill.style.strokeDashoffset = circumference * (1 - r); };
+  // The toast's two bars. `done` is how many files are fully sent; the top bar
+  // still advances by BYTES, so it keeps moving through a single large file
+  // instead of freezing between whole-file steps.
+  const setToast = (index, fileOffset, fileSize) => {
+    uploadToast.setFiles(index, grandTotal ? (sentBefore + fileOffset) / grandTotal : 1);
+    uploadToast.setChunks(fileSize ? fileOffset / fileSize : 1);
+  };
   // Declared out here so the catch below can release the ownIds claim.
   let uploadId = null;
 
   if (btn) btn.disabled = true;
   if (icon) icon.classList.add("hidden");
   if (ring) ring.classList.remove("hidden");
+  uploadToast.start(files.length);
   setProgress(0); // determinate from the start
 
   try {
@@ -2601,6 +2735,8 @@ async function uploadFilesChunked(files, fields) {
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       let offset = 0;
+      uploadToast.setCurrentFile(file.name);
+      setToast(index, 0, file.size);
       while (offset < file.size) {
         const slice = file.slice(offset, Math.min(offset + chunkSize, file.size));
         const buf = await slice.arrayBuffer();
@@ -2621,12 +2757,16 @@ async function uploadFilesChunked(files, fields) {
           });
           offset = off.received;
           setProgress(grandTotal ? (sentBefore + offset) / grandTotal : 1);
+          setToast(index, offset, file.size);
           continue;
         }
         offset = resp.received;
         setProgress(grandTotal ? (sentBefore + offset) / grandTotal : 1);
+        setToast(index, offset, file.size);
       }
       sentBefore += file.size;
+      // Whole file done: reflect it in the "N of M" counter right away.
+      uploadToast.setFiles(index + 1, grandTotal ? sentBefore / grandTotal : 1);
     }
 
     // Return the created task: the caller prepends it straight onto the list,
@@ -2646,6 +2786,9 @@ async function uploadFilesChunked(files, fields) {
     if (btn) btn.disabled = false;
     if (icon) icon.classList.remove("hidden");
     if (ring) ring.classList.add("hidden");
+    // finally, not the success path: a failed or aborted upload must not leave
+    // the toast pinned to the corner forever.
+    uploadToast.stop();
   }
 }
 
@@ -3189,7 +3332,7 @@ async function createTask(event) {
           fd.append("diarize", fields.diarize ? "true" : "false");
           fd.append("prompts", fields.prompts);
           fd.append("delivery", fields.delivery);
-          created = await uploadFileWithProgress(fd);
+          created = await uploadFileWithProgress(fd, file.name);
         }
       }
     } else {

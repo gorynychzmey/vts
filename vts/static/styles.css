@@ -2541,3 +2541,78 @@ dialog:not([open]) {
 .check-btn.hidden {
   display: none;
 }
+
+
+/* Upload progress toast (Diana): uploading gave almost no feedback — a thin
+   ring around the submit button, which said nothing about WHICH file of how
+   many was in flight. Fixed to the corner so it survives the page scrolling
+   while a large multi-file set uploads. Reuses .step-progress so it reads as
+   the same kind of progress as a running task's bars. */
+.upload-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 60;
+  width: min(22rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffcf2;
+  box-shadow: 0 6px 20px rgb(21 32 24 / 0.18);
+}
+
+.upload-toast[hidden] {
+  display: none;
+}
+
+.upload-toast-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.upload-toast-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.upload-toast-count {
+  font-size: 0.78rem;
+  color: var(--muted, #555);
+  flex: 0 0 auto;
+}
+
+/* The filename is the one unbounded string here; never let it widen the toast. */
+.upload-toast-file {
+  font-size: 0.76rem;
+  color: var(--muted, #555);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-toast-bar {
+  height: 0.9rem;
+}
+
+.upload-toast-bar .step-progress-text {
+  font-size: 0.68rem;
+}
+
+/* One file has no "N of M" to report, so the FILES bar goes away entirely
+   (Victor) and the toast keeps the bar that still means something: progress
+   through the single file, under its name. Two bars showing the same number
+   would just be noise. */
+.upload-toast.single #upload-toast-files-bar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-toast .step-progress-fill {
+    transition: none;
+  }
+}
