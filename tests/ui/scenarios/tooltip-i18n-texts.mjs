@@ -56,7 +56,7 @@ const EXPECTED = {
     de: "Nur die finale Zusammenfassung aus bereits verarbeiteten Teilen neu erstellen",
   },
   "#preset-save-btn": {
-    ru: "Сохранить текущие настройки задачи как новый пресет",
+    ru: "Сохранить текущие настройки задачи как новый шаблон",
     en: "Save the current task settings as a new preset",
     de: "Aktuelle Aufgabeneinstellungen als neues Preset speichern",
   },

@@ -284,6 +284,49 @@ input[type="file"] {
   color: var(--muted, #555);
 }
 
+/* Small "?" affordance next to the preset label: the term needs explaining
+   (Diana's feedback), and a hover-only title is invisible on touch — the
+   marker is focusable so the tooltip is reachable by keyboard too. */
+.preset-hint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--muted, #555);
+  cursor: help;
+  user-select: none;
+}
+
+.preset-hint:hover,
+.preset-hint:focus-visible {
+  color: var(--fg, #111);
+  border-color: var(--muted, #555);
+}
+
+/* The marker sits ~85px into the form, so the globally right-anchored bubble
+   would start ~174px off the left of a phone screen, clipped mid-word. Note the
+   scroll probe cannot see that: overflow to the LEFT never adds scrollWidth.
+   Left-anchor it, as the preset dialog's pills already do. */
+.preset-hint[data-tooltip]::after {
+  left: 0;
+  right: auto;
+  text-align: left;
+  /* Anchoring alone only moves the spill to the right, where it DOES add
+     sideways scroll — the width is the real constraint. Not `100%`: a
+     percentage here resolves against the 15px trigger, not the row, giving an
+     unreadable one-word-per-line column. The 132px is measured as the widest
+     value with no overflow across both source modes and all three locales
+     (File mode lays out narrower than URL; ru wraps wider than de at equal
+     width). Keeps a readable 188x86 bubble at 320px. */
+  max-width: min(16rem, calc(100vw - 132px));
+}
+
 #preset-select {
   min-width: 8rem;
   max-width: 12rem;

@@ -225,7 +225,12 @@
           <div class="row options-row">
             <div class="preset-field">
               <span class="preset-label" data-i18n="new_task.preset">Preset</span>
-              <select id="preset-select"></select>
+              <span class="preset-hint" tabindex="0" role="note"
+                    title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
+                    data-i18n-title="new_task.preset_hint"
+                    data-i18n-aria-label="new_task.preset_hint">?</span>
+              <select id="preset-select" title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
+                      data-i18n-title="new_task.preset_hint"></select>
               <button type="button" id="preset-save-btn" class="btn-text" data-i18n="preset.save_as"
                       title="Save the current task settings as a new preset"
                       data-i18n-title="preset.save_as_tooltip">Save as preset</button>

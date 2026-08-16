@@ -30,6 +30,7 @@ window.__VTS_I18N.de = {
 "new_task.prompts_none": "Keine Prompts",
 "new_task.prompts_count": "{count} Prompts",
 "new_task.preset": "Preset",
+"new_task.preset_hint": "Ein gespeicherter Satz von Aufgabeneinstellungen: Sprache, Transkript, Sprecher und Prompts. Wählen Sie eines aus, um alle Einstellungen auf einmal zu übernehmen.",
 "preset.system.default": "Standard",
 "preset.save_as": "Als Preset speichern",
 "preset.save_as_tooltip": "Aktuelle Aufgabeneinstellungen als neues Preset speichern",
