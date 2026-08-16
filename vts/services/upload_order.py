@@ -15,7 +15,7 @@ is exactly what Telegram and WhatsApp voice messages use.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 _DIGITS = re.compile(r"(\d+)")
 
@@ -26,12 +26,28 @@ def natural_key(name: str) -> list:
 
 
 def _parse(value: str | None) -> datetime | None:
+    """Parse a container creation_time tag into a COMPARABLE datetime.
+
+    Always tz-aware on the way out. The tag comes straight from ffprobe and its
+    shape follows the container, not our code: MP4/MOV write a trailing "Z",
+    while Matroska and friends can write "YYYY-MM-DD HH:MM:SS" with no
+    designator. Mixing those two in one sorted() raises "can't compare
+    offset-naive and offset-aware datetimes" — inside finalize, which loses the
+    upload (vts-5z9k).
+
+    A naive tag is read as UTC. That is what the aware ones almost always say
+    anyway, and being an hour or two out only matters if it reorders the set —
+    in which case the alternative was a crash, not a better order.
+    """
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def resolve_order(entries: list[dict]) -> tuple[list[dict], str]:

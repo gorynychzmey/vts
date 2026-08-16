@@ -80,3 +80,38 @@ def test_unparseable_creation_time_falls_back():
     ordered, source = resolve_order(entries)
     assert [e["filename"] for e in ordered] == ["a.mp4", "b.mp4"]
     assert source == "filename"
+
+
+def test_mixed_aware_and_naive_creation_times_do_not_crash():
+    """A set mixing container formats must not blow up finalize (vts-5z9k).
+
+    creation_time is the raw ffprobe container tag. MP4/MOV emit a trailing
+    'Z' (tz-aware); Matroska and others can emit 'YYYY-MM-DD HH:MM:SS' with no
+    designator at all (naive). Both parse, both are distinct, so the
+    all-present/all-distinct guards pass and sorted() then compares an aware
+    datetime against a naive one — TypeError, raised inside finalize, losing
+    the whole upload.
+
+    Asserted as "finalize survives and picks a sane order", not as a specific
+    rule: the point is that a heterogeneous set falls through to a signal that
+    can actually order it rather than crashing.
+    """
+    entries = [
+        _e("b.mkv", creation_time="2026-08-01 11:00:00", last_modified=2000),
+        _e("a.mp4", creation_time="2026-08-01T10:00:00.000000Z", last_modified=1000),
+    ]
+    ordered, source = resolve_order(entries)
+    assert [e["filename"] for e in ordered] == ["a.mp4", "b.mkv"]
+    assert source in {"creation_time", "last_modified"}
+
+
+def test_all_naive_creation_times_still_order_by_creation_time():
+    """A set that is uniformly naive is perfectly orderable — do not throw the
+    signal away just because it carries no timezone."""
+    entries = [
+        _e("b.mkv", creation_time="2026-08-01 11:00:00"),
+        _e("a.mkv", creation_time="2026-08-01 10:00:00"),
+    ]
+    ordered, source = resolve_order(entries)
+    assert [e["filename"] for e in ordered] == ["a.mkv", "b.mkv"]
+    assert source == "creation_time"
