@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import threading
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
-from vts.services.downloader import download_video_and_audio
+from vts.services.downloader import download_video_and_audio, kill_active_downloads
 from vts.services.media import (
     build_segments,
     concat_audio_stream_copy,
@@ -24,6 +26,15 @@ from vts.pipeline.steps.base import Step, StepState
 
 if TYPE_CHECKING:
     from vts.pipeline.context import PipelineContext
+
+
+# How often the download's progress callback asks Redis whether the task was
+# cancelled. Progress hooks fire far too often to check on every one.
+_CANCEL_POLL_INTERVAL_S = 1.0
+
+
+class DownloadCancelled(Exception):
+    """The task was cancelled while its download was still running."""
 
 
 # Progress callbacks below run on a worker thread (asyncio.to_thread) and hand
@@ -100,8 +111,37 @@ class DownloadStep(Step):
             st.logger.info("using saved yt-dlp youtube client for user: %s", preferred_youtube_client)
         loop = asyncio.get_running_loop()
         captured_title: list[str] = []
+        # Set from the loop, read from the download's worker thread. A plain
+        # flag is enough: it only ever goes False->True, and a check that is one
+        # progress tick late costs nothing.
+        cancel_seen = threading.Event()
+        # yt-dlp fires progress hooks many times a second and the publish
+        # throttle does not cover this path, so the Redis lookup is rate-limited
+        # here instead. A cancel noticed up to a second late is still orders of
+        # magnitude better than one noticed when the download ends.
+        last_cancel_poll = 0.0
+
+        async def _poll_cancel() -> None:
+            if await ctx.bus.is_cancel_requested(st.task_id):
+                cancel_seen.set()
 
         def sync_progress(phase: str, payload: dict[str, Any]) -> None:
+            # Cancellation is checked here for the same reason diarization
+            # checks it in its own progress callback: the processor only tests
+            # between steps, and a download is the other step long enough to be
+            # worth interrupting. Killing the child is what actually stops it —
+            # asyncio.to_thread abandons only the await, so without this the
+            # download runs to completion with nobody left to want the file.
+            if cancel_seen.is_set():
+                kill_active_downloads(st.logger)
+                raise DownloadCancelled
+            # is_cancel_requested is async and this runs off-loop, so the check
+            # is one tick behind: ask now, act on the answer next time round.
+            nonlocal last_cancel_poll
+            now = time.monotonic()
+            if now - last_cancel_poll >= _CANCEL_POLL_INTERVAL_S:
+                last_cancel_poll = now
+                _publish_soon(loop, _poll_cancel)
             if not captured_title:
                 title = payload.get("media_title")
                 if title and isinstance(title, str):
