@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
+import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-
-from yt_dlp import YoutubeDL
 
 from vts.core.failures import classify_failure_code
 
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 PhaseCallback = Callable[[str, str], None]
+# The dict yt-dlp hands its progress hooks; now rebuilt from the child process.
+ProgressHook = Callable[[dict[str, Any]], None]
+# Grace period for the download child to exit before escalating SIGTERM->SIGKILL.
+_CHILD_EXIT_TIMEOUT = 10.0
+# Live download children, so a cancelled task can actually stop the download.
+_CHILDREN: set[subprocess.Popen[str]] = set()
+_CHILDREN_LOCK = threading.Lock()
 YOUTUBE_CLIENT_FALLBACK_ORDER = ("android_vr", "android", "ios", "mweb", "web_safari", "web")
 _PERCENT_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*%")
 
@@ -92,12 +100,191 @@ def _run_download(
             },
         )
 
-    options = dict(ydl_opts)
-    options["outtmpl"] = outtmpl
-    options["progress_hooks"] = [hook]
-    options["logger"] = _YdlLogger(logger)
-    with YoutubeDL(options) as ydl:
-        ydl.download([url])
+    _run_download_subprocess(
+        url=url,
+        outtmpl=outtmpl,
+        ydl_opts=ydl_opts,
+        phase=phase,
+        hook=hook,
+        logger=logger,
+    )
+
+
+def _run_download_subprocess(
+    *,
+    url: str,
+    outtmpl: str,
+    ydl_opts: dict[str, Any],
+    phase: str,
+    hook: ProgressHook,
+    logger: logging.Logger,
+) -> None:
+    """Run yt-dlp in a child process, replaying its progress and logs here.
+
+    Isolating the download (vts-xkx4) needs an egress rule, and the kernel can
+    only name a process — not the asyncio.to_thread thread this used to be.
+    The child is otherwise ordinary: same options, same progress hook, same
+    exception text, so _run_download_with_client_resolution above keeps
+    classifying failures exactly as before.
+    """
+    request = json.dumps(
+        {
+            "url": url,
+            "outtmpl": outtmpl,
+            # cookiesfrombrowser arrives as a tuple; JSON makes it a list, and
+            # yt-dlp accepts either.
+            "ydl_opts": ydl_opts,
+            "phase": phase,
+        }
+    )
+    command = [sys.executable, "-m", "vts.services.ytdlp_runner"]
+    proc = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    _register_child(proc)
+
+
+    failure: str | None = None
+    try:
+        proc.stdin.write(request)
+        proc.stdin.close()
+        # Read as it arrives rather than communicate(): progress must reach SSE
+        # while the download runs, not after it ends.
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                logger.warning("yt-dlp runner emitted non-JSON line: %s", line[:200])
+                continue
+            kind = message.get("t")
+            if kind == "progress":
+                hook(_rehydrate_progress(message.get("payload") or {}))
+            elif kind == "log":
+                _log_from_child(logger, message)
+            elif kind == "error":
+                failure = str(message.get("message") or "yt-dlp failed")
+    except BaseException:
+        # Covers the parent dying mid-read (broken pipe, worker shutdown), NOT
+        # task cancellation: measured, asyncio.to_thread only abandons the
+        # await, so nothing is ever raised in here when a task is cancelled.
+        # Stopping a cancelled download is kill_active_downloads()'s job.
+        _terminate(proc, logger)
+        raise
+    finally:
+        # Normal path: the child has closed stdout, so this returns promptly.
+        # Cancellation path: _terminate already reaped it, and wait() is a no-op.
+        try:
+            proc.wait(timeout=_CHILD_EXIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            logger.warning("yt-dlp runner did not exit after stdout closed; killing")
+            _terminate(proc, logger)
+        stderr_tail = (proc.stderr.read() or "").strip() if proc.stderr else ""
+        if proc.stderr:
+            proc.stderr.close()
+        _unregister_child(proc)
+
+    if failure is not None:
+        # Re-raised as a plain RuntimeError carrying the child's message: the
+        # caller only ever reads str(exc), via classify_failure_code().
+        raise RuntimeError(failure)
+    if proc.returncode != 0:
+        detail = stderr_tail[-500:] if stderr_tail else f"exit code {proc.returncode}"
+        raise RuntimeError(f"yt-dlp runner failed: {detail}")
+
+
+def _register_child(proc: subprocess.Popen[str]) -> None:
+    with _CHILDREN_LOCK:
+        _CHILDREN.add(proc)
+
+
+def _unregister_child(proc: subprocess.Popen[str]) -> None:
+    with _CHILDREN_LOCK:
+        _CHILDREN.discard(proc)
+
+
+def kill_active_downloads(logger: logging.Logger | None = None) -> int:
+    """Kill any yt-dlp child still running, returning how many were stopped.
+
+    Cancelling the asyncio task is not enough on its own: asyncio.to_thread
+    only abandons the *await*, and the worker thread runs to completion (this
+    was equally true when yt-dlp ran inline as a thread — a cancelled download
+    kept downloading, just invisibly). Now that it is a process, cancellation
+    finally has something it can act on, but somebody has to pull the trigger.
+
+    Called from the cancel path in the worker, which owns the decision; this
+    module only knows how to stop what it started.
+    """
+    log = logger or logging.getLogger(__name__)
+    with _CHILDREN_LOCK:
+        victims = list(_CHILDREN)
+    stopped = 0
+    for proc in victims:
+        if proc.poll() is None:
+            _terminate(proc, log)
+            stopped += 1
+    return stopped
+
+
+def _terminate(proc: subprocess.Popen[str], logger: logging.Logger) -> None:
+    """Stop the child, escalating to SIGKILL if it ignores SIGTERM."""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=_CHILD_EXIT_TIMEOUT)
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("yt-dlp runner ignored SIGTERM; sending SIGKILL")
+    proc.kill()
+    try:
+        proc.wait(timeout=_CHILD_EXIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # Unkillable means stuck in uninterruptible I/O; nothing more to do
+        # here, and blocking the worker thread forever would be worse.
+        logger.error("yt-dlp runner survived SIGKILL")
+
+
+def _rehydrate_progress(payload: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the shape yt-dlp's own progress hook would have passed.
+
+    The child cannot ship info_dict wholesale (it holds arbitrary objects), so
+    it sends the handful of fields the hook actually reads and they are put
+    back into place here — keeping _extract_download_progress and the title
+    capture working on the structure they already expect.
+    """
+    info_dict = {}
+    if payload.get("info_title"):
+        info_dict["title"] = payload["info_title"]
+    if payload.get("info_filename"):
+        info_dict["_filename"] = payload["info_filename"]
+    return {
+        "status": payload.get("status", ""),
+        "downloaded_bytes": payload.get("downloaded_bytes"),
+        "total_bytes": payload.get("total_bytes"),
+        "total_bytes_estimate": payload.get("total_bytes_estimate"),
+        "_percent_str": payload.get("_percent_str"),
+        "filename": payload.get("filename"),
+        "info_dict": info_dict,
+    }
+
+
+def _log_from_child(logger: logging.Logger, message: dict[str, Any]) -> None:
+    text = str(message.get("msg") or "")
+    level = message.get("level")
+    if level == "error":
+        logger.error("yt-dlp %s", text)
+    elif level == "warning":
+        logger.warning("yt-dlp %s", text)
+    else:
+        logger.info("yt-dlp %s", text)
 
 
 def _is_youtube_url(url: str) -> bool:
