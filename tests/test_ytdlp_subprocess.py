@@ -222,3 +222,113 @@ def test_runner_failure_without_protocol_error_still_raises(
     with pytest.raises(RuntimeError):
         _run("https://example.com/video", tmp_path)
 
+
+# A yt-dlp stand-in that writes a lot to stderr BEFORE finishing, the way
+# yt-dlp's ffmpeg child does on HLS/DASH/live sources: ffmpeg inherits fd 2 and
+# reports progress there, outside yt-dlp's captured logger.
+FAKE_YTDLP_NOISY_STDERR = """
+import sys
+
+
+class YoutubeDL:
+    def __init__(self, options):
+        self.options = options
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def download(self, urls):
+        # ~280KB, comfortably past the 64KB pipe buffer (measured: 56 bytes a
+        # line). If the parent only reads stderr after stdout closes, this
+        # write blocks forever and the download never ends.
+        for _ in range(5000):
+            sys.stderr.write("frame= 1234 fps=25 q=28.0 size=   45056kB time=00:01:52\\n")
+        sys.stderr.flush()
+        for hook in self.options.get("progress_hooks", []):
+            hook({
+                "status": "finished",
+                "downloaded_bytes": 1024,
+                "total_bytes": 1024,
+                "filename": "/tmp/video.source.mp4",
+                "info_dict": {"title": "Noisy", "_filename": "/tmp/video.source.mp4"},
+            })
+"""
+
+
+def test_verbose_child_stderr_does_not_deadlock_the_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chatty child must not wedge the parent (vts-u9ap).
+
+    stderr is a ~64KB pipe. yt-dlp's own logger is captured into the stdout
+    protocol, so normal stderr is small — but on HLS/DASH/live sources yt-dlp
+    shells out to ffmpeg, which inherits fd 2 and is very verbose there. Once
+    that pipe fills, the child blocks in write() and can never close stdout, so
+    a parent that reads stderr only after the stdout loop ends waits forever.
+
+    Asserted as the symptom (does the download return at all?) on a watchdog
+    thread, because the failure mode is a hang: a plain call would take the
+    whole suite down with it rather than fail.
+    """
+    stub_dir = tmp_path / "noisy"
+    stub_dir.mkdir()
+    (stub_dir / "yt_dlp.py").write_text(textwrap.dedent(FAKE_YTDLP_NOISY_STDERR))
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("PYTHONPATH", f"{stub_dir}:{repo_root}")
+
+    done = threading.Event()
+    error: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            _run("https://example.com/hls-live", tmp_path)
+        except BaseException as exc:  # noqa: BLE001 — reported, not swallowed
+            error.append(exc)
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    finished = done.wait(timeout=30)
+
+    if not finished:
+        # Leave nothing running for the rest of the suite.
+        kill_active_downloads(logging.getLogger("test-ytdlp"))
+        pytest.fail(
+            "the download never returned: the child filled its stderr pipe and "
+            "blocked, so stdout never closed and the parent read it forever"
+        )
+    assert not error, f"download raised instead of completing: {error[0]!r}"
+
+
+def test_stderr_tail_still_reaches_the_failure_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Draining stderr on a thread must not lose it (vts-u9ap).
+
+    When the child dies without emitting a protocol error line, whatever it
+    wrote to stderr is the only diagnostic there is — so the tail has to
+    survive the move off the main path and into the reader thread.
+    """
+    stub_dir = tmp_path / "ffmpeg-fail"
+    stub_dir.mkdir()
+    (stub_dir / "yt_dlp.py").write_text(
+        textwrap.dedent(
+            """
+            import sys
+            sys.stderr.write("ffmpeg: Invalid data found when processing input\\n")
+            sys.stderr.flush()
+            sys.exit(3)
+            """
+        )
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("PYTHONPATH", f"{stub_dir}:{repo_root}")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _run("https://example.com/video", tmp_path)
+
+    assert "Invalid data found" in str(excinfo.value)

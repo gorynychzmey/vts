@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import threading
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ PhaseCallback = Callable[[str, str], None]
 ProgressHook = Callable[[dict[str, Any]], None]
 # Grace period for the download child to exit before escalating SIGTERM->SIGKILL.
 _CHILD_EXIT_TIMEOUT = 10.0
+# How many trailing stderr lines to keep for the failure message. Bounded
+# because ffmpeg can write megabytes there on a long HLS download (vts-u9ap),
+# and only the tail ever reaches a human.
+_STDERR_TAIL_LINES = 200
 # Live download children, so a cancelled task can actually stop the download.
 _CHILDREN: set[subprocess.Popen[str]] = set()
 _CHILDREN_LOCK = threading.Lock()
@@ -148,6 +153,31 @@ def _run_download_subprocess(
     assert proc.stdin is not None and proc.stdout is not None
     _register_child(proc)
 
+    # Drain stderr on its own thread rather than after the stdout loop (vts-u9ap).
+    # stderr is a ~64KB pipe. yt-dlp's own logger is captured into the stdout
+    # protocol, so the normal case is quiet — but on HLS/DASH/live sources
+    # yt-dlp shells out to ffmpeg, which inherits fd 2 and reports progress
+    # there, outside that logger. Once the pipe fills the child blocks in
+    # write(), so it never closes stdout and the read loop below waits forever.
+    # Only the tail is kept: it exists for the error message, and an ffmpeg-
+    # chatty download would otherwise buffer megabytes to no purpose.
+    stderr_tail_lines: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
+    stderr_reader: threading.Thread | None = None
+    if proc.stderr is not None:
+        stderr_stream = proc.stderr
+
+        def _drain_stderr() -> None:
+            try:
+                for err_line in stderr_stream:
+                    stderr_tail_lines.append(err_line)
+            except (ValueError, OSError):
+                # Closed from under us while the child was being killed.
+                pass
+
+        stderr_reader = threading.Thread(
+            target=_drain_stderr, name="ytdlp-stderr", daemon=True
+        )
+        stderr_reader.start()
 
     failure: str | None = None
     try:
@@ -186,9 +216,17 @@ def _run_download_subprocess(
         except subprocess.TimeoutExpired:
             logger.warning("yt-dlp runner did not exit after stdout closed; killing")
             _terminate(proc, logger)
-        stderr_tail = (proc.stderr.read() or "").strip() if proc.stderr else ""
+        # The child has exited by now, so its end of the pipe is closed and the
+        # reader is at EOF; the timeout is only a backstop so a wedged reader
+        # cannot pin the worker thread.
+        if stderr_reader is not None:
+            stderr_reader.join(timeout=_CHILD_EXIT_TIMEOUT)
         if proc.stderr:
-            proc.stderr.close()
+            try:
+                proc.stderr.close()
+            except OSError:
+                pass
+        stderr_tail = "".join(stderr_tail_lines).strip()
         _unregister_child(proc)
 
     if failure is not None:
