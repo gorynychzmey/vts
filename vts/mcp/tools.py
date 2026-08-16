@@ -302,17 +302,25 @@ async def list_tasks(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="invalid cursor") from exc
     status_enum = TaskStatus(status) if status is not None else None
-    tasks = await repo.list_tasks_page(
+    # Over-fetch by one to learn whether a further page exists (vts-a95z).
+    # Inferring has_more from "we got exactly `limit` rows" lies whenever the
+    # remaining row count is an exact multiple of the page size: the last full
+    # page looks like a full page, so has_more comes back True with a cursor,
+    # and the next call returns nothing. One extra row settles it for real, in
+    # the same round trip.
+    rows = await repo.list_tasks_page(
         uuid.UUID(user.id),
         before=before,
         order="desc",
-        limit=limit,
+        limit=limit + 1,
         status=status_enum,
         q=q,
         created_from=created_from,
         created_to=created_to,
         source_type=source_type,
     )
+    has_more = len(rows) > limit
+    tasks = rows[:limit]
     summaries = [
         TaskSummary(
             task_id=t.id,
@@ -324,7 +332,8 @@ async def list_tasks(
         )
         for t in tasks
     ]
-    has_more = len(tasks) == limit
+    # Cursor comes from the last row we are RETURNING, never from the probe
+    # row: handing back the probe's cursor would skip it on the next page.
     next_cursor = (
         encode_cursor(tasks[-1].created_at, tasks[-1].id)
         if (has_more and tasks)
