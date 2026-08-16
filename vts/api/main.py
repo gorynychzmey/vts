@@ -4449,18 +4449,33 @@ def create_app() -> FastAPI:
             )
 
             # Rollback: if this label was previously resolved (in an earlier
-            # save of this same awaiting_input dialog) to a DIFFERENT person,
-            # and that prior decision added a fragment, that fragment is now
-            # attributed to the wrong voice — delete it. Only ever touches a
-            # fragment this same task added (source_task_id == task_id is
+            # save of this same awaiting_input dialog) and that decision added a
+            # fragment, drop it before this save adds its own. Only ever touches
+            # a fragment this same task added (source_task_id == task_id is
             # implicit: record_decision below always writes this task_id as
             # source_task_id, so any voice_sample_id on a decision scoped to
             # this task_id was added by this task). Fragments predating this
             # task are never looked at here.
+            #
+            # Deliberately NOT conditioned on the speaker having changed
+            # (vts-3ij7). The SPA resubmits the whole resolutions set, so
+            # re-saving the dialog after editing some OTHER label replays this
+            # one unchanged — same speaker, add_fragment still true. Rolling
+            # back only on a rebind left the previous sample in place and added
+            # a second one from the same clip: the speaker accumulates a
+            # duplicate fragment per re-save, and the older one is orphaned
+            # (no decision row references it any more, so a later rebind cannot
+            # clean it up either). Both branches want the prior sample gone: on
+            # a rebind it is attributed to the wrong voice, on a re-save it is
+            # about to be superseded by an identical one.
             prior = await repo.find_prior_decision_sample(user_id, task_id, res.speaker_label)
             if prior is not None:
-                prior_speaker_id, prior_voice_sample_id = prior
-                if prior_voice_sample_id is not None and prior_speaker_id != speaker_id:
+                _prior_speaker_id, prior_voice_sample_id = prior
+                # Never delete a sample this save is going to keep referencing:
+                # a client that echoes back the voice_sample_id from a previous
+                # save (rather than asking for a new fragment) is pointing at a
+                # row that must survive.
+                if prior_voice_sample_id is not None and prior_voice_sample_id != voice_sample_id:
                     await repo.delete_voice_sample(user_id, prior_voice_sample_id)
 
             if res.add_fragment and speaker_id is not None:

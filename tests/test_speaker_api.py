@@ -276,6 +276,138 @@ async def test_resolution_bind_new_creates_speaker_sample_and_decision(client, a
 
 
 @pytest.mark.asyncio
+async def test_resaving_the_same_speaker_does_not_duplicate_the_fragment(
+    client, authed_app, tmp_path
+):
+    """Re-saving the dialog must not add a second copy of the same clip (vts-3ij7).
+
+    The SPA resubmits the WHOLE resolutions set, so fixing one label replays
+    every other label unchanged — same speaker, add_fragment still true. The
+    rollback used to fire only when the label was rebound to a DIFFERENT
+    person, so an unchanged replay added another sample from the same clip and
+    orphaned the previous one: no decision row referenced it any more, which
+    also put it out of reach of any later cleanup.
+
+    Asserted on the sample count for the speaker, because that is what the user
+    sees (a voice registry filling up with duplicates of one fragment) and what
+    skews future matching — one clip counted N times.
+    """
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    payload = {
+        "resolutions": [
+            {
+                "speaker_label": "SPEAKER_00",
+                "action": "bind_new",
+                "new_name": "Вася",
+                "add_fragment": True,
+                "outcome": "manual_match",
+            }
+        ],
+        "continue_task": False,
+    }
+
+    r = await client.post(f"/api/tasks/{task_id}/speakers", json=payload)
+    assert r.status_code == 200, r.text
+
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        speakers = await repo.list_speakers(uuid.UUID(_TEST_USER_ID))
+        sp = next(s for s in speakers if s.name == "Вася")
+        first = await repo.list_voice_samples(sp.id)
+        assert len(first) == 1
+        first_id = first[0].id
+
+    # Second save: bind to the SAME (now existing) speaker, fragment again.
+    payload_again = {
+        "resolutions": [
+            {
+                "speaker_label": "SPEAKER_00",
+                "action": "bind_existing",
+                "speaker_id": str(sp.id),
+                "add_fragment": True,
+                "outcome": "manual_match",
+            }
+        ],
+        "continue_task": False,
+    }
+    r = await client.post(f"/api/tasks/{task_id}/speakers", json=payload_again)
+    assert r.status_code == 200, r.text
+
+    async with factory() as session:
+        repo = Repo(session)
+        samples = await repo.list_voice_samples(sp.id)
+        assert len(samples) == 1, (
+            f"re-saving the same speaker left {len(samples)} fragments; "
+            "the previous one should have been rolled back"
+        )
+        # And the survivor is the NEW one: the stale row must be gone, not the
+        # fresh one deleted by an over-eager rollback.
+        assert samples[0].id != first_id
+        assert samples[0].source_task_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_rebinding_to_a_different_speaker_still_rolls_back(client, authed_app, tmp_path):
+    """The original rollback case must survive the vts-3ij7 widening.
+
+    Binding a label to one person and then to another has to leave the first
+    person with no fragment from this task — otherwise the wrong voice keeps a
+    sample that was never theirs.
+    """
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
+    _override_diarization_backend(app, _FakeDiarizationBackend())
+
+    await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_new",
+                    "new_name": "Первый",
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+
+    r = await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_new",
+                    "new_name": "Второй",
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        speakers = await repo.list_speakers(uuid.UUID(_TEST_USER_ID))
+        first = next(s for s in speakers if s.name == "Первый")
+        second = next(s for s in speakers if s.name == "Второй")
+        assert await repo.list_voice_samples(first.id) == []
+        assert len(await repo.list_voice_samples(second.id)) == 1
+
+
+@pytest.mark.asyncio
 async def test_resolution_leaves_task_awaiting_when_not_continued(client, authed_app, tmp_path):
     app, factory = authed_app
     task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
