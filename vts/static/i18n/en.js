@@ -235,7 +235,6 @@ window.__VTS_I18N.en = {
 "tab.prompt_redacted": "Processed transcript will appear here as segments are summarized",
 "tab.prompt_log": "Select tab to load task log",
 "tab.results": "Summary",
-"results.select_prompt": "Result",
 "results.pending": " (pending)",
 "about.open": "Show task settings and details",
 "about.title": "About task",

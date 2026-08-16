@@ -447,9 +447,13 @@ function isTabEnabled(taskEl, tabName) {
 }
 
 function getFirstEnabledTab(taskEl) {
-  const orderedTabs = ["transcript", "redacted", "summary", "log"];
-  for (const tabName of orderedTabs) {
-    if (isTabEnabled(taskEl, tabName)) {
+  // Read the strip rather than a hardcoded list: the prompt tabs are inserted
+  // between "summary" and "log", and a task whose only ready result is a user
+  // prompt must be able to fall back onto it.
+  const buttons = taskEl ? [...taskEl.querySelectorAll(".tab-btn")] : [];
+  for (const btn of buttons) {
+    const tabName = String(btn.dataset.tab || "");
+    if (tabName && !btn.disabled) {
       return tabName;
     }
   }
@@ -484,6 +488,11 @@ function getTabDownloadSpec(tabName) {
   }
   if (tabName === "log") {
     return { prefix: "log", ext: "log" };
+  }
+  // Prompt results are markdown like the summary; the tab name already carries
+  // the prompt identity, so it doubles as the filename stem.
+  if (isPromptTabName(tabName)) {
+    return { prefix: tabName, ext: "md" };
   }
   return { prefix: "content", ext: "txt" };
 }
@@ -548,9 +557,17 @@ async function loadTabContent(taskEl, taskId, tabName) {
     return value;
   }
   if (tabName === "summary") {
-    // The summary tab is the "results" view: route through the selected prompt
-    // result rather than the fixed /summary endpoint.
-    return loadSelectedResult(taskEl, taskId);
+    // The summary tab renders system:summary specifically. It used to be the
+    // generic "results" view fronted by a dropdown; user prompts now have their
+    // own tabs, so this is just one more result.
+    return loadPromptResult(taskEl, taskId, { source: "system", id: "summary" }, "summary");
+  }
+  if (isPromptTabName(tabName)) {
+    const ref = promptTabRef(taskEl, tabName);
+    if (!ref) {
+      return "";
+    }
+    return loadPromptResult(taskEl, taskId, ref, tabName);
   }
   const endpoint = tabName === "transcript" ? "transcript" : tabName === "redacted" ? "redacted" : "";
   if (!endpoint) {
@@ -565,82 +582,178 @@ async function loadTabContent(taskEl, taskId, tabName) {
   return value;
 }
 
-function resultEntryLabel(entry) {
-  const source = String(entry && entry.source ? entry.source : "");
-  const name = String(entry && entry.name ? entry.name : "");
-  if (source === "system" && name) {
-    const translated = t(name);
-    return translated === name ? name : translated;
-  }
-  return name || `${source}:${entry && entry.id ? entry.id : ""}`;
-}
-
-function resultEntryValue(entry) {
-  return `${entry && entry.source ? entry.source : ""}:${entry && entry.id ? entry.id : ""}`;
-}
-
-// Populate the per-task result dropdown from runtime.promptResults. Preserves
-// the current selection if it is still present, otherwise defaults to
-// system:summary if available, else the first completed entry.
-function renderResultPromptSelect(taskEl) {
-  if (!taskEl || !taskEl._elements || !taskEl._runtime) {
+// Flag which sides of the tab strip have content scrolled out of view, so CSS
+// can fade that edge. Without it a strip that overflows just looks truncated —
+// nothing indicates it can be scrolled (Diana, on mobile; it applies to a
+// desktop card with many prompt tabs too).
+function updateTabsScrollHints(tabsBar) {
+  if (!tabsBar) {
     return;
   }
-  const select = taskEl._elements.resultPromptSelect;
-  if (!select) {
-    return;
-  }
-  const entries = Array.isArray(taskEl._runtime.promptResults) ? taskEl._runtime.promptResults : [];
-  const previous = select.value;
-  select.innerHTML = "";
-  for (const entry of entries) {
-    const value = resultEntryValue(entry);
-    const completed = String(entry && entry.status ? entry.status : "") === "completed";
-    const option = document.createElement("option");
-    option.value = value;
-    option.disabled = !completed;
-    option.textContent = completed ? resultEntryLabel(entry) : `${resultEntryLabel(entry)}${t("results.pending")}`;
-    select.appendChild(option);
-  }
-  const hasValue = (val) =>
-    val && entries.some((e) => resultEntryValue(e) === val && String(e.status || "") === "completed");
-  let target = "";
-  if (hasValue(previous)) {
-    target = previous;
-  } else if (hasValue("system:summary")) {
-    target = "system:summary";
-  } else {
-    const firstCompleted = entries.find((e) => String(e.status || "") === "completed");
-    target = firstCompleted ? resultEntryValue(firstCompleted) : "";
-  }
-  if (target) {
-    select.value = target;
-  }
-  // Show the dropdown only when there is more than one result to choose from;
-  // a single (summary-only) result needs no picker.
-  const completedCount = entries.filter((e) => String(e.status || "") === "completed").length;
-  if (taskEl._elements.resultPromptBar) {
-    taskEl._elements.resultPromptBar.classList.toggle("hidden", entries.length <= 1 && completedCount <= 1);
-  }
+  // 1px of slack: scrollWidth/clientWidth are integers but the used widths are
+  // fractional, so an unscrollable strip can report a 0.5px difference.
+  const max = tabsBar.scrollWidth - tabsBar.clientWidth;
+  const left = tabsBar.scrollLeft;
+  tabsBar.dataset.scrollStart = left > 1 ? "1" : "0";
+  tabsBar.dataset.scrollEnd = max - left > 1 ? "1" : "0";
 }
 
-// Load the text for the currently selected result into the summary/results
-// panel. Falls back to the legacy /summary endpoint when no result is selected
-// (e.g. summary-only task before prompt_results is populated).
-async function loadSelectedResult(taskEl, taskId) {
-  const select = taskEl && taskEl._elements ? taskEl._elements.resultPromptSelect : null;
-  const panel = getTabPanel(taskEl, "summary");
-  const value = select ? String(select.value || "") : "";
+// Bound once per card. ResizeObserver covers the cases a scroll listener misses:
+// the card being expanded, the window resizing, and a prompt tab being added.
+function bindTabsScrollHints(tabsBar) {
+  if (!tabsBar || tabsBar._scrollHintsBound) {
+    return;
+  }
+  tabsBar._scrollHintsBound = true;
+  tabsBar.addEventListener("scroll", () => updateTabsScrollHints(tabsBar), { passive: true });
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => updateTabsScrollHints(tabsBar));
+    ro.observe(tabsBar);
+  }
+  updateTabsScrollHints(tabsBar);
+}
+
+// A prompt ref -> the tab name used in `data-tab`, the panel's CSS class and
+// the download filename. Tabs are addressed as `.tab-content.<name>` and
+// `[data-tab="<name>"]`, so the name has to survive both a CSS class selector
+// and an attribute selector: user prompt ids are UUIDs and system ids are
+// slugs, but neither is guaranteed class-safe, so anything outside [a-z0-9_-]
+// is escaped rather than trusted.
+function promptTabName(ref) {
+  const source = String(ref && ref.source ? ref.source : "");
+  const id = String(ref && ref.id ? ref.id : "");
+  const safe = `${source}-${id}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `prompt_${safe}`;
+}
+
+function isPromptTabName(tabName) {
+  return String(tabName || "").startsWith("prompt_");
+}
+
+// The {source,id} behind a prompt tab, read back off the button rather than
+// re-derived from the name — promptTabName is lossy (it escapes), so it cannot
+// be inverted.
+function promptTabRef(taskEl, tabName) {
+  const btn = getTabButton(taskEl, tabName);
+  if (!btn) {
+    return null;
+  }
+  const source = String(btn.dataset.promptSource || "");
+  const id = String(btn.dataset.promptId || "");
+  return source && id ? { source, id } : null;
+}
+
+// Status of a prompt ref within runtime.promptResults ("" when the pipeline has
+// not reported on it yet).
+function promptResultStatus(taskEl, ref) {
+  const entries = taskEl && taskEl._runtime && Array.isArray(taskEl._runtime.promptResults)
+    ? taskEl._runtime.promptResults
+    : [];
+  const hit = entries.find(
+    (e) => e && String(e.source) === ref.source && String(e.id) === ref.id,
+  );
+  return hit ? String(hit.status || "") : "";
+}
+
+// Build/refresh one tab per selected USER prompt, keeping "Log" last.
+//
+// system:summary is deliberately excluded: it already has its own "Summary"
+// tab, and it appears in prompt_results alongside the user prompts, so
+// including it here would render the same result twice.
+//
+// Tabs follow runtime.promptRefs (selection order, stable from creation) and
+// take only their enabled/disabled state from prompt_results, so a tab does not
+// jump position when its prompt finishes. Existing buttons are reused rather
+// than rebuilt: recreating them on every poll would drop the click handler
+// bound here and reset the strip's scroll position mid-read.
+function syncPromptTabs(taskEl, taskId) {
+  if (!taskEl || !taskEl._runtime) {
+    return;
+  }
+  const tabsBar = taskEl.querySelector(".tabs");
+  if (!tabsBar) {
+    return;
+  }
+  const refs = (Array.isArray(taskEl._runtime.promptRefs) ? taskEl._runtime.promptRefs : [])
+    .filter((ref) => ref && ref.source === "user");
+  const logBtn = getTabButton(taskEl, "log");
+  const wanted = new Set(refs.map((ref) => promptTabName(ref)));
+
+  // Drop tabs whose prompt is no longer selected (restart with a new preset).
+  for (const btn of [...tabsBar.querySelectorAll(".tab-btn")]) {
+    const name = String(btn.dataset.tab || "");
+    if (isPromptTabName(name) && !wanted.has(name)) {
+      btn.remove();
+      getTabPanel(taskEl, name)?.remove();
+    }
+  }
+
+  for (const ref of refs) {
+    const tabName = promptTabName(ref);
+    let btn = getTabButton(taskEl, tabName);
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tab-btn";
+      btn.dataset.tab = tabName;
+      btn.dataset.promptSource = ref.source;
+      btn.dataset.promptId = ref.id;
+      // NO data-i18n here: applyI18n assigns textContent, and these labels are
+      // user-authored prompt names that carry no translation key anyway.
+      btn.addEventListener("click", async () => {
+        if (btn.disabled) {
+          return;
+        }
+        await activateTaskTab(taskEl, taskId, tabName);
+      });
+      // Keep "Log" last (Victor): insert before it rather than appending.
+      tabsBar.insertBefore(btn, logBtn || null);
+    }
+    let panel = getTabPanel(taskEl, tabName);
+    if (!panel) {
+      panel = document.createElement("pre");
+      panel.className = `tab-content ${tabName}`;
+      const logPanel = getTabPanel(taskEl, "log");
+      logPanel?.parentNode?.insertBefore(panel, logPanel);
+    }
+    const label = promptDisplayName({
+      source: ref.source,
+      id: ref.id,
+      name: aboutResolvePromptName(ref.source, ref.id),
+    });
+    if (btn.textContent !== label) {
+      btn.textContent = label;
+    }
+    const ready = promptResultStatus(taskEl, ref) === "completed";
+    btn.disabled = !ready;
+    // Same "explain why it is dead" treatment the built-in tabs get.
+    btn.title = ready ? label : `${label}${t("results.pending")}`;
+    btn.setAttribute("aria-label", btn.title);
+  }
+
+  bindTabsScrollHints(tabsBar);
+  updateTabsScrollHints(tabsBar);
+}
+
+// Load one prompt result into its tab panel.
+//
+// The legacy /summary fallback is kept for system:summary specifically: a
+// summary-only task can finish with summary_path set before prompt_results is
+// populated, and the per-result endpoint 404s for an entry that is not there
+// yet (vts-b6l). User prompts have no such legacy path — an absent result just
+// means the tab is still disabled.
+async function loadPromptResult(taskEl, taskId, ref, tabName) {
+  const panel = getTabPanel(taskEl, tabName);
+  const source = String(ref && ref.source ? ref.source : "");
+  const id = String(ref && ref.id ? ref.id : "");
+  const known = promptResultStatus(taskEl, { source, id }) !== "";
   let text;
-  if (value) {
-    const idx = value.indexOf(":");
-    const source = idx >= 0 ? value.slice(0, idx) : value;
-    const ref = idx >= 0 ? value.slice(idx + 1) : "";
-    text = await api(
-      `/api/tasks/${taskId}/results/${encodeURIComponent(source)}/${encodeURIComponent(ref)}`
-    ).catch((err) => err.message);
-  } else {
+  if (source === "system" && id === "summary" && !known) {
     text = await api(`/api/tasks/${taskId}/summary`).catch((err) => err.message);
+  } else {
+    text = await api(
+      `/api/tasks/${taskId}/results/${encodeURIComponent(source)}/${encodeURIComponent(id)}`
+    ).catch((err) => err.message);
   }
   const out = String(text || "");
   if (panel) {
@@ -710,15 +823,7 @@ async function activateTaskTab(taskEl, taskId, tabName) {
     return;
   }
   stopLogPolling(taskEl);
-  // The result-prompt picker belongs to the summary/results tab only.
-  if (taskEl._elements && taskEl._elements.resultPromptBar) {
-    if (tab === "summary") {
-      renderResultPromptSelect(taskEl);
-    } else {
-      taskEl._elements.resultPromptBar.classList.add("hidden");
-    }
-  }
-  if (tab === "transcript" || tab === "summary" || tab === "redacted") {
+  if (tab === "transcript" || tab === "summary" || tab === "redacted" || isPromptTabName(tab)) {
     await loadTabContent(taskEl, taskId, tab);
   }
 }
@@ -1291,6 +1396,13 @@ function createRuntime(task) {
     promptResults: Array.isArray(task.options && task.options.prompt_results)
       ? task.options.prompt_results
       : [],
+    // Selected prompts in the order the user picked them, independent of
+    // prompt_results (which is APPEND-ORDERED BY COMPLETION — driving tabs off
+    // it would make them appear one by one and reorder as each finishes).
+    // Diana's ask is that the tabs are visible from the moment the task is
+    // created, so the tab strip follows this list and prompt_results only
+    // supplies each tab's status.
+    promptRefs: selectedPromptRefs((task.options || {})),
     redactedReady: Boolean(task.redacted_path),
     mediaReady: Boolean(task.media_path),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
@@ -1765,13 +1877,12 @@ function renderTaskRuntime(taskEl) {
     elements.redactedTabBtn.title = canOpenRedacted ? t("tab.redacted") : t("tab.redacted_pending");
     elements.redactedTabBtn.setAttribute("aria-label", elements.redactedTabBtn.title);
   }
+  // BEFORE ensureActiveTabSelection: that call picks a fallback tab when the
+  // active one is disabled, so the prompt tabs have to exist and carry their
+  // enabled state by then, or a task whose only ready result is a user prompt
+  // would fall back past it.
+  syncPromptTabs(taskEl, taskEl.dataset.taskId || "");
   ensureActiveTabSelection(taskEl);
-
-  // Keep the results dropdown in sync as prompt_results grows on each poll,
-  // but only when the results (summary) tab is the active one.
-  if (getActiveTabName(taskEl) === "summary") {
-    renderResultPromptSelect(taskEl);
-  }
 
   // specific status, not a group: only a running task's elapsed timer ticks;
   // a waiting task is not executing, so it must keep a blank runtime.
@@ -1852,8 +1963,6 @@ function renderTaskCard(task) {
   const downloadMediaBtn = root.querySelector(".download-media-btn");
   const archiveBtn = root.querySelector(".archive-btn");
   const deleteBtn = root.querySelector(".delete-btn");
-  const resultPromptBar = root.querySelector(".result-prompt-bar");
-  const resultPromptSelect = root.querySelector(".result-prompt-select");
   const transcriptPre = root.querySelector(".tab-content.transcript");
   const summaryPre = root.querySelector(".tab-content.summary");
   const redactedPre = root.querySelector(".tab-content.redacted");
@@ -1910,6 +2019,12 @@ function renderTaskCard(task) {
 
   root.querySelectorAll(".tab-btn").forEach((btn) => {
     const tabName = String(btn.dataset.tab || "");
+    // Prompt tabs are labelled with the user's own prompt name by
+    // syncPromptTabs and have no `tab.*` key; the fallback here is the raw tab
+    // name, so relabelling one would replace "Протокол" with "prompt_user-<id>".
+    if (isPromptTabName(tabName)) {
+      return;
+    }
     const tabLabel = t(`tab.${tabName}`);
     btn.textContent = tabLabel === `tab.${tabName}` ? tabName : tabLabel;
   });
@@ -2005,12 +2120,6 @@ function renderTaskCard(task) {
     });
   });
 
-  if (resultPromptSelect) {
-    resultPromptSelect.addEventListener("change", () => {
-      void loadSelectedResult(root, task.id);
-    });
-  }
-
   root._elements = {
     linkEl: root.querySelector(".task-link"),
     playerBtn: root.querySelector(".task-player-btn"),
@@ -2038,8 +2147,6 @@ function renderTaskCard(task) {
     redactedTabBtn,
     copyTabBtn,
     saveTabBtn,
-    resultPromptBar,
-    resultPromptSelect,
     transcriptPanel: transcriptPre,
     summaryPanel: summaryPre,
     redactedPanel: redactedPre,

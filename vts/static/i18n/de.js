@@ -235,7 +235,6 @@ window.__VTS_I18N.de = {
 "tab.prompt_redacted": "Das verarbeitete Transkript erscheint hier, sobald Segmente zusammengefasst werden",
 "tab.prompt_log": "Tab auswählen, um das Aufgaben-Log zu laden",
 "tab.results": "Zusammenfassung",
-"results.select_prompt": "Ergebnis",
 "results.pending": " (ausstehend)",
 "about.open": "Einstellungen und Details der Aufgabe anzeigen",
 "about.title": "Über die Aufgabe",

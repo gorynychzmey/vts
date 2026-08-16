@@ -1284,6 +1284,29 @@ input[type="file"] {
   scrollbar-width: thin;
 }
 
+/* Scroll affordance (Diana): the strip already scrolled at every width, but a
+   cut-off tab just looks like a cut-off tab — nothing said there was more to
+   the side. Fade the edge that has hidden content, driven by data-scroll-*
+   flags that app.js sets from scrollLeft.
+   mask-image on the scroller itself rather than an overlay: an absolutely
+   positioned ::after here would sit INSIDE the scrollable box and extend its
+   scrollWidth, which is the vts-nr4 invisible-horizontal-scroll trap. A mask
+   paints nothing and adds no layout. */
+.tabs[data-scroll-start="1"] {
+  mask-image: linear-gradient(to right, transparent 0, #000 1.5rem);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 1.5rem);
+}
+
+.tabs[data-scroll-end="1"] {
+  mask-image: linear-gradient(to left, transparent 0, #000 1.5rem);
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 1.5rem);
+}
+
+.tabs[data-scroll-start="1"][data-scroll-end="1"] {
+  mask-image: linear-gradient(to right, transparent 0, #000 1.5rem, #000 calc(100% - 1.5rem), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 1.5rem, #000 calc(100% - 1.5rem), transparent 100%);
+}
+
 .tab-actions {
   margin-left: auto;
   display: inline-flex;
@@ -1311,32 +1334,6 @@ input[type="file"] {
 .tab-btn.active {
   background: var(--accent-2);
   color: #fff;
-}
-
-.result-prompt-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0.8rem 0 0;
-}
-
-.result-prompt-bar.hidden {
-  display: none;
-}
-
-.result-prompt-label {
-  font-size: 0.85rem;
-  color: var(--muted, #555);
-}
-
-.result-prompt-select {
-  flex: 1 1 auto;
-  max-width: 320px;
-  padding: 0.3rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: #fffcf2;
-  font-family: inherit;
 }
 
 .tab-content {
