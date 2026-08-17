@@ -74,9 +74,11 @@ Install/deploy these separately:
 - Whisper ASR webservice:
   - Image: `ghcr.io/ahmetoner/whisper-asr-webservice:latest`
   - Docs: `https://github.com/ahmetoner/whisper-asr-webservice`
-- llama.cpp OpenAI-compatible server:
-  - Image: `ghcr.io/ggerganov/llama.cpp:server`
-  - Docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
+- An OpenAI-compatible LLM server. The shipped prompts are tuned for Qwen 3.6
+  35B behind a proxy such as LiteLLM; llama.cpp is the API vts was implemented
+  against and is what `docker-compose.yml` ships
+  (`ghcr.io/ggml-org/llama.cpp:server`).
+  See [docs/LLM_BACKENDS.md](LLM_BACKENDS.md) for the trade-offs.
 - Diarization sidecar (own image, `diar-build-X.Y.Z` tag): required for
   `diarize=true`. **Speaker registry matching additionally requires sidecar
   1.1.0+** — the version that serves `POST /embed` and reports
@@ -99,12 +101,20 @@ The DAG is defined in [`vts/pipeline/types.py`](../vts/pipeline/types.py) as a f
 | 4 | `segment_audio` | `media/audio.wav` | `segments/0001.wav … NNNN.wav` with `overlap_seconds` overlap | Segment files exist |
 | 5 | `detect_language` | first segment | `language` column on `tasks` | Field populated |
 | 6 | `transcribe_segments` | `segments/*.wav` (parallel: `transcribe_parallel_per_task`) | `asr_segments` rows + `asr/segments_raw.json` | Per-segment row present |
-| 7 | `merge_transcript` | `asr_segments` rows | `outputs/transcript.txt`, `outputs/transcript.json` | Files exist |
-| 8 | `prepare_llama_model` | LLM URL | warm `/props` cache, validated tokenizer | Cached props match |
-| 9 | `prepare_summary_chunks` | `outputs/transcript.json` | `summary/chunks.json` (token-counted windows) | File exists |
-| 10 | `summarize_windows` | chunks (parallel via gpu lane, llm priority) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
-| 11 | `pack_window_notes` | `summary/windows.json` | `summary/packed_notes.json` (only when packing triggered) | File exists or skip-flag in step row |
-| 12 | `summarize_final` | window notes (packed if applicable) | `summary/final.md`, `tasks.summary_path` | File exists |
+| 7 | `diarize` | trimmed `media/audio.wav` (not the transcript) | speaker-turn artifact | Artifact exists / skipped when `diarize=false` |
+| 8 | `merge_transcript` | `asr_segments` rows + speaker turns | `outputs/transcript.txt`, `outputs/transcript.json` | Files exist |
+| 9 | `prepare_llama_model` | LLM URL | warm `/props` cache, validated tokenizer | Cached props match |
+| 10 | `match_speakers` | diarized clusters + speaker registry | bound speakers; may pause into `awaiting_input` | Step row resolved |
+| 11 | `prepare_summary_chunks` | `outputs/transcript.json` | `summary/chunks.json` (token-counted windows) | File exists |
+| 12 | `summarize_windows` | chunks (parallel via gpu lane, llm priority) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
+| 13 | `pack_window_notes` | `summary/windows.json` | `summary/packed_notes.json` (only when packing triggered) | File exists or skip-flag in step row |
+| 14+ | finalize tail (one step per selected prompt) | window notes (packed if applicable) | per-prompt result; `summary/final.md` + `tasks.summary_path` for the built-in summary | File exists |
+
+Steps 1–13 are the fixed head (`DAG_HEAD`). The tail is **dynamic**: `build_dag_steps()`
+appends one finalize step per prompt selected on the task. The built-in summary
+prompt keeps the legacy step name `summarize_final`; every other prompt becomes
+`finalize:<source>:<id>`. A task with no prompts selected is transcript-only and
+has no tail at all.
 
 Restart contract: `processor._maybe_skip_step()` calls the stage with `dry_run=True`; if it returns `True`, the step row is marked `skipped` and the next stage runs. Otherwise the stage executes from scratch — there is no partial-stage resume, just whole-stage idempotency.
 
@@ -329,6 +339,15 @@ say "ask whoever gave you the link" instead.
 | `services.llm.thinking` | `VTS_LLM_THINKING` | `null` |
 | `services.llm.chat_timeout_seconds` | `VTS_LLM_CHAT_TIMEOUT_SECONDS` | `600` |
 | `services.llm.final_timeout_seconds` | `VTS_LLM_FINAL_TIMEOUT_SECONDS` | `1800` |
+
+These are code defaults, tuned for a local llama.cpp + Qwen2.5-7B setup. The
+shipped prompts in `./prompts/` are instead tuned for **Qwen 3.6 35B** served
+over an OpenAI-compatible proxy, which needs an explicit `tokenizer_path` and
+a lower `temperature`. See [docs/LLM_BACKENDS.md](LLM_BACKENDS.md).
+
+The legacy `services.llama.*` YAML keys are still accepted as aliases for
+`services.llm.*`. They are **config-key aliases only** — the corresponding
+`VTS_LLAMA_*` environment variables are not read.
 
 **Authentication:** (see [docs/AUTH.md](AUTH.md) for semantics)
 

@@ -28,11 +28,18 @@ sensible defaults for queueing, restartability, and progress reporting.
 
 What you get:
 
-- A web UI for submitting tasks (URL or file upload), watching progress live
-  via SSE, and reading the resulting transcript and summary.
+- A web UI for submitting tasks (URL or file upload, including a set of files
+  joined into one recording), watching progress live via SSE, and reading the
+  resulting transcript and summary.
 - A worker that downloads, segments, transcribes, and summarizes — restart-safe,
   with backpressure and a single "heavy slot" so a small machine doesn't
   thrash.
+- Optional **speaker diarization** with a persistent speaker registry, so
+  recurring voices are recognised across recordings and named once.
+- **Custom prompts**: pick per task which prompts run over the transcript;
+  each produces its own result. Reusable option **presets** save the choice.
+- **Delivery**: push finished results to an external system (e.g. a wiki)
+  through pluggable adapters, with retries and per-task delivery status.
 - An installable PWA: appears in the Android share sheet, supports push
   notifications when a task finishes.
 - A JSONL metrics stream so you can see exactly how each pipeline stage
@@ -49,19 +56,21 @@ cd vts
 cp .env.example .env
 
 # Pick an LLM backend. The shipped prompts in ./prompts/ are tuned for
-# Qwen 3.5 9B (via Ollama). Other instruct models work too — see
-# docs/LLM_BACKENDS.md for the trade-offs and switch instructions.
+# Qwen 3.6 35B served via an OpenAI-compatible proxy such as LiteLLM. Other
+# instruct models work too — see docs/LLM_BACKENDS.md for the trade-offs,
+# the LiteLLM setup, and switch instructions.
 
-# Path A — Ollama (recommended, matches the shipped prompt tuning):
-docker compose --profile llm-ollama --profile asr-whisper up -d
-docker compose exec ollama ollama pull qwen3.5:9b
-
-# Path B — llama.cpp with a local .gguf file:
+# Path A — llama.cpp with a local .gguf file (simplest to run locally: vts
+# reads context size and tokenization straight from the server):
 mkdir -p models
 # Download a quantized model into ./models. Example: Qwen2.5-7B-Instruct Q4_K_M
 # from https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF (≈4.6 GB).
-# (download Qwen2.5-7B-Instruct-Q4_K_M.gguf into ./models/)
 docker compose --profile llm-llamacpp --profile asr-whisper up -d
+
+# Path B — Ollama (needs a local tokenizer.json and a manual summary.n_ctx;
+# see docs/LLM_BACKENDS.md):
+docker compose --profile llm-ollama --profile asr-whisper up -d
+docker compose exec ollama ollama pull qwen3.5:9b
 
 # Wait ~30s for healthchecks to settle, then open:
 open http://localhost:8080
@@ -146,13 +155,14 @@ vts is built against the llama.cpp HTTP server, which means it uses a few
 endpoints beyond the OpenAI standard (`/props`, `/tokenize`, `/detokenize`).
 This affects which alternative backends work:
 
-- **Ollama** — what the author runs in production. The shipped prompts in
-  `./prompts/` are tuned for Qwen 3.5 9B (`qwen3.5:9b`). Needs a local
-  tokenizer file and a static `n_ctx`; see [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md).
+- **LiteLLM proxy** — the recommended setup: the shipped prompts in
+  `./prompts/` are tuned for Qwen 3.6 35B (`qwen3.6:35b`) served this way.
+  Also the way to reach hosted models. Needs a local tokenizer file and a
+  static `n_ctx`; see [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md).
 - **llama.cpp** — the API vts is implemented against; works with no extra
   setup once you have a `.gguf` model.
-- **vLLM, OpenAI, Anthropic, anything OpenAI-compatible via LiteLLM** — same
-  caveats as Ollama.
+- **Ollama, vLLM, OpenAI, Anthropic** — work, with the same tokenizer and
+  `n_ctx` caveats as LiteLLM.
 
 ## Documentation
 
