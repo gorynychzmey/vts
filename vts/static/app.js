@@ -4617,11 +4617,34 @@ document.getElementById("locale-toggle-btn")?.addEventListener("click", async ()
     /* not persisting is survivable; the current page is already switched */
   }
   applyI18nToPage();
+  // applyI18nToPage() only touches [data-i18n] nodes. Labels built in JS —
+  // the prompt and delivery pills, which read t() at render time — keep the
+  // old language until their widget is rebuilt, so rebuild them here.
+  // Both take the current selection as an argument, so re-rendering must not
+  // (and does not) reset what the user picked.
+  repaintJsBuiltLabels();
   // applyI18nToPage() rewrites every [data-i18n] node, which includes the theme
   // label — re-sync it (and the endonym, which it must NOT translate).
   syncThemeControl(readStoredTheme());
   syncLocaleControl();
 });
+
+// Widgets whose visible text is produced by t() in JS rather than by a
+// data-i18n attribute. applyI18nToPage() cannot reach them, so every locale
+// change has to rebuild them explicitly — passing the CURRENT selection so the
+// repaint is purely cosmetic.
+function repaintJsBuiltLabels() {
+  if (promptSelect) {
+    renderPromptMultiselect(promptSelect, promptsCache, getSelectedPrompts());
+  }
+  if (deliverySelect && deliveryTargetsList().length > 0) {
+    renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
+  }
+  // Task cards render their status text and step labels through t() too.
+  document.querySelectorAll(".task").forEach((card) => {
+    if (card._runtime && card._elements) renderTaskRuntime(card);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Theme: system -> light -> dark -> system.

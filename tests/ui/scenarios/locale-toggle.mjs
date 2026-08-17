@@ -58,6 +58,35 @@ export async function run() {
     st = await readState(page);
     if (st.lang !== "en") failures.push(`after 3rd click <html lang> = "${st.lang}", expected wrap to en`);
 
+    // Labels built in JS, not by data-i18n: the prompt and delivery pills read
+    // t() at render time, so applyI18nToPage() cannot reach them. They stayed
+    // in the previous language until the widget was rebuilt — visible as a
+    // German "Zusammenfassung" sitting in a Russian UI.
+    for (const [start, want, expect] of [["en", "ru", "Сводка"], ["ru", "de", "Zusammenfassung"], ["de", "en", "Summary"]]) {
+      const fresh = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
+      await fresh.goto(baseUrl, { waitUntil: "networkidle" });
+      await fresh.evaluate((l) => localStorage.setItem("vts_locale", l), start);
+      await fresh.reload({ waitUntil: "networkidle" });
+      await fresh.waitForTimeout(400);
+      await fresh.click("#header-menu-btn");
+      await fresh.waitForTimeout(200);
+      await fresh.click("#locale-toggle-btn");
+      await fresh.waitForTimeout(500);
+      const got = await fresh.evaluate(() => ({
+        lang: document.documentElement.lang,
+        pill: document.querySelector("#prompt-select .prompt-select-summary")?.textContent?.trim(),
+        selected: getSelectedPrompts().map((x) => `${x.source}:${x.id}`).join(","),
+      }));
+      if (got.lang !== want) failures.push(`${start}->${want}: lang = "${got.lang}"`);
+      if (got.pill !== expect)
+        failures.push(`${start}->${want}: prompt pill = "${got.pill}", expected "${expect}" (JS-built label did not follow the locale)`);
+      // The repaint passes the current selection through; losing it would be a
+      // far worse bug than a stale label.
+      if (got.selected !== "system:summary")
+        failures.push(`${start}->${want}: locale switch changed the selection to "${got.selected}"`);
+      await fresh.close();
+    }
+
     // Persistence: the stored choice must beat browser detection on reload.
     await page.evaluate(() => localStorage.setItem("vts_locale", "de"));
     await page.reload({ waitUntil: "networkidle" });
