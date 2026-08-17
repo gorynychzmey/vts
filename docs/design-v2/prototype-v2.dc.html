@@ -1,0 +1,1962 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="vts-theme.css">
+  <meta name="theme-color" content="#c5532a">
+</helmet>
+
+<div class="app" onClick="{{ onRootClick }}">
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M4 12h1.5M9 6.5v11M14 3.5v17M19 9v6M22 11.5h0.4"/></svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-title" data-i18n="header.title">VTS</span>
+          <span class="brand-sub" data-i18n="header.subtitle">Транскрибация видео</span>
+        </span>
+      </div>
+
+      <button class="icon-btn ghost" id="theme-toggle-btn" onClick="{{ toggleTheme }}" title="{{ themeTitle }}" aria-label="{{ themeTitle }}">
+        <sc-if value="{{ themeIsDark }}" hint-placeholder-val="{{ false }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/></svg>
+        </sc-if>
+        <sc-if value="{{ themeIsLight }}" hint-placeholder-val="{{ true }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a7.5 7.5 0 1 0 10.5 10.5"/></svg>
+        </sc-if>
+      </button>
+
+      <div class="header-menu-wrapper pop-wrap">
+        <button class="icon-btn ghost {{ navBtnClass }}" id="header-menu-btn" onClick="{{ toggleNav }}" data-i18n-title="header.menu" title="Меню" aria-label="Меню">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <sc-if value="{{ navOpen }}" hint-placeholder-val="{{ false }}">
+          <div class="popover menu right header-menu" id="header-menu" onClick="{{ stop }}">
+            <button class="menu-item" id="push-toggle-btn" onClick="{{ toggleNotif }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+              <span data-i18n="action.enable_notifications">Уведомления</span>
+              <span class="badge trail {{ notifBadgeClass }}">{{ notifBadge }}</span>
+            </button>
+            <button class="menu-item" id="prompts-btn" onClick="{{ openPrompts }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+              <span data-i18n="prompts.manage.open">Промпты</span>
+            </button>
+            <button class="menu-item" id="presets-btn" onClick="{{ openPresets }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+              <span data-i18n="preset.manage.open">Пресеты</span>
+            </button>
+            <button class="menu-item" id="speaker-registry-btn" onClick="{{ openPersons }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M17 8.5a2.6 2.6 0 0 1 0 5"/><path d="M18.5 19a4.6 4.6 0 0 0-2-3.4"/></svg>
+              <span data-i18n="speakers.registry.open">Реестр голосов</span>
+            </button>
+            <button class="menu-item" id="delivery-btn" onClick="{{ openDelivery }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>
+              <span data-i18n="delivery.manage.open">Доставка результатов</span>
+            </button>
+            <button class="menu-item" id="tokens-btn" onClick="{{ openTokens }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="14" r="4"/><path d="M11 11l9-9"/><path d="M16 6l3 3"/></svg>
+              <span data-i18n="tokens.open">API-токены</span>
+            </button>
+            <div class="popover-sep"></div>
+            <div class="menu-foot header-version">
+              <span data-i18n="header.version">Версия</span>
+              <span class="mono" id="app-version">{{ appVersion }}</span>
+              <sc-if value="{{ newBuild }}" hint-placeholder-val="{{ false }}">
+                <button class="btn-link trail" onClick="{{ reloadApp }}">Обновить</button>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <button class="icon-btn ghost" id="logout-btn" data-i18n-title="action.logout" data-i18n-aria-label="action.logout" title="Выход" aria-label="Выход">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <div class="user-context">
+      <div class="context-line">
+        <span class="dot-online"></span>
+        <span class="context-label" data-i18n="context.authenticated">Вы вошли как</span>
+        <span class="context-value mono" id="auth-user">anna@studio</span>
+        <span class="badge admin">админ</span>
+      </div>
+      <div class="context-line admin-controls" id="admin-controls">
+        <span class="context-label" data-i18n="context.acting_as">Работаю как</span>
+        <select class="field mono" id="admin-user-select" data-i18n-title="admin.switch_user" title="Выбрать пользователя">
+          <option>anna@studio</option>
+          <option>maxim@studio</option>
+          <option>guest@studio</option>
+        </select>
+        <button class="icon-btn ghost sm" id="admin-apply-btn" data-i18n-title="admin.apply" title="Применить" aria-label="Применить">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>
+        </button>
+        <button class="icon-btn ghost sm" id="admin-reset-btn" data-i18n-title="admin.use_self" title="Вернуться к себе" aria-label="Вернуться к себе">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6M3 13a9 9 0 1 0 2.6-6.4L3 9"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="card-head new-task-header">
+        <h2 class="card-title" data-i18n="new_task.title">Новая задача</h2>
+        <div class="segmented source-type-radio-group" role="group" data-i18n-aria-label="new_task.source_type_label" aria-label="Тип источника">
+          <button id="source-type-url" class="{{ urlTabClass }}" onClick="{{ setSourceUrl }}"><span data-i18n="new_task.source_url">URL</span></button>
+          <button id="source-type-file" class="{{ fileTabClass }}" onClick="{{ setSourceFile }}"><span data-i18n="new_task.source_file">Файл</span></button>
+        </div>
+      </div>
+
+      <div class="url-row">
+        <sc-if value="{{ urlMode }}" hint-placeholder-val="{{ true }}">
+          <div class="input-shell">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+            <input class="input-bare" id="url" type="url" value="{{ urlValue }}" onInput="{{ onUrlInput }}" data-i18n-placeholder="new_task.url_placeholder" placeholder="https://youtube.com/watch?v=…" />
+          </div>
+        </sc-if>
+        <sc-if value="{{ fileMode }}" hint-placeholder-val="{{ false }}">
+          <div class="file-drop">
+            <sc-if value="{{ noFiles }}" hint-placeholder-val="{{ true }}">
+              <div class="file-drop-empty">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1 12.3 20a5 5 0 0 1-7.1-7.1l8.5-8.4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.4a1.7 1.7 0 0 1-2.4-2.3l7.8-7.8"/></svg>
+                <span class="file-drop-hint">
+                  <b>Перетащите файлы или выберите на диске</b>
+                  <span>несколько файлов — одна задача · mp4, mkv, webm, mov, mp3, m4a, wav, flac и др.</span>
+                </span>
+                <button class="btn-text" onClick="{{ pickFiles }}">Выбрать</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{ hasFiles }}" hint-placeholder-val="{{ false }}">
+              <div class="file-list">
+                <sc-for list="{{ fileRows }}" as="fl" hint-placeholder-count="2">
+                  <div class="file-row">
+                    <span class="file-row-num mono">{{ fl.num }}</span>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 4v5h5"/></svg>
+                    <span class="file-row-name">{{ fl.name }}</span>
+                    <span class="file-row-size mono">{{ fl.size }}</span>
+                    <button class="icon-btn xs danger-hover" onClick="{{ fl.onRemove }}" title="Убрать файл" aria-label="Убрать файл">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+                    </button>
+                  </div>
+                </sc-for>
+                <div class="file-foot">
+                  <span class="file-foot-text">{{ filesSummary }}</span>
+                  <button class="btn-text spacer" style="margin-left:auto" onClick="{{ pickFiles }}">Добавить ещё</button>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <button class="primary submit" id="submit-btn" onClick="{{ submitTask }}" data-i18n-title="action.create" title="Создать задачу" aria-label="Создать задачу">
+          <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+            <svg class="submit-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </sc-if>
+          <sc-if value="{{ uploading }}" hint-placeholder-val="{{ false }}">
+            <svg class="submit-progress" viewBox="0 0 24 24" width="26" height="26" style="transform:rotate(-90deg)">
+              <circle class="submit-progress-track" cx="12" cy="12" r="9" fill="none" stroke-width="2.5"/>
+              <circle class="submit-progress-fill" cx="12" cy="12" r="9" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="56.55" stroke-dashoffset="{{ uploadOffset }}"/>
+            </svg>
+          </sc-if>
+        </button>
+      </div>
+
+      <div class="options-row">
+        <div class="pop-wrap">
+          <button class="option-pill preset-pill" id="preset-select" onClick="{{ togglePresetMenu }}" data-i18n-title="new_task.preset_hint" title="Пресет — сохранённый набор параметров задачи: артефакты, язык, промпты и доставка">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+            <span class="pill-label">{{ presetName }}</span>
+            <sc-if value="{{ presetDirty }}" hint-placeholder-val="{{ false }}">
+              <span class="badge accent sm">изменён</span>
+            </sc-if>
+            <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <sc-if value="{{ presetOpen }}" hint-placeholder-val="{{ false }}">
+            <div class="popover w-md" onClick="{{ stop }}">
+              <div class="popover-title" data-i18n="new_task.preset">Пресет задачи</div>
+              <sc-for list="{{ presetRows }}" as="ps" hint-placeholder-count="4">
+                <button class="pick-row stacked {{ ps.cls }}" onClick="{{ ps.onPick }}">
+                  <svg class="tick" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-top:3px; opacity:{{ ps.tickOpacity }}"><path d="m5 13 4 4L19 7"/></svg>
+                  <span class="pick-body">
+                    <span class="pick-label strong">{{ ps.name }}</span>
+                    <span class="pick-sub">{{ ps.summary }}</span>
+                  </span>
+                </button>
+              </sc-for>
+              <div class="popover-sep"></div>
+              <sc-if value="{{ presetDirty }}" hint-placeholder-val="{{ false }}">
+                <button class="menu-item" id="preset-resave-btn" onClick="{{ savePreset }}">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3"/></svg>
+                  <span data-i18n="preset.resave">Сохранить изменения в пресет</span>
+                </button>
+              </sc-if>
+              <button class="menu-item" id="preset-save-btn" onClick="{{ savePresetAsNew }}" style="color:var(--accent-ink)">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                <span data-i18n="preset.save_as">Сохранить как новый пресет</span>
+              </button>
+            </div>
+          </sc-if>
+        </div>
+        <span class="options-sep"></span>
+
+        <button class="option-pill {{ audioClass }}" id="audio-only-pill" onClick="{{ toggleAudio }}" data-i18n-title="new_task.audio_only_tooltip" title="Скачивать только аудиодорожку">
+          <span class="checkbox">
+            <sc-if value="{{ audioOn }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+          </span>
+          <span data-i18n="new_task.audio_only">Только аудио</span>
+        </button>
+
+        <button class="option-pill {{ transcriptClass }}" onClick="{{ toggleTranscript }}" data-i18n-title="new_task.transcript_tooltip" title="Сохранить транскрипт">
+          <span class="checkbox">
+            <sc-if value="{{ transcriptOn }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+          </span>
+          <span data-i18n="new_task.transcript">Транскрипт</span>
+        </button>
+
+        <div class="pop-wrap">
+          <button class="option-pill {{ summaryClass }}" id="prompt-select" onClick="{{ togglePromptPicker }}" data-i18n-title="new_task.prompts_tooltip" title="{{ summaryPillTitle }}">
+            <span class="checkbox">
+              <sc-if value="{{ summaryOn }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+            </span>
+            <span class="pill-label">{{ summaryPillLabel }}</span>
+            <svg class="chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <sc-if value="{{ promptPickerOpen }}" hint-placeholder-val="{{ false }}">
+            <div class="popover w-lg" onClick="{{ stop }}">
+              <div class="popover-note">Что собрать из обработанного транскрипта. Каждый пункт даёт отдельный артефакт; если снять все — суммаризация не запустится.</div>
+              <sc-for list="{{ promptPickRows }}" as="p" hint-placeholder-count="3">
+                <button class="pick-row {{ p.cls }}" onClick="{{ p.onToggle }}">
+                  <span class="checkbox lg {{ p.markClass }}">
+                    <sc-if value="{{ p.on }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+                  </span>
+                  <span class="pick-body">
+                    <span class="pick-label {{ p.labelClass }}">{{ p.label }}</span>
+                    <span class="pick-sub">{{ p.sub }}</span>
+                    <span class="pick-meta">
+                      {{ p.meta }}
+                      <sc-if value="{{ p.system }}" hint-placeholder-val="{{ false }}"><span class="badge info sm">системный</span></sc-if>
+                    </span>
+                  </span>
+                </button>
+              </sc-for>
+              <div class="popover-sep"></div>
+              <button class="menu-item" onClick="{{ openPrompts }}" style="color:var(--accent-ink)">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                <span data-i18n="prompts.manage.open">Управлять промптами</span>
+              </button>
+            </div>
+          </sc-if>
+        </div>
+
+        <button class="option-pill {{ diarizeClass }}" id="diarize-pill" onClick="{{ toggleSpeakers }}" data-i18n-title="new_task.diarize_tooltip" title="Разметить речь по спикерам">
+          <span class="checkbox">
+            <sc-if value="{{ speakersOn }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+          </span>
+          <span data-i18n="new_task.diarize">Спикеры</span>
+        </button>
+
+        <sc-if value="{{ speakersOn }}" hint-placeholder-val="{{ true }}">
+          <button class="option-pill {{ noStopClass }}" id="speaker-no-manual-stop-pill" onClick="{{ toggleNoStop }}" data-i18n-title="new_task.speaker_no_manual_stop_tooltip" title="Не ждать привязки голосов">
+            <span class="checkbox">
+              <sc-if value="{{ noStopOn }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+            </span>
+            <span data-i18n="new_task.speaker_no_manual_stop">Не останавливаться после диаризации</span>
+          </button>
+        </sc-if>
+
+        <sc-if value="{{ hasAdapters }}" hint-placeholder-val="{{ true }}">
+          <div class="pop-wrap" id="delivery-select-field">
+            <button class="option-pill {{ deliveryClass }}" id="delivery-select" onClick="{{ toggleDeliveryPicker }}" data-i18n-title="new_task.delivery_tooltip" title="{{ deliveryPillTitle }}">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>
+              <span data-i18n="new_task.delivery">Доставка</span>
+              <sc-if value="{{ hasComposerTargets }}" hint-placeholder-val="{{ false }}"><span class="count-pip">{{ composerTargetCount }}</span></sc-if>
+            </button>
+            <sc-if value="{{ deliveryPickerOpen }}" hint-placeholder-val="{{ false }}">
+              <div class="popover w-sm" onClick="{{ stop }}">
+                <div class="popover-title">Куда отправить результат</div>
+                <sc-for list="{{ deliveryPickRows }}" as="d" hint-placeholder-count="2">
+                  <button class="pick-row {{ d.cls }}" onClick="{{ d.onToggle }}">
+                    <span class="checkbox lg {{ d.markClass }}">
+                      <sc-if value="{{ d.on }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+                    </span>
+                    <span class="pick-body">
+                      <span class="pick-label strong">{{ d.name }}</span>
+                      <span class="pick-sub">{{ d.detail }}</span>
+                    </span>
+                  </button>
+                </sc-for>
+                <div class="popover-sep"></div>
+                <button class="menu-item" onClick="{{ openDelivery }}" style="color:var(--accent-ink)">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                  <span data-i18n="delivery.manage.open">Настроить доставку</span>
+                </button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <label class="language-control" id="language-control" data-i18n-title="new_task.language_tooltip" title="Язык распознавания">
+          <span data-i18n="new_task.language">Язык</span>
+          <select id="language" value="{{ lang }}" onChange="{{ onLang }}">
+            <option value="" data-i18n="new_task.language_auto">авто</option>
+            <option value="ru" data-i18n="new_task.language_ru">Русский</option>
+            <option value="en" data-i18n="new_task.language_en">Английский</option>
+            <option value="de" data-i18n="new_task.language_de">Немецкий</option>
+            <option value="fr" data-i18n="new_task.language_fr">Французский</option>
+            <option value="es" data-i18n="new_task.language_es">Испанский</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2 class="card-title" data-i18n="tasks.title">Задачи</h2>
+        <span class="count-badge">{{ taskCount }}</span>
+        <button class="icon-btn ghost" id="refresh-btn" style="margin-left:auto" data-i18n-title="action.refresh" title="Обновить" aria-label="Обновить">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"/></svg>
+        </button>
+      </div>
+
+      <div class="task-filters" id="task-filters">
+        <div class="filter-search">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <input class="input-bare" id="filter-q" value="{{ filterQ }}" onInput="{{ onFilterQ }}" data-i18n-placeholder="filters.search" placeholder="Поиск по названию или источнику" />
+        </div>
+        <div class="segmented square filter-type" id="filter-type">
+          <sc-for list="{{ srcFilterRows }}" as="sf" hint-placeholder-count="3">
+            <button class="{{ sf.cls }}" onClick="{{ sf.onPick }}">{{ sf.label }}</button>
+          </sc-for>
+        </div>
+        <div class="filter-range">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+          <input class="filter-date" id="filter-from" type="date" value="{{ dateFrom }}" onChange="{{ onDateFrom }}" />
+          <span class="filter-range-dash">—</span>
+          <input class="filter-date" id="filter-to" type="date" value="{{ dateTo }}" onChange="{{ onDateTo }}" />
+        </div>
+        <sc-if value="{{ filtersActive }}" hint-placeholder-val="{{ false }}">
+          <button id="filter-clear" onClick="{{ resetFilters }}" data-i18n="filters.clear">Сбросить</button>
+        </sc-if>
+      </div>
+
+      <sc-if value="{{ hasNewAbove }}" hint-placeholder-val="{{ false }}">
+        <button class="new-tasks-banner" id="new-tasks-banner" onClick="{{ dismissNewAbove }}">
+          <span data-i18n="tasks.new_above">Новые задачи ↑</span>
+          <span class="new-tasks-count" id="new-tasks-count">{{ newAboveCount }}</span>
+        </button>
+      </sc-if>
+
+      <sc-if value="{{ noMatches }}" hint-placeholder-val="{{ false }}">
+        <div class="task-empty" id="task-empty">
+          <b data-i18n="filters.no_matches">Ничего не найдено</b>
+          <span>Измените запрос, тип источника или период.</span>
+        </div>
+      </sc-if>
+
+      <div class="task-list" id="task-list">
+        <sc-for list="{{ tasks }}" as="t" hint-placeholder-count="4">
+          <article class="{{ t.cardClass }}">
+            <div class="task-header-row">
+              <span class="task-dot"></span>
+              <div class="task-main">
+                <sc-if value="{{ t.notRenaming }}" hint-placeholder-val="{{ true }}">
+                  <div class="task-title-row">
+                    <a class="task-link {{ t.playerClass }}" href="{{ t.playerHref }}" target="_blank" rel="noreferrer" onClick="{{ stop }}" data-i18n-title="tasks.open_player" title="{{ t.playerTitle }}">
+                      <span>{{ t.title }}</span>
+                      <svg class="player-glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none"/></svg>
+                    </a>
+                    <sc-if value="{{ t.expired }}" hint-placeholder-val="{{ false }}">
+                      <span class="badge warn" data-i18n="tasks.media_expired_badge" data-i18n-title="tasks.media_expired_tooltip" title="Исходный медиафайл удалён политикой хранения">медиа удалено</span>
+                    </sc-if>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ t.renaming }}" hint-placeholder-val="{{ false }}">
+                  <div class="task-name-edit" onClick="{{ stop }}">
+                    <input class="task-name-input" maxlength="500" value="{{ t.renameValue }}" onInput="{{ t.onRenameInput }}" />
+                    <button class="icon-btn accent sm task-name-ok-btn" onClick="{{ t.onRenameSave }}" data-i18n-title="action.save_name" title="Сохранить" aria-label="Сохранить">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>
+                    </button>
+                    <button class="icon-btn sm plain task-name-cancel-btn" onClick="{{ t.onRenameCancel }}" data-i18n-title="action.cancel_edit" title="Отменить" aria-label="Отменить">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+                    </button>
+                  </div>
+                </sc-if>
+                <div class="task-source">
+                  <sc-if value="{{ t.isUrlTask }}" hint-placeholder-val="{{ true }}">
+                    <a href="{{ t.sourceHref }}" target="_blank" rel="noreferrer" onClick="{{ stop }}" title="Открыть источник в новой вкладке">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+                      <span>{{ t.source }}</span>
+                    </a>
+                    <span class="task-source-sep">·</span>
+                  </sc-if>
+                  <span class="task-source-info">{{ t.info }}</span>
+                </div>
+                <sc-if value="{{ t.hasStats }}" hint-placeholder-val="{{ false }}">
+                  <div class="task-stats">
+                    <sc-for list="{{ t.stats }}" as="st" hint-placeholder-count="3">
+                      <span class="task-stats-chip">{{ st.text }}</span>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div class="task-status">
+                <span class="status-pill"><span class="pip"></span>{{ t.statusLabel }}</span>
+              </div>
+
+              <span class="task-runtime">{{ t.runtime }}</span>
+
+              <div class="task-actions-inline">
+                <sc-if value="{{ t.showPause }}" hint-placeholder-val="{{ false }}">
+                  <button class="icon-btn ghost pause-btn" onClick="{{ t.onPause }}" data-i18n-title="action.pause" title="Пауза" aria-label="Пауза">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M8 6v12M16 6v12"/></svg>
+                  </button>
+                </sc-if>
+                <sc-if value="{{ t.showResume }}" hint-placeholder-val="{{ false }}">
+                  <button class="icon-btn accent resume-btn" onClick="{{ t.onResume }}" data-i18n-title="action.resume" title="Возобновить" aria-label="Возобновить">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><path d="m8 6 10 6-10 6z"/></svg>
+                  </button>
+                </sc-if>
+              </div>
+
+              <div class="task-toolbar-wrap btn-menu-wrapper">
+                <button class="icon-btn ghost {{ t.menuBtnClass }}" onClick="{{ t.onMenu }}" title="Ещё" aria-label="Ещё">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
+                </button>
+                <sc-if value="{{ t.menuOpen }}" hint-placeholder-val="{{ false }}">
+                  <div class="popover btn-menu" onClick="{{ stop }}">
+                    <sc-if value="{{ t.menuMain }}" hint-placeholder-val="{{ true }}">
+                      <button class="menu-item task-edit-name-btn" onClick="{{ t.onRenameStart }}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                        <span data-i18n="action.edit_name">Переименовать</span>
+                      </button>
+                      <button class="menu-item" onClick="{{ t.onAbout }}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h0"/></svg>
+                        <span data-i18n="about.open">О задаче</span>
+                      </button>
+                      <button class="menu-item task-player-btn {{ t.playerMenuClass }}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+                        <span data-i18n="tasks.open_player">Открыть плеер с транскриптом</span>
+                      </button>
+                      <button class="menu-item restart-summary-btn" onClick="{{ t.onOpenRestart }}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>
+                        <span data-i18n="action.restart_summary">Перезапустить summary</span>
+                        <svg class="chev-right" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+                      </button>
+                      <button class="menu-item download-media-btn {{ t.dlClass }}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="m8 12 4 4 4-4"/><path d="M3 18h18"/></svg>
+                        <span data-i18n="action.download_media">Скачать медиафайл</span>
+                      </button>
+                      <sc-if value="{{ t.expired }}" hint-placeholder-val="{{ false }}">
+                        <div class="menu-note">Файл удалён политикой хранения</div>
+                      </sc-if>
+                      <button class="menu-item archive-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h18"/><path d="M5 8h14v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 12h6"/></svg>
+                        <span data-i18n="action.archive">Архивировать</span>
+                      </button>
+                      <div class="popover-sep"></div>
+                      <button class="menu-item danger delete-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12"/></svg>
+                        <span data-i18n="action.delete">Удалить</span>
+                      </button>
+                    </sc-if>
+                    <sc-if value="{{ t.menuRestart }}" hint-placeholder-val="{{ false }}">
+                      <button class="menu-back" onClick="{{ t.onMenuBack }}">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>
+                        <span data-i18n="action.restart_summary">Перезапустить summary</span>
+                      </button>
+                      <button class="menu-item stacked restart-summary-full-btn">
+                        <b>С нуля</b>
+                        <span>Сбросить все этапы суммаризации</span>
+                      </button>
+                      <button class="menu-item stacked restart-summary-final-btn">
+                        <b data-i18n="restart_final.title">Только финальную сводку</b>
+                        <span>Оконные сводки сохранятся · можно выбрать другой пресет</span>
+                      </button>
+                    </sc-if>
+                  </div>
+                </sc-if>
+              </div>
+
+              <button class="icon-btn toggle-btn" onClick="{{ t.onToggle }}" data-i18n-title="action.expand" title="Развернуть" aria-label="Развернуть">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="task-break"></div>
+            </div>
+
+            <sc-if value="{{ t.needsSpeakers }}" hint-placeholder-val="{{ false }}">
+              <div class="resolve-voices-bar">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M17 8.5a2.6 2.6 0 0 1 0 5"/><path d="M18.5 19a4.6 4.6 0 0 0-2-3.4"/></svg>
+                <p>{{ t.speakerCta }}</p>
+                <button class="primary sm resolve-voices-btn" onClick="{{ t.onOpenSpeakers }}" data-i18n="action.resolve_voices">Привязать спикеров</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ t.expanded }}" hint-placeholder-val="{{ false }}">
+              <div class="task-body">
+                <div class="step-meta">
+                  <span class="step-label">{{ t.stepLabel }}</span>
+                  <span class="step-time mono">{{ t.stepTime }}</span>
+                </div>
+
+                <sc-if value="{{ t.showProgress }}" hint-placeholder-val="{{ false }}">
+                  <div class="progress-stack">
+                    <div class="progress-group">
+                      <span class="progress-caption" data-i18n="progress.overall">Общий прогресс</span>
+                      <div class="step-progress overall-progress">
+                        <div class="step-progress-fill" style="width:{{ t.overall }}%"></div>
+                        <div class="step-progress-text mono">{{ t.overall }}%</div>
+                      </div>
+                    </div>
+                    <div class="progress-group">
+                      <span class="progress-caption" data-i18n="progress.step">Прогресс шага</span>
+                      <div class="step-progress local-progress {{ t.localClass }}">
+                        <div class="step-progress-fill" style="width:{{ t.localWidth }}"></div>
+                        <div class="step-progress-text mono">{{ t.localText }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ t.hasMessage }}" hint-placeholder-val="{{ false }}">
+                  <div class="task-message">
+                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h0"/></svg>
+                    <span>{{ t.message }}</span>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ t.hasSpeakers }}" hint-placeholder-val="{{ false }}">
+                  <div class="speaker-box">
+                    <div class="speaker-box-head">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M17 8.5a2.6 2.6 0 0 1 0 5"/><path d="M18.5 19a4.6 4.6 0 0 0-2-3.4"/></svg>
+                      <b>Спикеры</b>
+                      <span>{{ t.speakerSummary }}</span>
+                      <button class="btn-link" style="margin-left:auto" onClick="{{ openPersons }}" data-i18n="speakers.registry.open">Реестр голосов</button>
+                    </div>
+                    <div class="speaker-list">
+                      <sc-for list="{{ t.speakers }}" as="sp" hint-placeholder-count="3">
+                        <div class="speaker-row {{ sp.rowClass }}">
+                          <span class="avatar {{ sp.avatarClass }}">{{ sp.initials }}</span>
+                          <span class="speaker-label">{{ sp.label }}</span>
+                          <span class="speaker-share mono">{{ sp.share }}</span>
+                          <button class="btn-text ghost" style="margin-left:auto" onClick="{{ sp.onPick }}">{{ sp.pickLabel }}</button>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <div class="tabs-bar">
+                  <sc-for list="{{ t.tabs }}" as="tab" hint-placeholder-count="4">
+                    <button class="tab-btn {{ tab.cls }}" onClick="{{ tab.onClick }}" title="{{ tab.title }}">{{ tab.label }}</button>
+                  </sc-for>
+                  <div class="tab-actions">
+                    <button class="icon-btn tab-copy-btn" data-i18n-title="action.copy_tab" title="Копировать" aria-label="Копировать">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9h11v11H9z"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/></svg>
+                    </button>
+                    <button class="icon-btn tab-save-btn" data-i18n-title="action.save_tab" title="Сохранить" aria-label="Сохранить">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3"/><path d="M9 14h6"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <sc-if value="{{ t.isPromptTab }}" hint-placeholder-val="{{ false }}">
+                  <div class="prompt-artifact">
+                    <div class="prompt-artifact-head {{ t.promptOpenClass }}">
+                      <div class="prompt-artifact-bar">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+                        <span class="cap">{{ t.promptName }}</span>
+                        <span class="meta">{{ t.promptMeta }}</span>
+                        <button class="btn-link" onClick="{{ t.togglePromptText }}">
+                          {{ t.promptToggleLabel }}
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                        </button>
+                      </div>
+                      <pre class="prompt-artifact-text">{{ t.promptText }}</pre>
+                    </div>
+                    <sc-if value="{{ t.promptReady }}" hint-placeholder-val="{{ true }}">
+                      <pre class="tab-content" style="margin-top:0">{{ t.promptResult }}</pre>
+                    </sc-if>
+                    <sc-if value="{{ t.promptPending }}" hint-placeholder-val="{{ false }}">
+                      <div class="pending-note"><span class="pending-spinner"></span>Результат промпта ещё не готов</div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ t.isTextTab }}" hint-placeholder-val="{{ true }}">
+                  <pre class="tab-content">{{ t.tabBody }}</pre>
+                </sc-if>
+              </div>
+            </sc-if>
+          </article>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ hasMore }}" hint-placeholder-val="{{ false }}">
+        <button class="task-sentinel" id="task-sentinel" onClick="{{ loadMore }}">
+          <span class="task-sentinel-spinner"></span>{{ moreLabel }}
+        </button>
+      </sc-if>
+      <sc-if value="{{ allLoaded }}" hint-placeholder-val="{{ true }}">
+        <div class="task-sentinel-end" data-i18n="tasks.no_more">{{ shownLabel }}</div>
+      </sc-if>
+    </section>
+
+    <footer class="page-footer">
+      <a href="#privacy">Политика приватности</a>
+      <span class="mono">{{ appVersion }}</span>
+      <button class="btn-link spacer" onClick="{{ stop }}">Установить приложение</button>
+    </footer>
+  </main>
+
+  <sc-if value="{{ toastOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="upload-toast" id="upload-toast" aria-live="polite">
+      <div class="upload-toast-row">
+        <span class="upload-toast-title" id="upload-toast-title">Загрузка файлов</span>
+        <span class="upload-toast-count mono" id="upload-toast-count">{{ toastCount }}</span>
+      </div>
+      <div class="step-progress local-progress upload-toast-bar" id="upload-toast-files-bar">
+        <div class="step-progress-fill" id="upload-toast-files-fill" style="width:{{ toastFilesPct }}%"></div>
+        <div class="step-progress-text mono" id="upload-toast-files-text">{{ toastFilesPct }}%</div>
+      </div>
+      <div class="upload-toast-file" id="upload-toast-filename">{{ toastFile }}</div>
+      <div class="step-progress upload-toast-bar" id="upload-toast-chunks-bar">
+        <div class="step-progress-fill" id="upload-toast-chunks-fill" style="width:{{ uploadPct }}%"></div>
+        <div class="step-progress-text mono" id="upload-toast-chunks-text">{{ uploadPct }}%</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ promptsOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closePrompts }}">
+      <div class="dialog prompts-dialog" id="prompts-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <h2 data-i18n="prompts.manage.title">Пользовательские промпты</h2>
+          <button class="icon-btn ghost sm" id="prompts-close-btn" onClick="{{ closePrompts }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help">Промпты применяются к обработанному транскрипту. Каждый выбранный промпт сохраняется как отдельный артефакт задачи. Встроенные промпты доступны только для чтения.</p>
+        <div class="mgr-columns">
+          <div class="mgr-col-list">
+            <button class="btn-dashed" onClick="{{ newPrompt }}" data-i18n="prompts.manage.create">Новый промпт</button>
+            <div class="mgr-list prompts-list" id="prompts-list">
+              <sc-for list="{{ promptList }}" as="pl" hint-placeholder-count="4">
+                <button class="mgr-item {{ pl.cls }}" onClick="{{ pl.onSelect }}">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+                  <span class="mgr-item-body">
+                    <span class="mgr-item-name">{{ pl.name }}</span>
+                    <span class="mgr-item-sub">{{ pl.preview }}</span>
+                    <span class="pick-meta">
+                      {{ pl.meta }}
+                      <sc-if value="{{ pl.system }}" hint-placeholder-val="{{ false }}"><span class="badge info sm">системный</span></sc-if>
+                    </span>
+                  </span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+          <div class="mgr-col-form">
+            <div class="prompt-form" style="flex:0 0 auto">
+              <label class="field-label" data-i18n="prompts.manage.name">Название</label>
+              <input class="text-input" id="prompt-name-input" value="{{ draftName }}" onInput="{{ onDraftName }}" readOnly="{{ draftReadOnly }}" placeholder="напр., Мемо встречи" />
+            </div>
+            <div class="prompt-form" id="prompt-form">
+              <div class="field-head">
+                <label class="field-label" data-i18n="prompts.manage.body">Текст промпта</label>
+                <sc-if value="{{ draftReadOnly }}" hint-placeholder-val="{{ false }}">
+                  <span class="badge info sm">только чтение</span>
+                </sc-if>
+                <span class="field-meta">{{ draftMeta }}</span>
+              </div>
+              <textarea class="prompt-body-input" id="prompt-body-input" spellcheck="false" value="{{ draftTemplate }}" onInput="{{ onDraftTemplate }}" readOnly="{{ draftReadOnly }}" placeholder="Опишите, что модель должна сделать с обработанным транскриптом."></textarea>
+            </div>
+            <div class="prompt-form-actions">
+              <sc-if value="{{ canDeleteDraft }}" hint-placeholder-val="{{ false }}">
+                <button class="btn-text danger" onClick="{{ deletePrompt }}" data-i18n="action.delete">Удалить</button>
+              </sc-if>
+              <button class="btn-text spacer" onClick="{{ duplicatePrompt }}">Дублировать</button>
+              <sc-if value="{{ draftEditable }}" hint-placeholder-val="{{ true }}">
+                <button class="primary" id="prompt-submit-btn" onClick="{{ savePrompt }}">Сохранить</button>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ presetsMgrOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closePresets }}">
+      <div class="dialog presets-dialog" id="presets-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <h2 data-i18n="preset.manage.title">Пресеты задач</h2>
+          <button class="icon-btn ghost sm" id="presets-close-btn" onClick="{{ closePresets }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help">Пресет — сохранённый набор параметров новой задачи: артефакты, язык, промпты и назначения доставки.</p>
+        <div class="mgr-columns">
+          <div class="mgr-col-list">
+            <button class="btn-dashed" onClick="{{ newPreset }}">Новый пресет</button>
+            <div class="mgr-list presets-list" id="presets-list">
+              <sc-for list="{{ presetMgrRows }}" as="pm" hint-placeholder-count="4">
+                <button class="mgr-item stacked {{ pm.cls }}" onClick="{{ pm.onSelect }}">
+                  <span class="mgr-item-name">{{ pm.name }}</span>
+                  <span class="mgr-item-sub">{{ pm.summary }}</span>
+                  <sc-if value="{{ pm.isDefault }}" hint-placeholder-val="{{ false }}">
+                    <span class="badge accent sm">по умолчанию</span>
+                  </sc-if>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+          <div class="mgr-col-form" id="preset-form">
+            <div class="prompt-form" style="flex:0 0 auto">
+              <label class="field-label" data-i18n="preset.manage.name">Название</label>
+              <input class="text-input" id="preset-name-input" value="{{ presetDraftName }}" onInput="{{ onPresetDraftName }}" placeholder="напр., Встреча с клиентом" />
+            </div>
+            <div class="prompt-select-field">
+              <span class="prompt-select-label">Артефакты</span>
+              <div class="preset-edit-options" id="preset-edit-options">
+                <sc-for list="{{ presetDraftOpts }}" as="po" hint-placeholder-count="4">
+                  <button class="option-pill {{ po.cls }}" onClick="{{ po.onToggle }}">
+                    <span class="checkbox sm">
+                      <sc-if value="{{ po.on }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+                    </span>{{ po.label }}
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+            <div class="preset-field">
+              <label class="field-label" data-i18n="new_task.language">Язык</label>
+              <select class="field" id="preset-edit-language" value="{{ presetDraftLang }}" onChange="{{ onPresetDraftLang }}">
+                <option value="">авто</option><option value="ru">Русский</option><option value="en">Английский</option><option value="de">Немецкий</option><option value="fr">Французский</option><option value="es">Испанский</option>
+              </select>
+            </div>
+            <div class="prompt-select-field">
+              <span class="prompt-select-label" data-i18n="new_task.prompts">Сводка и промпты</span>
+              <div class="prompt-select" id="preset-edit-prompts">
+                <sc-for list="{{ presetDraftPrompts }}" as="pp" hint-placeholder-count="3">
+                  <button class="pick-row {{ pp.cls }}" onClick="{{ pp.onToggle }}">
+                    <span class="checkbox {{ pp.markClass }}">
+                      <sc-if value="{{ pp.on }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+                    </span>
+                    <span class="pick-body">
+                      <span class="pick-label {{ pp.labelClass }}">{{ pp.label }}</span>
+                      <sc-if value="{{ pp.system }}" hint-placeholder-val="{{ false }}"><span class="badge info sm">системный</span></sc-if>
+                    </span>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+            <button class="preset-default-toggle {{ defaultPresetClass }}" onClick="{{ toggleDefaultPreset }}">
+              <span class="checkbox lg">
+                <sc-if value="{{ presetIsDefault }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></sc-if>
+              </span>
+              <span>Использовать для новых задач по умолчанию</span>
+            </button>
+            <sc-if value="{{ presetStale }}" hint-placeholder-val="{{ false }}">
+              <div class="preset-dangling-hint" id="preset-dangling-hint">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2 20h20z"/><path d="M12 10v4M12 17h0"/></svg>
+                <span data-i18n="preset.dangling_prompts">В пресете остались удалённые промпты. Сохраните его заново, чтобы убрать их из набора.</span>
+              </div>
+            </sc-if>
+            <div class="prompt-form-actions">
+              <sc-if value="{{ canDeletePreset }}" hint-placeholder-val="{{ false }}">
+                <button class="btn-text danger" onClick="{{ deletePresetMgr }}">Удалить</button>
+              </sc-if>
+              <button class="primary spacer" id="preset-submit-btn" onClick="{{ savePresetMgr }}">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ personsOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closePersons }}">
+      <div class="dialog md speaker-registry-dialog" id="speaker-registry-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <h2 data-i18n="speakers.registry.title">Реестр голосов</h2>
+          <button class="icon-btn ghost sm" id="speaker-registry-close-btn" onClick="{{ closePersons }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help" data-i18n="speakers.registry.select_hint">Известные голоса подставляются в транскрипт вместо «Спикер 1». Подсказка помогает опознать человека по роли или манере речи.</p>
+        <div class="speaker-registry-list" id="speaker-list">
+          <sc-for list="{{ personRows }}" as="pn" hint-placeholder-count="3">
+            <div class="person-block">
+              <div class="person-row {{ pn.cls }}">
+                <span class="avatar lg {{ pn.avatarClass }}">{{ pn.initials }}</span>
+                <div class="person-row-body">
+                  <b>{{ pn.name }}</b>
+                  <span>{{ pn.note }}</span>
+                </div>
+                <button class="sample-count {{ pn.samplesClass }}" onClick="{{ pn.onSamples }}" title="Фрагменты голоса" aria-label="Фрагменты голоса">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 10v4M8 7v10M12 5v14M16 8v8M20 11v2"/></svg>{{ pn.sampleCount }}
+                </button>
+                <button class="icon-btn sm plain" onClick="{{ pn.onEdit }}" title="Редактировать" aria-label="Редактировать">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                </button>
+                <button class="icon-btn sm danger-hover" onClick="{{ pn.onDelete }}" title="Удалить" aria-label="Удалить">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12"/></svg>
+                </button>
+              </div>
+              <sc-if value="{{ pn.samplesOpen }}" hint-placeholder-val="{{ false }}">
+                <div class="speaker-samples-list" id="speaker-samples">
+                  <sc-if value="{{ pn.hasSamples }}" hint-placeholder-val="{{ true }}">
+                    <sc-for list="{{ pn.samples }}" as="sm" hint-placeholder-count="2">
+                      <div class="sample-row">
+                        <button class="play-btn sm" onClick="{{ sm.onPlay }}" title="Прослушать" aria-label="Прослушать">
+                          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" stroke="none"><path d="m8 6 10 6-10 6z"/></svg>
+                        </button>
+                        <span class="sample-row-name">{{ sm.label }}</span>
+                        <span class="sample-row-dur mono">{{ sm.dur }}</span>
+                        <button class="btn-link" onClick="{{ sm.onMove }}">Перенести</button>
+                        <button class="icon-btn xs danger-hover" onClick="{{ sm.onDelete }}" title="Удалить фрагмент" aria-label="Удалить фрагмент">
+                          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+                        </button>
+                      </div>
+                    </sc-for>
+                  </sc-if>
+                  <sc-if value="{{ pn.noSamples }}" hint-placeholder-val="{{ false }}">
+                    <span class="speaker-samples-empty" id="speaker-samples-empty">Фрагментов голоса пока нет.</span>
+                  </sc-if>
+                  <div class="merge-row">
+                    <span>Объединить с другой персоной</span>
+                    <select class="field" value="{{ pn.mergeValue }}" onChange="{{ pn.onMerge }}">
+                      <option value="">выберите…</option>
+                      <sc-for list="{{ pn.mergeOptions }}" as="mo" hint-placeholder-count="2">
+                        <option value="{{ mo.id }}">{{ mo.name }}</option>
+                      </sc-for>
+                    </select>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <div class="speaker-create-form" id="speaker-create-form">
+          <span class="field-label">{{ personFormTitle }}</span>
+          <div class="speaker-create-row">
+            <input class="text-input" id="speaker-create-name" value="{{ personDraftName }}" onInput="{{ onPersonName }}" data-i18n-placeholder="speakers.registry.name_placeholder" placeholder="Имя, напр. Анна Ковалёва" />
+            <input class="text-input" value="{{ personDraftNote }}" onInput="{{ onPersonNote }}" placeholder="Подсказка: роль, манера речи" />
+          </div>
+          <div class="prompt-form-actions">
+            <sc-if value="{{ personEditing }}" hint-placeholder-val="{{ false }}">
+              <button class="btn-text" onClick="{{ cancelPerson }}">Отменить</button>
+            </sc-if>
+            <button class="primary spacer" onClick="{{ savePerson }}" data-i18n="speakers.registry.add">{{ personSaveLabel }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closeAbout }}">
+      <div class="dialog sm" id="task-about-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header about-title-row">
+          <div style="min-width:0">
+            <h2 data-i18n="about.title">{{ aboutTitle }}</h2>
+            <span class="dialog-sub mono">{{ aboutSource }}</span>
+          </div>
+          <button class="icon-btn ghost sm" id="task-about-close-btn" onClick="{{ closeAbout }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <div class="about-grid about-params" style="margin-top:14px">
+          <sc-for list="{{ aboutRows }}" as="ar" hint-placeholder-count="6">
+            <div class="about-row">
+              <span class="about-label">{{ ar.k }}</span>
+              <span class="about-value">{{ ar.v }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <span class="field-label" data-i18n="about.section_results">Шаги пайплайна</span>
+        <div class="about-steps about-timings" style="margin-top:8px">
+          <sc-for list="{{ aboutSteps }}" as="st" hint-placeholder-count="6">
+            <div class="about-step {{ st.cls }}">
+              <span class="pip"></span>
+              <span class="about-step-name">{{ st.name }}</span>
+              <span class="about-step-status">{{ st.status }}</span>
+              <span class="about-step-dur mono">{{ st.dur }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ deliveryOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closeDelivery }}">
+      <div class="dialog delivery-dialog" id="delivery-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <h2 data-i18n="delivery.manage.title">Доставка результатов</h2>
+          <button class="icon-btn ghost sm" id="delivery-close-btn" onClick="{{ closeDelivery }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help">Подключение — доступ к внешней системе. Назначение — конкретное место в ней, куда уходит готовый результат.</p>
+        <sc-if value="{{ noAdapters }}" hint-placeholder-val="{{ false }}">
+          <div class="delivery-empty-hint" id="delivery-no-adapters">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>
+            <b data-i18n="delivery.no_adapters">Плагины доставки не установлены</b>
+            <span>Настраивать пока нечего. Когда администратор поставит плагин, здесь появятся подключения и назначения.</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ hasAdapters }}" hint-placeholder-val="{{ true }}">
+          <div class="segmented delivery-tabs-bar">
+            <sc-for list="{{ dlvTabs }}" as="dt" hint-placeholder-count="2">
+              <button class="{{ dt.cls }}" onClick="{{ dt.onPick }}">{{ dt.label }}</button>
+            </sc-for>
+          </div>
+          <sc-if value="{{ dlvConnTab }}" hint-placeholder-val="{{ true }}">
+            <div class="delivery-sections delivery-section" id="delivery-credentials-list">
+              <sc-for list="{{ connRows }}" as="cn" hint-placeholder-count="2">
+                <div class="delivery-row">
+                  <div class="delivery-row-body">
+                    <b>{{ cn.name }}</b>
+                    <span class="delivery-adapter-label">{{ cn.adapter }}</span>
+                  </div>
+                  <span class="check-pill {{ cn.cls }}"><span class="pip"></span>{{ cn.status }}</span>
+                  <button class="btn-text" onClick="{{ cn.onTest }}">Проверить</button>
+                  <button class="icon-btn sm plain" title="Редактировать" aria-label="Редактировать">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                  </button>
+                  <sc-if value="{{ cn.adapterMissing }}" hint-placeholder-val="{{ false }}">
+                    <div class="delivery-check-message">Плагин этого подключения больше не установлен.</div>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <button class="btn-dashed" data-i18n="delivery.credentials.create">Новое подключение</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ dlvDestTab }}" hint-placeholder-val="{{ false }}">
+            <div class="delivery-sections delivery-section" id="delivery-targets-list">
+              <sc-for list="{{ destRows }}" as="ds" hint-placeholder-count="2">
+                <div class="delivery-row">
+                  <div class="delivery-row-body">
+                    <b>{{ ds.name }}</b>
+                    <span class="delivery-row-detail">{{ ds.detail }}</span>
+                  </div>
+                  <span class="delivery-conn-chip">{{ ds.conn }}</span>
+                  <button class="icon-btn sm plain" title="Редактировать" aria-label="Редактировать">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                  </button>
+                  <button class="icon-btn sm danger-hover" title="Удалить" aria-label="Удалить">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12"/></svg>
+                  </button>
+                </div>
+              </sc-for>
+              <button class="btn-dashed" data-i18n="delivery.targets.create">Новое назначение</button>
+            </div>
+          </sc-if>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ resolveOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closeResolve }}">
+      <div class="dialog md voice-resolution-dialog" id="voice-resolution-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <div style="min-width:0">
+            <h2 data-i18n="voices.dialog.title">Привязка голосов</h2>
+            <span class="dialog-sub">{{ resolveTaskTitle }}</span>
+          </div>
+          <button class="icon-btn ghost sm" id="voice-close-btn" onClick="{{ closeResolve }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help">Прослушайте фрагмент и выберите человека. Совпадения предложены по похожести голоса.</p>
+        <div class="voice-list" id="voice-list">
+          <sc-for list="{{ resolveRows }}" as="rv" hint-placeholder-count="3">
+            <div class="voice-row {{ rv.cls }}">
+              <div class="voice-row-head">
+                <button class="play-btn" onClick="{{ rv.onPlay }}" title="Прослушать" aria-label="Прослушать">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none"><path d="m8 6 10 6-10 6z"/></svg>
+                </button>
+                <span class="speaker-label">{{ rv.label }}</span>
+                <span class="speaker-share mono">{{ rv.share }}</span>
+                <span class="spacer"></span>
+                <button class="btn-text ghost {{ rv.pickClass }}" onClick="{{ rv.onPick }}">{{ rv.pickLabel }}</button>
+              </div>
+              <sc-if value="{{ rv.hasSuggestion }}" hint-placeholder-val="{{ false }}">
+                <div class="suggestion-row">
+                  <span class="cap">Похоже на:</span>
+                  <sc-for list="{{ rv.suggestions }}" as="sg" hint-placeholder-count="2">
+                    <button class="suggestion" onClick="{{ sg.onPick }}">{{ sg.name }}<span class="score">{{ sg.score }}</span></button>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <div class="voice-dialog-actions">
+          <button class="btn-text" id="voice-cancel" onClick="{{ closeResolve }}" data-i18n="voices.dialog.cancel">Отменить</button>
+          <button class="btn-text spacer" id="voice-save" onClick="{{ saveResolve }}" data-i18n="voices.dialog.save">Сохранить</button>
+          <button class="primary" id="voice-save-continue" onClick="{{ saveResolveContinue }}" data-i18n="voices.dialog.save_continue">Сохранить и продолжить</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ pickerOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop nested" onClick="{{ closePicker }}">
+      <div class="dialog speaker-picker-dialog" id="speaker-picker-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <div style="min-width:0">
+            <h2 id="speaker-picker-title">{{ pickerTitle }}</h2>
+            <span class="dialog-sub">{{ pickerSub }}</span>
+          </div>
+          <button class="icon-btn ghost sm" id="speaker-picker-close-btn" onClick="{{ closePicker }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <div class="filter-search" style="margin:12px 0 10px">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <input class="input-bare" value="{{ pickerQuery }}" onInput="{{ onPickerQuery }}" placeholder="Поиск по имени" />
+        </div>
+        <div class="speaker-picker-sort" id="speaker-picker-sort">
+          <button class="btn-text ghost {{ pickerSortDistClass }}" id="speaker-picker-sort-distance" onClick="{{ sortByDistance }}" data-i18n="speakers.registry.move_sort_distance">По похожести</button>
+          <button class="btn-text ghost {{ pickerSortAlphaClass }}" id="speaker-picker-sort-alpha" onClick="{{ sortByAlpha }}" data-i18n="speakers.registry.move_sort_alpha">По алфавиту</button>
+        </div>
+        <sc-if value="{{ pickerEmpty }}" hint-placeholder-val="{{ false }}">
+          <p class="tokens-help" id="speaker-picker-empty">Никого не нашлось. Создайте персону из введённого имени.</p>
+        </sc-if>
+        <div class="speaker-picker-list" id="speaker-picker-list">
+          <sc-if value="{{ pickerHasUnbind }}" hint-placeholder-val="{{ true }}">
+            <button class="speaker-picker-row" onClick="{{ unbindPicker }}">
+              <span class="avatar">—</span>
+              <span class="speaker-picker-row-body"><b>Не привязан</b><span>Оставить «{{ pickerSpeakerLabel }}» без имени</span></span>
+            </button>
+          </sc-if>
+          <sc-for list="{{ pickerRows }}" as="pk" hint-placeholder-count="4">
+            <button class="speaker-picker-row {{ pk.cls }}" onClick="{{ pk.onPick }}">
+              <span class="avatar {{ pk.avatarClass }}">{{ pk.initials }}</span>
+              <span class="speaker-picker-row-body">
+                <b>{{ pk.name }}</b>
+                <span>{{ pk.note }}</span>
+              </span>
+              <sc-if value="{{ pk.hasScore }}" hint-placeholder-val="{{ false }}">
+                <span class="speaker-picker-score">{{ pk.score }}</span>
+              </sc-if>
+            </button>
+          </sc-for>
+        </div>
+        <div class="voice-dialog-actions">
+          <button class="btn-text" id="speaker-picker-cancel" onClick="{{ closePicker }}" data-i18n="speakers.registry.move_cancel">Отменить</button>
+          <button class="primary spacer" onClick="{{ createFromPicker }}">{{ pickerCreateLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ tokensOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ closeTokens }}">
+      <div class="dialog sm tokens-dialog" id="tokens-dialog" onClick="{{ stop }}">
+        <div class="tokens-dialog-header">
+          <h2 data-i18n="tokens.title">API-токены</h2>
+          <button class="icon-btn ghost sm" id="tokens-close-btn" onClick="{{ closeTokens }}" data-i18n-title="tokens.close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+          </button>
+        </div>
+        <p class="tokens-help" data-i18n="tokens.help">Используйте эти токены для скриптов (Authorization: Bearer …). У них те же права, что и у вашей сессии.</p>
+        <ul class="tokens-list" id="tokens-list">
+          <li class="token-row">
+            <div class="token-row-body"><b>obs-laptop</b><span>vts_a1b2… · посл. использование 2 ч назад</span></div>
+            <button class="btn-text danger" style="margin-left:auto">Отозвать</button>
+          </li>
+          <li class="token-row">
+            <div class="token-row-body"><b>ci-runner</b><span>vts_9z8y… · никогда</span></div>
+            <button class="btn-text danger" style="margin-left:auto">Отозвать</button>
+          </li>
+        </ul>
+        <div class="tokens-create-form" id="tokens-create-form">
+          <input class="text-input" id="tokens-create-name" data-i18n-placeholder="tokens.name_placeholder" placeholder="например, obs-laptop" />
+          <button class="primary" data-i18n="tokens.create">Создать токен</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1080,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = {
+    theme: 'light',
+    source: 'url', url: '', lang: '',
+    opts: { audio: false, transcript: true, speakers: true, noStop: false },
+    presetId: 'quick', presetOpen: false,
+    presets: [
+      { id: 'quick', name: 'Быстрая сводка', opts: { audio: false, transcript: true, speakers: true, noStop: false }, lang: '', prompts: ['p0'] },
+      { id: 'meeting', name: 'Встреча', opts: { audio: true, transcript: true, speakers: true, noStop: false }, lang: 'ru', prompts: ['p0', 'p1', 'p2'] },
+      { id: 'lecture', name: 'Лекция', opts: { audio: false, transcript: true, speakers: false, noStop: false }, lang: '', prompts: ['p1', 'p4'] },
+      { id: 'transcript', name: 'Только транскрипт', opts: { audio: true, transcript: true, speakers: true, noStop: true }, lang: '', prompts: [] },
+    ],
+    defaultPresetId: 'quick', presetsMgrOpen: false, presetMgrId: 'meeting', presetDraft: null,
+    expanded: { t1: false, t5: true }, tabs: { t1: 'log', t5: 'prompt0' },
+    menuId: null, menuView: 'main', navOpen: false,
+    renamingId: null, renameDraft: '', names: {},
+    newRows: [], flashId: null, newAboveCount: 0,
+    files: [], uploading: false, uploadPct: 0, uploadIdx: 0,
+    filterQ: '', filterSrc: 'all', dateFrom: '', dateTo: '', shown: 6,
+    notif: false, newBuild: true,
+    tokensOpen: false, promptsOpen: false, promptPickerOpen: false,
+    composerPrompts: { p0: true }, promptTextOpen: {},
+    promptLib: [
+      { id: 'p0', system: true, name: 'Сводка', text: 'Системный промпт финальной сводки.\n\nСобери связную сводку по оконным сводкам записи.\nСохрани структуру: контекст, основные темы, решения.\nНе добавляй информацию, которой нет во входных данных.' },
+      { id: 'p1', name: 'Мемо встречи', text: 'Ты редактор, который готовит конспект встречи по расшифровке разговора.\n\nПравила:\n1. Работай только с фактами из транскрипта, ничего не додумывай.\n2. Сохраняй формулировки участников там, где они точнее пересказа.\n3. Если в записи есть противоречия — покажи оба варианта и помети «расхождение».\n4. Проценты, суммы и даты выписывай ровно так, как они звучат.\n\nФормат вывода:\n— Блок «Контекст»: 2–3 предложения о том, зачем собирались.\n— Блок «Ключевые тезисы»: 5–7 пунктов, каждый не длиннее двух строк.\n— Блок «Решения»: только то, о чём договорились окончательно.\n— Блок «Открытые вопросы»: то, что осталось без ответа.' },
+      { id: 'p2', name: 'Задачи и решения', text: 'Собери из транскрипта список задач.\n\nДля каждой задачи укажи:\n— что сделать (глагол в начале, одна строка);\n— кто отвечает, если это названо в разговоре;\n— срок, если он прозвучал;\n— от чего задача зависит, если это обсуждали.\n\nЕсли ответственный или срок не названы — оставь прочерк, не угадывай.\nОтсортируй задачи по сроку: сначала с датами, потом без.' },
+      { id: 'p3', name: 'Тред для соцсетей', text: 'Преврати содержание записи в тред из 6 коротких постов.\n\nТребования:\n— первый пост формулирует проблему без общих слов;\n— посты 2–5 раскрывают по одной мысли каждый, с конкретикой из записи;\n— последний пост — вывод, а не призыв подписаться;\n— до 240 символов на пост, без хештегов и эмодзи.' },
+      { id: 'p4', name: 'Глоссарий', text: 'Составь глоссарий терминов, которые встречаются в записи.\n\nБери только те термины, которые участники используют как рабочие: продуктовые метрики, внутренние названия, технические понятия.\nДля каждого термина дай определение в одну-две строки — так, как его понимают в этом разговоре.\nОтсортируй по алфавиту.' },
+    ],
+    editingPromptId: 'p1', draftTemplate: '', draftName: '',
+    personsOpen: false, samplesFor: null,
+    persons: [
+      { id: 'v1', name: 'Анна Ковалёва', note: 'ведёт встречи, быстрая речь', samples: [{ id: 's1', label: 'Вебинар: ретеншн — 04:12', dur: '0:08' }, { id: 's2', label: 'Планирование Q3 — 21:40', dur: '0:11' }] },
+      { id: 'v2', name: 'Максим Дорн', note: 'аналитика, низкий голос', samples: [{ id: 's3', label: 'Подкаст: аналитика — 12:03', dur: '0:09' }] },
+      { id: 'v3', name: 'Гость (внешний)', note: 'без подсказки', samples: [] },
+    ],
+    personDraftId: null, personDraftName: '', personDraftNote: '',
+    deliveryOpen: false, deliveryTab: 'conn', deliveryPickerOpen: false, composerTargets: {}, connState: {},
+    aboutId: null, resolveId: null, resolveDraft: {}, speakerMap: {},
+    pickerFor: null, pickerQuery: '', pickerSort: 'distance',
+    vw: (typeof window !== 'undefined' ? window.innerWidth : 1200),
+  };
+
+  componentDidMount() {
+    const p = this.state.promptLib.find(x => x.id === this.state.editingPromptId);
+    if (p) this.setState({ draftTemplate: p.text, draftName: p.name || '' });
+    this._onDoc = () => {
+      const s = this.state;
+      if (s.menuId || s.promptPickerOpen || s.presetOpen || s.navOpen || s.deliveryPickerOpen) {
+        this.setState({ menuId: null, promptPickerOpen: false, presetOpen: false, navOpen: false, deliveryPickerOpen: false });
+      }
+    };
+    document.addEventListener('click', this._onDoc);
+    this._onResize = () => {
+      if (this._raf) return;
+      this._raf = requestAnimationFrame(() => { this._raf = null; if (window.innerWidth !== this.state.vw) this.setState({ vw: window.innerWidth }); });
+    };
+    window.addEventListener('resize', this._onResize);
+    this.applyTheme(this.state.theme);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('click', this._onDoc);
+    window.removeEventListener('resize', this._onResize);
+  }
+
+  applyTheme(t) {
+    try {
+      document.documentElement.setAttribute('data-theme', t);
+      const m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute('content', t === 'dark' ? '#191512' : '#c5532a');
+    } catch (_) {}
+  }
+  toggleTheme(e) {
+    if (e) e.stopPropagation();
+    const t = this.state.theme === 'dark' ? 'light' : 'dark';
+    this.applyTheme(t);
+    this.setState({ theme: t });
+  }
+
+  ADAPTERS = ['notion', 'obsidian-webdav'];
+  CONNS = [
+    { id: 'c1', name: 'Notion рабочего пространства', adapter: 'notion', missing: false },
+    { id: 'c2', name: 'Obsidian (WebDAV)', adapter: 'obsidian-webdav', missing: true },
+  ];
+  TARGETS = [
+    { id: 'd1', name: 'База «Расшифровки»', conn: 'notion', detail: 'Коллекция: Meetings · сводка + транскрипт' },
+    { id: 'd2', name: 'Хранилище заметок', conn: 'obsidian-webdav', detail: 'Папка /vts/inbox · только сводка' },
+  ];
+  CHECK = {
+    ok: { label: 'подключено', cls: 'ok' },
+    checking: { label: 'проверяем…', cls: 'warn' },
+    unreachable: { label: 'недоступно', cls: 'bad' },
+    unauthorized: { label: 'нет доступа', cls: 'bad' },
+    not_found: { label: 'место не найдено', cls: 'bad' },
+    unexpected_response: { label: 'неожиданный ответ', cls: 'warn' },
+    timeout: { label: 'таймаут', cls: 'warn' },
+    unknown: { label: 'не проверялось', cls: '' },
+  };
+  STEPS = [
+    'Загрузка медиа', 'Извлечение аудио', 'Обрезка тишины', 'Сегментация аудио', 'Определение языка',
+    'Транскрибация сегментов', 'Диаризация спикеров', 'Сборка транскрипта', 'Прогрев LLM',
+    'Нарезка для сводки', 'Оконные сводки', 'Финальная сводка',
+  ];
+  LABELS = {
+    running: 'выполняется', queued: 'в очереди', waiting: 'ожидание', paused: 'пауза',
+    completed: 'завершено', archived: 'в архиве', failed: 'ошибка', canceled: 'отменено',
+    awaiting_input: 'нужна проверка',
+  };
+
+  RAW = [
+    { id: 't1', status: 'running', src: 'url', date: '2026-08-17', title: 'Лекция: системное мышление в продукте',
+      source: 'youtube.com/watch?v=k3Xp9', meta: '48:12 · 96 МБ', runtime: '04:12', overall: 62, local: 80,
+      stepLabel: 'Шаг 6 из 12: Транскрибация сегментов', stepTime: '02:41',
+      content: { transcript: '[00:00] …ключевая идея системного мышления в том,\nчто мы смотрим не на элементы, а на связи между ними…', redacted: '', summary: '', log: '12:04:01  download: completed (96 МБ)\n12:06:40  transcribe_segments: 6/10 …' } },
+    { id: 't2', status: 'queued', queuePos: 2, src: 'url', date: '2026-08-17', title: 'Подкаст: продуктовая аналитика без иллюзий',
+      source: 'youtu.be/Qm2Lf', meta: '1:12:40 · 142 МБ', runtime: '—', overall: 0, local: 0,
+      stepLabel: 'Шаг — из 12: ожидание', stepTime: '—',
+      content: { transcript: '(в очереди)', redacted: '', summary: '', log: '12:09:50  task queued (#2)' } },
+    { id: 't8', status: 'awaiting_input', src: 'file', date: '2026-08-16', parts: 2, title: 'Совет директоров: итоги полугодия',
+      source: 'файлы: board_h1_1.mp4 +1', meta: '2 файла · 1:38:05 · 214 МБ', runtime: '14:20', overall: 58, local: 100,
+      stepLabel: 'Шаг 7 из 12: Диаризация спикеров', stepTime: '03:04',
+      speakers: [
+        { label: 'Спикер 1', share: '46%', suggestions: [['v1', '92%'], ['v2', '61%']] },
+        { label: 'Спикер 2', share: '38%', suggestions: [['v2', '88%']] },
+        { label: 'Спикер 3', share: '16%', suggestions: [] },
+      ],
+      content: { transcript: '[00:00] Спикер 1: Начнём с результатов первого полугодия…', redacted: '', summary: '', log: '15:02:11  diarize: 3 голоса найдено' } },
+    { id: 't3', status: 'paused', src: 'url', date: '2026-08-16', title: 'Интервью с основателем',
+      source: 'vimeo.com/88421', meta: '31:50 · 64 МБ', runtime: '01:58', overall: 30, local: 45,
+      stepLabel: 'Шаг 4 из 12: Сегментация аудио', stepTime: '01:58',
+      content: { transcript: '(приостановлено)', redacted: '', summary: '', log: '11:40:12  paused by user' } },
+    { id: 't4', status: 'failed', src: 'url', date: '2026-08-15', title: 'YouTube live: демо-день акселератора',
+      source: 'youtube.com/live/Zx7', meta: 'медиа недоступно', runtime: '00:24', overall: 8, local: 0,
+      stepLabel: 'Шаг 1 из 12: Загрузка медиа', stepTime: '00:24',
+      message: 'YouTube-трансляция пока недоступна. Нажмите «Возобновить» позже, когда трансляция начнётся.',
+      content: { transcript: '', redacted: '', summary: '', log: '11:20:03  download: error — live not started' } },
+    { id: 't7', status: 'running', localIndet: true, src: 'file', date: '2026-08-17', parts: 3, title: 'Созвон: планирование квартала',
+      source: 'файлы: q3_planning_1.mp4 +2', meta: '3 файла · 1:04:20 · 168 МБ', runtime: '07:33', overall: 71, local: 0,
+      stepLabel: 'Шаг 9 из 12: Прогрев LLM', stepTime: '00:46',
+      speakers: [{ label: 'Спикер 1', share: '61%', suggestions: [['v1', '90%']] }, { label: 'Спикер 2', share: '39%', suggestions: [] }],
+      content: { transcript: '[00:00] Давайте начнём с того, где мы по целям квартала…', redacted: '(появится по мере суммаризации)', summary: '', log: '13:41:09  prepare_llama_model: loading weights…' } },
+    { id: 't5', status: 'completed', src: 'url', date: '2026-08-14', title: 'Вебинар: ретеншн-метрики для SaaS',
+      source: 'youtube.com/watch?v=Rt9Vm', meta: '52:30 · 74 МБ',
+      stats: ['сырой 18 240 симв.', 'обработанный 15 980 симв.', 'сводка 2 310 симв.'],
+      runtime: '11:48', overall: 100, local: 100, stepLabel: 'Готово · все 12 шагов завершены', stepTime: '11:48',
+      content: {
+        transcript: '[00:00] Сегодня разберём, как считать retention…\n[02:14] Не путайте N-day и unbounded retention…',
+        redacted: '[00:00] Разбор подсчёта retention и когортных срезов…',
+        summary: '• Retention считают когортно; N-day и unbounded дают разные ответы.\n• Для SaaS важнее кривая удержания, чем единичная цифра.\n• Якорь-метрика: доля пользователей, дошедших до «момента ценности».',
+        log: '10:58:21  task completed in 11:48' } },
+    { id: 't6', status: 'archived', expired: true, src: 'file', date: '2026-07-29', title: 'Старый созвон команды (Q1)',
+      source: 'файл: standup_q1.mp4', meta: '24:15 · 51 МБ', stats: ['сырой 9 120 симв.', 'сводка 1 040 симв.'],
+      runtime: '08:02', overall: 100, local: 100, stepLabel: 'В архиве · артефакты сохранены', stepTime: '08:02',
+      content: { transcript: '(сохранён)', redacted: '', summary: 'Краткий разбор Q1-стендапа…', log: 'Лог удалён при архивации.' } },
+  ];
+
+  PROMPT_RESULTS = {
+    t5: [
+      { promptId: 'p0', result: '• Retention считают когортно, а не как одну усреднённую цифру.\n• N-day и unbounded retention отвечают на разные вопросы.\n• Для SaaS важнее форма кривой удержания.' },
+      { promptId: 'p2', result: '1. Построить когортный retention по неделям — аналитика.\n2. Определить «момент ценности» для онбординга — продукт.\n3. Сегментировать кривые по источнику трафика — маркетинг.' },
+    ],
+    t1: [{ promptId: 'p0', result: '' }],
+    t7: [{ promptId: 'p4', result: '' }],
+  };
+
+  static preview(t, n) { const s = (t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s; }
+  static meta(t) {
+    const s = t || '', lines = s.split('\n').length, chars = s.length;
+    const w = (n, a, b, c) => { const m = n % 100, k = n % 10; if (m > 10 && m < 20) return c; if (k === 1) return a; if (k >= 2 && k <= 4) return b; return c; };
+    return lines + ' ' + w(lines, 'строка', 'строки', 'строк') + ' · ' + chars + ' симв.';
+  }
+  static initials(name) { return (name || '?').split(' ').map(w => w[0]).slice(0, 2).join(''); }
+
+  allRows() { return [...this.state.newRows, ...this.RAW]; }
+  promptById(id) { return this.state.promptLib.find(p => p.id === id) || { text: '' }; }
+  closeAll(extra) { this.setState(Object.assign({ navOpen: false, menuId: null, promptPickerOpen: false, presetOpen: false, deliveryPickerOpen: false }, extra || {})); }
+
+  setSource(s) { this.setState({ source: s }); }
+  onUrl(e) { this.setState({ url: e.target.value }); }
+  toggleOpt(k) { this.setState(s => ({ opts: { ...s.opts, [k]: !s.opts[k] } })); }
+  toggleExpand(id) { this.setState(s => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] }, menuId: null })); }
+  setTab(id, k) { this.setState(s => ({ tabs: { ...s.tabs, [id]: k } })); }
+  toggleMenu(id, e) { e.stopPropagation(); this.setState(s => ({ menuId: s.menuId === id ? null : id, menuView: 'main' })); }
+
+  pickFiles(e) {
+    if (e) e.stopPropagation();
+    const pool = [
+      { name: 'q3_planning_call.mp4', size: '168 МБ' }, { name: 'interview_part2.mkv', size: '92 МБ' },
+      { name: 'standup_2026-08-17.m4a', size: '18 МБ' }, { name: 'workshop_audio.wav', size: '241 МБ' },
+    ];
+    this.setState(s => {
+      const have = s.files.map(x => x.name);
+      return { files: [...s.files, ...pool.filter(x => have.indexOf(x.name) < 0).slice(0, s.files.length ? 1 : 2)] };
+    });
+  }
+  removeFile(name, e) { if (e) e.stopPropagation(); this.setState(s => ({ files: s.files.filter(x => x.name !== name) })); }
+  submitTask(e) {
+    if (e) e.stopPropagation();
+    const { source, url, files, uploading } = this.state;
+    if (uploading) return;
+    if (source === 'file') {
+      if (!files.length) { this.pickFiles(); return; }
+      const total = files.length;
+      this.setState({ uploading: true, uploadPct: 0, uploadIdx: 0 });
+      clearInterval(this._up);
+      this._up = setInterval(() => {
+        const p = Math.min(100, this.state.uploadPct + 6);
+        if (p >= 100) {
+          const idx = this.state.uploadIdx || 0;
+          if (idx + 1 >= total) {
+            clearInterval(this._up);
+            const label = total === 1 ? ('файл: ' + files[0].name) : ('файлы: ' + files[0].name + ' +' + (total - 1));
+            this.addRow(label, files[0].name.replace(/\.[^.]+$/, '') + (total > 1 ? ' (+' + (total - 1) + ')' : ''), total);
+            this.setState({ uploading: false, uploadPct: 0, uploadIdx: 0, files: [] });
+          } else this.setState({ uploadPct: 0, uploadIdx: idx + 1 });
+        } else this.setState({ uploadPct: p });
+      }, 70);
+      return;
+    }
+    const v = (url || '').trim(); if (!v) return;
+    this.addRow(v.replace(/^https?:\/\//, ''), 'Новая задача', 1);
+    this.setState({ url: '' });
+  }
+  addRow(source, title, parts) {
+    const id = 'n' + Date.now() + Math.floor(Math.random() * 99);
+    const row = {
+      id, status: 'queued', queuePos: 1, title, source, parts: parts || 1,
+      src: source.indexOf('файл') === 0 ? 'file' : 'url', date: '2026-08-17',
+      meta: (parts > 1 ? parts + ' файла · ожидает обработки' : 'ожидает обработки'),
+      runtime: '—', overall: 0, local: 0, stepLabel: 'Шаг — из 12: ожидание', stepTime: '—',
+      content: { transcript: '(в очереди)', redacted: '', summary: '', log: 'задача поставлена в очередь' },
+    };
+    this.setState(s => ({ newRows: [row, ...s.newRows], flashId: id, newAboveCount: s.newAboveCount + 1 }));
+    clearTimeout(this._flash);
+    this._flash = setTimeout(() => { if (this.state.flashId === id) this.setState({ flashId: null }); }, 1900);
+  }
+
+  startRename(id, e) {
+    if (e) e.stopPropagation();
+    const row = this.allRows().find(r => r.id === id);
+    this.setState(s => ({ renamingId: id, renameDraft: s.names[id] || (row ? row.title : ''), menuId: null, menuView: 'main' }));
+  }
+  saveRename(e) {
+    if (e) e.stopPropagation();
+    const { renamingId, renameDraft } = this.state;
+    const v = (renameDraft || '').trim();
+    if (!renamingId || !v) { this.setState({ renamingId: null }); return; }
+    this.setState(s => ({ names: { ...s.names, [renamingId]: v }, renamingId: null }));
+  }
+
+  applyPreset(id) {
+    const p = this.state.presets.find(x => x.id === id); if (!p) return;
+    const prompts = {}; p.prompts.forEach(k => { prompts[k] = true; });
+    this.setState({ presetId: id, opts: { ...p.opts }, lang: p.lang, composerPrompts: prompts, presetOpen: false });
+  }
+  currentPrompts() { return Object.keys(this.state.composerPrompts).filter(k => this.state.composerPrompts[k]).sort(); }
+  isDirty() {
+    const { presets, presetId, opts, lang } = this.state;
+    const p = presets.find(x => x.id === presetId); if (!p) return true;
+    if (lang !== p.lang) return true;
+    if (['audio', 'transcript', 'speakers', 'noStop'].some(k => !!opts[k] !== !!p.opts[k])) return true;
+    return this.currentPrompts().join(',') !== [...p.prompts].sort().join(',');
+  }
+  presetSummary(p) {
+    const LANG = { '': 'язык авто', ru: 'русский', en: 'английский', de: 'немецкий', fr: 'французский', es: 'испанский' };
+    const bits = [];
+    if (p.opts.audio) bits.push('только аудио');
+    if (p.opts.transcript) bits.push('транскрипт');
+    const named = p.prompts.map(id => (this.state.promptLib.find(x => x.id === id) || {}).name).filter(Boolean);
+    if (named.length) bits.push(named.join(' + '));
+    if (p.opts.speakers) bits.push(p.opts.noStop ? 'спикеры без остановки' : 'спикеры');
+    bits.push(LANG[p.lang] || 'язык авто');
+    return bits.join(' · ');
+  }
+  savePreset(e) {
+    if (e) e.stopPropagation();
+    const { presetId, opts, lang } = this.state, prompts = this.currentPrompts();
+    this.setState(s => ({ presets: s.presets.map(p => p.id === presetId ? { ...p, opts: { ...opts }, lang, prompts } : p), presetOpen: false }));
+  }
+  savePresetAsNew(e) {
+    if (e) e.stopPropagation();
+    const { presets, opts, lang } = this.state, id = 'ps' + Date.now();
+    this.setState({ presets: [...presets, { id, name: 'Пресет ' + (presets.length + 1), opts: { ...opts }, lang, prompts: this.currentPrompts() }], presetId: id, presetOpen: false });
+  }
+  blankDraft() { return { name: '', opts: { audio: false, transcript: true, speakers: true, noStop: false }, lang: '', prompts: ['p0'] }; }
+  openPresetsMgr(e) {
+    if (e) e.stopPropagation();
+    try { window.scrollTo(0, 0); } catch (_) {}
+    const p = this.state.presets.find(x => x.id === this.state.presetMgrId) || this.state.presets[0];
+    this.closeAll({ presetsMgrOpen: true, presetMgrId: p ? p.id : null, presetDraft: p ? { name: p.name, opts: { ...p.opts }, lang: p.lang, prompts: [...p.prompts] } : this.blankDraft() });
+  }
+  selectPresetMgr(id) {
+    const p = this.state.presets.find(x => x.id === id); if (!p) return;
+    this.setState({ presetMgrId: id, presetDraft: { name: p.name, opts: { ...p.opts }, lang: p.lang, prompts: [...p.prompts] } });
+  }
+  patchDraft(patch) { this.setState(s => ({ presetDraft: { ...s.presetDraft, ...patch } })); }
+  savePresetMgr() {
+    const { presetMgrId, presetDraft, presets } = this.state;
+    const name = (presetDraft.name || '').trim(); if (!name) return;
+    if (presetMgrId) this.setState({ presets: presets.map(p => p.id === presetMgrId ? { ...p, name, opts: { ...presetDraft.opts }, lang: presetDraft.lang, prompts: [...presetDraft.prompts] } : p) });
+    else { const id = 'ps' + Date.now(); this.setState({ presets: [...presets, { id, name, opts: { ...presetDraft.opts }, lang: presetDraft.lang, prompts: [...presetDraft.prompts] }], presetMgrId: id }); }
+  }
+  deletePresetMgr() {
+    const { presetMgrId, presets } = this.state; if (!presetMgrId) return;
+    const next = presets.filter(p => p.id !== presetMgrId), first = next[0];
+    this.setState(s => ({
+      presets: next, presetMgrId: first ? first.id : null,
+      presetId: s.presetId === presetMgrId ? (first ? first.id : null) : s.presetId,
+      defaultPresetId: s.defaultPresetId === presetMgrId ? null : s.defaultPresetId,
+      presetDraft: first ? { name: first.name, opts: { ...first.opts }, lang: first.lang, prompts: [...first.prompts] } : this.blankDraft(),
+    }));
+  }
+
+  openPrompts(e) {
+    if (e) e.stopPropagation();
+    try { window.scrollTo(0, 0); } catch (_) {}
+    const first = this.state.promptLib.find(p => !p.system) || this.state.promptLib[0];
+    this.closeAll({ promptsOpen: true, editingPromptId: first ? first.id : null, draftTemplate: first ? first.text : '', draftName: first ? (first.name || '') : '' });
+  }
+  selectPromptEdit(id) { const p = this.state.promptLib.find(x => x.id === id); if (p) this.setState({ editingPromptId: id, draftTemplate: p.text, draftName: p.name || '' }); }
+  newPrompt() { this.setState({ editingPromptId: null, draftTemplate: '', draftName: '' }); }
+  savePrompt() {
+    const { editingPromptId, draftTemplate, draftName, promptLib } = this.state;
+    const text = (draftTemplate || '').trim(), name = (draftName || '').trim();
+    if (!text || !name) return;
+    if (editingPromptId) this.setState({ promptLib: promptLib.map(p => p.id === editingPromptId ? { ...p, name, text } : p) });
+    else { const id = 'p' + Date.now(); this.setState({ promptLib: [...promptLib, { id, name, text }], editingPromptId: id }); }
+  }
+  deletePrompt() {
+    const { editingPromptId, promptLib } = this.state; if (!editingPromptId) return;
+    const next = promptLib.filter(p => p.id !== editingPromptId), first = next[0];
+    this.setState(s => ({ promptLib: next, composerPrompts: { ...s.composerPrompts, [editingPromptId]: undefined }, editingPromptId: first ? first.id : null, draftTemplate: first ? first.text : '', draftName: first ? (first.name || '') : '' }));
+  }
+
+  openPersonsMgr(e) { if (e) e.stopPropagation(); try { window.scrollTo(0, 0); } catch (_) {} this.closeAll({ personsOpen: true, personDraftId: null, personDraftName: '', personDraftNote: '', samplesFor: null }); }
+  savePerson() {
+    const { personDraftId, personDraftName, personDraftNote, persons } = this.state;
+    const name = (personDraftName || '').trim(); if (!name) return;
+    if (personDraftId) this.setState({ persons: persons.map(p => p.id === personDraftId ? { ...p, name, note: personDraftNote } : p) });
+    else this.setState({ persons: [...persons, { id: 'v' + Date.now(), name, note: personDraftNote, samples: [] }] });
+    this.setState({ personDraftId: null, personDraftName: '', personDraftNote: '' });
+  }
+  mergePersons(sourceId, targetId) {
+    if (!targetId || targetId === sourceId) return;
+    const { persons } = this.state;
+    const src = persons.find(p => p.id === sourceId); if (!src) return;
+    this.setState({
+      persons: persons.filter(p => p.id !== sourceId).map(p => p.id === targetId ? { ...p, samples: [...p.samples, ...src.samples] } : p),
+      samplesFor: targetId,
+    });
+  }
+
+  openDeliveryMgr(e) { if (e) e.stopPropagation(); try { window.scrollTo(0, 0); } catch (_) {} this.closeAll({ deliveryOpen: true }); }
+  testConn(id) {
+    const outcomes = ['ok', 'unauthorized', 'timeout'];
+    this.setState(s => ({ connState: { ...s.connState, [id]: 'checking' } }));
+    clearTimeout(this['_ck' + id]);
+    this['_ck' + id] = setTimeout(() => {
+      const conn = this.CONNS.find(c => c.id === id);
+      const res = conn && conn.missing ? 'unreachable' : outcomes[Math.floor(Math.random() * outcomes.length)];
+      this.setState(s => ({ connState: { ...s.connState, [id]: res } }));
+    }, 900);
+  }
+
+  openAbout(id, e) { if (e) e.stopPropagation(); try { window.scrollTo(0, 0); } catch (_) {} this.closeAll({ aboutId: id }); }
+  openResolve(id, e) {
+    if (e) e.stopPropagation();
+    try { window.scrollTo(0, 0); } catch (_) {}
+    const row = this.allRows().find(r => r.id === id), draft = {};
+    ((row && row.speakers) || []).forEach(sp => { draft[sp.label] = (this.state.speakerMap[id] || {})[sp.label] || ''; });
+    this.closeAll({ resolveId: id, resolveDraft: draft });
+  }
+  saveResolve() {
+    const { resolveId, resolveDraft } = this.state;
+    this.setState(s => ({ speakerMap: { ...s.speakerMap, [resolveId]: { ...resolveDraft } }, resolveId: null }));
+  }
+
+  /* nested speaker picker: from the resolution dialog, from a task card, or from a sample move */
+  openPicker(ctx, e) { if (e) e.stopPropagation(); this.setState({ pickerFor: ctx, pickerQuery: '', pickerSort: 'distance' }); }
+  closePicker(e) { if (e) e.stopPropagation(); this.setState({ pickerFor: null }); }
+  assignFromPicker(personId) {
+    const ctx = this.state.pickerFor; if (!ctx) return;
+    if (ctx.kind === 'resolve') this.setState(s => ({ resolveDraft: { ...s.resolveDraft, [ctx.label]: personId }, pickerFor: null }));
+    else if (ctx.kind === 'task') this.setState(s => ({ speakerMap: { ...s.speakerMap, [ctx.taskId]: { ...(s.speakerMap[ctx.taskId] || {}), [ctx.label]: personId } }, pickerFor: null }));
+    else if (ctx.kind === 'sample') {
+      this.setState(s => ({
+        persons: s.persons.map(p => {
+          if (p.id === ctx.personId) return { ...p, samples: p.samples.filter(x => x.id !== ctx.sampleId) };
+          if (p.id === personId) { const moved = (s.persons.find(y => y.id === ctx.personId) || { samples: [] }).samples.find(x => x.id === ctx.sampleId); return moved ? { ...p, samples: [...p.samples, moved] } : p; }
+          return p;
+        }),
+        pickerFor: null, samplesFor: personId,
+      }));
+    }
+  }
+  createFromPicker() {
+    const name = (this.state.pickerQuery || '').trim();
+    if (!name) { this.openPersonsMgr(); this.setState({ pickerFor: null }); return; }
+    const id = 'v' + Date.now();
+    this.setState(s => ({ persons: [...s.persons, { id, name, note: 'создана при привязке', samples: [] }] }));
+    this.assignFromPicker(id);
+  }
+
+  renderVals() {
+    const S = this.state;
+    const {
+      theme, source, url, opts, lang, expanded, tabs, menuId, menuView, navOpen, notif, newBuild,
+      presets, presetId, presetOpen, presetsMgrOpen, presetMgrId, presetDraft, defaultPresetId,
+      renamingId, renameDraft, names, newRows, flashId, newAboveCount,
+      files, uploading, uploadPct, uploadIdx,
+      filterQ, filterSrc, dateFrom, dateTo, shown,
+      tokensOpen, promptsOpen, promptPickerOpen, composerPrompts, promptLib, editingPromptId, draftTemplate, draftName, promptTextOpen,
+      personsOpen, persons, personDraftId, personDraftName, personDraftNote, samplesFor,
+      deliveryOpen, deliveryTab, deliveryPickerOpen, composerTargets, connState,
+      aboutId, resolveId, resolveDraft, speakerMap, pickerFor, pickerQuery, pickerSort, vw,
+    } = S;
+
+    const promptCount = Object.values(composerPrompts).filter(Boolean).length;
+    const summaryOn = promptCount > 0;
+    const targetCount = Object.values(composerTargets).filter(Boolean).length;
+    const on = (b) => b ? 'is-on' : '';
+    const q = filterQ.trim().toLowerCase();
+
+    const matched = [...newRows, ...this.RAW].filter(r => {
+      if (q && (names[r.id] || r.title).toLowerCase().indexOf(q) < 0 && r.source.toLowerCase().indexOf(q) < 0) return false;
+      if (filterSrc !== 'all' && (r.src || 'url') !== filterSrc) return false;
+      if (dateFrom && (r.date || '') < dateFrom) return false;
+      if (dateTo && (r.date || '') > dateTo) return false;
+      return true;
+    });
+    const rows = matched.slice(0, shown);
+    const allRows = [...newRows, ...this.RAW];
+    const personName = (id) => (persons.find(p => p.id === id) || {}).name || '';
+
+    const tasks = rows.map(r => {
+      const isExp = !!expanded[r.id];
+      const activeTab = tabs[r.id] || 'transcript';
+      const expired = !!r.expired;
+      const indet = !!r.localIndet && r.status === 'running';
+      const results = this.PROMPT_RESULTS[r.id] || [];
+      const promptDefs = results.map((p, i) => {
+        const src = this.promptById(p.promptId);
+        return { key: 'prompt' + i, label: src.name || 'Промпт', title: Component.preview(src.text, 90), ready: !!p.result };
+      });
+      const defs = [
+        { key: 'transcript', label: 'Сырой транскрипт', ready: !!r.content.transcript },
+        { key: 'redacted', label: 'Обработанный', ready: !!r.content.redacted },
+        ...(results.length ? [] : [{ key: 'summary', label: 'Сводка', ready: !!r.content.summary }]),
+        ...promptDefs,
+        { key: 'log', label: 'Лог', ready: true },
+      ];
+      const promptIdx = activeTab.indexOf('prompt') === 0 ? parseInt(activeTab.slice(6), 10) : -1;
+      const pr = promptIdx >= 0 ? results[promptIdx] : null;
+      const prText = pr ? this.promptById(pr.promptId).text : '';
+      const openKey = r.id + ':' + promptIdx;
+      const playable = !!r.content.transcript && !expired;
+
+      return {
+        id: r.id,
+        cardClass: ['task', 'status-' + r.status, isExp ? 'is-open' : '', menuId === r.id ? 'menu-open' : '', flashId === r.id ? 'is-flash' : '', expired ? 'task-expired' : ''].filter(Boolean).join(' '),
+        title: names[r.id] || r.title,
+        playerHref: '#player/' + r.id,
+        playerClass: playable ? '' : 'disabled',
+        playerTitle: playable ? 'Открыть плеер с транскриптом' : (expired ? 'Медиафайл удалён — плеер недоступен' : 'Транскрипт ещё не готов'),
+        playerMenuClass: playable ? '' : 'disabled',
+        dlClass: expired ? 'disabled' : '',
+        expired,
+        isUrlTask: (r.src || 'url') !== 'file',
+        sourceHref: 'https://' + String(r.source).replace(/^https?:\/\//, ''),
+        source: r.source,
+        info: r.meta,
+        hasStats: !!(r.stats && r.stats.length),
+        stats: (r.stats || []).map(text => ({ text })),
+        statusLabel: r.queuePos ? this.LABELS[r.status] + ' #' + r.queuePos : this.LABELS[r.status],
+        runtime: r.runtime,
+        showPause: r.status === 'running',
+        showResume: r.status === 'paused' || r.status === 'failed',
+        onPause: (e) => e.stopPropagation(),
+        onResume: (e) => e.stopPropagation(),
+        onMenu: (e) => this.toggleMenu(r.id, e),
+        menuOpen: menuId === r.id,
+        menuBtnClass: menuId === r.id ? 'active' : '',
+        menuMain: menuView !== 'restart', menuRestart: menuView === 'restart',
+        onOpenRestart: (e) => { e.stopPropagation(); this.setState({ menuView: 'restart' }); },
+        onMenuBack: (e) => { e.stopPropagation(); this.setState({ menuView: 'main' }); },
+        onAbout: (e) => this.openAbout(r.id, e),
+        onToggle: () => this.toggleExpand(r.id),
+        expanded: isExp,
+        renaming: renamingId === r.id, notRenaming: renamingId !== r.id,
+        renameValue: renamingId === r.id ? renameDraft : '',
+        onRenameInput: (e) => this.setState({ renameDraft: e.target.value }),
+        onRenameStart: (e) => this.startRename(r.id, e),
+        onRenameSave: (e) => this.saveRename(e),
+        onRenameCancel: (e) => { e.stopPropagation(); this.setState({ renamingId: null }); },
+        stepLabel: r.stepLabel, stepTime: r.stepTime,
+        showProgress: r.status !== 'completed' && r.status !== 'archived' && r.status !== 'canceled',
+        overall: r.overall,
+        localClass: indet ? 'indeterminate' : '',
+        localWidth: indet ? '42%' : (r.local + '%'),
+        localText: indet ? 'выполняется' : (r.local + '%'),
+        hasMessage: !!r.message, message: r.message || '',
+        needsSpeakers: r.status === 'awaiting_input',
+        speakerCta: 'Найдено ' + ((r.speakers || []).length) + ' голоса — привяжите их к персонам, чтобы продолжить обработку',
+        onOpenSpeakers: (e) => this.openResolve(r.id, e),
+        hasSpeakers: !!(r.speakers && r.speakers.length) && r.status !== 'awaiting_input',
+        speakerSummary: (r.speakers || []).length + ' голоса в записи',
+        speakers: (r.speakers || []).map(sp => {
+          const bound = (speakerMap[r.id] || {})[sp.label] || '';
+          return {
+            label: sp.label, share: sp.share,
+            rowClass: bound ? '' : 'unbound',
+            avatarClass: bound ? 'bound' : '',
+            initials: bound ? Component.initials(personName(bound)) : '?',
+            pickLabel: bound ? personName(bound) : 'Выбрать персону',
+            onPick: (e) => this.openPicker({ kind: 'task', taskId: r.id, label: sp.label, suggestions: sp.suggestions || [] }, e),
+          };
+        }),
+        tabs: defs.map(td => ({
+          label: td.label, title: td.title || '',
+          cls: [td.key === activeTab ? 'active' : '', td.ready ? '' : 'disabled'].filter(Boolean).join(' '),
+          onClick: () => { if (td.ready || td.key === activeTab) this.setTab(r.id, td.key); },
+        })),
+        tabBody: r.content[activeTab] || '',
+        isPromptTab: promptIdx >= 0, isTextTab: promptIdx < 0,
+        promptText: prText,
+        promptName: pr ? (this.promptById(pr.promptId).name || 'Промпт') : '',
+        promptMeta: pr ? Component.meta(prText) : '',
+        promptOpenClass: promptTextOpen[openKey] ? 'open' : '',
+        promptToggleLabel: promptTextOpen[openKey] ? 'Свернуть' : 'Показать полностью',
+        togglePromptText: (e) => { e.stopPropagation(); this.setState(s => ({ promptTextOpen: { ...s.promptTextOpen, [openKey]: !s.promptTextOpen[openKey] } })); },
+        promptResult: pr ? pr.result : '',
+        promptReady: !!(pr && pr.result), promptPending: !!(pr && !pr.result),
+      };
+    });
+
+    const aboutRow = allRows.find(x => x.id === aboutId);
+    const resolveRow = allRows.find(x => x.id === resolveId);
+
+    /* nested picker rows */
+    const pickerSuggest = {};
+    ((pickerFor && pickerFor.suggestions) || []).forEach(([pid, score]) => { pickerSuggest[pid] = score; });
+    const pq = (pickerQuery || '').trim().toLowerCase();
+    let pickerList = persons.filter(p => !pq || p.name.toLowerCase().indexOf(pq) >= 0);
+    if (pickerSort === 'alpha') pickerList = [...pickerList].sort((a, b) => a.name.localeCompare(b.name));
+    else pickerList = [...pickerList].sort((a, b) => (parseInt(pickerSuggest[b.id] || '0', 10) - parseInt(pickerSuggest[a.id] || '0', 10)));
+    const pickerBound = pickerFor
+      ? (pickerFor.kind === 'resolve' ? (resolveDraft[pickerFor.label] || '')
+        : pickerFor.kind === 'task' ? ((speakerMap[pickerFor.taskId] || {})[pickerFor.label] || '') : '')
+      : '';
+
+    return {
+      onRootClick: () => { if (this.state.menuId) this.setState({ menuId: null }); },
+      stop: (e) => e.stopPropagation(),
+
+      /* theme */
+      themeIsDark: theme === 'dark', themeIsLight: theme !== 'dark',
+      themeTitle: theme === 'dark' ? 'Светлая тема' : 'Тёмная тема',
+      toggleTheme: (e) => this.toggleTheme(e),
+
+      /* top bar */
+      toggleNav: (e) => { e.stopPropagation(); this.setState(s => ({ navOpen: !s.navOpen, menuId: null })); },
+      navOpen, navBtnClass: navOpen ? 'active' : '',
+      toggleNotif: (e) => { e.stopPropagation(); this.setState(s => ({ notif: !s.notif })); },
+      notifBadge: notif ? 'вкл' : 'выкл',
+      notifBadgeClass: notif ? 'accent' : 'info',
+      appVersion: '2.4.1', newBuild,
+      reloadApp: (e) => { e.stopPropagation(); this.setState({ newBuild: false, navOpen: false }); },
+
+      /* composer */
+      urlMode: source === 'url', fileMode: source === 'file',
+      urlTabClass: source === 'url' ? 'active' : '', fileTabClass: source === 'file' ? 'active' : '',
+      setSourceUrl: () => this.setSource('url'), setSourceFile: () => this.setSource('file'),
+      urlValue: url, onUrlInput: (e) => this.onUrl(e),
+      noFiles: files.length === 0, hasFiles: files.length > 0,
+      fileRows: files.map((x, i) => ({ num: (i + 1) + '.', name: x.name, size: x.size, onRemove: (e) => this.removeFile(x.name, e) })),
+      filesSummary: files.length + (files.length === 1 ? ' файл' : (files.length < 5 ? ' файла' : ' файлов')) + ' — одна задача, части обрабатываются по порядку',
+      pickFiles: (e) => this.pickFiles(e),
+      submitTask: (e) => this.submitTask(e),
+      uploading, idle: !uploading, uploadPct,
+      uploadOffset: 56.55 * (1 - uploadPct / 100),
+      toastOpen: uploading,
+      toastCount: ((uploadIdx || 0) + 1) + ' / ' + Math.max(files.length, 1),
+      toastFile: files[uploadIdx || 0] ? files[uploadIdx || 0].name : '',
+      toastFilesPct: files.length ? Math.round(((uploadIdx || 0) / files.length) * 100) : 0,
+
+      audioOn: opts.audio, transcriptOn: opts.transcript, speakersOn: opts.speakers, noStopOn: opts.noStop, summaryOn,
+      audioClass: on(opts.audio), transcriptClass: on(opts.transcript), diarizeClass: on(opts.speakers),
+      noStopClass: on(opts.noStop), summaryClass: on(summaryOn),
+      toggleAudio: () => this.toggleOpt('audio'),
+      toggleTranscript: () => this.toggleOpt('transcript'),
+      toggleSpeakers: () => this.setState(s => ({ opts: { ...s.opts, speakers: !s.opts.speakers, noStop: s.opts.speakers ? false : s.opts.noStop } })),
+      toggleNoStop: () => this.toggleOpt('noStop'),
+      lang, onLang: (e) => this.setState({ lang: e.target.value }),
+
+      togglePresetMenu: (e) => { e.stopPropagation(); this.setState(s => ({ presetOpen: !s.presetOpen, promptPickerOpen: false, deliveryPickerOpen: false, menuId: null })); },
+      presetOpen,
+      presetName: (presets.find(p => p.id === presetId) || {}).name || 'Без пресета',
+      presetDirty: this.isDirty(),
+      presetRows: presets.map(p => ({
+        name: p.name, summary: this.presetSummary(p),
+        cls: p.id === presetId ? 'is-on' : '', tickOpacity: p.id === presetId ? 1 : 0,
+        onPick: () => this.applyPreset(p.id),
+      })),
+      savePreset: (e) => this.savePreset(e),
+      savePresetAsNew: (e) => this.savePresetAsNew(e),
+
+      togglePromptPicker: (e) => { e.stopPropagation(); this.setState(s => ({ promptPickerOpen: !s.promptPickerOpen, presetOpen: false, deliveryPickerOpen: false, menuId: null })); },
+      promptPickerOpen,
+      summaryPillLabel: promptCount > 1 ? ('Сводка · ' + promptCount) : 'Сводка',
+      summaryPillTitle: (() => {
+        const picked = promptLib.filter(p => composerPrompts[p.id]).map(p => p.name || 'без названия');
+        return picked.length
+          ? ('Промпты для обработанного транскрипта: ' + picked.join(', ') + '. Каждый даёт отдельный артефакт задачи')
+          : 'Промпты для обработанного транскрипта: ни один не выбран — суммаризация не запустится';
+      })(),
+      promptPickRows: [...promptLib].sort((x, y) => (y.system ? 1 : 0) - (x.system ? 1 : 0)).map(p => {
+        const sel = !!composerPrompts[p.id];
+        return {
+          label: p.name || 'Без названия', sub: Component.preview(p.text, 96),
+          labelClass: 'strong', system: !!p.system,
+          meta: Component.meta(p.text), on: sel,
+          cls: sel ? 'is-on' : '', markClass: sel ? 'is-on' : '',
+          onToggle: () => this.setState(s => ({ composerPrompts: { ...s.composerPrompts, [p.id]: !s.composerPrompts[p.id] } })),
+        };
+      }),
+
+      hasAdapters: this.ADAPTERS.length > 0, noAdapters: this.ADAPTERS.length === 0,
+      toggleDeliveryPicker: (e) => { e.stopPropagation(); this.setState(s => ({ deliveryPickerOpen: !s.deliveryPickerOpen, promptPickerOpen: false, presetOpen: false, menuId: null })); },
+      deliveryPickerOpen, deliveryClass: on(targetCount > 0),
+      hasComposerTargets: targetCount > 0, composerTargetCount: targetCount,
+      deliveryPillTitle: (() => {
+        const picked = this.TARGETS.filter(t => composerTargets[t.id]).map(t => t.name);
+        return picked.length
+          ? ('Готовый результат уйдёт в: ' + picked.join(', '))
+          : 'Куда отправить готовый результат — ни одно назначение не выбрано';
+      })(),
+      deliveryPickRows: this.TARGETS.map(t => {
+        const sel = !!composerTargets[t.id];
+        return {
+          name: t.name, detail: t.detail, on: sel, cls: sel ? 'is-on' : '', markClass: sel ? 'is-on' : '',
+          onToggle: () => this.setState(s => ({ composerTargets: { ...s.composerTargets, [t.id]: !s.composerTargets[t.id] } })),
+        };
+      }),
+
+      /* tasks + filters */
+      tasks, taskCount: matched.length,
+      filterQ, onFilterQ: (e) => this.setState({ filterQ: e.target.value, shown: 6 }),
+      srcFilterRows: [['all', 'Все'], ['url', 'URL'], ['file', 'Файл']].map(([k, label]) => ({
+        label, cls: filterSrc === k ? 'active' : '', onPick: () => this.setState({ filterSrc: k, shown: 6 }),
+      })),
+      dateFrom, dateTo,
+      onDateFrom: (e) => this.setState({ dateFrom: e.target.value, shown: 6 }),
+      onDateTo: (e) => this.setState({ dateTo: e.target.value, shown: 6 }),
+      filtersActive: !!(q || filterSrc !== 'all' || dateFrom || dateTo),
+      resetFilters: () => this.setState({ filterQ: '', filterSrc: 'all', dateFrom: '', dateTo: '', shown: 6 }),
+      noMatches: matched.length === 0,
+      hasNewAbove: newAboveCount > 0, newAboveCount: '+' + newAboveCount,
+      dismissNewAbove: () => { try { window.scrollTo(0, 0); } catch (_) {} this.setState({ newAboveCount: 0 }); },
+      hasMore: matched.length > rows.length,
+      allLoaded: matched.length > 0 && matched.length === rows.length,
+      moreLabel: 'Загрузить ещё — осталось ' + (matched.length - rows.length),
+      shownLabel: 'Показаны все задачи: ' + matched.length,
+      loadMore: () => this.setState(s => ({ shown: s.shown + 6 })),
+
+      /* prompts manager */
+      openPrompts: (e) => this.openPrompts(e),
+      closePrompts: () => this.setState({ promptsOpen: false }),
+      promptsOpen,
+      promptList: promptLib.map(p => ({
+        name: p.name || 'Без названия',
+        preview: Component.preview(p.text, 110),
+        meta: Component.meta(p.text), system: !!p.system,
+        cls: p.id === editingPromptId ? 'active' : '',
+        onSelect: () => this.selectPromptEdit(p.id),
+      })),
+      newPrompt: () => this.newPrompt(),
+      savePrompt: () => this.savePrompt(),
+      deletePrompt: () => this.deletePrompt(),
+      duplicatePrompt: () => { const id = 'p' + Date.now(); this.setState(s => ({ promptLib: [...s.promptLib, { id, name: (s.draftName || 'Промпт') + ' (копия)', text: s.draftTemplate }], editingPromptId: id, draftName: (s.draftName || 'Промпт') + ' (копия)' })); },
+      canDeleteDraft: !!editingPromptId && !this.promptById(editingPromptId).system,
+      draftReadOnly: !!this.promptById(editingPromptId).system,
+      draftEditable: !this.promptById(editingPromptId).system,
+      draftTemplate, draftMeta: Component.meta(draftTemplate),
+      draftName, onDraftName: (e) => this.setState({ draftName: e.target.value }),
+      onDraftTemplate: (e) => this.setState({ draftTemplate: e.target.value }),
+
+      /* presets manager */
+      openPresets: (e) => this.openPresetsMgr(e),
+      closePresets: () => this.setState({ presetsMgrOpen: false }),
+      presetsMgrOpen,
+      presetMgrRows: presets.map(p => ({
+        name: p.name, summary: this.presetSummary(p), isDefault: p.id === defaultPresetId,
+        cls: p.id === presetMgrId ? 'active' : '', onSelect: () => this.selectPresetMgr(p.id),
+      })),
+      newPreset: () => this.setState({ presetMgrId: null, presetDraft: this.blankDraft() }),
+      presetDraftName: presetDraft ? presetDraft.name : '',
+      onPresetDraftName: (e) => this.patchDraft({ name: e.target.value }),
+      presetDraftLang: presetDraft ? presetDraft.lang : '',
+      onPresetDraftLang: (e) => this.patchDraft({ lang: e.target.value }),
+      presetDraftOpts: [['audio', 'Только аудио'], ['transcript', 'Транскрипт'], ['speakers', 'Спикеры'], ['noStop', 'Не останавливаться после диаризации']].map(([k, label]) => {
+        const val = !!(presetDraft && presetDraft.opts[k]);
+        return { label, on: val, cls: on(val), onToggle: () => this.patchDraft({ opts: { ...presetDraft.opts, [k]: !val } }) };
+      }),
+      presetDraftPrompts: [...promptLib].sort((x, y) => (y.system ? 1 : 0) - (x.system ? 1 : 0)).map(p => {
+        const sel = !!(presetDraft && presetDraft.prompts.indexOf(p.id) >= 0);
+        return {
+          label: p.name || 'Без названия', labelClass: 'strong', system: !!p.system,
+          on: sel, cls: sel ? 'is-on' : '', markClass: sel ? 'is-on' : '',
+          onToggle: () => this.patchDraft({ prompts: sel ? presetDraft.prompts.filter(x => x !== p.id) : [...presetDraft.prompts, p.id] }),
+        };
+      }),
+      presetIsDefault: presetMgrId === defaultPresetId,
+      defaultPresetClass: presetMgrId === defaultPresetId ? 'is-on' : '',
+      toggleDefaultPreset: () => this.setState(s => ({ defaultPresetId: s.presetMgrId === s.defaultPresetId ? null : s.presetMgrId })),
+      presetStale: !!(presetDraft && presetDraft.prompts.some(id => !promptLib.find(p => p.id === id))),
+      canDeletePreset: !!presetMgrId,
+      savePresetMgr: () => this.savePresetMgr(),
+      deletePresetMgr: () => this.deletePresetMgr(),
+
+      /* voice registry */
+      openPersons: (e) => this.openPersonsMgr(e),
+      closePersons: () => this.setState({ personsOpen: false }),
+      personsOpen,
+      personRows: persons.map(p => {
+        const editing = personDraftId === p.id, isOpen = samplesFor === p.id;
+        return {
+          name: p.name, note: p.note || 'без подсказки', initials: Component.initials(p.name),
+          cls: editing ? 'editing' : '', avatarClass: editing ? 'bound' : '',
+          sampleCount: p.samples.length, samplesOpen: isOpen, samplesClass: isOpen ? 'active' : '',
+          hasSamples: p.samples.length > 0, noSamples: p.samples.length === 0,
+          samples: p.samples.map(sm => ({
+            label: sm.label, dur: sm.dur,
+            onPlay: (e) => e.stopPropagation(),
+            onMove: (e) => this.openPicker({ kind: 'sample', personId: p.id, sampleId: sm.id, suggestions: [] }, e),
+            onDelete: (e) => { e.stopPropagation(); this.setState(s => ({ persons: s.persons.map(x => x.id === p.id ? { ...x, samples: x.samples.filter(y => y.id !== sm.id) } : x) })); },
+          })),
+          mergeValue: '',
+          mergeOptions: persons.filter(x => x.id !== p.id).map(x => ({ id: x.id, name: x.name })),
+          onMerge: (e) => this.mergePersons(p.id, e.target.value),
+          onSamples: (e) => { e.stopPropagation(); this.setState(s => ({ samplesFor: s.samplesFor === p.id ? null : p.id })); },
+          onEdit: (e) => { e.stopPropagation(); this.setState({ personDraftId: p.id, personDraftName: p.name, personDraftNote: p.note || '' }); },
+          onDelete: (e) => { e.stopPropagation(); this.setState(s => ({ persons: s.persons.filter(x => x.id !== p.id), samplesFor: null, personDraftId: s.personDraftId === p.id ? null : s.personDraftId })); },
+        };
+      }),
+      personFormTitle: personDraftId ? 'Изменить персону' : 'Новая персона',
+      personSaveLabel: personDraftId ? 'Сохранить' : 'Добавить',
+      personEditing: !!personDraftId,
+      personDraftName, personDraftNote,
+      onPersonName: (e) => this.setState({ personDraftName: e.target.value }),
+      onPersonNote: (e) => this.setState({ personDraftNote: e.target.value }),
+      savePerson: () => this.savePerson(),
+      cancelPerson: () => this.setState({ personDraftId: null, personDraftName: '', personDraftNote: '' }),
+
+      /* delivery */
+      openDelivery: (e) => this.openDeliveryMgr(e),
+      closeDelivery: () => this.setState({ deliveryOpen: false }),
+      deliveryOpen,
+      dlvTabs: [['conn', 'Подключения'], ['dest', 'Назначения']].map(([k, label]) => ({
+        label, cls: deliveryTab === k ? 'active' : '', onPick: () => this.setState({ deliveryTab: k }),
+      })),
+      dlvConnTab: deliveryTab === 'conn', dlvDestTab: deliveryTab === 'dest',
+      connRows: this.CONNS.map(c => {
+        const st = this.CHECK[connState[c.id] || 'unknown'];
+        return { name: c.name, adapter: c.adapter, adapterMissing: c.missing, status: st.label, cls: st.cls, onTest: () => this.testConn(c.id) };
+      }),
+      destRows: this.TARGETS.map(t => ({ name: t.name, detail: t.detail, conn: t.conn })),
+
+      /* about */
+      aboutOpen: !!aboutId,
+      closeAbout: () => this.setState({ aboutId: null }),
+      aboutTitle: aboutRow ? (names[aboutRow.id] || aboutRow.title) : '',
+      aboutSource: aboutRow ? aboutRow.source : '',
+      aboutRows: aboutRow ? (() => {
+        const LANG = { '': 'авто', ru: 'русский', en: 'английский', de: 'немецкий', fr: 'французский', es: 'испанский' };
+        return [
+          { k: 'Идентификатор', v: aboutRow.id },
+          { k: 'Статус', v: this.LABELS[aboutRow.status] },
+          { k: 'Тип источника', v: (aboutRow.src || 'url') === 'file' ? ((aboutRow.parts || 1) > 1 ? aboutRow.parts + ' загруженных файла' : 'загруженный файл') : 'ссылка' },
+          { k: 'Создана', v: aboutRow.date || '—' },
+          { k: 'Длительность', v: aboutRow.meta },
+          { k: 'Время обработки', v: aboutRow.runtime },
+          { k: 'Язык', v: LANG[lang] },
+          { k: 'Диаризация', v: opts.speakers ? 'включена' : 'выключена' },
+          { k: 'Медиафайл', v: aboutRow.expired ? 'удалён политикой хранения' : 'доступен' },
+          { k: 'Артефакты', v: (aboutRow.stats || ['—']).join(' · ') },
+        ];
+      })() : [],
+      aboutSteps: aboutRow ? (() => {
+        const m = /Шаг (\d+)/.exec(aboutRow.stepLabel || '');
+        const cur = m ? parseInt(m[1], 10) : ((aboutRow.status === 'completed' || aboutRow.status === 'archived') ? 13 : 0);
+        return this.STEPS.map((name, i) => {
+          const n = i + 1;
+          let cls = '', status = 'ожидает';
+          if (n < cur) { cls = 'done'; status = 'готово'; }
+          else if (n === cur) {
+            if (aboutRow.status === 'failed') { cls = 'fail'; status = 'ошибка'; }
+            else if (aboutRow.status === 'canceled') { status = 'пропущен'; }
+            else { cls = 'run'; status = 'выполняется'; }
+          }
+          return { name: n + '. ' + name, status, cls, dur: cls === 'done' ? ((n * 7 % 4 + 1) + ':' + String(n * 13 % 60).padStart(2, '0')) : '—' };
+        });
+      })() : [],
+
+      /* voice resolution */
+      resolveOpen: !!resolveId,
+      closeResolve: () => this.setState({ resolveId: null }),
+      resolveTaskTitle: resolveRow ? (names[resolveRow.id] || resolveRow.title) : '',
+      resolveRows: resolveRow ? (resolveRow.speakers || []).map(sp => {
+        const v = resolveDraft[sp.label] || '';
+        return {
+          label: sp.label, share: 'доля речи ' + sp.share,
+          cls: v ? '' : 'unbound',
+          pickLabel: v ? personName(v) : 'Выбрать персону',
+          pickClass: v ? 'active' : '',
+          onPick: (e) => this.openPicker({ kind: 'resolve', label: sp.label, suggestions: sp.suggestions || [] }, e),
+          hasSuggestion: (sp.suggestions || []).length > 0,
+          suggestions: (sp.suggestions || []).map(([pid, score]) => ({
+            name: personName(pid), score,
+            onPick: (e) => { e.stopPropagation(); this.setState(s => ({ resolveDraft: { ...s.resolveDraft, [sp.label]: pid } })); },
+          })),
+          onPlay: (e) => e.stopPropagation(),
+        };
+      }) : [],
+      saveResolve: () => this.saveResolve(),
+      saveResolveContinue: () => this.saveResolve(),
+
+      /* nested speaker picker */
+      pickerOpen: !!pickerFor,
+      closePicker: (e) => this.closePicker(e),
+      pickerTitle: pickerFor && pickerFor.kind === 'sample' ? 'Перенести фрагмент' : 'Выбрать персону',
+      pickerSub: pickerFor
+        ? (pickerFor.kind === 'sample' ? 'Фрагмент перейдёт к выбранной персоне' : ('Голос: ' + pickerFor.label))
+        : '',
+      pickerSpeakerLabel: pickerFor ? (pickerFor.label || '') : '',
+      pickerQuery, onPickerQuery: (e) => this.setState({ pickerQuery: e.target.value }),
+      pickerSortDistClass: pickerSort === 'distance' ? 'active' : '',
+      pickerSortAlphaClass: pickerSort === 'alpha' ? 'active' : '',
+      sortByDistance: (e) => { e.stopPropagation(); this.setState({ pickerSort: 'distance' }); },
+      sortByAlpha: (e) => { e.stopPropagation(); this.setState({ pickerSort: 'alpha' }); },
+      pickerEmpty: pickerList.length === 0,
+      pickerHasUnbind: !!(pickerFor && pickerFor.kind !== 'sample'),
+      unbindPicker: (e) => { e.stopPropagation(); this.assignFromPicker(''); },
+      pickerRows: pickerList.map(p => ({
+        name: p.name, note: p.note || 'без подсказки', initials: Component.initials(p.name),
+        cls: p.id === pickerBound ? 'active' : '',
+        avatarClass: p.id === pickerBound ? 'bound' : '',
+        hasScore: !!pickerSuggest[p.id], score: pickerSuggest[p.id] || '',
+        onPick: (e) => { e.stopPropagation(); this.assignFromPicker(p.id); },
+      })),
+      pickerCreateLabel: (pickerQuery || '').trim() ? ('Создать «' + (pickerQuery || '').trim() + '»') : 'Новая персона',
+      createFromPicker: () => this.createFromPicker(),
+
+      /* tokens */
+      openTokens: (e) => { if (e) e.stopPropagation(); try { window.scrollTo(0, 0); } catch (_) {} this.closeAll({ tokensOpen: true }); },
+      closeTokens: () => this.setState({ tokensOpen: false }),
+      tokensOpen,
+    };
+  }
+}
+</script>
+</body>
+</html>
