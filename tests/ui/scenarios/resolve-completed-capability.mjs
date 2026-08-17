@@ -87,19 +87,25 @@ export async function run() {
     await page.waitForSelector(`[data-task-id="${RUNNING_ID}"]`, { timeout: 5000 });
 
     // --- completed + can_resolve_speakers:true -> button visible ---
+    // The entry moved into the task kebab, so this asks whether it is OFFERED
+    // (not .hidden) rather than whether it is painted — a row inside a closed
+    // menu is legitimately invisible either way.
+    const offered = (sel) => page.$eval(sel, (el) => !el.classList.contains("hidden")).catch(() => false);
     const doneBtn = `[data-task-id="${DONE_ID}"] .resolve-voices-btn`;
-    if (!(await isVisible(page, doneBtn))) {
-      failures.push("resolve-voices-btn should be visible on a completed task with can_resolve_speakers:true");
+    if (!(await offered(doneBtn))) {
+      failures.push("resolve entry should be offered on a completed task with can_resolve_speakers:true");
     }
 
     // --- running before match_speakers, can_resolve_speakers:false -> hidden ---
     const runningBtn = `[data-task-id="${RUNNING_ID}"] .resolve-voices-btn`;
-    if (await isVisible(page, runningBtn)) {
-      failures.push("resolve-voices-btn should be hidden on a running task before match_speakers without can_resolve_speakers");
+    if (await offered(runningBtn)) {
+      failures.push("resolve entry should be withheld on a running task before match_speakers without can_resolve_speakers");
     }
 
     // --- open the dialog on the completed task: "Save & continue" hidden
     // (not paused), but "Save" and "Cancel" present ---
+    await clickReal(page, `[data-task-id="${DONE_ID}"] .task-menu-btn`);
+    await page.waitForTimeout(200);
     await clickReal(page, doneBtn);
     await page.waitForTimeout(300);
     if (!(await dialogOpen(page, "voice-resolution-dialog"))) {

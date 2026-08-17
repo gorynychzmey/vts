@@ -144,6 +144,9 @@ export async function run() {
     }
 
     // Open the resolve dialog and Save.
+    // Resolve moved into the task kebab (redesign v2): open it first.
+    await page.click(`${cardSel} .task-menu-btn`);
+    await page.waitForTimeout(200);
     await page.click(`${cardSel} .resolve-voices-btn`);
     await page.waitForTimeout(300);
     const dlgOpen = await page.$eval("#voice-resolution-dialog", (d) => d.open === true).catch(() => false);

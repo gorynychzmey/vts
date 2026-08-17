@@ -103,6 +103,9 @@ export async function run() {
       );
     }
 
+    // Resolve moved into the task kebab (redesign v2): open it first.
+    await clickReal(page, `[data-task-id="${DONE_ID}"] .task-menu-btn`);
+    await page.waitForTimeout(200);
     await clickReal(page, `[data-task-id="${DONE_ID}"] .resolve-voices-btn`);
     await page.waitForTimeout(400);
     if (!(await dialogOpen(page, "voice-resolution-dialog"))) {

@@ -121,7 +121,10 @@ export async function run() {
   const browser = await launch();
   const failures = [];
   try {
-    const { page, errors } = await openPage(browser, baseUrl);
+    // Taller than the default: this scenario opens the task kebab, which is
+    // placed below its trigger — at 700px the menu lands off-screen and the
+    // click times out (same reason restart-dialog sets its own viewport).
+    const { page, errors } = await openPage(browser, baseUrl, { width: 1100, height: 1000 });
 
     // ANTI-FLICKER: closed dialog must be display:none right after boot.
     const closedDisplay = await page.evaluate(() => {
@@ -135,12 +138,25 @@ export async function run() {
     // --- "Доработать" button renders for a needs_input task ---
     await page.waitForSelector(`[data-task-id="${TASK_ID}"]`, { timeout: 5000 });
     const resolveBtn = `[data-task-id="${TASK_ID}"] .resolve-voices-btn`;
-    if (!(await isVisible(page, resolveBtn))) {
-      failures.push("resolve-voices-btn not visible on an awaiting_input/match_speakers task");
+    // Resolve lives in the task kebab (redesign v2), and closing the dialog also
+    // closes that menu — so every reopen has to go through it. A helper because
+    // this scenario reopens the dialog five times.
+    const openResolve = async () => {
+      await clickReal(page, `[data-task-id="${TASK_ID}"] .task-menu-btn`);
+      await page.waitForTimeout(200);
+      await clickReal(page, resolveBtn);
+    };
+    // The entry lives in the task kebab now, so "is it offered?" is a question
+    // about the .hidden class rather than about paint: a row in a closed menu is
+    // legitimately not visible.
+    const resolveOffered = await page.$eval(resolveBtn, (el) => !el.classList.contains("hidden"))
+      .catch(() => false);
+    if (!resolveOffered) {
+      failures.push("resolve entry not offered on an awaiting_input/match_speakers task");
     }
 
     // --- opens the dialog ---
-    await clickReal(page, resolveBtn);
+    await openResolve();
     await page.waitForTimeout(300);
     if (!(await dialogOpen(page, "voice-resolution-dialog"))) {
       failures.push("voice-resolution-dialog did not open");
@@ -253,79 +269,63 @@ export async function run() {
     const autoNameVisible = await isVisible(page, `${rowSelector("SPEAKER_00")} .voice-new-name`);
     if (autoNameVisible) failures.push("auto row: name input should be hidden while bound to an existing person");
 
-    // --- preview audio element: has a src pointing at the preview route,
-    // URL-encoded label, controls enabled (vts-80i task 14.5) ---
-    const audioInfo = await page.evaluate((sel) => {
-      const el = document.querySelector(sel + " audio.voice-preview-audio");
-      return el ? { src: el.getAttribute("src"), controls: el.controls } : null;
-    }, rowSelector("SPEAKER_00"));
-    if (!audioInfo) {
-      failures.push("SPEAKER_00 row: no audio.voice-preview-audio element found");
-    } else {
-      const expectedSrc = `/api/tasks/${TASK_ID}/speaker-previews/SPEAKER_00/0/audio`;
-      if (audioInfo.src !== expectedSrc) {
-        failures.push(`audio src wrong: got ${JSON.stringify(audioInfo.src)}, expected ${JSON.stringify(expectedSrc)}`);
-      }
-      if (!audioInfo.controls) failures.push("audio element should have controls enabled");
-    }
-
-    // --- the preview src must be built by buildPath (like the voice-sample
-    // player), not a bare string. Under acting-as, buildPath appends the
-    // as_user param the endpoint needs to authorize the fetch; the bare URL
-    // dropped it, so every preview 404'd and showed "unavailable" with a 0:00
-    // player for an admin viewing another user's task (vts-552).
+    // --- preview src: still built by buildPath, still pointing at the preview
+    // route with a URL-encoded label.
     //
-    // state.actingAs is module-scoped (not on window), so this can't drive the
-    // real acting-as toggle here without exposing internals for a test. Instead
-    // assert the src is buildPath's output for the no-acting case: it must equal
-    // buildPath(rawPath) exactly (pathname[+search]), which fails for a bare
-    // template string only if the path is malformed — and pins the call site so
-    // a future edit back to a bare URL is caught by the assertion below AND by
-    // the src-shape check above. buildPath is exercised for real here (same fn
-    // that adds as_user), so a regression that stops routing through it changes
-    // this value. ---
-    const builtSrc = await page.evaluate((sel) => {
-      const el = document.querySelector(sel + " audio.voice-preview-audio");
-      if (!el) return null;
-      const raw = el.getAttribute("src");
-      // A buildPath()-produced src is always same-origin-relative (pathname +
-      // optional search), never absolute. A raw new-URL round-trip of the same
-      // path must reproduce it byte-for-byte.
+    // The per-row <audio controls> became a play/stop button backed by one
+    // shared Audio() (redesign v2), so the src only exists after a click. The
+    // reason to keep asserting it is unchanged and specific: under acting-as,
+    // buildPath appends the as_user param the endpoint needs to authorize the
+    // fetch. A bare template string drops it, and every preview 404s with
+    // "unavailable" for an admin viewing another user's task (vts-552). ---
+    await clickReal(page, rowSelector("SPEAKER_00") + " .voice-play-btn");
+    await page.waitForTimeout(300);
+    const audioSrc = await page.evaluate((sel) => {
+      const host = document.querySelector(sel)?.closest("ul, .speaker-box-list");
+      const raw = host?._previewAudio?.getAttribute("src");
+      if (!raw) return null;
+      // A buildPath() output is always same-origin-relative (pathname + optional
+      // search), never absolute — a raw URL round-trip must reproduce it exactly.
       const round = new URL(raw, window.location.origin);
       return { raw, normalized: round.pathname + round.search };
     }, rowSelector("SPEAKER_00"));
-    if (builtSrc && builtSrc.raw !== builtSrc.normalized) {
-      failures.push(
-        `preview src is not a normalized buildPath output (${JSON.stringify(builtSrc.raw)}); ` +
-        `the acting-as as_user param rides on buildPath, so a bare URL here breaks admin previews`
-      );
+    if (!audioSrc) {
+      failures.push("SPEAKER_00 row: play did not set a preview src");
+    } else {
+      const expectedSrc = `/api/tasks/${TASK_ID}/speaker-previews/SPEAKER_00/0/audio`;
+      if (audioSrc.raw !== expectedSrc) {
+        failures.push(`preview src wrong: got ${JSON.stringify(audioSrc.raw)}, expected ${JSON.stringify(expectedSrc)}`);
+      }
+      if (audioSrc.raw !== audioSrc.normalized) {
+        failures.push(
+          `preview src is not a normalized buildPath output (${JSON.stringify(audioSrc.raw)}); ` +
+          `the acting-as as_user param rides on buildPath, so a bare URL here breaks admin previews`
+        );
+      }
     }
 
-    // --- graceful fallback: simulate the audio element's own "error" event
-    // (what a real 404 from the preview route fires) directly - the stub
-    // server always answers /api/* GETs with 200 (real backend 404s
-    // instead), so we dispatch the event the browser would raise in that
-    // case rather than rely on the stub's response code. Confirms the
-    // listener wired in app.js actually swaps the elements, with no JS
-    // error thrown in the process. ---
-    await page.evaluate((sel) => {
-      const el = document.querySelector(sel + " audio.voice-preview-audio");
-      el.dispatchEvent(new Event("error"));
-    }, rowSelector("SPEAKER_00"));
-    await page.waitForTimeout(100);
+    // --- graceful fallback when a voice has no preview clip.
+    //
+    // The per-row <audio controls> became a play/stop button backed by ONE
+    // shared Audio() per surface (redesign v2), so there is no element to
+    // dispatch "error" on until playback is attempted. Clicking play against
+    // the stub — which serves no audio — makes the real error path run, and the
+    // button is expected to mark itself unusable rather than sit there dead. ---
+    await clickReal(page, rowSelector("SPEAKER_00") + " .voice-play-btn");
+    await page.waitForTimeout(400);
     const fallbackState = await page.evaluate((sel) => {
-      const audioEl = document.querySelector(sel + " audio.voice-preview-audio");
-      const noteEl = document.querySelector(sel + " .voice-preview-unavailable");
+      const btn = document.querySelector(sel + " .voice-play-btn");
       return {
-        audioHidden: audioEl ? audioEl.classList.contains("hidden") : null,
-        noteHidden: noteEl ? noteEl.classList.contains("hidden") : null,
+        marked: btn ? btn.classList.contains("no-preview") : null,
+        stillPlaying: btn ? btn.classList.contains("playing") : null,
+        tooltip: btn ? btn.getAttribute("data-tooltip") : null,
       };
     }, rowSelector("SPEAKER_00"));
-    if (fallbackState.audioHidden !== true) {
-      failures.push(`error'd audio element should gain .hidden, got ${JSON.stringify(fallbackState)}`);
+    if (fallbackState.marked !== true) {
+      failures.push(`play button should mark itself .no-preview when the clip cannot load, got ${JSON.stringify(fallbackState)}`);
     }
-    if (fallbackState.noteHidden !== false) {
-      failures.push(`preview-unavailable note should be shown after error, got ${JSON.stringify(fallbackState)}`);
+    if (fallbackState.stillPlaying !== false) {
+      failures.push(`play button should not stay in the playing state after an error, got ${JSON.stringify(fallbackState)}`);
     }
 
     // --- noise checkbox: present on every row, checked only where noise:true
@@ -430,7 +430,7 @@ export async function run() {
     }
 
     // --- reopen: Save & continue with an anonymous voice confirms ---
-    await clickReal(page, resolveBtn);
+    await openResolve();
     await page.waitForTimeout(250);
     let anonConfirmMsg = "";
     page.once("dialog", async (dialog) => {
@@ -469,7 +469,7 @@ export async function run() {
     }
 
     // --- reopen, make a change, Cancel prompts a discard confirm ---
-    await clickReal(page, resolveBtn);
+    await openResolve();
     await page.waitForTimeout(250);
     await page.selectOption(`${rowSelector("SPEAKER_00")} .voice-select`, "sp-far");
     await page.waitForTimeout(100);
@@ -494,7 +494,7 @@ export async function run() {
     }
 
     // --- reopen with no changes: Cancel closes without any confirm ---
-    await clickReal(page, resolveBtn);
+    await openResolve();
     await page.waitForTimeout(250);
     let unexpectedConfirm = false;
     page.once("dialog", async (dialog) => { unexpectedConfirm = true; await dialog.dismiss(); });

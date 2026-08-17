@@ -5906,6 +5906,17 @@ function buildSpeakerRow(row, opts) {
   if (variant === "panel") li.classList.add("voice-row-compact");
   li.dataset.speakerLabel = row.label;
 
+  // Outcome glyph: auto / grey / miss at a glance. Dialog only — the panel says
+  // the same thing through the bound name or the "pick" action.
+  if (variant === "dialog") {
+    const glyph = document.createElement("span");
+    glyph.className = "voice-glyph";
+    glyph.textContent = glyphForOutcome(row.outcome);
+    glyph.title = t(`voices.status.${row.outcome}`);
+    glyph.setAttribute("aria-label", t(`voices.status.${row.outcome}`));
+    li.appendChild(glyph);
+  }
+
   // Play/stop the preview clip. Stop rather than pause: the clips are a few
   // seconds long, so resuming from the middle is never what you want.
   const play = document.createElement("button");
@@ -5964,18 +5975,23 @@ function buildSpeakerRow(row, opts) {
   if (variant === "dialog") {
     select = document.createElement("select");
     select.className = "voice-select";
-    for (const option of row.options) {
+    const addNewOption = () => {
       const opt = document.createElement("option");
-      opt.value = option.speaker_id;
-      opt.textContent = option.distance === null || option.distance === undefined
-        ? option.name
-        : `${option.name} · ${Number(option.distance).toFixed(3)}`;
-      select.appendChild(opt);
-    }
-    const newOpt = document.createElement("option");
-    newOpt.value = NEW_PERSON_VALUE;
-    newOpt.textContent = t("voices.row.new_person");
-    select.appendChild(newOpt);
+      opt.value = NEW_PERSON_VALUE;
+      opt.textContent = t("voices.row.new_person");
+      return opt;
+    };
+    // miss: "<Add new person>" at the TOP (the model missed; the person list
+    // still follows in case the user recognises the voice by ear anyway).
+    if (row.outcome === "miss") select.appendChild(addNewOption());
+    row.options.forEach((option) => {
+      const el = document.createElement("option");
+      el.value = option.speaker_id;
+      el.textContent = option.name;
+      select.appendChild(el);
+    });
+    // grey/auto: "<Add new person>" at the BOTTOM — a candidate is likelier.
+    if (row.outcome !== "miss") select.appendChild(addNewOption());
     select.value = row.selection;
     head.appendChild(select);
   } else {
