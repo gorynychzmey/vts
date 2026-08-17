@@ -113,11 +113,15 @@ export async function run() {
       return {
         language: q(".about-language"),
         prompts: q(".about-prompts"),
-        titleText: titleEl?.textContent || "",
+        // The label lives in an inner span now (the anchor also holds the
+        // player glyph, so textContent on it would delete that glyph).
+        titleText: (titleEl?.querySelector(".task-link-text") || titleEl)?.textContent?.trim() || "",
         titleHref: titleEl?.getAttribute("href") || "",
         titleTag: titleEl?.tagName || "",
         playerBtnHidden: !!document.querySelector(".about-player-btn")?.classList.contains("hidden"),
-        playerBtnHref: document.querySelector(".about-player-btn")?.getAttribute("href") || "",
+        // The glyph is an <svg> inside the title link now, so the player href
+        // is the LINK's — the glyph only marks it as playable.
+        playerGlyphInLink: !!titleEl?.contains(document.querySelector(".about-player-btn")),
         sourceUrlHref: document.querySelector(".about-source-url")?.getAttribute("href") || "",
         sourceUrlText: document.querySelector(".about-source-url")?.textContent || "",
         audioIsBool: audioEl?.classList.contains("about-bool") && audioEl.classList.contains("is-no"),
@@ -144,9 +148,11 @@ export async function run() {
     if (info.titleTag !== "A") failures.push(`title is not an <a> link (got ${info.titleTag})`);
     if (info.titleText !== "About me") failures.push(`title text wrong: ${JSON.stringify(info.titleText)}`);
     if (!info.titleHref.includes("/player/")) failures.push(`title href not player: ${JSON.stringify(info.titleHref)}`);
-    // ▶ player icon in the About dialog, mirroring the card (vts-u6w #1).
-    if (info.playerBtnHidden) failures.push("About ▶ player icon hidden (media is present)");
-    if (!info.playerBtnHref.includes("/player/")) failures.push(`About ▶ href not player: ${JSON.stringify(info.playerBtnHref)}`);
+    // Player glyph in the About dialog, mirroring the card (vts-u6w #1): the
+    // title itself carries the /player/ href (asserted above) and the glyph
+    // sits inside it as the affordance.
+    if (info.playerBtnHidden) failures.push("About player glyph hidden (media is present)");
+    if (!info.playerGlyphInLink) failures.push("About player glyph should sit inside the title link, as on the card");
     // Original URL as a real clickable link under the title.
     if (info.sourceUrlHref !== "http://x/v") failures.push(`source-url href wrong: ${JSON.stringify(info.sourceUrlHref)}`);
     if (info.sourceUrlText !== "http://x/v") failures.push(`source-url text wrong: ${JSON.stringify(info.sourceUrlText)}`);

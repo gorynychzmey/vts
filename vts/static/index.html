@@ -1028,9 +1028,13 @@
       <section class="about-source">
         <h3 data-i18n="about.section_source">Source</h3>
         <div class="about-title-row">
-          <a class="about-source-title task-link" target="_blank" rel="noopener noreferrer"></a>
-          <a class="icon-btn ghost about-player-btn hidden" target="_blank" rel="noopener" data-i18n-title="tasks.open_player" data-i18n-aria-label="tasks.open_player">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+          <a class="about-source-title task-link" target="_blank" rel="noopener noreferrer"
+             data-i18n-title="tasks.open_player">
+            <span class="task-link-text"></span>
+            <svg class="player-glyph about-player-btn hidden" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+              <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
+            </svg>
           </a>
         </div>
         <a class="about-source-url task-source mono"></a>

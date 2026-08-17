@@ -9,6 +9,11 @@
 //  2. Icon buttons mark actionable vs not by the BORDER, not by opacity alone:
 //     enabled ghost buttons have a visible outline + fill, disabled ones have
 //     neither (transparent border and background).
+//     The disabled sample now comes from a DISABLED-BY-STATE control rendered
+//     for the check, because the task card no longer keeps one: pause/resume
+//     became a single toggle in redesign v2 that hides when neither action
+//     applies, rather than sitting there greyed out. The CSS rule is unchanged
+//     and still worth pinning — only a live example had to be arranged.
 import { startStubServer, launch } from "../harness.mjs";
 
 export const name = "menu-icons-and-button-states";
@@ -111,7 +116,22 @@ export async function run() {
       });
 
       if (!states.enabled.length) failures.push(`[${locale}] no enabled ghost icon button found to check`);
-      if (!states.disabled.length) failures.push(`[${locale}] no disabled ghost icon button found to check`);
+      if (!states.disabled.length) {
+        // No card button is disabled-and-visible any more, so disable one for
+        // the measurement. Still a real assertion: it reads the computed style
+        // the live CSS produces for .icon-btn.ghost:disabled.
+        const sampled = await page.evaluate(() => {
+          const btn = document.querySelector("article.task .task-actions-inline .icon-btn.ghost:not(.hidden)");
+          if (!btn) return null;
+          btn.disabled = true;
+          const cs = getComputedStyle(btn);
+          const rec = { cls: [...btn.classList].join("."), border: cs.borderTopColor, bg: cs.backgroundColor };
+          btn.disabled = false;
+          return rec;
+        });
+        if (sampled) states.disabled.push(sampled);
+        else failures.push(`[${locale}] no ghost icon button on the card to sample the disabled style from`);
+      }
 
       for (const b of states.enabled) {
         if (transparent(b.border)) {

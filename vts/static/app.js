@@ -1263,7 +1263,12 @@ function renderTaskAboutDialog(task) {
   const isUpload = sourceUrl.startsWith("file://");
   const uploadName = isUpload ? sourceUrl.slice("file://".length) : "";
   const titleEl = q(".about-source-title");
-  titleEl.textContent = task.source_title || (isUpload ? uploadName : sourceUrl);
+  const titleLabel = task.source_title || (isUpload ? uploadName : sourceUrl);
+  // Into the inner span, not the anchor: the anchor also holds the player glyph
+  // now, and textContent on it would delete that glyph (same trap as the card).
+  const titleTextEl = titleEl.querySelector(".task-link-text");
+  if (titleTextEl) titleTextEl.textContent = titleLabel;
+  else titleEl.textContent = titleLabel;
   const mediaReady = Boolean(task.media_path);
   const playerHref = buildPath(`/player/${encodeURIComponent(task.id)}`);
   if (mediaReady) {
@@ -1273,17 +1278,10 @@ function renderTaskAboutDialog(task) {
   } else {
     titleEl.removeAttribute("href");
   }
-  // Player ▶ icon next to the title, mirroring the task card (vts-u6w #1).
-  const playerBtn = q(".about-player-btn");
-  if (playerBtn) {
-    if (mediaReady) {
-      playerBtn.href = playerHref;
-      playerBtn.classList.remove("hidden");
-    } else {
-      playerBtn.removeAttribute("href");
-      playerBtn.classList.add("hidden");
-    }
-  }
+  // Player glyph inside the title, mirroring the task card (vts-u6w #1): the
+  // title itself is the link, and the glyph marks it as playable. It is an
+  // <svg> now, not an anchor, so it only toggles visibility.
+  q(".about-player-btn")?.classList.toggle("hidden", !mediaReady);
   const sourceUrlEl = q(".about-source-url");
   // Original url: plain text for uploads (file://…), a real link for http(s)
   // sources. isHttpUrl guards against javascript:/data: hrefs (vts-dcc).
@@ -1877,6 +1875,12 @@ function renderTaskRuntime(taskEl) {
   const canRestartSummary = statusPred.canRestartSummary(runtime);
   const canRestartFinalSummary = statusPred.canRestartFinalSummary(runtime);
   const canArchive = statusPred.canArchive(runtime.baseStatus);
+  // A single toggle (redesign v2): canPause and canResume are mutually exclusive,
+  // so a second button was always present-but-dead. When neither applies —
+  // a completed or failed task — no control is shown at all rather than a
+  // disabled one, which reads as "temporarily unavailable" and is misleading.
+  elements.pauseBtn.classList.toggle("hidden", !canPause);
+  elements.resumeBtn.classList.toggle("hidden", !canResume);
   elements.pauseBtn.disabled = !canPause;
   elements.resumeBtn.disabled = !canResume;
   if (elements.resolveVoicesBtn) {
@@ -2913,6 +2917,10 @@ function updatePromptSelectSummary(container) {
   const checked = Array.from(
     container.querySelectorAll('input[type="checkbox"]:checked')
   );
+  // Drives the pill's active styling (redesign v2). Set here rather than in CSS
+  // because :has() cannot see the popover's checkboxes from the toggle button.
+  container.querySelector(".prompt-select-toggle")
+    ?.classList.toggle("has-selection", checked.length > 0);
   let text;
   if (checked.length === 0) {
     text = t("new_task.prompts_none");
@@ -5915,9 +5923,11 @@ function buildSpeakerRow(row, opts) {
   // Outcome glyph: auto / grey / miss at a glance. Dialog only — the panel says
   // the same thing through the bound name or the "pick" action.
   if (variant === "dialog") {
+    // A dot, not an emoji: the emoji rendered as tofu wherever the emoji font is
+    // missing, and it could not follow the theme. Same vocabulary the task card
+    // uses for status.
     const glyph = document.createElement("span");
-    glyph.className = "voice-glyph";
-    glyph.textContent = glyphForOutcome(row.outcome);
+    glyph.className = `voice-glyph outcome-${row.outcome}`;
     glyph.title = t(`voices.status.${row.outcome}`);
     glyph.setAttribute("aria-label", t(`voices.status.${row.outcome}`));
     li.appendChild(glyph);
@@ -7754,6 +7764,8 @@ function updateDeliverySummary(container) {
   const count = container.querySelectorAll(
     '.prompt-select-popover input[type="checkbox"]:checked'
   ).length;
+  container.querySelector(".prompt-select-toggle")
+    ?.classList.toggle("has-selection", count > 0);
   summary.textContent = count
     ? t("delivery.selected_count", { count })
     : t("delivery.none_selected");

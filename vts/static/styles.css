@@ -510,6 +510,12 @@ button:hover {
   margin-bottom: 0.75rem;
 }
 
+/* Right-aligned (redesign v2): the heading names the card, the switch is a
+   control acting on it — they are not two items of one list. */
+.new-task-header .source-type-radio-group {
+  margin-left: auto;
+}
+
 /* Section headings (redesign v2 type scale). These were never given a size, so
    they used the browser's h2 default — 24px against the design's 15px, which is
    what made them shout. Dialog h2s keep their own larger size: a dialog title
@@ -950,10 +956,38 @@ input[type="file"] {
   font-size: var(--fs-ui);
 }
 
+/* Compact field, sized like the segmented control in the filter row rather than
+   a full-width form input. The old min-width:20rem forced 320px, which pushed
+   the apply/reset buttons out of the row and onto lines of their own. */
 .admin-controls select {
-  min-width: min(20rem, 100%);
-  border-radius: 999px;
-  padding-block: 0.45rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(18rem, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 0.3rem 0.55rem;
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: var(--bg-field);
+  height: var(--h-control-sm);
+}
+
+.admin-controls select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* The row's buttons match the field's height, not the 2.25rem toolbar size —
+   this is a compact inline control, not a card action. */
+.admin-controls .icon-btn {
+  width: var(--h-control-sm);
+  height: var(--h-control-sm);
+  border-radius: var(--r-sm);
+}
+
+.admin-controls .icon-btn svg {
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 .icon-btn {
@@ -2480,16 +2514,45 @@ dialog:not([open]) {
   min-height: 0;
 }
 
+/* Flex, not the inherited two-column grid: the row now holds a glyph, a play
+   button and the body in the dialog, and just play + body in the panel. One
+   flex line covers both without a per-variant grid template. */
 .voice-row {
-  grid-template-columns: auto 1fr;
-  align-items: start;
-  gap: 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
 }
 
+/* Outcome as a coloured dot (auto / grey / miss), matching the task card's
+   status vocabulary. */
 .voice-glyph {
-  font-size: 1.3rem;
-  line-height: 1;
-  padding-top: 0.15rem;
+  flex: 0 0 auto;
+  width: 0.56rem;
+  height: 0.56rem;
+  margin-top: 0.6rem;
+  border-radius: 50%;
+  background: var(--mute);
+}
+
+.voice-glyph.outcome-auto {
+  background: var(--ok);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--ok) 16%, transparent);
+}
+
+.voice-glyph.outcome-grey {
+  background: var(--warn);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--warn) 16%, transparent);
+}
+
+.voice-glyph.outcome-miss {
+  background: var(--danger);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--danger) 16%, transparent);
+}
+
+/* The body takes the rest of the line. */
+.voice-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .voice-row-body {
@@ -3871,4 +3934,32 @@ dialog:not([open]) {
 .speaker-chip-pct {
   color: var(--accent-ink);
   font-weight: 700;
+}
+
+
+/* ---------- Active option pills (redesign v2) ----------
+   A checked pill was indistinguishable from an unchecked one apart from the
+   checkbox glyph itself, so a row of six pills gave no read on what the task
+   will actually do. :has() keeps the state in CSS: nothing in app.js has to
+   mirror `checked` into a class, so the two cannot drift. */
+.option-pill:has(input:checked) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* The prompt and delivery pills are not checkboxes — they are "on" when
+   something is selected, which app.js marks with .has-selection. */
+.prompt-select-toggle.has-selection {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* Disabled beats active: a pill dimmed because transcript is off should not
+   also shout that it is selected. */
+.option-pill.disabled:has(input:checked) {
+  border-color: var(--line);
+  background: var(--bg-field);
+  color: var(--ink);
 }

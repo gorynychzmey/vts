@@ -167,11 +167,20 @@ export async function run() {
     const rowCount = await page.$$eval("#voice-list .voice-row", (els) => els.length);
     if (rowCount !== 3) failures.push(`expected 3 voice rows, got ${rowCount}`);
 
+    // The outcome marker is a themed dot now, not an emoji character: emoji
+    // rendered as tofu wherever the emoji font is missing and could not follow
+    // the theme. What matters is unchanged — each outcome is visually distinct —
+    // so this asserts the outcome class AND that the three actually differ in
+    // colour, which the emoji check could not have caught on its own.
     const glyphs = await page.evaluate((sels) => {
       const out = {};
       for (const [label, sel] of Object.entries(sels)) {
         const el = document.querySelector(sel + " .voice-glyph");
-        out[label] = el ? el.textContent : null;
+        out[label] = el
+          ? { cls: [...el.classList].find((c) => c.startsWith("outcome-")) || null,
+              bg: getComputedStyle(el).backgroundColor,
+              label: el.getAttribute("aria-label") || "" }
+          : null;
       }
       return out;
     }, {
@@ -179,9 +188,18 @@ export async function run() {
       SPEAKER_01: rowSelector("SPEAKER_01"),
       SPEAKER_02: rowSelector("SPEAKER_02"),
     });
-    if (glyphs.SPEAKER_00 !== "🟢") failures.push(`auto row glyph wrong: ${glyphs.SPEAKER_00}`);
-    if (glyphs.SPEAKER_01 !== "🟡") failures.push(`grey row glyph wrong: ${glyphs.SPEAKER_01}`);
-    if (glyphs.SPEAKER_02 !== "🔴") failures.push(`miss row glyph wrong: ${glyphs.SPEAKER_02}`);
+    if (glyphs.SPEAKER_00?.cls !== "outcome-auto") failures.push(`auto row glyph wrong: ${JSON.stringify(glyphs.SPEAKER_00)}`);
+    if (glyphs.SPEAKER_01?.cls !== "outcome-grey") failures.push(`grey row glyph wrong: ${JSON.stringify(glyphs.SPEAKER_01)}`);
+    if (glyphs.SPEAKER_02?.cls !== "outcome-miss") failures.push(`miss row glyph wrong: ${JSON.stringify(glyphs.SPEAKER_02)}`);
+    const colours = new Set([glyphs.SPEAKER_00?.bg, glyphs.SPEAKER_01?.bg, glyphs.SPEAKER_02?.bg]);
+    if (colours.size !== 3) {
+      failures.push(`the three outcomes must be visually distinct, got ${JSON.stringify([...colours])}`);
+    }
+    // The marker carries no text, so the accessible name is the only thing
+    // conveying the outcome to a screen reader.
+    for (const [label, g] of Object.entries(glyphs)) {
+      if (!g?.label) failures.push(`${label}: outcome dot has no aria-label`);
+    }
 
     // --- bug #2: each row shows the transcript-consistent "Голос N" display
     // label, NOT the raw technical SPEAKER_NN tag ---
