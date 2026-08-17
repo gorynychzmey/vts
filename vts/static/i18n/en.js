@@ -28,6 +28,8 @@ window.__VTS_I18N.en = {
 "new_task.file_move_down": "Move down",
 "new_task.file_summary": "{count} file(s) · {size} · joined in this order",
 "new_task.file_duplicate": "Already added, skipped: {names}",
+"new_task.prompts_tooltip": "Which summaries to generate from the transcript. Pick one or more; each becomes its own result tab.",
+"new_task.delivery_tooltip": "Where to send the finished results. Configure destinations under Manage delivery.",
 "new_task.file_label": "Video / audio file",
 "new_task.audio_only": "Audio only",
 "new_task.audio_only_tooltip": "Download only the audio track instead of the full video. Saves bandwidth; does not affect the transcript or the summary.",

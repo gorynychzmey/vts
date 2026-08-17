@@ -1906,18 +1906,27 @@ input[type="file"] {
 
 /* ---------- API tokens dialog (vts-nuu) ---------- */
 
+/* Shared surface for all nine dialogs (redesign v2). The class name is
+   historical — it started on the tokens dialog and every other one adopted it,
+   so a change here is a change to all of them. */
 .tokens-dialog {
-  border: 1px solid var(--ink-soft);
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-3xl);
   padding: 1.25rem 1.5rem;
   max-width: 640px;
   width: calc(100% - 2rem);
-  background: var(--bg);
+  /* --bg-card, not --bg: a dialog floats above the page and should read as a
+     raised surface, the way the task cards and popovers do. */
+  background: var(--bg-card);
   color: var(--ink);
+  box-shadow: var(--sh-modal);
 }
 
 .tokens-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.45);
+  /* Tokenised so the scrim tracks the theme: the flat 45% black was tuned for
+     the light theme and reads as a smear over an already-dark page. */
+  background: var(--backdrop);
+  backdrop-filter: blur(3px);
 }
 
 /* Layout only when open — a closed <dialog> must keep the UA `display:none`,
