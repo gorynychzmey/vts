@@ -68,6 +68,28 @@ export async function run() {
         );
       }
 
+      // Icons line up in one column. The player row is an <a> among <button>s,
+      // and `.btn-menu button` (0,1,1) outranked `.menu-item` (0,1,0), so the
+      // buttons kept the old display:block layout while the anchor used the new
+      // flex one — leaving that one icon ~5px off.
+      const iconCols = await page.evaluate(() => {
+        // Visible rows only: a .hidden row measures at 0 and would drag the
+        // minimum down regardless of how the painted icons line up.
+        const xs = [...document.querySelectorAll(".task-menu .menu-item")]
+          .filter((r) => r.getBoundingClientRect().width > 0)
+          .map((r) => r.querySelector("svg"))
+          .filter((svg) => svg && svg.getBoundingClientRect().width > 0)
+          .map((svg) => Math.round(svg.getBoundingClientRect().left));
+        return { min: Math.min(...xs), max: Math.max(...xs), count: xs.length };
+      });
+      if (iconCols.count < 2) {
+        failures.push(`[${width}px] expected several menu icons to compare, got ${iconCols.count}`);
+      } else if (iconCols.max - iconCols.min > 1) {
+        failures.push(
+          `[${width}px] menu icons are not in one column: left edges span ${iconCols.max - iconCols.min}px`
+        );
+      }
+
       // Every row reads as the same kind of thing, <a> or <button>.
       const underlined = await page.evaluate(() =>
         [...document.querySelectorAll(".task-menu .menu-item")]

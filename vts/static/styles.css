@@ -1580,12 +1580,10 @@ input[type="file"] {
 /* Player affordance next to the title. Inherits .icon-btn.ghost visuals;
    this just keeps it from shrinking and centers the glyph. `.hidden` still
    wins (display:none) via the global utility. */
-.task-player-btn:not(.hidden) {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
+/* The player moved into the task menu (redesign v2); it is styled by
+   .menu-item like every other row. The old icon-button rules lived here and
+   outranked .menu-item on specificity, re-centring the glyph so it sat ~5px
+   left of the other icons. */
 
 .task-stats {
   color: var(--ink-soft);
@@ -2685,10 +2683,6 @@ dialog:not([open]) {
 .task-edit-name-btn,
 .task-name-ok-btn,
 .task-name-cancel-btn,
-.task-player-btn {
-  flex: 0 0 auto;
-}
-
 .task-edit-name-btn svg,
 .task-name-ok-btn svg,
 .task-name-cancel-btn svg {
@@ -3658,7 +3652,12 @@ dialog:not([open]) {
 
 /* Rows, not a grid of glyphs: each action gets a readable label, which is the
    point of moving them here. */
-.menu-item {
+/* Scoped to .btn-menu so it outranks `.btn-menu button` (0,1,1), which still
+   claimed display:block and its own padding for every button row. The player
+   row is an <a> and fell through to .menu-item, so the two ended up laid out
+   differently — which is why its icon sat ~5px left of the others. */
+.btn-menu .menu-item,
+.popover .menu-item {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -3673,7 +3672,8 @@ dialog:not([open]) {
   white-space: nowrap;
 }
 
-.menu-item:hover:not(:disabled) {
+.btn-menu .menu-item:hover:not(:disabled),
+.popover .menu-item:hover:not(:disabled) {
   background: var(--bg-chip);
 }
 
