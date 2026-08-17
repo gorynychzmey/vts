@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 49 capabilities · 100 routes (74 in the OpenAPI schema, 26 hidden) · 26 MCP tools · 314 English UI strings.
+**Counts:** 52 capabilities · 100 routes (74 in the OpenAPI schema, 26 hidden) · 26 MCP tools · 328 English UI strings.
 
 ## Capabilities by entity
 
@@ -24,6 +24,7 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Delete | Delete the task and all its files — cannot be undone | any -> gone | `DELETE /api/tasks` | Task card toolbar (confirm: `confirm.delete`) |
 | Restart summary (full / final only) | Restart summary… | completed -> queued | `POST /api/tasks/{task_id}/restart_summary` | Task card toolbar + `#restart-final-dialog` for the final-only variant |
 | Watch live progress | Overall progress | queued/waiting/running | `GET /api/events`<br>`GET /api/tasks/queue-positions`<br>`GET /api/progress-weights` | Task card progress bars (overall + current step); SSE stream, polled queue positions |
+| Stage files before upload (add, reorder, remove) | Drop files here or pick them from disk | - | — | New Task card — `#file-drop`; the staging list is client-side, the upload itself uses `/api/uploads/*` |
 
 ### Task artefact
 
@@ -115,6 +116,8 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
 | Receive a share from the OS | — | - | `GET /share`<br>`POST /share` | PWA share target — hands the shared URL to the New Task form. `/_share_inbox` in `app.js` is a service-worker cache key, not a server route: `sw.js` intercepts it and it never reaches the API |
+| Switch theme (system / light / dark) | Theme: system | system / light / dark | — | Header — `#theme-toggle-btn`; client-side only, the choice is not stored server-side |
+| Switch interface language | — | en / ru / de | — | Header — `#locale-toggle-btn` cycles en/ru/de; client-side only, no endpoint |
 | Show version / detect a new build | Version: | - | `GET /api/version` | Header version label; polled to prompt a reload |
 | Read status/step vocabulary | — | - | `GET /api/status-config` | No screen — drives status chips and step names client-side |
 | Install as a PWA / work offline | — | - | `GET /manifest.webmanifest`<br>`GET /sw.js` | Browser install prompt; service worker |
