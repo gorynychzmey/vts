@@ -1247,6 +1247,8 @@ input[type="file"] {
 
 .btn-menu-wrapper {
   display: inline-flex;
+  /* The anchor for .btn-menu's absolute positioning. */
+  position: relative;
 }
 
 /* The header burger sits in a baseline-aligned row next to the version text;
@@ -1264,7 +1266,12 @@ input[type="file"] {
 
 
 .btn-menu {
-  position: fixed;
+  /* Absolute, not fixed: a fixed panel stays put while the page scrolls, so the
+     menu floated over unrelated cards. The card deliberately does NOT clip (see
+     the tooltip note on .task), so anchoring inside the wrapper is safe. */
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
   z-index: 1000;
   min-width: 200px;
   background: var(--bg-card);
@@ -4467,4 +4474,11 @@ dialog:not([open]) {
 
 .delivery-manage-btn svg {
   color: var(--accent);
+}
+
+
+/* The player row is an <a> (it opens a real URL) among <button> rows; without
+   this the UA underlines it and it reads as a different kind of thing. */
+.menu-item {
+  text-decoration: none;
 }

@@ -2124,14 +2124,10 @@ function renderTaskCard(task) {
       const isOpen = taskMenu.classList.contains("open");
       document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
       if (!isOpen) {
-        // Measure the trigger, then right-align the panel to it — the same
-        // placement the restart menu uses, so a wide panel cannot hang off the
-        // screen edge on a phone.
-        const rect = taskMenuBtn.getBoundingClientRect();
-        taskMenu.style.top = `${rect.bottom + 4}px`;
-        taskMenu.style.left = "0px";
+        // No coordinates here any more: the panel is positioned by CSS against
+        // .btn-menu-wrapper, so it scrolls with the card instead of hanging in
+        // the viewport.
         taskMenu.classList.add("open");
-        taskMenu.style.left = `${Math.max(8, rect.right - taskMenu.offsetWidth)}px`;
       }
       taskMenuBtn.setAttribute("aria-expanded", String(!isOpen));
       // The card must paint above its neighbours while its menu is open.
@@ -2162,14 +2158,8 @@ function renderTaskCard(task) {
       // would stack two panels on top of each other.
       document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
       if (!isOpen) {
-        // Anchor the sub-panel to the kebab BUTTON, not to this menu row, so it
-        // lands where the first panel was rather than halfway down the screen.
-        const anchor = taskMenuBtn || restartSummaryBtn;
-        const rect = anchor.getBoundingClientRect();
-        restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
-        restartSummaryMenu.style.left = "0px";
+        // Shares the kebab's wrapper, so CSS puts it where the first panel was.
         restartSummaryMenu.classList.add("open");
-        restartSummaryMenu.style.left = `${Math.max(8, rect.right - restartSummaryMenu.offsetWidth)}px`;
       }
     });
   }
@@ -7183,14 +7173,8 @@ if (headerMenuBtn && headerMenu) {
     const isOpen = headerMenu.classList.contains("open");
     document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
     if (!isOpen) {
-      // Same fixed-position placement the task cards' menus use: measure the
-      // trigger, then right-align the panel to it so a wide menu never hangs
-      // off the screen edge.
-      const rect = headerMenuBtn.getBoundingClientRect();
-      headerMenu.style.top = `${rect.bottom + 4}px`;
-      headerMenu.style.left = "0px";
+      // Positioned by CSS against .btn-menu-wrapper, like the task menus.
       headerMenu.classList.add("open");
-      headerMenu.style.left = `${Math.max(8, rect.right - headerMenu.offsetWidth)}px`;
     }
     headerMenuBtn.setAttribute("aria-expanded", String(!isOpen));
   });
