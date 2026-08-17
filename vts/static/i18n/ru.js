@@ -322,7 +322,9 @@ window.__VTS_I18N.ru = {
 "steps.diarize": "Определение говорящих",
 "steps.merge_transcript": "Сборка транскрипта",
 "steps.prepare_llama_model": "Подготовка LLM",
+"steps.match_speakers": "Сопоставление голосов",
 "steps.prepare_summary_chunks": "Подготовка окон сводки",
 "steps.summarize_windows": "Сводка по окнам",
+"steps.pack_window_notes": "Уплотнение заметок",
 "steps.summarize_final": "Финальная сводка"
 };

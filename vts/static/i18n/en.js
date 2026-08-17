@@ -322,7 +322,9 @@ window.__VTS_I18N.en = {
 "steps.diarize": "Speaker diarization",
 "steps.merge_transcript": "Transcript merge",
 "steps.prepare_llama_model": "LLM warm-up",
+"steps.match_speakers": "Speaker matching",
 "steps.prepare_summary_chunks": "Summary chunking",
 "steps.summarize_windows": "Window summaries",
+"steps.pack_window_notes": "Notes compaction",
 "steps.summarize_final": "Final summary"
 };
