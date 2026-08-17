@@ -171,7 +171,14 @@ function loadLocaleScript(locale) {
 }
 
 async function ensureI18nLoaded() {
-  const preferred = detectLocale();
+  // An explicit choice outranks navigator.languages; absence means "detect".
+  let stored = null;
+  try {
+    stored = localStorage.getItem("vts_locale");
+  } catch (err) {
+    stored = null;
+  }
+  const preferred = SUPPORTED_LOCALES.has(stored) ? stored : detectLocale();
   const localeLoaded = await loadLocaleScript(preferred);
   if (preferred !== "en") {
     await loadLocaleScript("en");
@@ -4156,10 +4163,21 @@ async function refreshAll() {
   startDurationTicker();
 }
 
+// Entries that change state in place instead of opening a dialog: clicking one
+// must NOT close the menu, or cycling the theme through its three states means
+// reopening the menu twice. Everything else closes it, including a click on the
+// page background.
+const MENU_KEEPS_OPEN = new Set(["theme-toggle-btn", "locale-toggle-btn", "push-toggle-btn"]);
+
 document.addEventListener("click", (event) => {
-  document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
-  const hdrBtn = document.getElementById("header-menu-btn");
-  if (hdrBtn) hdrBtn.setAttribute("aria-expanded", "false");
+  const keepOpen =
+    event.target instanceof Element &&
+    MENU_KEEPS_OPEN.has(event.target.closest("button")?.id || "");
+  if (!keepOpen) {
+    document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+    const hdrBtn = document.getElementById("header-menu-btn");
+    if (hdrBtn) hdrBtn.setAttribute("aria-expanded", "false");
+  }
   // Close any open prompt-select popover whose container does not contain the click.
   document.querySelectorAll(".prompt-select.open").forEach((container) => {
     if (!container.contains(event.target)) {
@@ -4316,6 +4334,128 @@ function resetTokensDialog() {
   if (tokensRawValueEl) tokensRawValueEl.textContent = "";
   if (tokensCreateNameInput) tokensCreateNameInput.value = "";
 }
+
+// ---------------------------------------------------------------------------
+// UI language: en -> ru -> de -> en.
+//
+// Until now the interface language came only from navigator.languages, with no
+// way to override it — a German-locale browser could not read the app in
+// English. The stored choice wins over detection; clearing it (not offered in
+// the UI) falls back to the browser.
+//
+// The label deliberately carries NO data-i18n: it shows the endonym, which is
+// the same string in every locale, and applyI18n() would overwrite it.
+const LOCALE_CYCLE = ["en", "ru", "de"];
+const LOCALE_ENDONYM = { en: "English", ru: "Русский", de: "Deutsch" };
+
+function syncLocaleControl() {
+  const label = document.getElementById("locale-toggle-label");
+  if (label) label.textContent = LOCALE_ENDONYM[state.locale] || LOCALE_ENDONYM.en;
+}
+
+document.getElementById("locale-toggle-btn")?.addEventListener("click", async () => {
+  const next = LOCALE_CYCLE[(LOCALE_CYCLE.indexOf(state.locale) + 1) % LOCALE_CYCLE.length];
+  const loaded = await loadLocaleScript(next);
+  if (!loaded) return;
+  state.locale = next;
+  try {
+    localStorage.setItem("vts_locale", next);
+  } catch (err) {
+    /* not persisting is survivable; the current page is already switched */
+  }
+  applyI18nToPage();
+  // applyI18nToPage() rewrites every [data-i18n] node, which includes the theme
+  // label — re-sync it (and the endonym, which it must NOT translate).
+  syncThemeControl(readStoredTheme());
+  syncLocaleControl();
+});
+
+// ---------------------------------------------------------------------------
+// Theme: system -> light -> dark -> system.
+//
+// "System" is the absence of the data-theme attribute, not a third value:
+// styles.css themes the dark case through
+//   @media (prefers-color-scheme: dark) :root:not([data-theme="light"])
+// so no attribute means "follow the OS", and an explicit choice always wins.
+// The stored value is therefore only ever "light", "dark", or absent — the
+// same contract the inline anti-flash script in index.html reads.
+const THEME_CYCLE = ["system", "light", "dark"];
+const THEME_LABEL_KEY = { system: "theme.system", light: "theme.light", dark: "theme.dark" };
+
+function readStoredTheme() {
+  try {
+    const v = localStorage.getItem("vts_theme");
+    return v === "light" || v === "dark" ? v : "system";
+  } catch (err) {
+    // Private mode or storage disabled: behave as if nothing was ever chosen.
+    return "system";
+  }
+}
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "light" || mode === "dark") {
+    root.setAttribute("data-theme", mode);
+  } else {
+    root.removeAttribute("data-theme");
+  }
+  try {
+    if (mode === "system") localStorage.removeItem("vts_theme");
+    else localStorage.setItem("vts_theme", mode);
+  } catch (err) {
+    /* not persisting is survivable; the current page still themes correctly */
+  }
+  syncThemeControl(mode);
+}
+
+// The <meta name="theme-color"> pair in index.html is keyed on the OS
+// preference, which cannot express "user chose light while the OS is dark".
+// Once a manual choice exists we drop the media-scoped tags and pin a single
+// value; going back to system restores the pair.
+function syncThemeColorMeta(mode) {
+  const head = document.head;
+  if (!head) return;
+  head.querySelectorAll('meta[name="theme-color"]').forEach((el) => el.remove());
+  const add = (content, media) => {
+    const m = document.createElement("meta");
+    m.setAttribute("name", "theme-color");
+    m.setAttribute("content", content);
+    if (media) m.setAttribute("media", media);
+    head.appendChild(m);
+  };
+  if (mode === "light") add("#c5532a");
+  else if (mode === "dark") add("#191512");
+  else {
+    add("#c5532a", "(prefers-color-scheme: light)");
+    add("#191512", "(prefers-color-scheme: dark)");
+  }
+}
+
+function syncThemeControl(mode) {
+  const label = document.getElementById("theme-toggle-label");
+  if (label) {
+    label.setAttribute("data-i18n", THEME_LABEL_KEY[mode] || THEME_LABEL_KEY.system);
+    label.textContent = t(THEME_LABEL_KEY[mode] || THEME_LABEL_KEY.system);
+  }
+  for (const name of THEME_CYCLE) {
+    document.getElementById(`theme-icon-${name}`)?.classList.toggle("hidden", name !== mode);
+  }
+  syncThemeColorMeta(mode);
+}
+
+document.getElementById("theme-toggle-btn")?.addEventListener("click", () => {
+  const next = THEME_CYCLE[(THEME_CYCLE.indexOf(readStoredTheme()) + 1) % THEME_CYCLE.length];
+  applyTheme(next);
+});
+
+// While the choice is "system", a live OS switch must repaint immediately.
+// Only the label and meta need touching — the CSS media block already does
+// the colours on its own.
+window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
+  if (readStoredTheme() === "system") syncThemeControl("system");
+});
+
+syncThemeControl(readStoredTheme());
 
 document.getElementById("tokens-btn")?.addEventListener("click", async () => {
   if (!tokensDialog) return;
@@ -6159,11 +6299,8 @@ if (headerMenuBtn && headerMenu) {
     }
     headerMenuBtn.setAttribute("aria-expanded", String(!isOpen));
   });
-  // Each entry opens a dialog; leaving the menu up behind it looks stuck.
-  headerMenu.addEventListener("click", () => {
-    headerMenu.classList.remove("open");
-    headerMenuBtn.setAttribute("aria-expanded", "false");
-  });
+  // Closing on entry click is handled by the document-level listener, which
+  // knows which entries are in-place toggles (MENU_KEEPS_OPEN).
 }
 
 // ---------- Share target: pending file handoff from service worker ----------
@@ -6252,6 +6389,7 @@ function applySharedUrlIfAny() {
 async function bootstrap() {
   await ensureI18nLoaded();
   applyI18nToPage();
+  syncLocaleControl();
   setVersionLabel(BUILD_VERSION);
   syncSummaryToggle();
   syncSourceType();
