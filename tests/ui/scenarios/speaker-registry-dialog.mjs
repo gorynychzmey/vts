@@ -1,5 +1,7 @@
-// Verifies the voice registry dialog (vts-80i, task 13): two-column layout
-// (speakers left, fragments of the selected speaker right), add-speaker form,
+// Verifies the voice registry dialog (vts-80i, task 13): ONE list with each
+// person's fragments expanding inside their own block (redesign v2 replaced the
+// two-column layout — a person's fragments used to sit on the far side of the
+// dialog, and that side was empty until something was selected), add-speaker form,
 // selecting a speaker loads its fragments, inline rename, delete-with-confirm
 // naming the fragment count for a speaker, delete-with-confirm for a fragment,
 // and that each fragment's <audio> src points at the sample audio endpoint.
@@ -67,18 +69,13 @@ export async function run() {
       failures.push("speaker-registry-dialog not visible after open");
     }
 
-    // Two columns render.
-    const colCount = await page.$$eval(".speaker-registry-col", (els) => els.length);
-    if (colCount !== 2) failures.push(`expected 2 registry columns, got ${colCount}`);
-
-    // Left column lists both speakers.
+    // One list, both speakers in it.
     const rowCount = await page.$$eval("#speaker-list .speaker-row", (els) => els.length);
     if (rowCount !== 2) failures.push(`expected 2 speaker rows, got ${rowCount}`);
 
-    // Right column starts with the "select a person" hint, no fragments yet.
-    if (!(await isVisible(page, "#speaker-samples-empty"))) {
-      failures.push("select-hint not visible before a speaker is selected");
-    }
+    // Nothing is expanded until a person is opened.
+    const panelsBefore = await page.$$eval(".speaker-samples-list", (els) => els.length);
+    if (panelsBefore !== 0) failures.push(`no person is open, so no samples panel should exist (got ${panelsBefore})`);
 
     // --- Adding a speaker ---
     await page.fill("#speaker-create-name", "Kolya");
@@ -96,24 +93,31 @@ export async function run() {
     // --- Selecting a speaker loads its fragments ---
     await clickReal(page, '#speaker-list .speaker-row[data-speaker-id="s1"]');
     await page.waitForTimeout(250);
-    if (await isVisible(page, "#speaker-samples-empty")) {
-      failures.push("select-hint still visible after selecting a speaker");
-    }
-    const sampleRowCount = await page.$$eval("#speaker-samples .speaker-sample-row", (els) => els.length);
+    // The panel opens INSIDE that person's block, not in a second column.
+    const openedInsideBlock = await page.$eval(
+      '.person-block[data-speaker-id="s1"]', (el) => !!el.querySelector(".speaker-samples-list")
+    ).catch(() => false);
+    if (!openedInsideBlock) failures.push("the samples panel must render inside the opened person's block");
+    const sampleRowCount = await page.$$eval(".speaker-samples-list .sample-row", (els) => els.length);
     if (sampleRowCount !== 2) failures.push(`expected 2 sample rows for s1, got ${sampleRowCount}`);
 
-    // Audio elements point at the sample audio endpoint.
-    const audioSrcs = await page.$$eval("#speaker-samples audio", (els) => els.map((e) => e.getAttribute("src")));
-    const expectedSrcs = ["/api/speakers/samples/sm1/audio", "/api/speakers/samples/sm2/audio"];
-    for (const expected of expectedSrcs) {
-      if (!audioSrcs.includes(expected)) {
-        failures.push(`missing audio src ${expected}, got ${JSON.stringify(audioSrcs)}`);
-      }
+    // Playback is a play/stop button backed by one shared Audio() per panel now
+    // (five stacked <audio controls> made the panel a wall of widgets). The src
+    // only exists after a click, and it must still be a buildPath output — the
+    // acting-as param rides on it.
+    await clickReal(page, ".speaker-samples-list .sample-row:first-child .play-btn");
+    await page.waitForTimeout(300);
+    const playedSrc = await page.$eval(".speaker-samples-list", (el) => el._audio?.getAttribute("src") || "");
+    if (!playedSrc.includes("/api/speakers/samples/sm1/audio")) {
+      failures.push(`play did not point at the sample endpoint, got ${JSON.stringify(playedSrc)}`);
+    }
+    if (/^https?:/i.test(playedSrc)) {
+      failures.push(`sample src must be a relative buildPath output, got ${JSON.stringify(playedSrc)}`);
     }
 
     // Fragment with a source_task_id shows a clickable link; the other shows
     // plain "source removed" text (no link).
-    const sourceInfo = await page.$$eval("#speaker-samples .speaker-sample-source", (els) =>
+    const sourceInfo = await page.$$eval(".speaker-samples-list .sample-row-name", (els) =>
       els.map((el) => ({ hasLink: !!el.querySelector("a"), text: el.textContent.trim() }))
     );
     if (!sourceInfo.some((s) => s.hasLink)) failures.push("no fragment shows a clickable source-task link");
@@ -124,9 +128,9 @@ export async function run() {
     // --- Selecting the other (empty) speaker shows its own empty state ---
     await clickReal(page, '#speaker-list .speaker-row[data-speaker-id="s2"]');
     await page.waitForTimeout(200);
-    const s2SampleRows = await page.$$eval("#speaker-samples .speaker-sample-row", (els) => els.length);
+    const s2SampleRows = await page.$$eval(".speaker-samples-list .sample-row", (els) => els.length);
     if (s2SampleRows !== 0) failures.push(`expected 0 sample rows for s2, got ${s2SampleRows}`);
-    const s2Empty = await page.$eval("#speaker-samples", (el) => el.textContent.trim().length > 0);
+    const s2Empty = await page.$eval(".speaker-samples-list", (el) => el.textContent.trim().length > 0);
     if (!s2Empty) failures.push("empty-samples message missing for a speaker with 0 fragments");
 
     // --- Inline rename ---
@@ -177,7 +181,7 @@ export async function run() {
       sampleConfirmSeen = true;
       await dialog.dismiss();
     });
-    const deleteSampleBtn = '#speaker-samples .speaker-sample-row [aria-label="Delete fragment"]';
+    const deleteSampleBtn = '.speaker-samples-list .sample-row [aria-label="Delete fragment"]';
     if (!(await page.$(deleteSampleBtn))) failures.push("no delete button on sample row");
     else {
       await clickReal(page, deleteSampleBtn);

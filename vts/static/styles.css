@@ -707,20 +707,27 @@ input[type="file"] {
   max-width: min(16rem, calc(100vw - 132px));
 }
 
-#preset-select {
-  min-width: 8rem;
-  max-width: 12rem;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--bg-field);
-  font-size: 0.84rem;
+/* #preset-select is a hidden value holder now (the pill drives it), so it must
+   not paint. An id selector outranks .sr-only, which is why the old sizing
+   rules kept it visible next to the pill. */
+#preset-select.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
 }
 
+/* Save lives inside the preset menu now, so it is a menu row, not a chip. */
 #preset-save-btn {
-  font-size: 0.82rem;
-  background: var(--ghost-bg);
-  color: var(--ink);
+  color: var(--accent-ink);
+}
+
+#preset-save-btn svg {
+  color: var(--accent);
 }
 
 .preset-dangling-hint {
@@ -3962,4 +3969,502 @@ dialog:not([open]) {
   border-color: var(--line);
   background: var(--bg-field);
   color: var(--ink);
+}
+
+
+/* ---------- Voice registry, single list (redesign v2) ----------
+   The two-column layout put a person's fragments on the far side of the dialog
+   from the person, and the right column sat empty until something was picked.
+   One list now, with the fragments expanding inside the person's own block. */
+.speaker-registry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.36rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  margin-bottom: 0.85rem;
+}
+
+.person-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.person-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--bg-field);
+  border-radius: var(--r-xl);
+  cursor: pointer;
+}
+
+.person-row.selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft-2);
+}
+
+.person-row.editing {
+  cursor: default;
+}
+
+.avatar.lg {
+  width: 2rem;
+  height: 2rem;
+  font-size: var(--fs-meta);
+}
+
+.person-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.person-row-body .speaker-name {
+  font-size: var(--fs-body);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The count IS the disclosure: the number is the reason to open the list, so a
+   separate chevron would be a second control for one idea. */
+.sample-count {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  height: var(--h-control-sm);
+  padding: 0 0.6rem;
+  border-radius: var(--r-sm);
+  background: var(--neutral-bg);
+  color: var(--ink-soft);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+
+.sample-count svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.sample-count:hover {
+  background: var(--neutral-bg-hover);
+}
+
+.sample-count.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.speaker-actions {
+  display: flex;
+  gap: 0.2rem;
+  flex: 0 0 auto;
+}
+
+.speaker-actions .icon-btn {
+  width: var(--h-control-sm);
+  height: var(--h-control-sm);
+  border-radius: var(--r-sm);
+}
+
+.speaker-actions .icon-btn svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+/* The expanded panel reads as part of the person above it, not as a sibling. */
+.speaker-samples-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: -0.3rem 0 0.25rem;
+  padding: 0.7rem 0.7rem 0.6rem;
+  border: 1px solid var(--line-soft);
+  border-top: 0;
+  background: var(--bg-inset);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+}
+
+.sample-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.3rem 0.25rem;
+}
+
+.sample-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sample-row-dur {
+  flex: 0 0 auto;
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+.sample-row-delete {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--r-sm);
+}
+
+.sample-row-delete svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+/* Small round play/stop, shared shape with the speaker rows elsewhere. */
+.play-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.play-btn svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: currentColor;
+  stroke: none;
+}
+
+.play-btn:hover,
+.play-btn.playing {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.speaker-samples-empty {
+  font-size: var(--fs-ui);
+  color: var(--ink-mute);
+  padding: 0.2rem 0.25rem;
+}
+
+/* Merge belongs to the open person: it names the target inline rather than
+   opening a second picker to choose one. */
+.merge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 0.3rem;
+  padding-top: 0.5rem;
+}
+
+.merge-row span {
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+.merge-row select {
+  margin-left: auto;
+  min-width: 9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 0.25rem 0.5rem;
+  font-size: var(--fs-ui);
+  background: var(--bg-field);
+  color: var(--ink);
+}
+
+.speaker-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.85rem;
+}
+
+.speaker-create-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.speaker-create-row input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+
+/* ---------- Preset pill and its menu (redesign v2) ----------
+   Choosing a preset and saving one are the same subject, so they share one
+   control. The separate "Save as preset" button is gone; the only sign the
+   settings had drifted used to be that button relabelling itself. */
+.pop-wrap {
+  position: relative;
+}
+
+.preset-pill {
+  background: var(--bg-chip);
+  border-color: var(--line-strong);
+  color: var(--ink);
+  font-weight: 700;
+  max-width: 17rem;
+  cursor: pointer;
+}
+
+.preset-pill:hover {
+  background: var(--ghost-bg);
+}
+
+.preset-pill > svg:first-of-type {
+  flex: 0 0 auto;
+  width: 0.88rem;
+  height: 0.88rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.preset-pill .pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-pill .chev {
+  flex: 0 0 auto;
+  width: 0.88rem;
+  height: 0.88rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.6;
+}
+
+.badge.accent {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+}
+
+.badge.sm {
+  font-size: 0.56rem;
+}
+
+/* Popover shared by the preset menu; positioned against .pop-wrap. */
+.popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 40;
+  min-width: 15rem;
+  padding: 0.36rem;
+  background: var(--bg-card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-pop);
+}
+
+.popover.w-md {
+  min-width: 18rem;
+}
+
+.popover-title {
+  padding: 0.36rem 0.5rem 0.3rem;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.popover-sep {
+  height: 1px;
+  margin: 0.3rem 0.4rem;
+  background: var(--line);
+}
+
+/* A preset row says what the preset DOES, not just its name — that summary is
+   what makes opening the menu worthwhile. */
+.pick-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.44rem 0.5rem;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.pick-row:hover {
+  background: var(--bg-chip);
+}
+
+.pick-row.is-on {
+  background: var(--accent-soft-2);
+}
+
+.pick-row .tick {
+  flex: 0 0 auto;
+  width: 0.88rem;
+  height: 0.88rem;
+  margin-top: 0.15rem;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+.pick-row.is-on .tick {
+  opacity: 1;
+}
+
+.pick-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.pick-label {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pick-sub {
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* ---------- Delivery pill and picker (redesign v2) ----------
+   Same shape as the preset control: a pill that opens a popover. The old
+   summary line said "2 selected", which told the user less than the pill plus
+   the list does. */
+.delivery-pill {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.delivery-pill > svg {
+  flex: 0 0 auto;
+  width: 0.88rem;
+  height: 0.88rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.delivery-pill .prompt-select-caret {
+  opacity: 0.6;
+}
+
+/* The count is the state: which destinations is what the popover answers. */
+/* :not(.hidden) because .hidden is declared ~2700 lines earlier and loses to a
+   later display at equal specificity — the same trap the file already documents
+   for the dialogs and the file-drop zone. */
+.count-pip:not(.hidden) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.3rem;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+}
+
+/* The delivery popover reuses the preset menu's surface, so the two dropdowns
+   in the same row do not look like different species. */
+.delivery-select-field .prompt-select-popover {
+  min-width: 17rem;
+  padding: 0.36rem;
+  background: var(--bg-card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-pop);
+}
+
+.delivery-select-field .delivery-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.44rem 0.5rem;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.delivery-select-field .delivery-row:hover {
+  background: var(--bg-chip);
+}
+
+.delivery-select-field .delivery-row input {
+  margin-top: 0.15rem;
+  flex: 0 0 auto;
+}
+
+.delivery-select-field .delivery-row .prompt-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* What this destination sends, and whether its plugin is even loaded — both
+   belong under the name rather than beside it. */
+.delivery-select-field .delivery-row-variant,
+.delivery-select-field .delivery-unavailable {
+  display: block;
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+.delivery-select-field .delivery-unavailable {
+  color: var(--warn-ink);
+}
+
+.delivery-manage-btn {
+  color: var(--accent-ink);
+}
+
+.delivery-manage-btn svg {
+  color: var(--accent);
 }

@@ -3158,18 +3158,29 @@ function applyPresetOptions(options) {
 }
 
 function updatePresetSaveBtn() {
+  const preset = findPreset(selectedPresetRef);
+  const isUserPreset = preset && preset.source === "user" && preset.editable;
+
+  // The pill carries the current preset's name and a "changed" badge — that
+  // badge replaces the old button-label trick, where the only sign the settings
+  // had drifted was a button relabelling itself.
+  const pillLabel = document.getElementById("preset-pill-label");
+  if (pillLabel) pillLabel.textContent = preset ? presetLabel(preset) : t("new_task.preset_none");
+  document.getElementById("preset-dirty-badge")
+    ?.classList.toggle("hidden", !(preset && presetDirty));
+
   if (!presetSaveBtn) {
     return;
   }
-  const preset = findPreset(selectedPresetRef);
-  const isUserPreset = preset && preset.source === "user" && preset.editable;
+  const saveLabel = document.getElementById("preset-save-label") || presetSaveBtn;
   if (preset && presetDirty && isUserPreset) {
-    presetSaveBtn.textContent = t("preset.save_changes");
+    saveLabel.textContent = t("preset.save_changes");
     presetSaveBtn.dataset.mode = "patch";
   } else {
-    presetSaveBtn.textContent = t("preset.save_as");
+    saveLabel.textContent = t("preset.save_as");
     presetSaveBtn.dataset.mode = "create";
   }
+  renderPresetMenu();
 }
 
 function recomputePresetDirty() {
@@ -3223,6 +3234,65 @@ function populatePresetSelect() {
     opt.textContent = presetLabel(preset);
     presetSelect.appendChild(opt);
   }
+  renderPresetMenu();
+}
+
+// The pill's menu (redesign v2). Rows come from the same presetsCache the
+// <select> is built from, so the two can never list different presets, and
+// picking one writes through the select — every existing listener keeps working.
+function renderPresetMenu() {
+  const list = document.getElementById("preset-menu-list");
+  if (!list) return;
+  list.textContent = "";
+  const currentRef = presetRefStr(selectedPresetRef);
+  for (const preset of presetsCache) {
+    const ref = presetRefStr({ source: preset.source, id: preset.id });
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "pick-row" + (ref === currentRef ? " is-on" : "");
+    row.innerHTML = '<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>';
+    const body = document.createElement("span");
+    body.className = "pick-body";
+    const label = document.createElement("span");
+    label.className = "pick-label";
+    label.textContent = presetLabel(preset);
+    body.appendChild(label);
+    // The summary is what makes the menu worth opening: it says what the preset
+    // actually does, which a bare name never did.
+    const summary = presetSummary(preset);
+    if (summary) {
+      const sub = document.createElement("span");
+      sub.className = "pick-sub";
+      sub.textContent = summary;
+      body.appendChild(sub);
+    }
+    row.appendChild(body);
+    row.addEventListener("click", () => {
+      presetSelect.value = ref;
+      // Programmatic .value fires no event, and every preset path hangs off it.
+      presetSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      closePresetMenu();
+    });
+    list.appendChild(row);
+  }
+}
+
+// One line describing a preset's effect, from the options it stores.
+function presetSummary(preset) {
+  const o = preset?.options || {};
+  const parts = [];
+  if (o.audio_only) parts.push(t("new_task.audio_only"));
+  if (o.transcript) parts.push(t("new_task.transcript"));
+  if (o.diarize) parts.push(t("new_task.diarize"));
+  const promptCount = Array.isArray(o.prompts) ? o.prompts.length : 0;
+  if (promptCount) parts.push(t("delivery.selected_count", { count: promptCount }));
+  if (o.language) parts.push(o.language);
+  return parts.join(" · ");
+}
+
+function closePresetMenu() {
+  document.getElementById("preset-menu")?.classList.add("hidden");
+  document.getElementById("preset-pill")?.setAttribute("aria-expanded", "false");
 }
 
 async function loadPresets() {
@@ -3314,6 +3384,29 @@ async function resavePresetClicked() {
   applyPresetById(keep);
   showDanglingHint(false);
 }
+
+// Pill opens its menu; a click anywhere else closes it. Same shape as the task
+// kebab, so the two popovers behave alike.
+document.getElementById("preset-pill")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = document.getElementById("preset-menu");
+  const pill = document.getElementById("preset-pill");
+  if (!menu) return;
+  const willOpen = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !willOpen);
+  pill?.setAttribute("aria-expanded", String(willOpen));
+});
+
+document.addEventListener("click", (event) => {
+  const menu = document.getElementById("preset-menu");
+  if (!menu || menu.classList.contains("hidden")) return;
+  if (event.target instanceof Element && event.target.closest("#preset-menu, #preset-pill")) return;
+  closePresetMenu();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePresetMenu();
+});
 
 if (presetSelect) {
   presetSelect.addEventListener("change", () => {
@@ -5084,15 +5177,29 @@ function renderSpeakers(list) {
     return;
   }
   for (const speaker of speakerRegistryCache) {
-    const row = document.createElement("li");
-    row.className = "tokens-row speaker-row";
+    // A block, not a bare row: the person's fragments expand INSIDE it
+    // (redesign v2). The two-column layout put a person's fragments on the far
+    // side of the dialog from the person, and left that side empty until
+    // something was selected.
+    const block = document.createElement("div");
+    block.className = "person-block";
+    block.dataset.speakerId = speaker.id;
+
+    const row = document.createElement("div");
+    row.className = "tokens-row speaker-row person-row";
     row.dataset.speakerId = speaker.id;
     if (speaker.id === selectedSpeakerId) row.classList.add("selected");
 
-    const meta = document.createElement("div");
-    meta.className = "tokens-meta speaker-meta";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar lg";
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.textContent = registryInitials(speaker.name);
+    row.appendChild(avatar);
 
-    const nameEl = document.createElement("span");
+    const meta = document.createElement("div");
+    meta.className = "tokens-meta speaker-meta person-row-body";
+
+    const nameEl = document.createElement("b");
     nameEl.className = "tokens-name speaker-name";
     nameEl.textContent = speaker.name;
     meta.appendChild(nameEl);
@@ -5106,12 +5213,29 @@ function renderSpeakers(list) {
 
     row.appendChild(meta);
 
-    // Row itself selects the speaker; clicking the name/action buttons must
-    // not also trigger selection when entering rename mode.
+    // The fragment count doubles as the disclosure: the number IS the reason to
+    // open it, so a separate chevron would be a second control for one idea.
+    const count = document.createElement("button");
+    count.type = "button";
+    count.className = "sample-count";
+    count.setAttribute("aria-expanded", String(speaker.id === selectedSpeakerId));
+    count.setAttribute("data-tooltip", t("speakers.registry.samples"));
+    count.setAttribute("aria-label", t("speakers.registry.samples"));
+    count.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 5v14M16 8v8M20 11v2"/></svg>' +
+      `<span>${Number(speaker.sample_count ?? 0)}</span>`;
+    if (speaker.id === selectedSpeakerId) count.classList.add("active");
+    count.addEventListener("click", (event) => {
+      event.stopPropagation();
+      // Toggle: clicking the open person's count closes it again.
+      selectSpeaker(speaker.id === selectedSpeakerId ? null : speaker.id);
+    });
+    row.appendChild(count);
+
     row.addEventListener("click", (event) => {
       if (row.classList.contains("editing")) return;
       if (event.target.closest(".speaker-actions")) return;
-      selectSpeaker(speaker.id);
+      selectSpeaker(speaker.id === selectedSpeakerId ? null : speaker.id);
     });
 
     const actions = document.createElement("div");
@@ -5126,16 +5250,6 @@ function renderSpeakers(list) {
     renameBtn.addEventListener("click", () => enterSpeakerRename(row, speaker));
     actions.appendChild(renameBtn);
 
-    // The merge button sits on the SOURCE — the person that will disappear.
-    const mergeBtn = document.createElement("button");
-    mergeBtn.type = "button";
-    mergeBtn.className = "icon-btn ghost speaker-merge-btn";
-    mergeBtn.setAttribute("data-tooltip", t("speakers.registry.merge"));
-    mergeBtn.setAttribute("aria-label", t("speakers.registry.merge"));
-    mergeBtn.innerHTML = ICON_MERGE;
-    mergeBtn.addEventListener("click", () => mergeSpeaker(speaker));
-    actions.appendChild(mergeBtn);
-
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "icon-btn ghost danger";
@@ -5146,8 +5260,27 @@ function renderSpeakers(list) {
     actions.appendChild(delBtn);
 
     row.appendChild(actions);
-    speakerListEl.appendChild(row);
+    block.appendChild(row);
+
+    // Where the fragments land when this person is open. Merge moved in here as
+    // a <select> (redesign v2) — it is a property of the open person rather
+    // than a toolbar action, and it names the target instead of opening a
+    // second picker to choose one.
+    if (speaker.id === selectedSpeakerId) {
+      const panel = document.createElement("div");
+      panel.className = "speaker-samples-list";
+      panel.id = "speaker-samples";
+      block.appendChild(panel);
+    }
+
+    speakerListEl.appendChild(block);
   }
+}
+
+function registryInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.slice(0, 2).map((w) => w[0].toUpperCase()).join("");
 }
 
 function enterSpeakerRename(row, speaker) {
@@ -5226,90 +5359,152 @@ async function deleteSpeaker(speaker) {
 
 async function selectSpeaker(speakerId) {
   selectedSpeakerId = speakerId;
-  speakerListEl?.querySelectorAll(".speaker-row").forEach((row) => {
-    row.classList.toggle("selected", row.dataset.speakerId === speakerId);
-  });
-  await refreshSpeakerSamples(speakerId);
+  // Re-render the list: the open person's block grows a samples panel, and the
+  // previously open one loses its own. Cheap — this list is a handful of rows.
+  renderSpeakers(speakerRegistryCache);
+  if (speakerId) await refreshSpeakerSamples(speakerId);
 }
 
 function renderSamples(samples) {
-  if (!speakerSamplesEl) return;
+  // Resolved at call time, not captured at load: the panel belongs to whichever
+  // person is currently open and is created with that person's block.
+  const panel = speakerListEl?.querySelector(
+    `.person-block[data-speaker-id="${CSS.escape(String(selectedSpeakerId || ""))}"] .speaker-samples-list`
+  );
+  if (!panel) return;
   const list = Array.isArray(samples) ? samples : [];
-  speakerSamplesEl.innerHTML = "";
-  const hasSelection = !!selectedSpeakerId;
-  speakerSamplesEmptyEl?.classList.toggle("hidden", hasSelection);
-  speakerSamplesEl.classList.toggle("hidden", !hasSelection);
-  if (!hasSelection) return;
+  panel.innerHTML = "";
 
   if (!list.length) {
     const empty = document.createElement("p");
-    empty.className = "tokens-empty";
+    empty.className = "speaker-samples-empty";
     empty.textContent = t("speakers.registry.samples_empty");
-    speakerSamplesEl.appendChild(empty);
+    panel.appendChild(empty);
+    appendMergeRow(panel);
     return;
   }
 
   for (const sample of list) {
-    const row = document.createElement("li");
-    row.className = "tokens-row speaker-sample-row";
+    // Compact row (redesign v2): a play button rather than a full <audio>
+    // widget, because five stacked players made the panel a wall of controls.
+    const row = document.createElement("div");
+    row.className = "sample-row";
 
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.src = buildPath(`/api/speakers/samples/${encodeURIComponent(sample.id)}/audio`);
-    row.appendChild(audio);
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "play-btn sm";
+    play.setAttribute("aria-label", t("speakers.registry.play_sample"));
+    play.setAttribute("data-tooltip", t("speakers.registry.play_sample"));
+    play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="play-icon" d="m8 6 10 6-10 6z"/><rect class="stop-icon hidden" x="8" y="8" width="8" height="8" rx="1.5"/></svg>';
+    play.addEventListener("click", () => playRegistrySample(panel, sample, play));
+    row.appendChild(play);
 
-    const meta = document.createElement("div");
-    meta.className = "tokens-meta speaker-sample-meta";
-
-    const duration = document.createElement("span");
-    duration.className = "speaker-sample-duration";
-    duration.textContent = formatDuration(sample.duration_sec || 0);
-    meta.appendChild(duration);
-
-    const created = document.createElement("span");
-    created.className = "speaker-sample-created";
-    created.textContent = sample.created_at ? new Date(sample.created_at).toLocaleString() : "";
-    meta.appendChild(created);
-
-    const source = document.createElement("span");
-    source.className = "speaker-sample-source";
+    const name = document.createElement("span");
+    name.className = "sample-row-name";
+    // The source task is the useful identity of a fragment ("where did this
+    // voice come from"), so it stays a link when the task still exists.
     if (sample.source_task_id) {
       const link = document.createElement("a");
       link.href = "#";
       link.className = "speaker-sample-source-link";
-      link.textContent = t("speakers.registry.from_task");
+      link.textContent = sample.source_task_title || t("speakers.registry.from_task");
       link.addEventListener("click", (event) => {
         event.preventDefault();
         jumpToTask(sample.source_task_id);
       });
-      source.appendChild(link);
+      name.appendChild(link);
     } else {
-      source.textContent = t("speakers.registry.from_task_gone");
+      name.textContent = t("speakers.registry.from_task_gone");
     }
-    meta.appendChild(source);
+    row.appendChild(name);
 
-    row.appendChild(meta);
+    const dur = document.createElement("span");
+    dur.className = "sample-row-dur mono";
+    dur.textContent = formatDuration(sample.duration_sec || 0);
+    row.appendChild(dur);
 
     const moveBtn = document.createElement("button");
     moveBtn.type = "button";
-    moveBtn.className = "icon-btn ghost speaker-sample-move-btn";
-    moveBtn.setAttribute("data-tooltip", t("speakers.registry.move_sample"));
-    moveBtn.setAttribute("aria-label", t("speakers.registry.move_sample"));
-    moveBtn.innerHTML = ICON_MOVE;
+    moveBtn.className = "btn-link";
+    moveBtn.textContent = t("speakers.registry.move_sample");
     moveBtn.addEventListener("click", () => moveSample(sample));
     row.appendChild(moveBtn);
 
     const delBtn = document.createElement("button");
     delBtn.type = "button";
-    delBtn.className = "icon-btn ghost danger";
+    delBtn.className = "icon-btn ghost danger sample-row-delete";
     delBtn.setAttribute("data-tooltip", t("speakers.registry.delete_sample"));
     delBtn.setAttribute("aria-label", t("speakers.registry.delete_sample"));
     delBtn.innerHTML = ICON_DELETE;
     delBtn.addEventListener("click", () => deleteSample(sample));
     row.appendChild(delBtn);
 
-    speakerSamplesEl.appendChild(row);
+    panel.appendChild(row);
   }
+  appendMergeRow(panel);
+}
+
+// Merge as a property of the open person rather than a toolbar action: it names
+// the target inline instead of opening a second picker to choose one.
+function appendMergeRow(panel) {
+  const source = speakerRegistryCache.find((sp) => sp.id === selectedSpeakerId);
+  const others = speakerRegistryCache.filter((sp) => sp.id !== selectedSpeakerId);
+  if (!source || !others.length) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "merge-row";
+  const label = document.createElement("span");
+  label.textContent = t("speakers.registry.merge_into");
+  wrap.appendChild(label);
+
+  const select = document.createElement("select");
+  select.className = "field";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = t("speakers.registry.merge_choose");
+  select.appendChild(placeholder);
+  for (const other of others) {
+    const opt = document.createElement("option");
+    opt.value = other.id;
+    opt.textContent = other.name;
+    select.appendChild(opt);
+  }
+  select.addEventListener("change", () => {
+    const target = others.find((o) => o.id === select.value);
+    select.value = "";
+    if (target) mergeSpeakerInto(source, target);
+  });
+  wrap.appendChild(select);
+  panel.appendChild(wrap);
+}
+
+// One <audio> for the panel, so starting a second fragment stops the first.
+function playRegistrySample(panel, sample, btn) {
+  if (!panel._audio) {
+    panel._audio = new Audio();
+    panel._audio.preload = "none";
+  }
+  const audio = panel._audio;
+  const reset = (el) => {
+    el.classList.remove("playing");
+    el.querySelector(".play-icon")?.classList.remove("hidden");
+    el.querySelector(".stop-icon")?.classList.add("hidden");
+  };
+  const playingThis = panel._audioId === sample.id && !audio.paused;
+  audio.pause();
+  panel.querySelectorAll(".play-btn.playing").forEach(reset);
+  if (playingThis) {
+    panel._audioId = null;
+    return;
+  }
+  audio.src = buildPath(`/api/speakers/samples/${encodeURIComponent(sample.id)}/audio`);
+  panel._audioId = sample.id;
+  btn.classList.add("playing");
+  btn.querySelector(".play-icon")?.classList.add("hidden");
+  btn.querySelector(".stop-icon")?.classList.remove("hidden");
+  audio.onended = () => reset(btn);
+  audio.onerror = () => reset(btn);
+  void audio.play().catch(() => reset(btn));
 }
 
 async function deleteSample(sample) {
@@ -5489,6 +5684,31 @@ async function moveSample(sample) {
       await refreshSpeakerRegistry();
     },
   });
+}
+
+// The inline <select> already names the target, so this is the merge without
+// the picker step. mergeSpeaker() (picker-based) stays for any caller that has
+// no target in hand.
+async function mergeSpeakerInto(source, target) {
+  const confirmed = window.confirm(
+    t("speakers.registry.merge_confirm", { source: source.name, target: target.name })
+  );
+  if (!confirmed) return;
+  try {
+    await api(`/api/speakers/${encodeURIComponent(source.id)}/merge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_id: target.id }),
+    });
+  } catch (err) {
+    console.error("speaker merge failed", err);
+    return;
+  }
+  // The source is gone; follow the data to the target so the panel stays open
+  // on the person the fragments now belong to.
+  if (selectedSpeakerId === source.id) selectedSpeakerId = target.id;
+  await refreshSpeakerRegistry();
+  if (selectedSpeakerId) await refreshSpeakerSamples(selectedSpeakerId);
 }
 
 async function mergeSpeaker(source) {
@@ -7730,26 +7950,70 @@ function renderDeliveryMultiselect(container, selected) {
   const chosen = Array.isArray(selected) ? selected : [];
   container.innerHTML = "";
 
+  // A pill with a count pip, matching the preset control (redesign v2): the
+  // destinations are a short list, so a summary line saying "2 selected" told
+  // the user less than the pill plus the list itself does.
   const toggle = document.createElement("button");
   toggle.type = "button";
-  toggle.className = "prompt-select-toggle";
+  toggle.className = "option-pill prompt-select-toggle delivery-pill";
   toggle.setAttribute("aria-haspopup", "true");
   toggle.setAttribute("aria-expanded", "false");
+  // The sibling label is gone (the pill says it), so the explanation it carried
+  // moves here.
+  toggle.setAttribute("data-i18n-title", "new_task.delivery_tooltip");
+  toggle.setAttribute("title", t("new_task.delivery_tooltip"));
+  toggle.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>';
 
+  const label = document.createElement("span");
+  label.className = "pill-label";
+  label.textContent = t("new_task.delivery");
+  toggle.appendChild(label);
+
+  // The count is the whole state: which destinations, in a list this short, is
+  // a question the popover answers.
+  const pip = document.createElement("span");
+  pip.className = "count-pip hidden";
+  toggle.appendChild(pip);
+
+  // Kept for updateDeliverySummary(), which several paths call; it carries the
+  // accessible summary rather than visible text now.
   const summary = document.createElement("span");
-  summary.className = "prompt-select-summary";
-  const caret = document.createElement("span");
-  caret.className = "prompt-select-caret";
-  caret.textContent = "▾";
-  caret.setAttribute("aria-hidden", "true");
-  toggle.append(summary, caret);
+  summary.className = "prompt-select-summary sr-only";
+  toggle.appendChild(summary);
+
+  const chev = document.createElement("span");
+  chev.className = "prompt-select-caret";
+  chev.textContent = "▾";
+  chev.setAttribute("aria-hidden", "true");
+  toggle.appendChild(chev);
 
   const popover = document.createElement("div");
-  popover.className = "prompt-select-popover";
+  popover.className = "prompt-select-popover popover w-sm";
   popover.hidden = true;
+  const title = document.createElement("div");
+  title.className = "popover-title";
+  title.textContent = t("delivery.where_to_send");
+  popover.appendChild(title);
   for (const target of deliveryTargetsList()) {
     popover.appendChild(buildDeliveryRow(target, chosen));
   }
+  // A way out to the full settings, as in the design: picking destinations and
+  // configuring them are different jobs, and the second one lives in a dialog.
+  const sep = document.createElement("div");
+  sep.className = "popover-sep";
+  popover.appendChild(sep);
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = "menu-item delivery-manage-btn";
+  manage.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>' +
+    `<span>${t("delivery.configure")}</span>`;
+  manage.addEventListener("click", () => {
+    setPromptPopoverOpen(container, false);
+    document.getElementById("delivery-btn")?.click();
+  });
+  popover.appendChild(manage);
 
   toggle.addEventListener("click", () => togglePromptPopover(container));
   popover.addEventListener("change", () => updateDeliverySummary(container));
@@ -7766,6 +8030,11 @@ function updateDeliverySummary(container) {
   ).length;
   container.querySelector(".prompt-select-toggle")
     ?.classList.toggle("has-selection", count > 0);
+  const pip = container.querySelector(".count-pip");
+  if (pip) {
+    pip.textContent = String(count);
+    pip.classList.toggle("hidden", count === 0);
+  }
   summary.textContent = count
     ? t("delivery.selected_count", { count })
     : t("delivery.none_selected");

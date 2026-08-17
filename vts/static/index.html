@@ -334,17 +334,53 @@
           <p id="task-form-error" class="form-error hidden" role="alert"></p>
 
           <div class="row options-row">
-            <div class="preset-field">
+            <!-- Preset as a pill with its own menu (redesign v2). The separate
+                 "Save as preset" button is gone: choosing a preset and saving
+                 one are the same subject, and a button that changed its own
+                 label between "save as" and "save changes" was the only hint
+                 that the current settings had drifted. The <select> stays as
+                 the value holder — app.js reads and writes selectedPresetRef
+                 through it, and it is the accessible control. -->
+            <div class="preset-field pop-wrap">
               <span class="preset-label" data-i18n="new_task.preset">Preset</span>
+              <!-- Kept from vts-lbgg: "preset" is opaque to Russian speakers, so
+                   the control carries an explanation rather than assuming the
+                   term is understood. -->
               <span class="preset-hint" tabindex="0" role="note"
                     title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
                     data-i18n-title="new_task.preset_hint"
                     data-i18n-aria-label="new_task.preset_hint">?</span>
-              <select id="preset-select" title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
-                      data-i18n-title="new_task.preset_hint"></select>
-              <button type="button" id="preset-save-btn" class="btn-text" data-i18n="preset.save_as"
-                      title="Save the current task settings as a new preset"
-                      data-i18n-title="preset.save_as_tooltip">Save as preset</button>
+              <select id="preset-select" class="sr-only"
+                      title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
+                      data-i18n-title="new_task.preset_hint"
+                      data-i18n-aria-label="new_task.preset"></select>
+              <button type="button" id="preset-pill" class="option-pill preset-pill"
+                      aria-haspopup="true" aria-expanded="false"
+                      title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
+                      data-i18n-title="new_task.preset_hint">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+                  <circle cx="16" cy="7" r="2" />
+                  <circle cx="10" cy="17" r="2" />
+                </svg>
+                <span class="pill-label" id="preset-pill-label"></span>
+                <span class="badge accent sm hidden" id="preset-dirty-badge"
+                      data-i18n="preset.dirty">changed</span>
+                <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <div class="popover w-md hidden" id="preset-menu">
+                <div class="popover-title" data-i18n="new_task.preset">Task preset</div>
+                <div id="preset-menu-list"></div>
+                <div class="popover-sep"></div>
+                <button type="button" id="preset-save-btn" class="menu-item"
+                        title="Save the current task settings as a new preset"
+                        data-i18n-title="preset.save_as_tooltip">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3"/></svg>
+                  <span id="preset-save-label" data-i18n="preset.save_as">Save as a new preset</span>
+                </button>
+              </div>
             </div>
             <label
               class="option-pill"
@@ -388,10 +424,7 @@
               <div class="prompt-select" id="prompt-select"></div>
             </div>
             <div class="prompt-select-field delivery-select-field" id="delivery-select-field" hidden>
-              <span class="prompt-select-label" tabindex="0" role="note"
-                    data-i18n="new_task.delivery"
-                    data-i18n-title="new_task.delivery_tooltip">Deliver to</span>
-              <div class="prompt-select" id="delivery-select"></div>
+              <div class="prompt-select pop-wrap" id="delivery-select"></div>
             </div>
             <label
               class="language-control"
@@ -1118,26 +1151,25 @@
         </button>
       </div>
 
-      <div class="speaker-registry-columns">
-        <div class="speaker-registry-col speaker-registry-col-speakers">
-          <ul id="speaker-list" class="tokens-list speaker-list"></ul>
+      <!-- One list, fragments expanding inside the row (redesign v2). The two
+           columns forced a person's fragments to be read on the far side of the
+           dialog from the person, and the right column sat empty until
+           something was selected. -->
+      <p class="tokens-help" data-i18n="speakers.registry.hint">
+        Known voices are substituted into the transcript in place of "Speaker 1".
+      </p>
+      <div id="speaker-list" class="speaker-registry-list"></div>
 
-          <form id="speaker-create-form" class="tokens-create-form">
-            <input type="text" id="speaker-create-name" name="name" required
-                   maxlength="255" autocomplete="off"
-                   data-i18n-placeholder="speakers.registry.name_placeholder"
-                   placeholder="Name" />
-            <button type="submit" class="btn-text primary" data-i18n="speakers.registry.add">Add</button>
-          </form>
+      <form id="speaker-create-form" class="speaker-create-form">
+        <span class="field-label" data-i18n="speakers.registry.new_person">New person</span>
+        <div class="speaker-create-row">
+          <input type="text" id="speaker-create-name" name="name" required
+                 maxlength="255" autocomplete="off"
+                 data-i18n-placeholder="speakers.registry.name_placeholder"
+                 placeholder="Name" />
+          <button type="submit" class="btn-text primary" data-i18n="speakers.registry.add">Add</button>
         </div>
-
-        <div class="speaker-registry-col speaker-registry-col-samples">
-          <p id="speaker-samples-empty" class="tokens-help" data-i18n="speakers.registry.select_hint">
-            Select a person on the left to see their voice fragments.
-          </p>
-          <ul id="speaker-samples" class="tokens-list speaker-samples-list hidden"></ul>
-        </div>
-      </div>
+      </form>
     </dialog>
 
     <dialog id="voice-resolution-dialog" class="tokens-dialog voice-resolution-dialog">

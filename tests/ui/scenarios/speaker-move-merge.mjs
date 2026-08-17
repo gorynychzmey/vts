@@ -67,7 +67,8 @@ export async function run() {
     await clickReal(page, '#speaker-list .speaker-row[data-speaker-id="s1"]');
     await page.waitForTimeout(250);
 
-    const moveBtn = "#speaker-samples .speaker-sample-move-btn";
+    // "Move" is a text link on the fragment row now (redesign v2).
+    const moveBtn = '.speaker-samples-list .sample-row .btn-link';
     if (!(await page.$(moveBtn))) {
       failures.push("no move button on the fragment row");
     } else {
@@ -142,31 +143,26 @@ export async function run() {
     }
 
     // ---- Merge two persons ----
-    const mergeBtn = '#speaker-list .speaker-row[data-speaker-id="s1"] .speaker-merge-btn';
-    if (!(await page.$(mergeBtn))) {
-      failures.push("no merge button on the speaker row");
+    // Merge is an inline <select> inside the open person's panel now, not a
+    // toolbar button opening a second picker: the target is named in place.
+    // What it protects is unchanged — the source must not be offered as its own
+    // target, and the confirmation must state the direction so the user cannot
+    // misread which person disappears.
+    const mergeSelect = '.person-block[data-speaker-id="s1"] .merge-row select';
+    if (!(await page.$(mergeSelect))) {
+      failures.push("no merge control in the opened person's panel");
     } else {
-      await clickReal(page, mergeBtn);
-      await page.waitForTimeout(300);
-
-      if (!(await dialogOpen(page, "speaker-picker-dialog"))) {
-        failures.push("picker did not open on merge click");
-      }
-
-      // Merge targets an existing person: no "create new", and the source
-      // itself must not be offered as its own target.
       const mergeNames = await page.$$eval(
-        "#speaker-picker-list .speaker-picker-row .tokens-name",
-        (els) => els.map((e) => e.textContent.trim())
+        `${mergeSelect} option`,
+        (els) => els.map((e) => e.textContent.trim()).filter((x) => x)
       );
-      if (mergeNames.some((n) => /^</.test(n))) {
-        failures.push(`merge picker offers "create new": ${JSON.stringify(mergeNames)}`);
-      }
       if (mergeNames.includes("Vasya-1")) {
-        failures.push(`merge picker offers the source itself: ${JSON.stringify(mergeNames)}`);
+        failures.push(`merge offers the source itself: ${JSON.stringify(mergeNames)}`);
+      }
+      if (!mergeNames.includes("Vasya-2")) {
+        failures.push(`merge does not offer the other person: ${JSON.stringify(mergeNames)}`);
       }
 
-      // The confirmation must state the direction: source -> target.
       let mergeConfirm = "";
       page.once("dialog", async (dialog) => {
         mergeConfirm = dialog.message();
@@ -176,13 +172,12 @@ export async function run() {
         page.waitForRequest(
           (r) => r.url().includes("/api/speakers/s1/merge") && r.method() === "POST"
         ),
-        clickReal(page, '#speaker-picker-list .speaker-picker-row[data-speaker-id="s2"]'),
+        page.selectOption(mergeSelect, "s2"),
       ]);
       if (!mergeConfirm.includes("Vasya-1") || !mergeConfirm.includes("Vasya-2")) {
         failures.push(`merge confirm misses a name: ${JSON.stringify(mergeConfirm)}`);
       }
-      // Direction check: the source must be mentioned before the target, so the
-      // user cannot misread which person disappears.
+      // Direction: the source must be mentioned before the target.
       if (mergeConfirm.indexOf("Vasya-1") > mergeConfirm.indexOf("Vasya-2")) {
         failures.push(`merge confirm reads backwards: ${JSON.stringify(mergeConfirm)}`);
       }
