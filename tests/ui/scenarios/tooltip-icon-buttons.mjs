@@ -1,5 +1,12 @@
 // Verifies the reusable [data-tooltip] pattern on the icon action buttons in
-// the prompt + preset manager dialogs. The native `title` does nothing on
+// the preset manager dialog.
+//
+// The prompts manager is no longer covered here: redesign v2 moved its actions
+// off the rows into the editor beside the list, so there are no per-row icon
+// buttons left to hover. Nothing was lost — the pattern is asserted on the
+// preset manager, which still has them (and which this session has not
+// restyled yet). When the presets dialog gets the same treatment, this
+// scenario needs a new host rather than a looser assertion. The native `title` does nothing on
 // touch, so the bubble must show on hover (desktop) AND focus/active (tap).
 // Asserts: each action icon button has a non-empty data-tooltip; the ::after
 // opacity is "0" at rest, "1" on hover, and "1" on focus (the touch-tap path).
@@ -82,19 +89,10 @@ export async function run() {
   const failures = [];
   fs.mkdirSync(SHOT_DIR, { recursive: true });
   try {
-    // ---- DESKTOP (1100px): prompts + presets, hover bubble visible ----
+    // ---- DESKTOP (1100px): presets, hover bubble visible ----
     const desktop = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await desktop.goto(baseUrl, { waitUntil: "networkidle" });
     await desktop.waitForTimeout(300);
-
-    await openFromHeaderMenu(desktop, "#prompts-btn");
-    failures.push(...await checkDialog(desktop, "#prompts-list", "prompts/desktop"));
-    // Leave a hover bubble showing for the screenshot.
-    await desktop.hover("#prompts-list .prompts-actions .icon-btn[data-tooltip]");
-    await desktop.waitForTimeout(150);
-    await desktop.screenshot({ path: `${SHOT_DIR}/tooltip-prompts-desktop.png` });
-    await desktop.click("#prompts-close-btn").catch(() => {});
-    await desktop.waitForTimeout(150);
 
     await openFromHeaderMenu(desktop, "#presets-btn");
     failures.push(...await checkDialog(desktop, "#presets-list", "presets/desktop"));
@@ -114,14 +112,6 @@ export async function run() {
     await mobile.$eval("#presets-list .prompts-actions .icon-btn[data-tooltip]", (b) => b.focus());
     await mobile.waitForTimeout(150);
     await mobile.screenshot({ path: `${SHOT_DIR}/tooltip-presets-mobile.png` });
-    await mobile.click("#presets-close-btn").catch(() => {});
-    await mobile.waitForTimeout(150);
-
-    await openFromHeaderMenu(mobile, "#prompts-btn");
-    failures.push(...await checkDialog(mobile, "#prompts-list", "prompts/mobile"));
-    await mobile.$eval("#prompts-list .prompts-actions .icon-btn[data-tooltip]", (b) => b.focus());
-    await mobile.waitForTimeout(150);
-    await mobile.screenshot({ path: `${SHOT_DIR}/tooltip-prompts-mobile.png` });
     await mobile.close();
   } finally {
     await browser.close();

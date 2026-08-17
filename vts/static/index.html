@@ -664,9 +664,11 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
                     <span data-i18n="menu.open_player">Open the transcript player</span>
                   </a>
-                  <button class="menu-item restart-summary-btn" type="button" data-i18n-title="action.restart_summary">
+                  <button class="menu-item has-submenu restart-summary-btn" type="button" data-i18n-title="action.restart_summary">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>
-                    <span data-i18n="menu.restart_summary">Restart summary…</span>
+                    <span data-i18n="menu.restart_summary">Restart summary</span>
+                    <!-- Marks the row as leading to a sub-panel rather than acting. -->
+                    <svg class="submenu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
                   </button>
                   <button class="menu-item download-media-btn" type="button" data-i18n-title="action.download_media" disabled>
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13"/><path d="m8 12 4 4 4-4"/><path d="M3 18h18"/></svg>
@@ -685,8 +687,19 @@
                 <!-- Restart sub-menu: a second panel rather than a nested one, so
                      it can never open off the edge of a narrow screen. -->
                 <div class="btn-menu restart-summary-menu">
-                  <button class="restart-summary-full-btn" type="button">Restart summary from scratch</button>
-                  <button class="restart-summary-final-btn" type="button">Restart final summary only</button>
+                  <button type="button" class="menu-back restart-summary-back-btn">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+                    <span data-i18n="action.restart_summary">Restart summary</span>
+                  </button>
+                  <div class="menu-sep"></div>
+                  <button class="menu-item stacked restart-summary-full-btn" type="button">
+                    <b data-i18n="restart.full">From scratch</b>
+                    <span data-i18n="restart.full_hint">Resets every summarization step</span>
+                  </button>
+                  <button class="menu-item stacked restart-summary-final-btn" type="button">
+                    <b data-i18n="restart_final.title">Final summary only</b>
+                    <span data-i18n="restart.final_hint">Window summaries are kept</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -847,24 +860,56 @@
         </button>
       </div>
 
-      <div id="prompts-list" class="tokens-list prompts-list"></div>
+      <p class="tokens-help" data-i18n="prompts.manage.hint">
+        Prompts run over the processed transcript. Each selected prompt is saved as
+        its own task artifact, next to the transcript and the summary.
+      </p>
 
-      <form id="prompt-form" class="tokens-create-form prompt-form">
-        <input type="hidden" id="prompt-edit-id" value="" />
-        <input type="text" id="prompt-name-input" name="name" required
-               maxlength="255" autocomplete="off"
-               data-i18n-placeholder="prompts.manage.name"
-               placeholder="Name" />
-        <textarea id="prompt-body-input" name="system_prompt" required rows="6"
-                  data-i18n-placeholder="prompts.manage.body"
-                  placeholder="Prompt text"></textarea>
-        <div class="prompt-form-actions">
-          <button type="submit" id="prompt-submit-btn" class="btn-text primary"
-                  data-i18n="prompts.manage.create">Create prompt</button>
-          <button type="button" id="prompt-cancel-btn" class="btn-text ghost hidden"
-                  data-i18n="prompts.manage.reset">Reset</button>
+      <!-- Two columns (redesign v2): the list was stacked above the editor, so a
+           long prompt body pushed the list off screen and picking another one
+           meant scrolling back up. Now the list stays put while the editor fills
+           the space it needs. -->
+      <div class="mgr-columns">
+        <div class="mgr-col-list">
+          <button type="button" id="prompt-new-btn" class="btn-dashed"
+                  data-i18n="prompts.manage.new">New prompt</button>
+          <div id="prompts-list" class="mgr-list prompts-list"></div>
         </div>
-      </form>
+
+        <form id="prompt-form" class="mgr-col-form prompt-form">
+          <input type="hidden" id="prompt-edit-id" value="" />
+          <div class="field-head">
+            <label class="field-label" for="prompt-name-input"
+                   data-i18n="prompts.manage.name">Name</label>
+          </div>
+          <input type="text" id="prompt-name-input" name="name" required
+                 class="text-input"
+                 maxlength="255" autocomplete="off"
+                 data-i18n-placeholder="prompts.manage.name"
+                 placeholder="Name" />
+          <div class="field-head">
+            <label class="field-label" for="prompt-body-input"
+                   data-i18n="prompts.manage.body_label">Prompt text</label>
+            <!-- Size of what is being edited: a prompt that quietly grew past
+                 what the model handles well is worth noticing. -->
+            <span class="field-meta" id="prompt-body-meta"></span>
+          </div>
+          <textarea id="prompt-body-input" name="system_prompt" required rows="6"
+                    class="prompt-body-input"
+                    data-i18n-placeholder="prompts.manage.body"
+                    placeholder="Prompt text"></textarea>
+          <div class="prompt-form-actions">
+            <button type="button" id="prompt-delete-btn" class="btn-text danger hidden"
+                    data-i18n="prompts.manage.delete">Delete</button>
+            <button type="button" id="prompt-duplicate-btn" class="btn-text ghost hidden"
+                    data-i18n="prompts.manage.duplicate">Duplicate</button>
+            <button type="submit" id="prompt-submit-btn" class="btn-text primary"
+                    data-i18n="prompts.manage.create">Create prompt</button>
+            <button type="button" id="prompt-cancel-btn" class="btn-text ghost hidden"
+                    data-i18n="prompts.manage.reset">Reset</button>
+          </div>
+        </form>
+      </div>
     </dialog>
 
     <dialog id="presets-dialog" class="tokens-dialog">

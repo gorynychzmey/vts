@@ -2043,12 +2043,13 @@ function renderTaskCard(task) {
     restartSummaryBtn.setAttribute("data-tooltip", t("action.restart_summary"));
     restartSummaryBtn.setAttribute("aria-label", t("action.restart_summary"));
   }
+  // No textContent here: these rows are two-line (<b> + <span>) and their labels
+  // come from data-i18n, so assigning textContent would delete both children —
+  // the same trap data-i18n has with icon buttons.
   if (restartSummaryFullBtn) {
-    restartSummaryFullBtn.textContent = t("action.restart_summary_full");
     restartSummaryFullBtn.setAttribute("data-tooltip", t("action.restart_summary_full_tooltip"));
   }
   if (restartSummaryFinalBtn) {
-    restartSummaryFinalBtn.textContent = t("action.restart_summary_final");
     restartSummaryFinalBtn.setAttribute("data-tooltip", t("action.restart_summary_final_tooltip"));
   }
   if (downloadMediaBtn) {
@@ -2147,6 +2148,14 @@ function renderTaskCard(task) {
       document.getElementById("speaker-registry-btn")?.click();
     });
   }
+  // Back to the main menu rather than out of it: closing the sub-panel used to
+  // drop the user out of the kebab entirely, so returning meant reopening it and
+  // finding the row again.
+  root.querySelector(".restart-summary-back-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    restartSummaryMenu?.classList.remove("open");
+    taskMenu?.classList.add("open");
+  });
   if (taskAboutBtn) {
     taskAboutBtn.addEventListener("click", () => openTaskAboutDialog(task));
   }
@@ -4942,6 +4951,7 @@ document.getElementById("tokens-copy-btn")?.addEventListener("click", async () =
 
 const promptsDialog = document.getElementById("prompts-dialog");
 const promptsListEl = document.getElementById("prompts-list");
+let promptsManagerCache = [];
 const promptForm = document.getElementById("prompt-form");
 const promptEditIdInput = document.getElementById("prompt-edit-id");
 const promptNameInput = document.getElementById("prompt-name-input");
@@ -4991,87 +5001,158 @@ async function duplicatePrompt(prompt) {
   });
 }
 
+// The editor's actions act on whatever is open in it, which is why they live
+// here rather than on every list row.
+document.getElementById("prompt-new-btn")?.addEventListener("click", () => {
+  resetPromptForm();
+  promptsListEl?.querySelectorAll(".mgr-item.active").forEach((el) => el.classList.remove("active"));
+  syncPromptEditorState(null);
+  document.getElementById("prompt-name-input")?.focus();
+});
+
+document.getElementById("prompt-duplicate-btn")?.addEventListener("click", () => {
+  const id = promptsListEl?.querySelector(".mgr-item.active")?.dataset.promptId;
+  const prompt = promptsManagerCache.find((p) => p.id === id);
+  if (prompt) void duplicatePrompt(prompt);
+});
+
+document.getElementById("prompt-delete-btn")?.addEventListener("click", async () => {
+  const id = promptEditIdInput?.value;
+  if (!id) return;
+  const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(id)}`), { method: "DELETE" });
+  if (resp.ok) {
+    resetPromptForm();
+    syncPromptEditorState(null);
+    await refreshPromptsManager();
+    await loadPrompts();
+  }
+});
+
+document.getElementById("prompt-body-input")?.addEventListener("input", updatePromptBodyMeta);
+
 function renderPromptsList(prompts) {
   if (!promptsListEl) return;
   promptsListEl.innerHTML = "";
+  const editingId = promptEditIdInput?.value || "";
   for (const prompt of prompts) {
-    const row = document.createElement("div");
-    row.className = "tokens-row prompts-row";
+    // A selectable list item, not a row of buttons (redesign v2). Editing,
+    // deleting and duplicating act on whatever is open in the editor beside it,
+    // so each row only has to identify its prompt and be picked.
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "mgr-item";
+    row.dataset.promptId = prompt.id;
+    if (prompt.id === editingId) row.classList.add("active");
 
-    const meta = document.createElement("div");
-    meta.className = "tokens-meta prompts-meta";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"
+    );
+    icon.appendChild(path);
+    row.appendChild(icon);
+
+    const body = document.createElement("span");
+    body.className = "mgr-item-body";
+
+    // The NAME identifies the prompt — that is what the user gave it for. The
+    // body's first line is a preview underneath, not the headline.
     const name = document.createElement("span");
-    name.className = "tokens-name prompt-name";
+    name.className = "mgr-item-name";
     name.textContent = promptDisplayName(prompt);
-    meta.appendChild(name);
+    body.appendChild(name);
+
+    const preview = promptPreviewText(prompt);
+    if (preview) {
+      const sub = document.createElement("span");
+      sub.className = "mgr-item-sub";
+      sub.textContent = preview;
+      body.appendChild(sub);
+    }
+
     if (prompt.source === "system") {
       const badge = document.createElement("span");
-      badge.className = "prompt-badge prompt-badge-system";
+      badge.className = "badge info sm prompt-badge-system";
       badge.textContent = t("prompt.badge.system");
-      meta.appendChild(badge);
-    }
-    row.appendChild(meta);
-
-    const actions = document.createElement("div");
-    actions.className = "prompts-actions";
-
-    if (prompt.editable) {
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "icon-btn ghost";
-      editBtn.setAttribute("data-tooltip", t("prompts.manage.edit"));
-      editBtn.setAttribute("aria-label", t("prompts.manage.edit"));
-      editBtn.innerHTML = ICON_EDIT;
-      editBtn.addEventListener("click", async () => {
-        const detail = await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
-        fillPromptForm({
-          name: detail.name,
-          body: detail.system_prompt || "",
-          editId: detail.id,
-        });
-      });
-      actions.appendChild(editBtn);
-
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "icon-btn ghost danger";
-      delBtn.setAttribute("data-tooltip", t("prompts.manage.delete"));
-      delBtn.setAttribute("aria-label", t("prompts.manage.delete"));
-      delBtn.innerHTML = ICON_DELETE;
-      delBtn.addEventListener("click", async () => {
-        const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(prompt.id)}`), { method: "DELETE" });
-        if (resp.ok) {
-          if (promptEditIdInput?.value === prompt.id) resetPromptForm();
-          await refreshPromptsManager();
-          await loadPrompts();
-        }
-      });
-      actions.appendChild(delBtn);
-    } else {
-      const badge = document.createElement("span");
-      badge.className = "prompts-readonly";
-      badge.textContent = t("prompts.manage.system_readonly");
-      actions.appendChild(badge);
+      body.appendChild(badge);
     }
 
-    const dupBtn = document.createElement("button");
-    dupBtn.type = "button";
-    dupBtn.className = "icon-btn ghost";
-    dupBtn.setAttribute("data-tooltip", t("prompts.manage.duplicate"));
-    dupBtn.setAttribute("aria-label", t("prompts.manage.duplicate"));
-    dupBtn.innerHTML = ICON_DUPLICATE;
-    dupBtn.addEventListener("click", () => duplicatePrompt(prompt));
-    actions.appendChild(dupBtn);
-
-    row.appendChild(actions);
+    row.appendChild(body);
+    row.addEventListener("click", () => openPromptInEditor(prompt));
     promptsListEl.appendChild(row);
   }
+}
+
+// First line of the prompt body, for the list preview. Falls back to nothing
+// rather than repeating the name when the body has not been loaded yet.
+function promptPreviewText(prompt) {
+  const body = String(prompt.system_prompt || prompt.preview || "").trim();
+  if (!body) return "";
+  return body.split(/\r?\n/).find((line) => line.trim()) || "";
+}
+
+// Selecting a row loads it into the editor. System prompts open read-only: they
+// can be duplicated and used, never edited in place.
+async function openPromptInEditor(prompt) {
+  let detail = prompt;
+  try {
+    // System prompts live behind their own text endpoint (they are files, not
+    // rows) — the same split duplicatePrompt() has to make.
+    detail = prompt.source === "system"
+      ? { name: promptDisplayName(prompt), ...(await api(`/api/prompts/system/${encodeURIComponent(prompt.id)}/text`)) }
+      : await api(`/api/prompts/${encodeURIComponent(prompt.id)}`);
+  } catch (err) {
+    console.error("Failed to load the prompt", err);
+    return;
+  }
+  fillPromptForm({
+    name: detail.name ?? promptDisplayName(prompt),
+    body: detail.system_prompt || "",
+    editId: prompt.editable ? detail.id : "",
+  });
+  promptsListEl?.querySelectorAll(".mgr-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.promptId === prompt.id);
+  });
+  syncPromptEditorState(prompt);
+}
+
+// Which actions the editor offers depends on what is open in it.
+function syncPromptEditorState(prompt) {
+  const editable = Boolean(prompt?.editable);
+  const bodyInput = document.getElementById("prompt-body-input");
+  const nameInput = document.getElementById("prompt-name-input");
+  if (bodyInput) bodyInput.readOnly = prompt ? !editable : false;
+  if (nameInput) nameInput.readOnly = prompt ? !editable : false;
+  document.getElementById("prompt-delete-btn")?.classList.toggle("hidden", !editable);
+  document.getElementById("prompt-duplicate-btn")?.classList.toggle("hidden", !prompt);
+  const submit = document.getElementById("prompt-submit-btn");
+  if (submit) submit.classList.toggle("hidden", Boolean(prompt) && !editable);
+  updatePromptBodyMeta();
+}
+
+// Lines and characters of what is open, so a prompt that quietly grew past what
+// the model handles well is visible rather than a surprise.
+function updatePromptBodyMeta() {
+  const meta = document.getElementById("prompt-body-meta");
+  const bodyInput = document.getElementById("prompt-body-input");
+  if (!meta || !bodyInput) return;
+  const value = bodyInput.value || "";
+  const lines = value ? value.split(/\r?\n/).length : 0;
+  meta.textContent = value
+    ? t("prompts.manage.size", { lines, chars: value.length })
+    : "";
 }
 
 async function refreshPromptsManager() {
   if (!promptsListEl) return;
   try {
     const prompts = await api("/api/prompts");
+    // Kept so the editor's buttons can act on the open prompt: the rows carry
+    // only an id in the DOM.
+    promptsManagerCache = Array.isArray(prompts) ? prompts : [];
     renderPromptsList(prompts);
   } catch (err) {
     console.error("Failed to load prompts", err);

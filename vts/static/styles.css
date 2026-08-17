@@ -4482,3 +4482,301 @@ dialog:not([open]) {
 .menu-item {
   text-decoration: none;
 }
+
+
+/* ---------- Manager dialogs: list + editor (redesign v2) ----------
+   Shared by the prompts and presets managers. The list used to sit ABOVE the
+   editor, so a long prompt body pushed it off screen and picking another one
+   meant scrolling back up. */
+.mgr-columns {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.mgr-col-list {
+  flex: 0 0 13.6rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.36rem;
+}
+
+.mgr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 19rem;
+  overflow-y: auto;
+}
+
+.mgr-col-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.44rem;
+  border-left: 1px solid var(--line-soft);
+  padding-left: 1rem;
+}
+
+/* A row identifies its item and is picked; the editor beside it holds the
+   actions, so the row carries none. */
+.mgr-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--r-md);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.mgr-item:hover {
+  background: var(--neutral-bg);
+}
+
+.mgr-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.mgr-item > svg {
+  flex: 0 0 auto;
+  width: 0.88rem;
+  height: 0.88rem;
+  margin-top: 0.18rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-faint);
+}
+
+.mgr-item.active > svg {
+  color: var(--accent);
+}
+
+.mgr-item-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  align-items: flex-start;
+}
+
+/* The NAME is the identity — that is what the user named it for. */
+.mgr-item-name {
+  max-width: 100%;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mgr-item.active .mgr-item-name {
+  font-weight: 700;
+}
+
+/* First line of the body, as a hint of what this prompt does. */
+.mgr-item-sub {
+  max-width: 100%;
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-dashed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.44rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--line-dashed);
+  background: transparent;
+  color: var(--accent-ink);
+  font-size: var(--fs-ui);
+  font-weight: 700;
+}
+
+.btn-dashed:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+
+.field-meta {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  color: var(--ink-ghost);
+}
+
+.text-input {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  padding: 0.55rem 0.75rem;
+  font-size: var(--fs-body);
+  background: var(--bg-field);
+  color: var(--ink);
+  outline: none;
+}
+
+.text-input:focus {
+  border-color: var(--accent);
+}
+
+/* Mono, because a prompt is text with structure the author lines up by hand. */
+.prompt-body-input {
+  flex: 1 1 auto;
+  min-height: 16rem;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  padding: 0.7rem 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--bg-inset);
+  outline: none;
+}
+
+.prompt-body-input:focus {
+  border-color: var(--accent);
+}
+
+/* A system prompt opens read-only: it can be duplicated and used, never edited
+   in place. */
+.prompt-body-input[readonly],
+.text-input[readonly] {
+  color: var(--ink-mute);
+  background: var(--bg-sunk);
+}
+
+.prompt-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+/* Destructive action to the far left, away from the primary one. */
+.prompt-form-actions .btn-text.danger {
+  margin-right: auto;
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.prompt-form-actions .btn-text.danger:hover {
+  background: color-mix(in oklab, var(--danger-soft) 82%, var(--danger) 12%);
+}
+
+@media (max-width: 40rem) {
+  /* One column on a phone: 13.6rem of list plus an editor does not fit, and the
+     editor is where the work happens. */
+  .mgr-columns {
+    flex-direction: column;
+  }
+
+  .mgr-col-list {
+    flex: 0 0 auto;
+  }
+
+  .mgr-list {
+    max-height: 9rem;
+  }
+
+  .mgr-col-form {
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+    padding-left: 0;
+    padding-top: 0.7rem;
+  }
+}
+
+
+/* The manager dialogs are two columns now, so the shared 640px cap clipped the
+   editor's actions. Wider, but still bounded by the viewport. */
+.prompts-dialog,
+.presets-dialog {
+  max-width: min(58rem, calc(100vw - 2rem));
+}
+
+
+/* A menu row that opens a sub-panel, marked as such — without the chevron it
+   looks identical to the rows that act immediately. */
+.menu-item.has-submenu .submenu-chev {
+  margin-left: auto;
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-faint);
+}
+
+/* Back out of a sub-panel into the menu it came from. */
+.menu-back {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.44rem 0.65rem;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.menu-back:hover {
+  background: var(--bg-chip);
+  color: var(--ink-soft);
+}
+
+.menu-back svg {
+  flex: 0 0 auto;
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Two-line rows: the action and what it costs. */
+.menu-item.stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+}
+
+.menu-item.stacked b {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+
+.menu-item.stacked span {
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+  font-weight: 400;
+}
