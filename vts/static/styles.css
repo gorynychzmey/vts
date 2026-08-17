@@ -1274,6 +1274,11 @@ input[type="file"] {
   right: 0;
   z-index: 1000;
   min-width: 200px;
+  /* Rows are rounded (var(--r-sm)) and hover-highlighted, so they need a gutter
+     between the highlight and the panel border — without it the first row's
+     label sits flush against the top edge and its hover box collides with the
+     panel's own corner radius. Same value as .popover, the sibling component. */
+  padding: 0.36rem;
   background: var(--bg-card);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1289,7 +1294,11 @@ input[type="file"] {
 .btn-menu button {
   display: block;
   width: 100%;
-  padding: 0.55rem 1rem;
+  /* The panel now carries its own 0.36rem gutter, so rows inset only enough to
+     keep the label off the hover box's edge — the old 1rem was compensating for
+     a panel with no padding at all. */
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--r-sm);
   background: none;
   border: none;
   text-align: left;
@@ -3708,7 +3717,9 @@ dialog:not([open]) {
    undone should not sit flush against Archive. */
 .menu-sep {
   height: 1px;
-  margin: 0.3rem 0.4rem;
+  /* Horizontal margin is 0: the panel's own padding already insets it. Adding
+     more made the rule visibly narrower than the rows it separates. */
+  margin: 0.3rem 0;
   background: var(--line);
 }
 
