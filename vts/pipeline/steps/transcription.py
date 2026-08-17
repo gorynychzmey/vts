@@ -364,6 +364,30 @@ class TranscribeSegmentsStep(Step):
         return False
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        """Transcribe every segment listed in the manifest, resuming as needed.
+
+        **Resume.** A segment counts as done only if its row carries a
+        non-empty `raw_json`; a row with text but no payload is re-done, since
+        the raw response is what later stages (diarization merge, the player)
+        read. Each segment is committed as it completes, so an interrupted run
+        loses at most the segment in flight.
+
+        **Tail prompt.** Whisper is primed with the end of the *previous*
+        segment so a sentence spanning a cut is transcribed coherently. That
+        priming is skipped when the previous segment was itself flagged as a
+        hallucination — feeding it forward is how one bad segment contaminates
+        the rest of the recording.
+
+        **Retry.** A segment whose text looks like a hallucination
+        (`is_probable_asr_hallucination`) is transcribed once more with no
+        prompt at all. The retry wins if it is clean, or — when both look bad
+        — if it merely scores higher (`transcript_quality_score`), so the
+        worse of two poor results is never kept. Both heuristics are pinned by
+        tests/test_asr_text_heuristics.py; changing a threshold there is a
+        deliberate act, not a silent drift.
+
+        Returns True, or False when the manifest lists no segments.
+        """
         manifest_path = st.dirs["outputs"] / "segments_manifest.json"
         if not manifest_path.exists():
             raise RuntimeError("Missing segment manifest")
