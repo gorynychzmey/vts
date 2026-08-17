@@ -475,6 +475,9 @@
     <template id="task-template">
       <article class="task">
         <div class="task-header-row">
+          <!-- Status at a glance: colour plus a pulse for running, so scanning a
+               long list does not require reading every pill (redesign v2). -->
+          <span class="task-dot" aria-hidden="true"></span>
           <div class="task-main">
             <div class="task-title-row">
               <a class="task-link" target="_blank" rel="noopener noreferrer"></a>

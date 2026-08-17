@@ -1314,7 +1314,8 @@ input[type="file"] {
 
 .task {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--r-2xl);
+  box-shadow: var(--sh-card);
   /* Deliberately NOT `overflow: hidden`. The card is full of tooltip triggers
      (every task action button: data-i18n-title becomes an absolutely-positioned
      data-tooltip bubble at runtime), and a clipping ancestor cut every bubble
@@ -1349,6 +1350,15 @@ input[type="file"] {
 }
 
 .task-main {
+  /* The flexible cell of .task-header-row. Without an explicit grow factor it
+     shrink-wraps, which after the status dot was added made the title look
+     centred rather than left-aligned.
+
+     Do NOT add `justify-items: start` here to "fix" alignment: it sizes the
+     grid tracks to their content instead of the container, so a long title
+     row stops shrinking and the whole page scrolls sideways by ~1000px on a
+     phone. `flex: 1 1 auto` with `min-width: 0` is what does the job. */
+  flex: 1 1 auto;
   min-width: 0;
   display: grid;
   gap: 0.2rem;
@@ -3160,5 +3170,95 @@ dialog:not([open]) {
   .file-row-name {
     flex: 1 1 100%;
     order: -1;
+  }
+}
+
+
+/* ---------- Task status at a glance (redesign v2) ----------
+   Colour on the card edge and a dot in the header row, so scanning a long list
+   does not mean reading every pill. Both come from the semantic token groups,
+   so they re-tint in the dark theme without a second rule. */
+.task.status-running {
+  border-color: var(--ok-line);
+}
+
+.task.status-completed {
+  border-color: var(--ok-line);
+}
+
+.task.status-failed {
+  border-color: var(--danger-line);
+}
+
+.task.status-awaiting_input {
+  border-color: var(--accent-line);
+}
+
+.task.status-queued,
+.task.status-waiting {
+  border-color: var(--warn-line);
+}
+
+.task.status-archived {
+  border-color: var(--info-line);
+}
+
+.task-dot {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--mute);
+}
+
+.status-running .task-dot {
+  background: var(--ok);
+  animation: task-dot-pulse 1.8s ease-in-out infinite;
+}
+
+.status-completed .task-dot {
+  background: var(--ok);
+}
+
+.status-failed .task-dot {
+  background: var(--danger);
+}
+
+.status-queued .task-dot,
+.status-waiting .task-dot {
+  background: var(--warn);
+}
+
+.status-paused .task-dot,
+.status-canceled .task-dot {
+  background: var(--mute);
+}
+
+.status-archived .task-dot {
+  background: var(--info);
+}
+
+.status-awaiting_input .task-dot {
+  background: var(--accent);
+  animation: task-dot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes task-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A pulsing dot on every running task is exactly the kind of motion this
+     setting exists to stop. */
+  .task-dot {
+    animation: none !important;
   }
 }
