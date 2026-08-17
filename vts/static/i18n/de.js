@@ -28,6 +28,8 @@ window.__VTS_I18N.de = {
 "new_task.file_move_down": "Nach unten",
 "new_task.file_summary": "{count} Datei(en) · {size} · in dieser Reihenfolge zusammengefügt",
 "new_task.file_duplicate": "Bereits hinzugefügt, übersprungen: {names}",
+"new_task.prompts_tooltip": "Welche Zusammenfassungen aus dem Transkript erzeugt werden. Mehrfachauswahl möglich — jede wird zu einem eigenen Ergebnis-Tab.",
+"new_task.delivery_tooltip": "Wohin die fertigen Ergebnisse gesendet werden. Ziele werden unter „Zustellung verwalten“ konfiguriert.",
 "new_task.file_label": "Video- oder Audiodatei",
 "new_task.audio_only": "Nur Audio",
 "new_task.audio_only_tooltip": "Nur die Audiospur herunterladen statt des vollständigen Videos. Spart Bandbreite; hat keinen Einfluss auf Transkript oder Zusammenfassung.",
