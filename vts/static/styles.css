@@ -2901,3 +2901,181 @@ dialog:not([open]) {
     transition: none;
   }
 }
+
+/* ---------- Staged file selection (File source) ----------
+   Ported from docs/design-v2 (.file-drop / .file-list / .file-row / .file-foot).
+   The zone replaces a bare <input type="file"> whose selection was invisible:
+   nothing showed what had been picked, one file could not be dropped, and a
+   second pick replaced the set instead of adding to it. */
+.file-drop:not(.hidden) {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--bg-field);
+  border: 1px dashed var(--line-dashed);
+  border-radius: var(--r-xl);
+  padding: 0.44rem 0.44rem 0.44rem 0.75rem;
+}
+
+/* Drop affordance: the empty state invites a drop, so the zone has to look
+   like it accepts one while a file is over it. */
+.file-drop.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.file-drop-empty:not(.hidden) {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2.25rem;
+}
+
+.file-drop-empty > svg {
+  flex: 0 0 auto;
+  width: 1.125rem;
+  height: 1.125rem;
+  fill: none;
+  stroke: var(--ink-ghost);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-drop-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.file-drop-hint b {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.file-drop-hint > span {
+  font-size: 0.69rem;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-list:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  background: var(--bg-sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: 0.36rem 0.44rem 0.36rem 0.6rem;
+  cursor: grab;
+}
+
+.file-row.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.file-row-num {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  color: var(--ink-soft);
+  min-width: 1ch;
+}
+
+.file-row > svg {
+  flex: 0 0 auto;
+  width: 0.94rem;
+  height: 0.94rem;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row-size {
+  flex: 0 0 auto;
+  font-size: 0.69rem;
+  color: var(--ink-soft);
+}
+
+/* The row buttons are smaller than the global .icon-btn: five controls plus a
+   filename have to fit one row on a phone. */
+.file-row .icon-btn {
+  flex: 0 0 auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+}
+
+.file-row .icon-btn svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.file-row-remove:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger-line);
+}
+
+.file-foot:not(.hidden) {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.06rem 0.125rem 0;
+}
+
+.file-foot-text {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.file-foot .btn-text {
+  margin-left: auto;
+}
+
+/* Duplicate notice: a skipped file is reported rather than silently dropped,
+   because silence reads as "the file was lost". */
+.file-warning:not(.hidden) {
+  margin: 0.125rem 0 0;
+  font-size: 0.72rem;
+  color: var(--warn-ink);
+}
+
+@media (max-width: 34rem) {
+  /* The name gets the whole first line; the metadata and controls wrap under
+     it, so a long filename does not squeeze the buttons off the row. */
+  .file-row {
+    flex-wrap: wrap;
+  }
+
+  .file-row-name {
+    flex: 1 1 100%;
+    order: -1;
+  }
+}
