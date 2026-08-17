@@ -166,6 +166,82 @@ def load_window_summaries(
     return windows
 
 
+def restore_windows(
+    output: Path, summary_dir: Path, total_windows: int
+) -> dict[int, dict[str, Any]]:
+    """Recover already-summarized windows so a resumed run skips them.
+
+    Read from two places on purpose, because a crash can leave them
+    disagreeing:
+
+    * `windows.json` — written after every window, so it is the complete
+      record right up to the moment the process died;
+    * `window_NN.txt` — written first, one file per window, so a window can
+      exist on disk with no line in `windows.json` yet.
+
+    The per-file pass only fills gaps (`idx in windows_by_index` -> skip), so
+    `windows.json` wins where both have an entry. Anything malformed is
+    skipped rather than raising: a half-written file from a kill -9 must not
+    make the whole step unresumable.
+
+    Indices above `total_windows` are dropped — after the whole-transcript
+    fallback re-chunks, the old run's higher-numbered windows describe a
+    segmentation that no longer exists.
+    """
+    windows_by_index: dict[int, dict[str, Any]] = {}
+    if output.exists():
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        raw_windows = payload.get("windows") if isinstance(payload, dict) else None
+        if isinstance(raw_windows, list):
+            for item in raw_windows:
+                if not isinstance(item, dict):
+                    continue
+                raw_index = item.get("window_index")
+                try:
+                    idx = int(raw_index)
+                except (TypeError, ValueError):
+                    continue
+                if idx < 1:
+                    continue
+                summary_payload = item.get("summary")
+                path = item.get("path")
+                if not isinstance(path, str) or not path.strip():
+                    path = str(summary_dir / f"window_{idx:02d}.txt")
+                windows_by_index[idx] = {
+                    "window_index": idx,
+                    "summary": summary_payload,
+                    "path": path,
+                }
+
+    file_pattern = re.compile(r"^window_(\d+)\.txt$")
+    for window_path in sorted(summary_dir.glob("window_*.txt")):
+        match = file_pattern.match(window_path.name)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx in windows_by_index:
+            continue
+        content = window_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(content)
+            summary: str | dict = parsed if isinstance(parsed, dict) else content
+        except json.JSONDecodeError:
+            summary = content
+        windows_by_index[idx] = {
+            "window_index": idx,
+            "summary": summary,
+            "path": str(window_path),
+        }
+
+    for idx in list(windows_by_index.keys()):
+        if idx > total_windows:
+            windows_by_index.pop(idx, None)
+    return windows_by_index
+
+
 def write_window_summaries(
     output: Path, output_mirror: Path, windows_by_index: dict[int, dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -649,57 +725,7 @@ class SummarizeWindowsStep(Step):
             ctx, st, output_language
         )
 
-        windows_by_index: dict[int, dict[str, Any]] = {}
-        if output.exists():
-            try:
-                payload = json.loads(output.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                payload = {}
-            raw_windows = payload.get("windows") if isinstance(payload, dict) else None
-            if isinstance(raw_windows, list):
-                for item in raw_windows:
-                    if not isinstance(item, dict):
-                        continue
-                    raw_index = item.get("window_index")
-                    try:
-                        idx = int(raw_index)
-                    except (TypeError, ValueError):
-                        continue
-                    if idx < 1:
-                        continue
-                    summary_payload = item.get("summary")
-                    path = item.get("path")
-                    if not isinstance(path, str) or not path.strip():
-                        path = str(summary_dir / f"window_{idx:02d}.txt")
-                    windows_by_index[idx] = {
-                        "window_index": idx,
-                        "summary": summary_payload,
-                        "path": path,
-                    }
-
-        file_pattern = re.compile(r"^window_(\d+)\.txt$")
-        for window_path in sorted(summary_dir.glob("window_*.txt")):
-            match = file_pattern.match(window_path.name)
-            if not match:
-                continue
-            idx = int(match.group(1))
-            if idx in windows_by_index:
-                continue
-            content = window_path.read_text(encoding="utf-8")
-            try:
-                parsed = json.loads(content)
-                summary: str | dict = parsed if isinstance(parsed, dict) else content
-            except json.JSONDecodeError:
-                summary = content
-            windows_by_index[idx] = {
-                "window_index": idx,
-                "summary": summary,
-                "path": str(window_path),
-            }
-
-        for idx in list(windows_by_index.keys()):
-            if idx > total_windows:
-                windows_by_index.pop(idx, None)
+        windows_by_index = restore_windows(output, summary_dir, total_windows)
 
         restored = sum(1 for idx in windows_by_index if 1 <= idx <= total_windows)
         if restored:
