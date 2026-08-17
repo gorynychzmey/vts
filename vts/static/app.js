@@ -1792,7 +1792,12 @@ function renderTaskTitle(taskEl) {
   const mediaReady = Boolean(runtime.mediaReady);
   const playerHref = buildPath(`/player/${encodeURIComponent(runtime.id)}`);
 
-  elements.linkEl.textContent = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
+  const linkLabel = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
+  // Into the inner span, NOT the anchor: the anchor also holds the player glyph,
+  // and assigning textContent to it would delete that glyph on every render.
+  const linkTextEl = elements.linkEl.querySelector(".task-link-text");
+  if (linkTextEl) linkTextEl.textContent = linkLabel;
+  else elements.linkEl.textContent = linkLabel;
   if (mediaReady) {
     elements.linkEl.href = playerHref;
     elements.linkEl.target = "_blank";
@@ -1805,8 +1810,10 @@ function renderTaskTitle(taskEl) {
     elements.linkEl.classList.add("expired");
   }
 
-  // Dedicated player affordance next to the title, so the player is
-  // discoverable rather than something you have to know exists (vts-at8).
+  // The player lives in the task menu (redesign v2). It used to be an icon next
+  // to the title for discoverability (vts-at8); the design moved it into the
+  // menu, where it gets a readable label instead of a bare glyph — the same
+  // trade the other five actions made.
   if (elements.playerBtn) {
     if (mediaReady) {
       elements.playerBtn.href = playerHref;
@@ -1816,6 +1823,10 @@ function renderTaskTitle(taskEl) {
       elements.playerBtn.classList.add("hidden");
     }
   }
+
+  // The glyph inside the title marks the name as playable — shown on exactly the
+  // same condition that makes the name a link at all.
+  elements.linkEl.querySelector(".player-glyph")?.classList.toggle("hidden", !mediaReady);
 
   if (elements.expiredEl) {
     elements.expiredEl.classList.toggle("hidden", mediaReady);
@@ -1984,6 +1995,9 @@ function renderTaskCard(task) {
   const pauseBtn = root.querySelector(".pause-btn");
   const resumeBtn = root.querySelector(".resume-btn");
   const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
+  const taskMenuBtn = root.querySelector(".task-menu-btn");
+  const taskMenu = root.querySelector(".task-menu");
+  const taskAboutBtn = root.querySelector(".task-about-btn");
   const restartSummaryBtn = root.querySelector(".restart-summary-btn");
   const restartSummaryMenu = root.querySelector(".restart-summary-menu");
   const restartSummaryFullBtn = root.querySelector(".restart-summary-full-btn");
@@ -2095,17 +2109,53 @@ function renderTaskCard(task) {
       openVoiceDialog(task.id, paused);
     });
   }
+  if (taskMenuBtn && taskMenu) {
+    taskMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = taskMenu.classList.contains("open");
+      document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
+      if (!isOpen) {
+        // Measure the trigger, then right-align the panel to it — the same
+        // placement the restart menu uses, so a wide panel cannot hang off the
+        // screen edge on a phone.
+        const rect = taskMenuBtn.getBoundingClientRect();
+        taskMenu.style.top = `${rect.bottom + 4}px`;
+        taskMenu.style.left = "0px";
+        taskMenu.classList.add("open");
+        taskMenu.style.left = `${Math.max(8, rect.right - taskMenu.offsetWidth)}px`;
+      }
+      taskMenuBtn.setAttribute("aria-expanded", String(!isOpen));
+      // The card must paint above its neighbours while its menu is open.
+      root.classList.toggle("menu-open", !isOpen);
+    });
+    // Every entry either opens a dialog or acts immediately, so the menu closes
+    // on any click inside it — except Restart, which swaps in its own panel.
+    taskMenu.addEventListener("click", (e) => {
+      if (e.target instanceof Element && e.target.closest(".restart-summary-btn")) return;
+      taskMenu.classList.remove("open");
+      taskMenuBtn.setAttribute("aria-expanded", "false");
+      root.classList.remove("menu-open");
+    });
+  }
+  if (taskAboutBtn) {
+    taskAboutBtn.addEventListener("click", () => openTaskAboutDialog(task));
+  }
   if (restartSummaryBtn && restartSummaryMenu) {
     restartSummaryBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const isOpen = restartSummaryMenu.classList.contains("open");
+      // Closes the kebab too: the trigger is inside it, and leaving both open
+      // would stack two panels on top of each other.
       document.querySelectorAll(".btn-menu.open").forEach((m) => m.classList.remove("open"));
       if (!isOpen) {
-        const rect = restartSummaryBtn.getBoundingClientRect();
+        // Anchor the sub-panel to the kebab BUTTON, not to this menu row, so it
+        // lands where the first panel was rather than halfway down the screen.
+        const anchor = taskMenuBtn || restartSummaryBtn;
+        const rect = anchor.getBoundingClientRect();
         restartSummaryMenu.style.top = `${rect.bottom + 4}px`;
         restartSummaryMenu.style.left = "0px";
         restartSummaryMenu.classList.add("open");
-        restartSummaryMenu.style.left = `${rect.right - restartSummaryMenu.offsetWidth}px`;
+        restartSummaryMenu.style.left = `${Math.max(8, rect.right - restartSummaryMenu.offsetWidth)}px`;
       }
     });
   }

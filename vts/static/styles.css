@@ -1428,13 +1428,46 @@ input[type="file"] {
 }
 
 .task-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  min-width: 0;
   color: var(--ink);
   text-decoration: none;
   font-size: var(--fs-title);
   font-weight: 600;
+}
+
+/* Truncation moved to the inner span: the anchor is a flex container now and
+   cannot ellipsis its own children. */
+.task-link-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-link:hover .task-link-text {
+  text-decoration: underline;
+}
+
+/* Deliberately quiet (redesign v2): the glyph marks the name as playable, it is
+   not a second button competing with the title. --ink-faint keeps it legible
+   without pulling the eye off the name it annotates. */
+.task-link .player-glyph {
+  flex: 0 0 auto;
+  width: 0.82rem;
+  height: 0.82rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-faint);
+}
+
+.task-link:hover .player-glyph {
+  color: var(--accent);
 }
 
 .task-link:hover {
@@ -3517,4 +3550,77 @@ dialog:not([open]) {
   background: transparent;
   color: var(--ink);
   padding: 0;
+}
+
+
+/* ---------- Task kebab menu (redesign v2) ----------
+   Six actions moved off the card into this panel; only pause/resume and Resolve
+   voices stay inline. A row of eight icon buttons made every card look equally
+   urgent and pushed the toolbar into a horizontal scroll on a phone. */
+.task-menu,
+.restart-summary-menu {
+  min-width: 13rem;
+}
+
+/* Rows, not a grid of glyphs: each action gets a readable label, which is the
+   point of moving them here. */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--bg-chip);
+}
+
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menu-item svg {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-soft);
+}
+
+/* Destructive action reads as destructive before it is clicked, not after. */
+.menu-item.danger {
+  color: var(--danger-ink);
+}
+
+.menu-item.danger svg {
+  color: var(--danger);
+}
+
+.menu-item.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+/* Separates Delete from everything above it — the one entry that cannot be
+   undone should not sit flush against Archive. */
+.menu-sep {
+  height: 1px;
+  margin: 0.3rem 0.4rem;
+  background: var(--line);
+}
+
+/* The card paints above its neighbours while its menu is open, so the panel is
+   not clipped by the next card's surface. */
+.task.menu-open {
+  position: relative;
+  z-index: 40;
 }

@@ -515,14 +515,14 @@
           <span class="task-dot" aria-hidden="true"></span>
           <div class="task-main">
             <div class="task-title-row">
-              <a class="task-link" target="_blank" rel="noopener noreferrer"></a>
-              <a class="icon-btn ghost task-player-btn hidden" target="_blank" rel="noopener" data-i18n-title="tasks.open_player" data-i18n-aria-label="tasks.open_player">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+              <a class="task-link" target="_blank" rel="noopener noreferrer" data-i18n-title="tasks.open_player">
+                <span class="task-link-text"></span>
+                <svg class="player-glyph hidden" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+                  <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
+                </svg>
               </a>
               <span class="task-expired hidden" data-i18n="tasks.media_expired_badge" data-i18n-title="tasks.media_expired_tooltip"></span>
-              <button class="icon-btn ghost task-edit-name-btn" type="button" data-i18n-title="action.edit_name" data-i18n-aria-label="action.edit_name">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>
-              </button>
               <span class="task-name-edit hidden">
                 <input class="task-name-input" type="text" maxlength="500" />
                 <button class="icon-btn ghost task-name-ok-btn" type="button" data-i18n-title="action.save_name" data-i18n-aria-label="action.save_name">
@@ -562,6 +562,11 @@
             <div class="task-toolbar-wrap">
             <div class="task-right-bottom">
             <span class="task-runtime mono"></span>
+            <!-- Redesign v2: only the two contextual actions stay on the card —
+                 pause/resume (never both at once) and, when a task is waiting on
+                 the user, Resolve voices. Everything else moved into the kebab
+                 menu below. app.js binds these by CLASS, so moving the nodes
+                 changes nothing for it as long as the classes travel with them. -->
             <div class="task-actions-inline">
               <button
                 class="icon-btn ghost pause-btn"
@@ -601,67 +606,66 @@
                   <path d="M12 17v4" />
                 </svg>
               </button>
-              <div class="btn-menu-wrapper">
+
+              <!-- Kebab: the six actions that used to sit on the card. Each label
+                   lives in an inner <span> because applyI18n assigns textContent
+                   and would otherwise delete the sibling <svg>. -->
+              <div class="btn-menu-wrapper task-menu-wrapper">
                 <button
-                  class="icon-btn ghost restart-summary-btn"
+                  class="icon-btn ghost task-menu-btn"
                   type="button"
-                  title="Restart summary…"
-                  aria-label="Restart summary"
-                  data-i18n-title="action.restart_summary"
-                  data-i18n-aria-label="action.restart_summary"
+                  aria-haspopup="true"
+                  aria-expanded="false"
+                  title="More actions"
+                  aria-label="More actions"
+                  data-i18n-title="tasks.more_actions"
+                  data-i18n-aria-label="tasks.more_actions"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8" />
-                    <path d="M3 3v5h5" />
+                    <circle cx="12" cy="5" r="1.6" />
+                    <circle cx="12" cy="12" r="1.6" />
+                    <circle cx="12" cy="19" r="1.6" />
                   </svg>
                 </button>
+                <div class="btn-menu task-menu">
+                  <button class="menu-item task-edit-name-btn" type="button" data-i18n-title="action.edit_name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>
+                    <span data-i18n="menu.rename">Rename</span>
+                  </button>
+                  <button class="menu-item task-about-btn" type="button" data-i18n-title="about.open">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5h.01"/></svg>
+                    <span data-i18n="menu.about">About this task</span>
+                  </button>
+                  <a class="menu-item task-player-btn hidden" target="_blank" rel="noopener"
+                     data-i18n-title="tasks.open_player">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                    <span data-i18n="menu.open_player">Open the transcript player</span>
+                  </a>
+                  <button class="menu-item restart-summary-btn" type="button" data-i18n-title="action.restart_summary">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>
+                    <span data-i18n="menu.restart_summary">Restart summary…</span>
+                  </button>
+                  <button class="menu-item download-media-btn" type="button" data-i18n-title="action.download_media" disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13"/><path d="m8 12 4 4 4-4"/><path d="M3 18h18"/></svg>
+                    <span data-i18n="menu.download_media">Download media</span>
+                  </button>
+                  <button class="menu-item archive-btn" type="button" data-i18n-title="action.archive">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h18"/><path d="M5 8h14v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 12h6"/></svg>
+                    <span data-i18n="menu.archive">Archive</span>
+                  </button>
+                  <div class="menu-sep"></div>
+                  <button class="menu-item danger delete-btn" type="button" data-i18n-title="action.delete">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12"/></svg>
+                    <span data-i18n="menu.delete">Delete</span>
+                  </button>
+                </div>
+                <!-- Restart sub-menu: a second panel rather than a nested one, so
+                     it can never open off the edge of a narrow screen. -->
                 <div class="btn-menu restart-summary-menu">
                   <button class="restart-summary-full-btn" type="button">Restart summary from scratch</button>
                   <button class="restart-summary-final-btn" type="button">Restart final summary only</button>
                 </div>
               </div>
-              <button
-                class="icon-btn ghost download-media-btn"
-                type="button"
-                title="Download the original media file"
-                aria-label="Download media"
-                data-i18n-title="action.download_media"
-                data-i18n-aria-label="action.download_media"
-                disabled
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3v13" />
-                  <path d="m8 12 4 4 4-4" />
-                  <path d="M3 18h18" />
-                </svg>
-              </button>
-              <button
-                class="icon-btn ghost archive-btn"
-                type="button"
-                title="Archive: remove from the list and delete media; transcript and summary are kept"
-                aria-label="Archive task"
-                data-i18n-title="action.archive"
-                data-i18n-aria-label="action.archive"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M3 8h18" />
-                  <path d="M5 8h14v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
-                  <path d="M9 12h6" />
-                  <path d="M4 4h16v4H4z" />
-                </svg>
-              </button>
-              <button
-                class="icon-btn ghost delete-btn danger"
-                type="button"
-                title="Delete the task and all its files — cannot be undone"
-                aria-label="Delete"
-                data-i18n-title="action.delete"
-                data-i18n-aria-label="action.delete"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12" />
-                </svg>
-              </button>
             </div>
             </div>
             </div>

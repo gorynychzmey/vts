@@ -5,12 +5,14 @@
 //     scrollable for no benefit — everything fits once the row is allowed to
 //     distribute. Note the scroller holds the runtime clock AND the button row,
 //     so measuring only .task-actions-inline misses the real width.
-//  2. .task-edit-name-btn (the rename pencil) sits in the flex .task-title-row
-//     next to a long, greedy title. Flex items shrink by default, so it was
-//     squeezed from its 2.25rem square down to ~16px and looked foreign.
+//  2. The rename pencil sat in the flex .task-title-row next to a long, greedy
+//     title and got squeezed from its 2.25rem square down to ~16px. Renaming
+//     moved into the task menu in redesign v2, so there is no pencil to squash
+//     any more — what remains squeezable next to the title is the player glyph,
+//     which is asserted instead: it must keep its size AND the title must still
+//     truncate rather than push it out.
 //
-// Asserts the last toolbar button is fully inside the scroller's client box and
-// the pencil keeps its icon-button size.
+// Asserts the last toolbar button is fully inside the scroller's client box.
 import { startStubServer, launch } from "../harness.mjs";
 
 export const name = "task-toolbar-fits-card";
@@ -29,6 +31,10 @@ const TASK = {
   source_type: "url",
   created_at: "2026-08-01T09:00:00Z",
   updated_at: "2026-08-01T10:00:00Z",
+  // Needed for the player glyph to render at all: it is shown on exactly the
+  // condition that makes the title a link. The field is media_path, not
+  // media_ready — runtime.mediaReady is derived from it.
+  media_path: "/data/t1/media.mp4",
   size_bytes: 5444141056,
   duration_sec: 2880,
   options: { transcript: true, audio_only: false, diarize: true },
@@ -57,7 +63,9 @@ export async function run() {
           const card = document.querySelector("article.task");
           if (!card) return { missing: true };
           const sc = card.querySelector(".task-right-bottom");
-          const edit = card.querySelector(".task-edit-name-btn");
+          // The pencil is gone (renaming lives in the task menu now); the glyph
+          // inside the title link is the flex item that can still be squeezed.
+          const edit = card.querySelector(".task-link .player-glyph");
           const buttons = [...card.querySelectorAll(".task-actions-inline > *")]
             .filter((e) => getComputedStyle(e).display !== "none");
           const last = buttons[buttons.length - 1];
@@ -91,12 +99,12 @@ export async function run() {
         if (r.lastFullyVisible === false) {
           failures.push(`[${locale}@${width}] last toolbar button is only partially visible`);
         }
-        // The pencil is a 2.25rem (36px) icon button; anything much under that
-        // means it got squeezed by the title again.
-        if (r.editW !== null && r.editW < 28) {
+        // The glyph is ~13px and flex:0 0 auto; anything under 10 means the
+        // title started eating it instead of truncating itself.
+        if (r.editW !== null && r.editW < 10) {
           failures.push(
-            `[${locale}@${width}] rename button squashed to ${r.editW}x${r.editH}px ` +
-            `(expected ~36px square — it must not shrink next to the title)`
+            `[${locale}@${width}] player glyph squashed to ${r.editW}x${r.editH}px ` +
+            `(expected ~13px — it must not shrink next to the title)`
           );
         }
         await page.close();

@@ -64,8 +64,12 @@ export async function run() {
       // grabbed before that detaches ("Element is not attached to the DOM") if
       // the click lands after a re-render — a race that any timing change can
       // expose. A locator re-resolves at click time.
+      // Restart lives inside the task kebab now (redesign v2), so the kebab has
+      // to be opened before its rows are clickable.
+      await clickReal(page, ".task-menu-btn");
+      await page.waitForTimeout(200);
       await clickReal(page, ".restart-summary-btn");
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(200);
       const finalBtn = page.locator(".restart-summary-final-btn").first();
       if ((await finalBtn.count()) === 0) {
         failures.push("no .restart-summary-final-btn in menu");
