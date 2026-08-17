@@ -2237,39 +2237,60 @@ dialog:not([open]) {
   margin: 0;
 }
 
+/* Redesign v2: name on top, "prefix… · last used" muted underneath, Revoke on
+   the right. Was a grid whose sub-line spanned BOTH columns, so the metadata
+   ran under the Revoke button instead of stopping beside it. Flex now: the text
+   block takes the slack and the button keeps its width. */
 .tokens-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.3rem 0.75rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--ink-soft);
-  border-radius: 6px;
+  display: flex;
   align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-field);
 }
 
 .tokens-meta {
+  flex: 1 1 auto;
   display: flex;
-  gap: 0.6rem;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 0.1rem;
   min-width: 0;
 }
 
 .tokens-name {
-  font-weight: 600;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tokens-sub {
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tokens-prefix {
-  color: var(--ink-soft);
-  font-size: 0.8rem;
+  color: var(--ink-faint);
 }
 
-.tokens-sub {
-  grid-column: 1 / -1;
-  color: var(--ink-soft);
-  font-size: 0.75rem;
+/* Destructive, but not the loud primary red: revoking is a normal piece of
+   housekeeping here, and one alarming button per row reads as a warning about
+   the row itself. */
+.tokens-revoke-btn {
+  flex: 0 0 auto;
+  color: var(--danger-ink);
+  background: var(--danger-soft);
+  border: 1px solid transparent;
+}
+
+.tokens-revoke-btn:hover {
+  border-color: var(--danger-line);
 }
 
 .tokens-create-form {

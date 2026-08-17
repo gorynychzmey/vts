@@ -1048,9 +1048,14 @@
           <p class="delivery-section-hint" data-i18n="delivery.credentials.hint">
             Where to deliver and how to authenticate. Several destinations can share one.
           </p>
-          <div id="delivery-credentials-list" class="tokens-list prompts-list"></div>
+          <div class="mgr-columns">
+            <div class="mgr-col-list">
+              <button type="button" id="delivery-credential-new" class="btn-dashed"
+                      data-i18n="delivery.credentials.new">New connection</button>
+              <div id="delivery-credentials-list" class="mgr-list prompts-list"></div>
+            </div>
 
-          <form id="delivery-credential-form" class="tokens-create-form prompt-form">
+          <form id="delivery-credential-form" class="mgr-col-form prompt-form">
             <input type="hidden" id="delivery-credential-edit-id" value="" />
             <input type="text" id="delivery-credential-name" name="name" required
                    maxlength="255" autocomplete="off"
@@ -1061,6 +1066,9 @@
             </label>
             <div id="delivery-credential-fields" class="delivery-fields"></div>
             <div class="prompt-form-actions">
+              <button type="button" id="delivery-credential-delete"
+                      class="btn-text danger hidden"
+                      data-i18n="delivery.credentials.delete">Delete connection</button>
               <button type="submit" id="delivery-credential-submit"
                       class="btn-text primary"
                       data-i18n="delivery.credentials.create">Create connection</button>
@@ -1070,15 +1078,21 @@
             </div>
             <p id="delivery-check-message" class="delivery-check-message" hidden></p>
           </form>
+          </div>
         </section>
 
         <section class="delivery-section" data-delivery-panel="targets" hidden>
           <p class="delivery-section-hint" data-i18n="delivery.targets.hint">
             One destination per place results should land. Pick the connection it uses.
           </p>
-          <div id="delivery-targets-list" class="tokens-list prompts-list"></div>
+          <div class="mgr-columns">
+            <div class="mgr-col-list">
+              <button type="button" id="delivery-target-new" class="btn-dashed"
+                      data-i18n="delivery.targets.new">New destination</button>
+              <div id="delivery-targets-list" class="mgr-list prompts-list"></div>
+            </div>
 
-          <form id="delivery-target-form" class="tokens-create-form prompt-form">
+          <form id="delivery-target-form" class="mgr-col-form prompt-form">
             <input type="hidden" id="delivery-target-edit-id" value="" />
             <input type="text" id="delivery-target-name" name="name" required
                    maxlength="255" autocomplete="off"
@@ -1094,6 +1108,9 @@
             <div id="delivery-target-fields" class="delivery-fields"></div>
             <p id="delivery-target-notice" class="delivery-check-message is-error" hidden></p>
             <div class="prompt-form-actions">
+              <button type="button" id="delivery-target-delete"
+                      class="btn-text danger hidden"
+                      data-i18n="delivery.targets.delete">Delete destination</button>
               <button type="submit" id="delivery-target-submit"
                       class="btn-text primary"
                       data-i18n="delivery.targets.create">Create destination</button>
@@ -1102,6 +1119,7 @@
                       data-i18n="prompts.manage.reset">Reset</button>
             </div>
           </form>
+          </div>
         </section>
       </div>
     </dialog>

@@ -115,11 +115,21 @@ export async function run() {
       failures.push("connections panel did not come back");
     }
 
-    // Existing rows render in both lists.
-    const credRows = await page.$$eval("#delivery-credentials-list .prompts-row", (e) => e.length);
+    // Existing rows render in both lists. Redesign v2 made them SELECTABLE
+    // .mgr-item buttons (list left, editor right, like the prompts and presets
+    // managers); picking a row is what opens it for editing.
+    const credRows = await page.$$eval("#delivery-credentials-list .mgr-item", (e) => e.length);
     if (credRows !== 1) failures.push(`expected 1 connection row, got ${credRows}`);
-    const targetRows = await page.$$eval("#delivery-targets-list .prompts-row", (e) => e.length);
+    const targetRows = await page.$$eval("#delivery-targets-list .mgr-item", (e) => e.length);
     if (targetRows !== 1) failures.push(`expected 1 destination row, got ${targetRows}`);
+
+    // The rows carry no actions of their own — delete lives in the editor and
+    // acts on whatever is open there.
+    const rowBtns = await page.$$eval(
+      "#delivery-credentials-list .mgr-item button, #delivery-credentials-list .prompts-actions",
+      (e) => e.length,
+    );
+    if (rowBtns !== 0) failures.push(`connection rows must carry no action buttons, got ${rowBtns}`);
 
     // --- schema-driven split: the whole point of the feature ---------------
     // base_url is a CONNECTION field, so it belongs to the credential form.
@@ -166,7 +176,8 @@ export async function run() {
     if (await isVisible(page, "#delivery-check-btn")) {
       failures.push("check button must be hidden until a connection is saved");
     }
-    await clickReal(page, "#delivery-credentials-list .prompts-actions .icon-btn");
+    // Picking the row opens that connection in the editor.
+    await clickReal(page, "#delivery-credentials-list .mgr-item");
     await page.waitForTimeout(250);
     if (!(await isVisible(page, "#delivery-check-btn"))) {
       failures.push("check button should appear when editing a saved connection");

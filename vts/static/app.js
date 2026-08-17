@@ -311,6 +311,25 @@ function formatDuration(seconds) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+// "2 hours ago" for the token list: an absolute timestamp answers "when
+// exactly", but the question a token row raises is "is this still in use" —
+// and a relative age answers that at a glance. Falls back to the locale date
+// once the age stops being useful as a relative figure.
+function formatRelativeTime(value) {
+  const ts = parseIsoMs(value);
+  if (!ts) return "";
+  const seconds = Math.floor((Date.now() - ts) / 1000);
+  // A clock skew (or a server slightly ahead) must not render "in -3 minutes".
+  if (seconds < 60) return t("time.just_now");
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t("time.minutes_ago", { count: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("time.hours_ago", { count: hours });
+  const days = Math.floor(hours / 24);
+  if (days < 30) return t("time.days_ago", { count: days });
+  return new Date(ts).toLocaleDateString();
+}
+
 function parseIsoMs(value) {
   if (!value) {
     return null;
@@ -4833,28 +4852,38 @@ function renderTokensList(tokens) {
     const row = document.createElement("div");
     row.className = "tokens-row";
 
+    // Two lines, name first (redesign v2): the name is what the user gave the
+    // token and the only thing they recognise it by, so it is the headline.
+    // Everything identifying-but-secondary goes on one muted line under it.
     const meta = document.createElement("div");
     meta.className = "tokens-meta";
     const name = document.createElement("span");
     name.className = "tokens-name";
     name.textContent = tok.name;
-    const prefix = document.createElement("code");
-    prefix.className = "mono tokens-prefix";
-    prefix.textContent = `${tok.prefix}…`;
     meta.appendChild(name);
-    meta.appendChild(prefix);
-    row.appendChild(meta);
 
     const sub = document.createElement("div");
-    sub.className = "tokens-sub";
-    const created = new Date(tok.created_at).toLocaleString();
-    const lastUsed = tok.last_used_at ? new Date(tok.last_used_at).toLocaleString() : t("tokens.never_used");
-    sub.textContent = `${t("tokens.created")}: ${created} · ${t("tokens.last_used")}: ${lastUsed}`;
-    row.appendChild(sub);
+    sub.className = "tokens-sub mono";
+    const prefix = document.createElement("span");
+    prefix.className = "tokens-prefix";
+    prefix.textContent = `${tok.prefix}…`;
+    sub.appendChild(prefix);
+    // Last use is the actionable fact — it is what tells you whether revoking
+    // this token will break something. Creation date was dropped from the row:
+    // it never answered a question the user actually had.
+    const used = document.createElement("span");
+    used.className = "tokens-last-used";
+    used.textContent = tok.last_used_at
+      ? t("tokens.last_used_at", { when: formatRelativeTime(tok.last_used_at) })
+      : t("tokens.never_used");
+    sub.appendChild(document.createTextNode(" · "));
+    sub.appendChild(used);
+    meta.appendChild(sub);
+    row.appendChild(meta);
 
     const revokeBtn = document.createElement("button");
     revokeBtn.type = "button";
-    revokeBtn.className = "btn-text ghost";
+    revokeBtn.className = "btn-text tokens-revoke-btn";
     revokeBtn.textContent = t("tokens.revoke");
     revokeBtn.addEventListener("click", async () => {
       if (!window.confirm(t("tokens.revoke_confirm"))) return;
@@ -7844,27 +7873,45 @@ async function loadDeliveryEntities() {
   }
 }
 
-function deliveryRowActions(onEdit, onDelete) {
-  const actions = document.createElement("div");
-  actions.className = "prompts-actions";
-  const edit = document.createElement("button");
-  edit.type = "button";
-  edit.className = "icon-btn ghost";
-  edit.setAttribute("data-tooltip", t("delivery.form.save"));
-  edit.setAttribute("aria-label", t("delivery.form.save"));
-  // innerHTML, not textContent: applyI18n would wipe an SVG child, and these
-  // buttons are icon-only (see the prompts list for the same construction).
-  edit.innerHTML = ICON_EDIT;
-  edit.addEventListener("click", onEdit);
-  const del = document.createElement("button");
-  del.type = "button";
-  del.className = "icon-btn ghost danger";
-  del.setAttribute("data-tooltip", t("prompts.manage.delete"));
-  del.setAttribute("aria-label", t("prompts.manage.delete"));
-  del.innerHTML = ICON_DELETE;
-  del.addEventListener("click", onDelete);
-  actions.append(edit, del);
-  return actions;
+// The connection / destination currently open in the editor. Every action
+// (save, delete) reads this rather than closing over a row, so it can never act
+// on something the user is not looking at. Same shape as the prompts and
+// presets managers (redesign v2); the per-row edit/delete icon buttons are gone.
+let deliveryEditingCredential = null;
+let deliveryEditingTarget = null;
+
+// Shared builder for a selectable list row: name on top, a muted detail line
+// under it, and an optional warning. No actions — those belong to the editor.
+function deliveryListRow({ name, meta, warning, active, onPick }) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "mgr-item";
+  if (active) row.classList.add("active");
+
+  const body = document.createElement("span");
+  body.className = "mgr-item-body";
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "mgr-item-name";
+  nameEl.textContent = name;
+  body.appendChild(nameEl);
+
+  if (meta) {
+    const sub = document.createElement("span");
+    sub.className = "mgr-item-sub";
+    sub.textContent = meta;
+    body.appendChild(sub);
+  }
+  if (warning) {
+    const warn = document.createElement("span");
+    warn.className = "delivery-unavailable";
+    warn.textContent = warning;
+    body.appendChild(warn);
+  }
+
+  row.appendChild(body);
+  row.addEventListener("click", onPick);
+  return row;
 }
 
 function renderDeliveryCredentials() {
@@ -7872,31 +7919,13 @@ function renderDeliveryCredentials() {
   if (!list) return;
   list.innerHTML = "";
   for (const cred of deliveryState.credentials) {
-    const row = document.createElement("div");
-    row.className = "tokens-row prompts-row";
-
-    const main = document.createElement("div");
-    main.className = "tokens-meta prompts-meta";
-    const name = document.createElement("span");
-    name.className = "tokens-name prompt-name";
-    name.textContent = cred.name;
-    const meta = document.createElement("span");
-    meta.className = "delivery-meta";
-    meta.textContent = cred.adapter
-      + " · " + t("delivery.used_by", { count: cred.used_by || 0 });
-    main.append(name, meta);
-    if (!cred.adapter_available) {
-      const warn = document.createElement("span");
-      warn.className = "delivery-unavailable";
-      warn.textContent = t("delivery.adapter_missing");
-      main.appendChild(warn);
-    }
-
-    row.append(main, deliveryRowActions(
-      () => editDeliveryCredential(cred),
-      () => deleteDeliveryCredential(cred),
-    ));
-    list.appendChild(row);
+    list.appendChild(deliveryListRow({
+      name: cred.name,
+      meta: `${cred.adapter} · ${t("delivery.used_by", { count: cred.used_by || 0 })}`,
+      warning: cred.adapter_available ? "" : t("delivery.adapter_missing"),
+      active: !!deliveryEditingCredential && deliveryEditingCredential.id === cred.id,
+      onPick: () => editDeliveryCredential(cred),
+    }));
   }
 }
 
@@ -7905,31 +7934,14 @@ function renderDeliveryTargets() {
   if (!list) return;
   list.innerHTML = "";
   for (const target of deliveryTargetsList()) {
-    const row = document.createElement("div");
-    row.className = "tokens-row prompts-row";
-
-    const main = document.createElement("div");
-    main.className = "tokens-meta prompts-meta";
-    const name = document.createElement("span");
-    name.className = "tokens-name prompt-name";
-    name.textContent = target.name;
     const cred = deliveryState.credentials.find((c) => c.id === target.credential_id);
-    const meta = document.createElement("span");
-    meta.className = "delivery-meta";
-    meta.textContent = target.adapter + " · " + (cred ? cred.name : "—");
-    main.append(name, meta);
-    if (!target.adapter_available) {
-      const warn = document.createElement("span");
-      warn.className = "delivery-unavailable";
-      warn.textContent = t("delivery.adapter_missing");
-      main.appendChild(warn);
-    }
-
-    row.append(main, deliveryRowActions(
-      () => editDeliveryTarget(target),
-      () => deleteDeliveryTarget(target),
-    ));
-    list.appendChild(row);
+    list.appendChild(deliveryListRow({
+      name: target.name,
+      meta: `${target.adapter} · ${cred ? cred.name : "—"}`,
+      warning: target.adapter_available ? "" : t("delivery.adapter_missing"),
+      active: !!deliveryEditingTarget && deliveryEditingTarget.id === target.id,
+      onPick: () => editDeliveryTarget(target),
+    }));
   }
 }
 
@@ -7967,6 +7979,8 @@ function fillCredentialSelect(adapterName, selectedId) {
 }
 
 function resetDeliveryCredentialForm() {
+  deliveryEditingCredential = null;
+  document.getElementById("delivery-credential-delete")?.classList.add("hidden");
   document.getElementById("delivery-credential-edit-id").value = "";
   document.getElementById("delivery-credential-name").value = "";
   document.getElementById("delivery-credential-submit").textContent =
@@ -8043,6 +8057,8 @@ async function renderTargetFields(adapter, credentialId, values) {
 }
 
 function resetDeliveryTargetForm() {
+  deliveryEditingTarget = null;
+  document.getElementById("delivery-target-delete")?.classList.add("hidden");
   document.getElementById("delivery-target-edit-id").value = "";
   document.getElementById("delivery-target-name").value = "";
   document.getElementById("delivery-target-submit").textContent =
@@ -8057,6 +8073,8 @@ function resetDeliveryTargetForm() {
 }
 
 function editDeliveryCredential(cred) {
+  deliveryEditingCredential = cred;
+  document.getElementById("delivery-credential-delete")?.classList.remove("hidden");
   document.getElementById("delivery-credential-edit-id").value = cred.id;
   document.getElementById("delivery-credential-name").value = cred.name;
   const adapterSelect = document.getElementById("delivery-credential-adapter");
@@ -8070,9 +8088,14 @@ function editDeliveryCredential(cred) {
     deliveryAdapter(cred.adapter),
     { connection: true, values: cred.config || {}, secretsSet: cred.secrets || {} },
   );
+  // Re-render so the picked row shows as active — the list is the only thing
+  // that says which connection the editor is showing.
+  renderDeliveryCredentials();
 }
 
 function editDeliveryTarget(target) {
+  deliveryEditingTarget = target;
+  document.getElementById("delivery-target-delete")?.classList.remove("hidden");
   document.getElementById("delivery-target-edit-id").value = target.id;
   document.getElementById("delivery-target-name").value = target.name;
   fillVariantSelect((target.config || {}).default_variant);
@@ -8083,6 +8106,7 @@ function editDeliveryTarget(target) {
   void renderTargetFields(
     deliveryAdapter(target.adapter), target.credential_id, target.config || {},
   );
+  renderDeliveryTargets();
 }
 
 /** Pull the server's message out of an api() error.
@@ -8117,6 +8141,7 @@ async function deleteDeliveryCredential(cred) {
     window.alert(deliveryErrorText(err, "delivery.credentials.delete_failed"));
     return;
   }
+  resetDeliveryCredentialForm();
   await refreshDeliveryManager();
 }
 
@@ -8130,6 +8155,7 @@ async function deleteDeliveryTarget(target) {
     window.alert(deliveryErrorText(err, "delivery.targets.delete_failed"));
     return;
   }
+  resetDeliveryTargetForm();
   await refreshDeliveryManager();
 }
 
@@ -8498,10 +8524,35 @@ document.getElementById("delivery-credential-form")
 
 document.getElementById("delivery-credential-cancel")?.addEventListener("click", () => {
   resetDeliveryCredentialForm();
+  renderDeliveryCredentials();
 });
 
 document.getElementById("delivery-target-cancel")?.addEventListener("click", () => {
   resetDeliveryTargetForm();
+  renderDeliveryTargets();
+});
+
+// The rows only select, so creating starts from an explicit empty editor.
+document.getElementById("delivery-credential-new")?.addEventListener("click", () => {
+  resetDeliveryCredentialForm();
+  renderDeliveryCredentials();
+  document.getElementById("delivery-credential-name")?.focus();
+});
+
+document.getElementById("delivery-target-new")?.addEventListener("click", () => {
+  resetDeliveryTargetForm();
+  renderDeliveryTargets();
+  document.getElementById("delivery-target-name")?.focus();
+});
+
+// Delete acts on what is OPEN in the editor, never on a row the user is not
+// looking at — the reason the per-row icon buttons went away.
+document.getElementById("delivery-credential-delete")?.addEventListener("click", () => {
+  if (deliveryEditingCredential) void deleteDeliveryCredential(deliveryEditingCredential);
+});
+
+document.getElementById("delivery-target-delete")?.addEventListener("click", () => {
+  if (deliveryEditingTarget) void deleteDeliveryTarget(deliveryEditingTarget);
 });
 
 document.getElementById("delivery-credential-adapter")?.addEventListener("change", (event) => {
