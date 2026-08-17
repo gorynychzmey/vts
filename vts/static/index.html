@@ -912,7 +912,7 @@
       </div>
     </dialog>
 
-    <dialog id="presets-dialog" class="tokens-dialog">
+    <dialog id="presets-dialog" class="tokens-dialog presets-dialog">
       <div class="tokens-dialog-header">
         <h2 data-i18n="preset.manage.title">Manage presets</h2>
         <button type="button" id="presets-close-btn" class="icon-btn ghost"
@@ -925,14 +925,35 @@
         </button>
       </div>
 
-      <div id="presets-list" class="tokens-list prompts-list"></div>
+      <p class="tokens-help" data-i18n="preset.manage.hint">
+        A preset is a saved set of new-task options: artifacts, language and prompts.
+      </p>
 
-      <form id="preset-form" class="tokens-create-form prompt-form">
+      <!-- Two columns (redesign v2), same shape as the prompts manager: the list
+           was stacked above the editor, so the editor's own options pushed the
+           list off screen. Actions belong to whatever is open on the right, not
+           to a row of icons on each list item. -->
+      <div class="mgr-columns">
+        <div class="mgr-col-list">
+          <button type="button" id="preset-new-btn" class="btn-dashed"
+                  data-i18n="preset.manage.new">New preset</button>
+          <div id="presets-list" class="mgr-list prompts-list"></div>
+        </div>
+
+      <form id="preset-form" class="mgr-col-form prompt-form">
         <input type="hidden" id="preset-edit-id" value="" />
+        <div class="field-head">
+          <label class="field-label" for="preset-name-input"
+                 data-i18n="preset.manage.name">Name</label>
+        </div>
         <input type="text" id="preset-name-input" name="name" required
+               class="text-input"
                maxlength="255" autocomplete="off"
                data-i18n-placeholder="preset.manage.name"
                placeholder="Name" />
+        <div class="field-head">
+          <span class="field-label" data-i18n="preset.manage.artifacts_label">Artifacts</span>
+        </div>
         <div class="row options-row preset-edit-options">
           <label class="option-pill" data-i18n-title="new_task.audio_only_tooltip">
             <input id="preset-edit-audio_only" type="checkbox" />
@@ -950,33 +971,47 @@
             <input id="preset-edit-speaker_no_manual_stop" type="checkbox" disabled />
             <span data-i18n="new_task.speaker_no_manual_stop">Don't stop for review</span>
           </label>
-          <label class="language-control" data-i18n-title="new_task.language_tooltip">
-            <span data-i18n="new_task.language">Language</span>
-            <select id="preset-edit-language">
-              <option value="" data-i18n="new_task.language_auto">auto</option>
-              <option value="en" data-i18n="new_task.language_en">English</option>
-              <option value="ru" data-i18n="new_task.language_ru">Russian</option>
-              <option value="de" data-i18n="new_task.language_de">German</option>
-              <option value="fr" data-i18n="new_task.language_fr">French</option>
-              <option value="es" data-i18n="new_task.language_es">Spanish</option>
-            </select>
-          </label>
+        </div>
+        <label class="language-control preset-language-row" data-i18n-title="new_task.language_tooltip">
+          <span class="field-label" data-i18n="new_task.language">Language</span>
+          <select id="preset-edit-language">
+            <option value="" data-i18n="new_task.language_auto">auto</option>
+            <option value="en" data-i18n="new_task.language_en">English</option>
+            <option value="ru" data-i18n="new_task.language_ru">Russian</option>
+            <option value="de" data-i18n="new_task.language_de">German</option>
+            <option value="fr" data-i18n="new_task.language_fr">French</option>
+            <option value="es" data-i18n="new_task.language_es">Spanish</option>
+          </select>
+        </label>
+        <div class="field-head">
+          <span class="field-label" data-i18n="preset.manage.prompts_label">Summary and prompts</span>
         </div>
         <div class="prompt-select-field">
-          <span class="prompt-select-label" data-i18n="new_task.prompts">Prompts</span>
           <div class="prompt-select" id="preset-edit-prompts"></div>
         </div>
         <div class="prompt-select-field delivery-select-field" id="preset-delivery-field" hidden>
           <span class="prompt-select-label" data-i18n="new_task.delivery">Deliver to</span>
           <div class="prompt-select" id="preset-edit-delivery"></div>
         </div>
+        <!-- "Default" is a property of the preset being edited, so it belongs in
+             the editor — it used to be a per-row icon button whose meaning was
+             only discoverable from a tooltip. -->
+        <label class="option-pill preset-default-pill" id="preset-default-pill">
+          <input id="preset-edit-default" type="checkbox" />
+          <span data-i18n="preset.manage.make_default_label">Use for new tasks by default</span>
+        </label>
         <div class="prompt-form-actions">
+          <button type="button" id="preset-delete-btn" class="btn-text danger hidden"
+                  data-i18n="preset.manage.delete">Delete</button>
+          <button type="button" id="preset-duplicate-btn" class="btn-text ghost hidden"
+                  data-i18n="preset.manage.duplicate">Duplicate</button>
           <button type="submit" id="preset-submit-btn" class="btn-text primary"
-                  data-i18n="preset.manage.edit">Edit</button>
-          <button type="button" id="preset-cancel-btn" class="btn-text ghost"
+                  data-i18n="preset.manage.create">Create preset</button>
+          <button type="button" id="preset-cancel-btn" class="btn-text ghost hidden"
                   data-i18n="prompts.manage.reset">Reset</button>
         </div>
       </form>
+      </div>
     </dialog>
 
     <dialog id="delivery-dialog" class="tokens-dialog delivery-dialog">

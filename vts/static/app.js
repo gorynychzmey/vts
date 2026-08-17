@@ -5,7 +5,6 @@ const ICON_DUPLICATE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" 
 const ICON_MERGE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v4a5 5 0 0 0 5 5h6M6 21v-4a5 5 0 0 1 5-5h6"/><path d="M14 9l3 3-3 3"/></svg>';
 // Arrow leaving a box — "move this fragment somewhere else".
 const ICON_MOVE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/><path d="M14 4h6v6"/><path d="M20 4l-8 8"/></svg>';
-const ICON_MAKE_DEFAULT ='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6.5 7 .9-5 4.8 1.3 7L12 17.8 5.4 21.2 6.7 14.2 1.7 9.4l7-.9z"/></svg>';
 const taskList = document.getElementById("task-list");
 const taskTemplate = document.getElementById("task-template");
 const form = document.getElementById("task-form");
@@ -3093,7 +3092,23 @@ function currentFormOptions() {
     diarize: !!form.diarize.checked,
     speaker_no_manual_stop: !!form.speaker_no_manual_stop.checked,
     prompts: getSelectedPrompts(),
+    // Delivery is part of a preset (the save handler writes it), so it has to
+    // be part of what "changed since the preset was applied" means. Leaving it
+    // out meant changing the destinations never lit up "save" — the edit looked
+    // accepted and was then silently dropped.
+    delivery: selectedDeliveryRefs(deliverySelect),
   };
+}
+
+// Same shape as promptRefsEqual, over `deliver_to` — order is not meaningful.
+function deliveryRefsEqual(a, b) {
+  const norm = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((r) => String(r.deliver_to))
+      .sort();
+  const sa = norm(a);
+  const sb = norm(b);
+  return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
 }
 
 function promptRefsEqual(a, b) {
@@ -3115,7 +3130,8 @@ function optionsEqual(a, b) {
     !!oa.transcript === !!ob.transcript &&
     !!oa.diarize === !!ob.diarize &&
     !!oa.speaker_no_manual_stop === !!ob.speaker_no_manual_stop &&
-    promptRefsEqual(oa.prompts, ob.prompts)
+    promptRefsEqual(oa.prompts, ob.prompts) &&
+    deliveryRefsEqual(oa.delivery, ob.delivery)
   );
 }
 
@@ -4333,7 +4349,20 @@ async function refreshAll() {
       state.taskPaging.pageSize = cfg.tasks_page_size;
     }
   } catch { /* predicates degrade to false; loadTasks still renders */ }
+  // Prompts, delivery and presets are PER-USER, and refreshAll() is what runs on
+  // an impersonation change — so they have to reload here. They used to be
+  // bootstrap-only: switching user (or dropping impersonation) reloaded the task
+  // list but left the previous user's prompts, destinations and presets in the
+  // caches, which then showed in the composer and in every manager dialog.
+  // Before loadTasks(): a task's finalize step labels resolve through
+  // promptsCache, so a stale cache renders the wrong names on first paint.
+  await loadPrompts();
+  await loadDeliveryEntities();
+  renderDeliverySelectors();
   await loadTasks();
+  // After loadTasks(), matching bootstrap's order: loadPresets() applies the
+  // default preset to the composer and reads the delivery data loaded above.
+  await loadPresets();
   connectEvents();
   startVersionWatcher();
   startDurationTicker();
@@ -6718,6 +6747,17 @@ const presetEditSpeakerNoManualStop = document.getElementById("preset-edit-speak
 const presetEditPrompts = document.getElementById("preset-edit-prompts");
 const presetSubmitBtn = document.getElementById("preset-submit-btn");
 const presetCancelBtn = document.getElementById("preset-cancel-btn");
+const presetNewBtn = document.getElementById("preset-new-btn");
+const presetDeleteBtn = document.getElementById("preset-delete-btn");
+const presetDuplicateBtn = document.getElementById("preset-duplicate-btn");
+const presetEditDefault = document.getElementById("preset-edit-default");
+const presetDefaultPill = document.getElementById("preset-default-pill");
+
+// The preset currently open in the editor. The list rows only select; every
+// action (delete, duplicate, make-default) reads this instead of closing over
+// a row, which is what let the old per-row icon buttons act on a preset the
+// user was not looking at.
+let presetEditing = null;
 
 let presetsManagerDefaultRef = null;
 
@@ -6733,6 +6773,14 @@ function setPresetFormMode(editId) {
       : t("preset.manage.create");
   }
   if (presetCancelBtn) presetCancelBtn.classList.toggle("hidden", !editId);
+
+  // Actions belong to the open preset now, so they appear only when one is
+  // open — and only the ones it actually supports. A system preset cannot be
+  // edited or deleted, but duplicating it is the normal way to start from it.
+  const editable = !!presetEditing && presetEditing.source === "user" && presetEditing.editable;
+  presetDeleteBtn?.classList.toggle("hidden", !editable);
+  presetDuplicateBtn?.classList.toggle("hidden", !presetEditing);
+  if (presetSubmitBtn) presetSubmitBtn.disabled = !!presetEditing && !editable;
 }
 
 // Same dependency as the create form's pill (syncSpeakerNoManualStopToggle):
@@ -6747,6 +6795,8 @@ function syncPresetSpeakerNoManualStopToggle() {
 }
 
 function resetPresetForm() {
+  presetEditing = null;
+  if (presetEditDefault) presetEditDefault.checked = false;
   if (presetNameInput) presetNameInput.value = "";
   if (presetEditLanguage) presetEditLanguage.value = "";
   if (presetEditAudioOnly) presetEditAudioOnly.checked = false;
@@ -6763,10 +6813,22 @@ function resetPresetForm() {
     );
   }
   setPresetFormMode("");
+  renderPresetsListFromCache();
 }
 
 function fillPresetForm(preset) {
   if (!presetForm) return;
+  presetEditing = preset;
+  if (presetEditDefault) {
+    presetEditDefault.checked = presetRefEquals(
+      { source: preset.source, id: preset.id },
+      presetsManagerDefaultRef
+    );
+    // Unchecking "default" has no meaning — something must be the default —
+    // so the box only ever sets it, and the current default cannot clear itself.
+    presetEditDefault.disabled = presetEditDefault.checked;
+    presetDefaultPill?.classList.toggle("disabled", presetEditDefault.checked);
+  }
   if (presetNameInput) presetNameInput.value = preset.name || "";
   const opts = preset.options || {};
   if (presetEditLanguage) presetEditLanguage.value = opts.language || "";
@@ -6789,6 +6851,9 @@ function fillPresetForm(preset) {
     )
   );
   setPresetFormMode(preset.id);
+  // Re-render so the picked row shows as active; the list is the only place
+  // that tells you which preset the editor is showing.
+  renderPresetsListFromCache();
   presetNameInput?.focus();
 }
 
@@ -6804,21 +6869,6 @@ async function duplicatePreset(preset) {
     });
   } catch (err) {
     console.error("Failed to duplicate preset", err);
-    return;
-  }
-  await refreshPresetsManager();
-  await loadPresets();
-}
-
-async function makePresetDefault(preset) {
-  try {
-    await api("/api/me/default_preset", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: preset.source, id: preset.id }),
-    });
-  } catch (err) {
-    console.error("Failed to set default preset", err);
     return;
   }
   await refreshPresetsManager();
@@ -6843,75 +6893,68 @@ async function deletePreset(preset) {
   await loadPresets();
 }
 
+// Presets the manager last loaded, so picking a row can re-render the list
+// (to move the `active` mark) without another round trip.
+let presetsManagerCache = [];
+
+function renderPresetsListFromCache() {
+  renderPresetsList(presetsManagerCache, presetsManagerDefaultRef);
+}
+
 function renderPresetsList(presets, defaultRef) {
   if (!presetsListEl) return;
+  presetsManagerCache = presets;
   presetsListEl.innerHTML = "";
+  const editingId = presetEditIdInput?.value || "";
   for (const preset of presets) {
-    const row = document.createElement("div");
-    row.className = "tokens-row prompts-row";
+    // A selectable list item, not a row of buttons (redesign v2), matching the
+    // prompts manager. Four icon buttons per row made every preset look like a
+    // control panel and hid what each one actually does behind a tooltip.
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "mgr-item";
+    row.dataset.presetId = preset.id;
+    if (
+      String(preset.id) === String(editingId) &&
+      presetEditing &&
+      presetEditing.source === preset.source
+    ) {
+      row.classList.add("active");
+    }
 
-    const meta = document.createElement("div");
-    meta.className = "tokens-meta prompts-meta";
+    const body = document.createElement("span");
+    body.className = "mgr-item-body";
+
     const name = document.createElement("span");
-    name.className = "tokens-name prompt-name";
+    name.className = "mgr-item-name";
     name.textContent = presetLabel(preset);
-    meta.appendChild(name);
+    body.appendChild(name);
+
+    // What the preset DOES, under its name — the same summary the preset pill
+    // menu shows, which is what makes the list readable without opening each one.
+    const summary = presetSummary(preset);
+    if (summary) {
+      const sub = document.createElement("span");
+      sub.className = "mgr-item-sub";
+      sub.textContent = summary;
+      body.appendChild(sub);
+    }
+
     if (preset.source === "system") {
       const badge = document.createElement("span");
-      badge.className = "prompt-badge prompt-badge-system";
+      badge.className = "badge info sm prompt-badge-system";
       badge.textContent = t("preset.manage.system_badge");
-      meta.appendChild(badge);
+      body.appendChild(badge);
     }
     if (presetRefEquals({ source: preset.source, id: preset.id }, defaultRef)) {
       const badge = document.createElement("span");
-      badge.className = "prompt-badge prompt-badge-default";
+      badge.className = "badge sm prompt-badge-default";
       badge.textContent = t("preset.manage.default_badge");
-      meta.appendChild(badge);
-    }
-    row.appendChild(meta);
-
-    const actions = document.createElement("div");
-    actions.className = "prompts-actions";
-
-    if (preset.source === "user" && preset.editable) {
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "icon-btn ghost";
-      editBtn.setAttribute("data-tooltip", t("preset.manage.edit"));
-      editBtn.setAttribute("aria-label", t("preset.manage.edit"));
-      editBtn.innerHTML = ICON_EDIT;
-      editBtn.addEventListener("click", () => fillPresetForm(preset));
-      actions.appendChild(editBtn);
-
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "icon-btn ghost danger";
-      delBtn.setAttribute("data-tooltip", t("preset.manage.delete"));
-      delBtn.setAttribute("aria-label", t("preset.manage.delete"));
-      delBtn.innerHTML = ICON_DELETE;
-      delBtn.addEventListener("click", () => deletePreset(preset));
-      actions.appendChild(delBtn);
+      body.appendChild(badge);
     }
 
-    const dupBtn = document.createElement("button");
-    dupBtn.type = "button";
-    dupBtn.className = "icon-btn ghost";
-    dupBtn.setAttribute("data-tooltip", t("preset.manage.duplicate"));
-    dupBtn.setAttribute("aria-label", t("preset.manage.duplicate"));
-    dupBtn.innerHTML = ICON_DUPLICATE;
-    dupBtn.addEventListener("click", () => duplicatePreset(preset));
-    actions.appendChild(dupBtn);
-
-    const defBtn = document.createElement("button");
-    defBtn.type = "button";
-    defBtn.className = "icon-btn ghost";
-    defBtn.setAttribute("data-tooltip", t("preset.manage.make_default"));
-    defBtn.setAttribute("aria-label", t("preset.manage.make_default"));
-    defBtn.innerHTML = ICON_MAKE_DEFAULT;
-    defBtn.addEventListener("click", () => makePresetDefault(preset));
-    actions.appendChild(defBtn);
-
-    row.appendChild(actions);
+    row.appendChild(body);
+    row.addEventListener("click", () => fillPresetForm(preset));
     presetsListEl.appendChild(row);
   }
 }
@@ -6927,7 +6970,17 @@ async function refreshPresetsManager() {
       console.error("Failed to load default preset", err);
     }
     presetsManagerDefaultRef = defaultRef;
-    renderPresetsList(Array.isArray(presets) ? presets : [], defaultRef);
+    const list = Array.isArray(presets) ? presets : [];
+    // Keep the editor pointed at the same preset across a refresh — a save
+    // returns a fresh object, and holding the stale one made the row lose its
+    // `active` mark and the action buttons read the wrong `editable`.
+    if (presetEditing) {
+      const again = list.find(
+        (p) => p.source === presetEditing.source && String(p.id) === String(presetEditing.id)
+      );
+      if (again) presetEditing = again;
+    }
+    renderPresetsList(list, defaultRef);
   } catch (err) {
     console.error("Failed to load presets", err);
   }
@@ -6989,6 +7042,28 @@ presetForm?.addEventListener("submit", async (event) => {
       });
     }
     if (!resp.ok) return;
+    // "Default" is a separate endpoint, but from the user's side it is one of
+    // the fields they just filled in, so it is saved with the rest. Only ever
+    // set: the box is disabled once checked (something must be the default).
+    if (presetEditDefault?.checked && !presetEditDefault.disabled) {
+      const saved = await resp.json().catch(() => null);
+      const ref = editId && presetEditing
+        ? { source: presetEditing.source, id: presetEditing.id }
+        : saved && saved.id
+          ? { source: saved.source || "user", id: saved.id }
+          : null;
+      if (ref) {
+        try {
+          await api("/api/me/default_preset", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ref),
+          });
+        } catch (err) {
+          console.error("Failed to set default preset", err);
+        }
+      }
+    }
   } catch (err) {
     console.error("Failed to save preset", err);
     return;
@@ -6996,6 +7071,22 @@ presetForm?.addEventListener("submit", async (event) => {
   resetPresetForm();
   await refreshPresetsManager();
   await loadPresets();
+});
+
+// The list rows only select, so creating starts from an explicit empty editor.
+presetNewBtn?.addEventListener("click", () => {
+  resetPresetForm();
+  presetNameInput?.focus();
+});
+
+// Both act on the preset open in the editor, never on a row the user is not
+// looking at.
+presetDeleteBtn?.addEventListener("click", () => {
+  if (presetEditing) deletePreset(presetEditing);
+});
+
+presetDuplicateBtn?.addEventListener("click", () => {
+  if (presetEditing) duplicatePreset(presetEditing);
 });
 
 // ---------- Restart final dialog ----------
@@ -7356,13 +7447,12 @@ async function bootstrap() {
   syncSourceType();
   applySharedUrlIfAny();
   await applyPendingSharedFileIfAny();
-  // Load prompts before the first task render so per-prompt finalize step
-  // labels resolve to names (not the raw "finalize:user:<uuid>") on first paint.
-  await loadPrompts();
   // Restore BEFORE the first task fetch, so the initial request already
   // carries the filters a reload is expected to preserve. Restoring after
   // refreshAll() would load an unfiltered list and then contradict it.
   restoreFilters();
+  // Loads prompts, delivery and presets too — they are per-user, so they live
+  // in refreshAll() rather than here (it also runs on every user switch).
   await refreshAll();
   // Infinite scroll: observe the sentinel once at bootstrap (refreshAll()
   // re-runs on user switches, so wiring here avoids duplicate observers).
@@ -7371,9 +7461,6 @@ async function bootstrap() {
   }, { rootMargin: "200px" });
   const _sentinelEl = document.getElementById("task-sentinel");
   if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
-  await loadDeliveryEntities();
-  renderDeliverySelectors();
-  await loadPresets();
   await loadPushConfig();
   await loadProgressWeights();
   await loadUploadConfig();
@@ -7392,6 +7479,14 @@ async function bootstrap() {
 const deliveryDialog = document.getElementById("delivery-dialog");
 const deliverySelect = document.getElementById("delivery-select");
 const deliverySelectField = document.getElementById("delivery-select-field");
+
+// Same as the prompt multiselect: the checkbox `change` bubbles out of the
+// popover. Without this the delivery set could be edited without the preset
+// ever being marked dirty, and the edit was dropped on save.
+// Registered HERE, not beside the other recomputePresetDirty listeners ~4000
+// lines up: `deliverySelect` is a const declared on the line above, so touching
+// it earlier is a temporal-dead-zone error that kills the whole bootstrap.
+deliverySelect?.addEventListener("change", recomputePresetDirty);
 const presetDeliverySelect = document.getElementById("preset-edit-delivery");
 const presetDeliveryField = document.getElementById("preset-delivery-field");
 

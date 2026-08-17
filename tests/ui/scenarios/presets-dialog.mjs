@@ -2,6 +2,14 @@
 // <dialog> must keep the UA display:none — a prior bug leaked dialogs visible),
 // opens from #presets-btn, renders system + user rows from /api/presets, marks
 // the user's default preset, and closes via #presets-close-btn.
+//
+// Redesign v2 rebuilt this dialog as list + editor (the same shape as the
+// prompts manager): the rows are SELECTABLE .mgr-item buttons carrying a name
+// and a settings summary, and every action (delete, duplicate, make-default)
+// moved into the editor and acts on whatever is open there. So the old
+// per-row icon buttons are gone, and picking a row is what enters edit mode.
+// The [data-tooltip] pattern those buttons hosted moved to the voice registry —
+// see tooltip-icon-buttons.
 import { startStubServer, launch, openPage, isVisible, dialogOpen, clickReal, screenshot, openFromHeaderMenu } from "../harness.mjs";
 
 export const name = "presets-dialog";
@@ -58,8 +66,8 @@ export async function run() {
       failures.push("presets-dialog not visible after open");
     }
 
-    // List renders one row per preset (system + user).
-    const rowCount = await page.$$eval("#presets-list .prompts-row", (els) => els.length);
+    // List renders one selectable row per preset (system + user).
+    const rowCount = await page.$$eval("#presets-list .mgr-item", (els) => els.length);
     if (rowCount !== 2) {
       failures.push(`expected 2 preset rows, got ${rowCount}`);
     }
@@ -69,26 +77,40 @@ export async function run() {
     const def = await page.$$eval("#presets-list .prompt-badge-default", (els) => els.length);
     if (def !== 1) failures.push(`expected 1 default badge, got ${def}`);
 
-    // User row exposes Edit + Delete; system row does not. Buttons are now
-    // ICON buttons: identify Edit by its aria-label/title, not text content.
-    const editBtns = await page.$$eval("#presets-list button", (els) =>
-      els.filter((b) => (b.getAttribute("aria-label") || "") === "Edit preset").length
+    // The rows carry NO actions — that is the point of the redesign. A row that
+    // grows buttons again is the regression this guards.
+    const rowBtns = await page.$$eval("#presets-list .mgr-item button, #presets-list .prompts-actions", (els) => els.length);
+    if (rowBtns !== 0) failures.push(`preset rows must carry no action buttons, got ${rowBtns}`);
+
+    // A row says what the preset DOES, not just its name — the summary under
+    // the name is what makes the list readable without opening each one.
+    const withSummary = await page.$$eval("#presets-list .mgr-item .mgr-item-sub", (els) =>
+      els.filter((el) => el.textContent.trim().length > 0).length
     );
-    if (editBtns !== 1) failures.push(`expected 1 Edit button (user only), got ${editBtns}`);
+    if (withSummary < 1) failures.push("no preset row shows a settings summary");
 
-    // Action buttons are icon buttons, not text buttons.
-    const iconBtns = await page.$$eval("#presets-list .prompts-actions .icon-btn", (els) => els.length);
-    if (iconBtns < 1) failures.push(`expected .prompts-actions .icon-btn > 0, got ${iconBtns}`);
-    const textBtns = await page.$$eval("#presets-list .prompts-actions .btn-text", (els) => els.length);
-    if (textBtns !== 0) failures.push(`expected 0 .prompts-actions .btn-text, got ${textBtns}`);
-
-    // The (long) user preset name must NOT be clipped now that icons free up width.
-    const presetNameClipped = await page.$$eval("#presets-list .tokens-name", (els) =>
-      els.some((el) => el.scrollWidth > el.clientWidth + 1)
+    // A long name is TRUNCATED with an ellipsis, not spilled: the list column is
+    // a fixed 13.6rem, so `scrollWidth > clientWidth` is the intended state here
+    // (it is what makes the ellipsis appear). What must not happen is the name
+    // painting outside its row, which is the actual visual defect.
+    const nameOverflow = await page.$$eval("#presets-list .mgr-item-name", (els) =>
+      els
+        .map((el) => {
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const row = el.closest(".mgr-item").getBoundingClientRect();
+          return {
+            ellipsis: cs.textOverflow === "ellipsis" && cs.overflow === "hidden",
+            escapes: r.right > row.right + 1,
+          };
+        })
+        .filter((x) => !x.ellipsis || x.escapes)
     );
-    if (presetNameClipped) failures.push("a preset .tokens-name is clipped (scrollWidth > clientWidth)");
+    if (nameOverflow.length) {
+      failures.push(`preset name must ellipsis inside its row: ${JSON.stringify(nameOverflow)}`);
+    }
 
-    await screenshot(page, "presets-dialog-icon-buttons");
+    await screenshot(page, "presets-dialog-two-column");
 
     // CREATE MODE (default): the form is visible, submit button reads the
     // create label (not "Edit"), and the prompt multiselect shows rows with
@@ -109,13 +131,21 @@ export async function run() {
     );
     if (summaryChecked !== 1) failures.push(`expected exactly 1 checked prompt (summary) in create mode, got ${summaryChecked}`);
 
-    // EDIT MODE: click the user preset's Edit -> submit label switches to
-    // "Edit preset" and the multiselect reflects that preset's prompts (u1).
-    await page.$$eval("#presets-list button", (els) => {
-      const b = els.find((x) => (x.getAttribute("aria-label") || "") === "Edit preset");
+    // EDIT MODE: picking the user preset's ROW opens it in the editor -> submit
+    // label switches to "Edit preset" and the multiselect reflects its prompts (u1).
+    await page.$$eval("#presets-list .mgr-item", (els) => {
+      const b = els.find((x) => x.textContent.includes("Standard (Kopie)"));
       if (b) b.click();
     });
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(200);
+
+    // The picked row is marked, so the list says which preset the editor shows.
+    const activeRows = await page.$$eval("#presets-list .mgr-item.active", (els) => els.length);
+    if (activeRows !== 1) failures.push(`expected exactly 1 active row after picking, got ${activeRows}`);
+
+    // Actions appear only once something is open, and act on THAT preset.
+    const delHidden = await page.$eval("#preset-delete-btn", (b) => b.classList.contains("hidden"));
+    if (delHidden) failures.push("delete button should be visible for an open editable preset");
     const editLabel = (await page.$eval("#preset-submit-btn", (b) => b.textContent.trim()));
     if (editLabel !== "Edit preset") {
       failures.push(`expected submit label "Edit preset" in edit mode, got "${editLabel}"`);

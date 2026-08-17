@@ -1457,16 +1457,25 @@ input[type="file"] {
   padding: 0.75rem 0.8rem;
   background: var(--bg-sunk);
   /* Was clipped by the parent's overflow before; now rounds itself so the
-     tinted background still follows the card's top corners. */
-  border-top-left-radius: 11px;
-  border-top-right-radius: 11px;
+     tinted background still follows the card's top corners.
+     Must be the CARD's radius (--r-2xl), not a hardcoded number: this was 11px
+     against the card's 15px, so the tinted row cut across the border's curve. */
+  border-top-left-radius: var(--r-2xl);
+  border-top-right-radius: var(--r-2xl);
 }
 
 /* Same reasoning for the bottom edge: whichever block ends the card must not
    paint square corners over the parent's rounded border. */
-.task > :last-child {
-  border-bottom-left-radius: 11px;
-  border-bottom-right-radius: 11px;
+/* `:last-child` alone is not enough: on a COLLAPSED card the last child is
+   `.task-body.hidden`, which paints nothing, so the visible bottom row (the
+   header) kept square corners while the card's border curved away from it.
+   Rounding the last VISIBLE block — and the header itself when it is the only
+   one — is what actually follows the card's bottom edge. */
+.task > :last-child,
+.task:has(> .task-body.hidden) > .task-header-row,
+.task > .task-body.hidden ~ :last-child {
+  border-bottom-left-radius: var(--r-2xl);
+  border-bottom-right-radius: var(--r-2xl);
 }
 
 .task-main {
@@ -1628,6 +1637,9 @@ input[type="file"] {
 }
 
 .task-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
   border-radius: 999px;
   padding: 0.24rem 0.58rem;
   border: 1px solid var(--line);
@@ -1635,6 +1647,25 @@ input[type="file"] {
   font-family: "IBM Plex Mono", monospace;
   font-size: var(--fs-meta);
   text-transform: lowercase;
+}
+
+/* A coloured dot in the chip, matching the one on the card's left edge. The
+   chip already carries the same .status-* class and takes its `color` from it,
+   so `currentColor` gives every status the right dot without one rule each —
+   including statuses added later. */
+.task-status::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Without a status class the chip is plain grey text, and a currentColor dot
+   would read as a bullet rather than a state. */
+.task-status:not([class*="status-"])::before {
+  background: var(--mute);
 }
 
 .task-status.status-running {
@@ -2724,6 +2755,13 @@ dialog:not([open]) {
   max-width: min(40rem, calc(100vw - 2rem));
   max-height: 80vh;
   overflow: auto;
+  /* A scrollbar is painted INSIDE the border box, so on a long task it covered
+     the right corners and they read as square while the left stayed round.
+     Clipping to the border radius keeps the corners; unlike the task card there
+     are no tooltip bubbles to escape this dialog, so clipping is safe here. */
+  border-radius: var(--r-3xl);
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 #task-about-dialog section {
@@ -4724,6 +4762,139 @@ dialog:not([open]) {
 .prompts-dialog,
 .presets-dialog {
   max-width: min(58rem, calc(100vw - 2rem));
+}
+
+
+/* ---------- Preset editor (redesign v2) ----------
+   The presets manager moved to the same list+editor shape as the prompts one.
+   Its editor has more fields than the prompt editor, so the pieces below give
+   them the same rhythm as .field-head/.text-input rather than letting each
+   control set its own spacing. */
+
+/* Language is its own line, not another artifact pill: it is a value the user
+   picks, while the pills beside it are on/off. Putting it in the pill row made
+   a <select> look like a checkbox. */
+.preset-language-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+.preset-language-row select {
+  flex: 0 1 auto;
+  min-width: 9rem;
+}
+
+/* The prompt list can be long; it scrolls inside the editor instead of growing
+   the dialog past the viewport, so the actions below stay reachable. */
+.presets-dialog .prompt-select-field .prompt-select {
+  max-height: 13rem;
+  overflow-y: auto;
+}
+
+/* Artifact pills in the narrow editor column: .option-pill carries min-width:0
+   so a long German label can wrap inside a grid cell (vts-nr4). In this flex
+   row that same rule let every pill shrink below its label and clip the text.
+   Here they must keep their content width and wrap onto a second line instead —
+   hence flex-basis auto with no shrink, PLUS `max-width: 100%` so a pill whose
+   label is wider than the whole column wraps its text rather than sticking out
+   past the dialog edge (an invisible horizontal scrollbar, vts-nr4 again). */
+.presets-dialog .preset-edit-options .option-pill {
+  flex: 0 0 auto;
+  min-width: auto;
+  max-width: 100%;
+}
+
+/* Below 40rem .options-row becomes a 2-column GRID (vts-nr4), where the pill is
+   sized by its track, not by its content. The `min-width: auto` above then stops
+   it shrinking into that track and it overflows the dialog — which is the exact
+   regression min-width:0 was added to prevent. Hand the grid layout back its
+   own rules. */
+@media (max-width: 40rem) {
+  .presets-dialog .preset-edit-options .option-pill {
+    min-width: 0;
+  }
+
+  .presets-dialog .preset-edit-options .option-pill > span {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+}
+
+/* The label may wrap inside a pill that hit that max-width. The .preset-edit-options
+   rule above pins `flex-shrink: 0` on this span for the grid layout it was written
+   for; here the pill is already content-sized, so the span only needs permission
+   to wrap when its pill is capped. */
+.presets-dialog .preset-edit-options .option-pill > span {
+  min-width: 0;
+  white-space: normal;
+  /* Overrides the `flex-shrink: 0` the .preset-edit-options rule above sets for
+     the grid layout. Kept there (that rule stops "Audio only" breaking across
+     three lines when there IS room); here the pill is already capped at the
+     column width, so a label that still does not fit must be allowed to shrink
+     and wrap — otherwise it sticks out past the dialog edge. */
+  flex-shrink: 1;
+}
+
+/* A full-width row, unlike the artifact pills it shares a class with: this is
+   one statement about the preset, not one of several options in a row.
+   `align-self` (not `width`) because .mgr-col-form is a COLUMN flex container —
+   the pill is a flex ITEM here, and its inline-flex display plus min-width:0
+   otherwise collapsed it to the width of the checkbox.
+   `display: flex` (not the inherited inline-flex) so the pill is sized by the
+   column, and `box-sizing` keeps its padding inside that width — otherwise the
+   pill itself, not the label, is what overflows the dialog. */
+.preset-default-pill {
+  display: flex;
+  box-sizing: border-box;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  margin-top: 0.7rem;
+  justify-content: flex-start;
+}
+
+/* `.option-pill > span` carries min-width:0 (so a long German label can wrap on
+   a phone, vts-nr4). In this pill that let the span shrink to 0px and wrap the
+   label to ONE CHARACTER per line — a 391px-tall column of letters. The pill is
+   sized by its container above, so the label can simply keep its own width. */
+.preset-default-pill > span {
+  flex: 0 1 auto;
+  min-width: max-content;
+}
+
+/* The checkbox took 597px of a 627px pill, shoving the label out past the
+   dialog edge (a horizontal scrollbar with nothing visible in it). `.option-pill
+   input` sets `flex: 0 0 auto`, but with no width the basis is `auto`, which in
+   this stretched row resolves to the free space rather than the control's own
+   size. An explicit width is what actually pins it. */
+.preset-default-pill > input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Already the default: the box stays checked and stops responding, because
+   unchecking it would leave no default at all. */
+.preset-default-pill.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Delete sits away from Save so the destructive action is not adjacent to the
+   one the user reaches for every time. */
+/* Four buttons with translated labels ("Voreinstellung duplizieren") exceed the
+   editor column, and .prompt-form-actions does not wrap by default — Reset was
+   pushed past the dialog edge. */
+.presets-dialog .prompt-form-actions {
+  margin-top: 0.9rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.presets-dialog .prompt-form-actions #preset-delete-btn {
+  margin-right: auto;
 }
 
 
