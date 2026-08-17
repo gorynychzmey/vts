@@ -212,6 +212,25 @@ def _entry_for_index(meta: dict, index: int) -> dict:
     raise HTTPException(status_code=404, detail=f"No file at index {index}")
 
 
+def _finish_interrupted_reorder(media_dir: Path) -> None:
+    """Finish a concat-order reorder that a previous finalize died inside.
+
+    A crash between the two rename passes in `uploads_finalize` leaves files
+    under `ordered.NNN.*`, a name nothing else recognises (vts-vm0 blocker 2,
+    "second, dirtier window"). That name already encodes the target
+    concat-order position, so finishing pass 2 for it needs no re-probing and
+    no re-resolution of order — which is why this can run before the
+    completeness check, on every call, without consulting `resolved_order`.
+
+    Cannot collide with entries that have not been reordered yet: `ordered.*`
+    is a distinct prefix from `audio.original.*`, and each position is unique
+    across the set.
+    """
+    for stray in sorted(media_dir.glob("ordered.*")):
+        target = media_dir / part_name(int(stray.stem.split(".")[1]), stray.suffix)
+        stray.rename(target)
+
+
 async def _lock_upload(session: AsyncSession, upload_id: uuid.UUID) -> None:
     """Serialize work for one upload_id across concurrent requests and
     workers (vts-hh1).
@@ -309,6 +328,41 @@ async def uploads_finalize(
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> TaskOut:
+    """Create the Task for a completed upload session (idempotent)."""
+    # This handler's docstring is published as the OpenAPI description and is
+    # capped at 300 chars for ChatGPT Actions (see test_openapi_spec.py), so
+    # the design notes live here as a comment instead.
+    #
+    # Written to be RESUMABLE: every client retry re-enters here, and a
+    # previous attempt may have died at any point. The whole body runs under
+    # pg_advisory_xact_lock (see _lock_upload), so attempts are serialized per
+    # upload_id rather than interleaved.
+    #
+    # Progress is not tracked by a status field but inferred from what is on
+    # disk, which gives four recovery points:
+    #
+    # 1. A Task row already exists -> the retry (or the loser of a concurrent
+    #    pair) gets that task back, not a primary-key crash. Checked under the
+    #    lock, so it cannot change while we look.
+    # 2. `ordered.NNN.*` files present -> a crash between the two rename
+    #    passes. _finish_interrupted_reorder completes pass 2 from the names
+    #    alone; it needs no order decision, so it runs first, unconditionally.
+    # 3. `resolved_order` persisted in the sidecar (`already_resolved`) -> a
+    #    previous attempt got as far as deciding the concat order. That
+    #    decision is made exactly ONCE and written before any rename touches
+    #    disk, because it is derived from probing files the renames then move:
+    #    after a reorder, the selection-index names those probes matched no
+    #    longer exist. So a retry reuses it verbatim and skips the
+    #    completeness check, finalize_multi and probing — all three of which
+    #    would otherwise fail or lie on a set that is already correct.
+    # 4. Sidecar still on disk -> kept (remove_meta=False) until the Task row
+    #    is committed, since it is what makes the session findable and keeps
+    #    the GC away. Unlinked only on success.
+    #
+    # The invariant tying 2-4 together: THE ORDER DECISION IS NEVER
+    # RE-DERIVED. That is what makes the two-pass reorder safe to redo from
+    # wherever it stopped. Splitting these steps into separate helpers would
+    # hide it.
     # Parse the id WITHOUT requiring the sidecar to still be on disk:
     # a successful finalize unlinks it, so _load_owned_session would 404
     # a legitimate retry before the already-finalized check below could
@@ -354,27 +408,11 @@ async def uploads_finalize(
     if meta.get("files"):
         media_dir = Path(settings.artifacts_root) / _user_hash_dir(user.username) / str(uid) / "media"
 
-        # Recover any `ordered.NNN.*` leftovers from an interrupted
-        # concat-order reorder (vts-vm0 blocker 2, "second, dirtier
-        # window"): a crash between the two rename passes below leaves
-        # files under a name nothing else recognises. `ordered.NNN.*`
-        # already encodes the target concat-order position in its own
-        # name — finishing pass 2 for it needs no re-probing and no
-        # re-resolution of order, so this is safe to do unconditionally,
-        # before the completeness check, on every finalize call (a no-op
-        # when there is nothing to recover). This can never collide with
-        # entries not yet reordered: `ordered.*` is a distinct name
-        # prefix from `audio.original.*`, and each `position` is unique
-        # across the whole set.
-        def _finish_interrupted_reorder() -> None:
-            for stray in sorted(media_dir.glob("ordered.*")):
-                target = media_dir / part_name(
-                    int(stray.stem.split(".")[1]), stray.suffix
-                )
-                stray.rename(target)
-
+        # Recovery pass, safe to run unconditionally on every finalize
+        # (a no-op when there is nothing to recover) — see
+        # _finish_interrupted_reorder.
         if media_dir.exists():
-            await asyncio.to_thread(_finish_interrupted_reorder)
+            await asyncio.to_thread(_finish_interrupted_reorder, media_dir)
 
         # Whether a PREVIOUS (crashed) attempt already got far enough to
         # persist the concat-order decision (see below). Used to skip
