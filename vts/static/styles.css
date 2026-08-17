@@ -59,7 +59,9 @@
 
   /* warning / queued */
   --warn: #caa23e;
-  --warn-ink: #8a6a1e;
+  /* Darkened from the design's #8a6a1e, which lands at 4.41:1 on --warn-soft
+     — just under AA for the queued/waiting status pills that use this pair. */
+  --warn-ink: #7d5f1a;
   --warn-soft: #f8efd9;
   --warn-line: #e8d7a8;
 
@@ -293,7 +295,7 @@ body {
   margin: 0;
   font-family: "Manrope", sans-serif;
   color: var(--ink);
-  background: radial-gradient(1200px 500px at 85% -10%, #f0c9af 0%, transparent 70%), var(--bg);
+  background: radial-gradient(1200px 500px at 85% -10%, var(--bg-tint-a) 0%, transparent 70%), var(--bg);
 }
 
 .bg-shape {
@@ -342,12 +344,12 @@ header p {
    buttons faded into the backdrop. Inside cards the same fill has enough
    contrast, so darken the border/background only here (vts-nr4). */
 .header-version .icon-btn.ghost {
-  background: #e4dcc9;
-  border: 1px solid #cfc5ad;
+  background: var(--bg-bar);
+  border: 1px solid var(--line-strong);
 }
 
 .header-version .icon-btn.ghost:hover {
-  background: #d9cfb8;
+  background: var(--ghost-bg-hover);
 }
 
 .card {
@@ -434,7 +436,7 @@ input[type="file"] {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
-  background: #fff;
+  background: var(--bg-field);
   font-size: 0.85rem;
   line-height: 1.4;
   cursor: pointer;
@@ -470,7 +472,7 @@ input[type="file"] {
 }
 
 .source-type-radio-group label:has(input[type="radio"]:checked) {
-  background: #fff;
+  background: var(--bg-card);
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
@@ -511,7 +513,7 @@ input[type="file"] {
   gap: 0.45rem;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-field);
   padding: 0.55rem 0.9rem;
   font-size: 0.85rem;
   /* Translated labels are much longer than the English ones (de:
@@ -540,7 +542,7 @@ input[type="file"] {
   gap: 0.45rem;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-field);
   padding: 0.2rem 0.2rem 0.2rem 0.7rem;
   font-size: 0.85rem;
 }
@@ -614,13 +616,13 @@ input[type="file"] {
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-field);
   font-size: 0.84rem;
 }
 
 #preset-save-btn {
   font-size: 0.82rem;
-  background: #efe9db;
+  background: var(--ghost-bg);
   color: var(--ink);
 }
 
@@ -672,7 +674,7 @@ input[type="file"] {
   gap: 0.45rem;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-field);
   padding: 0.55rem 0.9rem;
   font-size: 0.85rem;
   color: inherit;
@@ -710,7 +712,7 @@ input[type="file"] {
   padding: 0.4rem;
   border: 1px solid var(--line);
   border-radius: 0.6rem;
-  background: #fff;
+  background: var(--bg-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
 
@@ -730,7 +732,7 @@ input[type="file"] {
 }
 
 .prompt-row:hover {
-  background: #f5f5f5;
+  background: var(--bg-chip);
 }
 
 .prompt-row input {
@@ -749,25 +751,25 @@ input[type="file"] {
   padding: 0.1rem 0.45rem;
   border: 1px solid var(--line);
   color: var(--ink-soft);
-  background: #f5f5f5;
+  background: var(--bg-chip);
 }
 
 .prompt-badge-system {
-  background: #eef4ff;
-  border-color: #cdddfb;
-  color: #2c5cc5;
+  background: var(--info-soft);
+  border-color: var(--info-line);
+  color: var(--info-ink);
 }
 
 .prompt-badge-user {
-  background: #eefaf0;
-  border-color: #c9ecd2;
-  color: #2c8a4a;
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok-ink);
 }
 
 .prompt-badge-default {
-  background: #fff6e6;
-  border-color: #f3dca8;
-  color: #a76a14;
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
 }
 
 .row {
@@ -847,8 +849,8 @@ input[type="file"] {
 }
 
 .icon-btn.ghost:hover {
-  background: #e6dece;
-  border-color: #c2b699;
+  background: var(--ghost-bg-hover);
+  border-color: var(--line-strong);
 }
 
 .icon-btn:disabled {
@@ -923,9 +925,9 @@ input[type="file"] {
   /* Styled like the browser's native tooltip — light surface, dark text and a
      dark hairline border — so our bubbles and any remaining native `title`
      read as the same thing. */
-  background: #fff;
-  color: var(--ink, #152018);
-  border: 1px solid var(--ink, #152018);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--ink);
   box-shadow: 0 2px 6px rgb(21 32 24 / 0.18);
   font-size: 0.72rem;
   line-height: 1.25;
@@ -1052,7 +1054,7 @@ input[type="file"] {
 }
 
 .submit-progress-fill {
-  stroke: #fff;
+  stroke: var(--ink-on-accent);
   transition: stroke-dashoffset 0.15s linear;
 }
 
@@ -1078,8 +1080,8 @@ input[type="file"] {
   position: fixed;
   z-index: 1000;
   min-width: 200px;
-  background: #fff;
-  border: 1px solid #d8d0c4;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   overflow: hidden;
@@ -1150,7 +1152,7 @@ input[type="file"] {
 }
 
 .btn-menu button:hover {
-  background: #f5f0e8;
+  background: var(--bg-chip);
 }
 
 .task-list {
@@ -1174,7 +1176,7 @@ input[type="file"] {
   padding: 0.5rem 0.8rem;
   border: 1px solid var(--accent);
   border-radius: 12px;
-  background: #fff8e8;
+  background: var(--bg-sunk);
   color: var(--accent);
   font: inherit;
   font-weight: 600;
@@ -1184,7 +1186,7 @@ input[type="file"] {
 
 .new-tasks-banner:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--ink-on-accent);
 }
 
 .new-tasks-banner[hidden] {
@@ -1237,7 +1239,7 @@ input[type="file"] {
      The corners are kept by rounding the only children that paint to the edge
      (the tinted header row below, and the last child) instead of clipping the
      whole card. */
-  background: #fff;
+  background: var(--bg-card);
 }
 
 .task-header-row {
@@ -1249,7 +1251,7 @@ input[type="file"] {
      title/URL width straight back up to the card. */
   min-width: 0;
   padding: 0.75rem 0.8rem;
-  background: #fff8e8;
+  background: var(--bg-sunk);
   /* Was clipped by the parent's overflow before; now rounds itself so the
      tinted background still follows the card's top corners. */
   border-top-left-radius: 11px;
@@ -1309,7 +1311,7 @@ input[type="file"] {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--warn, #b25c00);
+  color: var(--warn-ink);
   border: 1px solid currentColor;
   border-radius: 3px;
   padding: 0 0.35rem;
@@ -1384,52 +1386,52 @@ input[type="file"] {
   border-radius: 999px;
   padding: 0.24rem 0.58rem;
   border: 1px solid var(--line);
-  background: #f4efe2;
+  background: var(--bg-chip);
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
   text-transform: lowercase;
 }
 
 .task-status.status-running {
-  border-color: #9fcdbf;
-  background: #e8f5ef;
-  color: #236952;
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok-ink);
 }
 
 .task-status.status-failed {
-  border-color: #e7b3b3;
-  background: #fdeeee;
-  color: #8b2323;
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger-ink);
 }
 
 .task-status.status-completed {
-  border-color: #9fcdbf;
-  background: #e8f5ef;
-  color: #236952;
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok-ink);
 }
 
 .task-status.status-archived {
-  border-color: #b8c7d6;
-  background: #edf3f8;
-  color: #36546f;
+  border-color: var(--info-line);
+  background: var(--info-soft);
+  color: var(--info-ink);
 }
 
 .task-status.status-queued {
-  border-color: #d5caaf;
-  background: #f5efe4;
-  color: #7a6331;
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
 }
 
 .task-status.status-waiting {
-  border-color: #d5caaf;
-  background: #f5efe4;
-  color: #7a6331;
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
 }
 
 .task-status.status-paused {
-  border-color: #c7c7c7;
-  background: #f3f3f3;
-  color: #5c5c5c;
+  border-color: var(--mute-line);
+  background: var(--mute-soft);
+  color: var(--mute-ink);
 }
 
 .task-runtime {
@@ -1496,7 +1498,7 @@ input[type="file"] {
   position: relative;
   height: 1.25rem;
   border-radius: 999px;
-  background: #ede6d6;
+  background: var(--bg-bar);
   overflow: hidden;
 }
 
@@ -1504,12 +1506,12 @@ input[type="file"] {
   position: absolute;
   inset: 0 auto 0 0;
   width: 0;
-  background: linear-gradient(90deg, #2f8f73 0%, #43b390 100%);
+  background: linear-gradient(90deg, var(--ok-ink) 0%, var(--ok) 100%);
   transition: width 0.18s ease;
 }
 
 .local-progress .step-progress-fill {
-  background: linear-gradient(90deg, #2f5f8f 0%, #3e86c3 100%);
+  background: linear-gradient(90deg, var(--info-ink) 0%, var(--info) 100%);
 }
 
 .step-progress.indeterminate .step-progress-fill {
@@ -1535,7 +1537,7 @@ input[type="file"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0f1b14;
+  color: var(--ink);
   font-size: 0.76rem;
   font-weight: 600;
 }
@@ -1544,9 +1546,9 @@ input[type="file"] {
   margin-top: 0.55rem;
   padding: 0.55rem 0.7rem;
   border-radius: 8px;
-  border: 1px solid #e7b3b3;
-  background: #fdf0f0;
-  color: #7e1f1f;
+  border: 1px solid var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger-ink);
   font-size: 0.84rem;
   line-height: 1.35;
 }
@@ -1604,7 +1606,7 @@ input[type="file"] {
 
 .tab-btn {
   flex: 0 0 auto;
-  background: #ece7da;
+  background: var(--bg-bar);
   color: var(--ink);
   font-weight: 600;
 }
@@ -1616,7 +1618,7 @@ input[type="file"] {
 
 .tab-btn.active {
   background: var(--accent-2);
-  color: #fff;
+  color: var(--ink-on-accent);
 }
 
 .tab-content {
@@ -1629,7 +1631,7 @@ input[type="file"] {
   white-space: pre-wrap;
   max-height: 320px;
   overflow: auto;
-  background: #fffcf2;
+  background: var(--bg-sunk);
 }
 
 .tab-content.active {
@@ -1684,7 +1686,7 @@ input[type="file"] {
     right: 0;
     width: 2rem;
     height: 100%;
-    background: linear-gradient(to right, transparent, #fff8e8);
+    background: linear-gradient(to right, transparent, var(--bg-sunk));
     pointer-events: none;
     transition: opacity 0.2s;
   }
@@ -1797,7 +1799,7 @@ input[type="file"] {
 }
 
 .icon-btn.push-active {
-  color: #d65d2b;
+  color: var(--accent);
 }
 
 .task.flash {
@@ -1817,7 +1819,7 @@ input[type="file"] {
   padding: 1.25rem 1.5rem;
   max-width: 640px;
   width: calc(100% - 2rem);
-  background: var(--bg, #fff);
+  background: var(--bg);
   color: var(--ink);
 }
 
@@ -1871,7 +1873,7 @@ dialog:not([open]) {
 }
 
 .task-stats-chip:hover {
-  background: var(--bg, #fff);
+  background: var(--bg);
   color: var(--ink);
   border-color: var(--ink-soft);
 }
@@ -1990,7 +1992,7 @@ dialog:not([open]) {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
+  background: var(--bg-field);
   font: inherit;
   line-height: 1.4;
 }
@@ -2040,7 +2042,7 @@ dialog:not([open]) {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
+  background: var(--bg-field);
   font: inherit;
   line-height: 1.4;
 }
@@ -2084,7 +2086,7 @@ dialog:not([open]) {
 }
 
 .btn-text.ghost:hover {
-  background: #e6dece;
+  background: var(--ghost-bg-hover);
 }
 
 .btn-text:disabled {
@@ -2102,8 +2104,8 @@ dialog:not([open]) {
 }
 
 .tokens-created {
-  border: 2px solid #b25c00;
-  background: #fff7ed;
+  border: 2px solid var(--accent-ink);
+  background: var(--accent-soft);
   border-radius: 6px;
   padding: 0.75rem 1rem;
 }
@@ -2111,7 +2113,7 @@ dialog:not([open]) {
 .tokens-created p {
   margin: 0 0 0.5rem;
   font-weight: 600;
-  color: #b25c00;
+  color: var(--accent-ink);
 }
 
 .tokens-raw-row {
@@ -2125,7 +2127,7 @@ dialog:not([open]) {
   overflow-x: auto;
   white-space: nowrap;
   padding: 0.4rem 0.6rem;
-  background: #fff;
+  background: var(--bg-field);
   border: 1px solid var(--ink-soft);
   border-radius: 4px;
   font-size: 0.85rem;
@@ -2179,7 +2181,7 @@ dialog:not([open]) {
 
 .speaker-row.selected {
   border-color: var(--accent);
-  background: var(--accent-soft, #fff2e8);
+  background: var(--accent-soft);
 }
 
 .speaker-row.editing {
@@ -2196,7 +2198,7 @@ dialog:not([open]) {
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-field);
   font: inherit;
 }
 
@@ -2323,7 +2325,7 @@ dialog:not([open]) {
   padding: 0.4rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-field);
   font: inherit;
 }
 
@@ -2332,7 +2334,7 @@ dialog:not([open]) {
   padding: 0.4rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-field);
   font: inherit;
 }
 
@@ -2372,13 +2374,13 @@ dialog:not([open]) {
 .task-name-input {
   font: inherit;
   padding: 2px 6px;
-  border: 1px solid var(--line, #888);
+  border: 1px solid var(--line);
   border-radius: 4px;
   /* Fill the editor span (which now grows to title width). Drop the old
      12rem min so it can shrink with a narrow card rather than overflow. */
   flex: 1 1 auto;
   min-width: 0;
-  background: var(--bg-card, #fff);
+  background: var(--bg-card);
   color: inherit;
 }
 
@@ -2412,7 +2414,7 @@ dialog:not([open]) {
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-field);
   font-size: 0.84rem;
 }
 
@@ -2498,7 +2500,7 @@ dialog:not([open]) {
 }
 
 #task-about-dialog .about-bool.is-yes {
-  color: var(--ok, #1a7f37);
+  color: var(--ok-ink);
 }
 
 #task-about-dialog .about-bool.is-no {
@@ -2602,7 +2604,7 @@ dialog:not([open]) {
 
 .delivery-unavailable {
   font-size: 0.75rem;
-  color: var(--danger, #c0392b);
+  color: var(--danger);
 }
 
 .delivery-fields {
@@ -2770,15 +2772,15 @@ dialog:not([open]) {
    green-on-orange — unreadable. A filled swatch with a white icon reads at a
    glance and does not depend on the surrounding colour. */
 .icon-btn.check-btn.check-ok {
-  background: #1a7f4b;
-  border-color: #1a7f4b;
-  color: #fff;
+  background: var(--ok-ink);
+  border-color: var(--ok-ink);
+  color: var(--bg-card);
 }
 
 .icon-btn.check-btn.check-bad {
-  background: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
-  color: #fff;
+  background: var(--danger-ink);
+  border-color: var(--danger-ink);
+  color: var(--bg-card);
 }
 
 /* The icon inherits the button's colour, so it flips to white with the rest. */
@@ -2814,7 +2816,7 @@ dialog:not([open]) {
 }
 
 .delivery-check-message.is-error {
-  color: var(--danger, #c0392b);
+  color: var(--danger);
   opacity: 1;
 }
 
@@ -2843,7 +2845,7 @@ dialog:not([open]) {
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fffcf2;
+  background: var(--bg-sunk);
   box-shadow: 0 6px 20px rgb(21 32 24 / 0.18);
 }
 
