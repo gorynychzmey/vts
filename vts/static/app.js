@@ -2420,16 +2420,19 @@ function syncSourceType() {
   // value on purpose: presets stay clean and the choice survives switching back
   // to a URL. The flag is dropped at the upload boundary instead.
   const audioOnlyPill = document.getElementById("audio-only-pill");
+  // The native input stays hidden in both modes: the drop zone's Choose / Add
+  // more buttons open it, and the staged rows are what the user actually sees.
+  const fileDrop = document.getElementById("file-drop");
   if (isFile) {
     urlInput.classList.add("hidden");
     urlInput.required = false;
-    fileInput.classList.remove("hidden");
-    fileInput.required = true;
+    fileDrop?.classList.remove("hidden");
+    fileInput.required = stagedFiles.length === 0;
     if (audioOnlyPill) audioOnlyPill.classList.add("hidden");
   } else {
     urlInput.classList.remove("hidden");
     urlInput.required = true;
-    fileInput.classList.add("hidden");
+    fileDrop?.classList.add("hidden");
     fileInput.required = false;
     if (audioOnlyPill) audioOnlyPill.classList.remove("hidden");
   }
@@ -3293,7 +3296,7 @@ async function createTask(event) {
   let created = null;
   try {
     if (isFile && fileInput) {
-      const selected = Array.from(fileInput.files || []);
+      const selected = stagedFiles.length ? stagedFiles.slice() : Array.from(fileInput.files || []);
       if (!selected.length) {
         showTaskFormError(t("upload.file_unreadable"));
         return;
@@ -3362,6 +3365,7 @@ async function createTask(event) {
   } catch (err) {
     if (isFileReadError(err)) {
       if (fileInput) fileInput.value = "";
+      clearStagedFiles();
       showTaskFormError(t("upload.file_unreadable"));
     } else {
       const message = err && err.message ? err.message : String(err);
@@ -3370,6 +3374,7 @@ async function createTask(event) {
     return;
   }
   form.reset();
+  clearStagedFiles();
   form.transcript.checked = true;
   resetPromptSelection();
   resetDeliverySelection();
@@ -4248,7 +4253,248 @@ document.addEventListener("focusin", (event) => {
 
 refreshBtn.addEventListener("click", loadTasks);
 form.addEventListener("submit", createTask);
-document.getElementById("file-input")?.addEventListener("change", clearTaskFormError);
+// ---------------------------------------------------------------------------
+// Staged file selection.
+//
+// fileInput.files is a read-only FileList: you cannot drop one entry from it,
+// and a fresh pick REPLACES it rather than appending. So the staged File[] here
+// is the source of truth, and the input is rebuilt from it via DataTransfer
+// (the same trick the share-target handler uses) purely so that native form
+// semantics and the existing submit path keep working unchanged.
+//
+// Order is significant: several files are concatenated in extract_audio, so the
+// row number is always shown and the rows can be reordered by dragging.
+const stagedFiles = [];
+
+const fileDropEl = document.getElementById("file-drop");
+const fileListEl = document.getElementById("file-list");
+const fileFootEl = document.getElementById("file-foot");
+const fileFootTextEl = document.getElementById("file-foot-text");
+const fileEmptyEl = document.getElementById("file-drop-empty");
+const fileWarningEl = document.getElementById("file-warning");
+
+function formatFileSize(bytes) {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Number(bytes) || 0;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+// Identity for dedupe: name + size. Two different recordings can share a name,
+// but not a name AND an exact byte count; this is the strongest check available
+// without reading the files.
+const fileKey = (f) => `${f.name}::${f.size}`;
+
+function showFileWarning(message) {
+  if (!fileWarningEl) return;
+  fileWarningEl.textContent = message;
+  fileWarningEl.classList.toggle("hidden", !message);
+}
+
+// Keep the native input in step with the staged array so the existing submit
+// path, form.reset() and required-validation all keep working.
+function syncFileInput() {
+  const input = document.getElementById("file-input");
+  if (!input) return;
+  const dt = new DataTransfer();
+  for (const f of stagedFiles) dt.items.add(f);
+  input.files = dt.files;
+  input.required = stagedFiles.length === 0 && getSourceType() === "file";
+}
+
+function renderStagedFiles() {
+  if (!fileListEl || !fileFootEl || !fileEmptyEl) return;
+  const has = stagedFiles.length > 0;
+  fileEmptyEl.classList.toggle("hidden", has);
+  fileListEl.classList.toggle("hidden", !has);
+  fileFootEl.classList.toggle("hidden", !has);
+  fileListEl.textContent = "";
+
+  stagedFiles.forEach((file, index) => {
+    const row = document.createElement("div");
+    row.className = "file-row";
+    row.setAttribute("role", "listitem");
+    row.draggable = true;
+    row.dataset.index = String(index);
+
+    const num = document.createElement("span");
+    num.className = "file-row-num mono";
+    num.textContent = String(index + 1);
+
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p1.setAttribute("d", "M15 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z");
+    const p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p2.setAttribute("d", "M14 4v5h5");
+    icon.append(p1, p2);
+
+    const name = document.createElement("span");
+    name.className = "file-row-name";
+    name.textContent = file.name;
+    name.title = file.name;
+
+    const size = document.createElement("span");
+    size.className = "file-row-size mono";
+    size.textContent = formatFileSize(file.size);
+
+    // Keyboard path for reordering: dragging alone would make ordering — which
+    // changes the concatenated output — mouse-only.
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "icon-btn ghost file-row-move";
+    up.disabled = index === 0;
+    up.setAttribute("aria-label", t("new_task.file_move_up"));
+    up.setAttribute("data-tooltip", t("new_task.file_move_up"));
+    up.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    up.addEventListener("click", () => moveStagedFile(index, index - 1));
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "icon-btn ghost file-row-move";
+    down.disabled = index === stagedFiles.length - 1;
+    down.setAttribute("aria-label", t("new_task.file_move_down"));
+    down.setAttribute("data-tooltip", t("new_task.file_move_down"));
+    down.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>';
+    down.addEventListener("click", () => moveStagedFile(index, index + 1));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn ghost file-row-remove";
+    remove.setAttribute("aria-label", t("new_task.file_remove"));
+    remove.setAttribute("data-tooltip", t("new_task.file_remove"));
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M6 18 18 6"/></svg>';
+    remove.addEventListener("click", () => removeStagedFile(index));
+
+    row.append(num, icon, name, size, up, down, remove);
+    fileListEl.appendChild(row);
+  });
+
+  if (fileFootTextEl) {
+    const total = stagedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+    fileFootTextEl.textContent = t("new_task.file_summary", {
+      count: stagedFiles.length,
+      size: formatFileSize(total),
+    });
+  }
+  syncFileInput();
+}
+
+function addStagedFiles(files) {
+  const incoming = Array.from(files || []);
+  if (!incoming.length) return;
+  const known = new Set(stagedFiles.map(fileKey));
+  const duplicates = [];
+  for (const file of incoming) {
+    const key = fileKey(file);
+    if (known.has(key)) {
+      duplicates.push(file.name);
+      continue;
+    }
+    known.add(key);
+    stagedFiles.push(file);
+  }
+  // Duplicates are reported rather than dropped silently: picking the same file
+  // twice is usually a mistake, and silence looks like the file was lost.
+  showFileWarning(
+    duplicates.length
+      ? t("new_task.file_duplicate", { names: duplicates.join(", "), count: duplicates.length })
+      : "",
+  );
+  renderStagedFiles();
+  clearTaskFormError();
+}
+
+function removeStagedFile(index) {
+  if (index < 0 || index >= stagedFiles.length) return;
+  stagedFiles.splice(index, 1);
+  showFileWarning("");
+  renderStagedFiles();
+}
+
+function moveStagedFile(from, to) {
+  if (from === to || from < 0 || to < 0 || from >= stagedFiles.length || to >= stagedFiles.length) return;
+  const [moved] = stagedFiles.splice(from, 1);
+  stagedFiles.splice(to, 0, moved);
+  renderStagedFiles();
+  // Keep the moved row focused so repeated keyboard moves do not lose the caret.
+  const rows = fileListEl?.querySelectorAll(".file-row");
+  const target = rows && rows[to];
+  target?.querySelector(from < to ? ".file-row-move + .file-row-move" : ".file-row-move")?.focus();
+}
+
+function clearStagedFiles() {
+  stagedFiles.length = 0;
+  showFileWarning("");
+  renderStagedFiles();
+}
+
+// Drag to reorder. dragover must preventDefault or the drop never fires.
+let dragFrom = null;
+fileListEl?.addEventListener("dragstart", (e) => {
+  const row = e.target instanceof Element ? e.target.closest(".file-row") : null;
+  if (!row) return;
+  dragFrom = Number(row.dataset.index);
+  row.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  // Firefox ignores a drag that sets no data.
+  e.dataTransfer.setData("text/plain", String(dragFrom));
+});
+fileListEl?.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+});
+fileListEl?.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const row = e.target instanceof Element ? e.target.closest(".file-row") : null;
+  if (!row || dragFrom === null) return;
+  moveStagedFile(dragFrom, Number(row.dataset.index));
+  dragFrom = null;
+});
+fileListEl?.addEventListener("dragend", () => {
+  fileListEl.querySelectorAll(".dragging").forEach((el) => el.classList.remove("dragging"));
+  dragFrom = null;
+});
+
+// The empty state invites a drop, so the zone has to accept one. Without the
+// dragover preventDefault the browser just navigates to the dropped file.
+fileDropEl?.addEventListener("dragover", (e) => {
+  if (!e.dataTransfer?.types?.includes("Files")) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  fileDropEl.classList.add("drag-over");
+});
+fileDropEl?.addEventListener("dragleave", (e) => {
+  // Ignore the events fired while moving between children of the zone.
+  if (e.relatedTarget instanceof Node && fileDropEl.contains(e.relatedTarget)) return;
+  fileDropEl.classList.remove("drag-over");
+});
+fileDropEl?.addEventListener("drop", (e) => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  fileDropEl.classList.remove("drag-over");
+  addStagedFiles(e.dataTransfer.files);
+});
+
+document.getElementById("file-pick-btn")?.addEventListener("click", () => {
+  document.getElementById("file-input")?.click();
+});
+document.getElementById("file-add-btn")?.addEventListener("click", () => {
+  document.getElementById("file-input")?.click();
+});
+
+document.getElementById("file-input")?.addEventListener("change", (e) => {
+  const input = e.target;
+  const picked = Array.from(input.files || []);
+  // Ignore the programmatic re-assignment made by syncFileInput().
+  if (picked.length === stagedFiles.length && picked.every((f, i) => f === stagedFiles[i])) return;
+  addStagedFiles(picked);
+});
 form.url.addEventListener("input", clearTaskFormError);
 form.transcript.addEventListener("change", syncSummaryToggle);
 document.querySelectorAll('input[name="source-type"]').forEach((el) => {

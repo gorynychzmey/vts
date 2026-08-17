@@ -257,6 +257,35 @@
               class="hidden"
               multiple
             />
+            <!-- File source: the selection used to be invisible — nothing showed
+                 what had been picked, a single file could not be removed, and
+                 re-picking REPLACED the set. The rows below render the staged
+                 files; app.js owns the File[] behind them, because
+                 fileInput.files is a read-only FileList. -->
+            <div class="file-drop hidden" id="file-drop">
+              <div class="file-drop-empty" id="file-drop-empty">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21.4 11.1 12.3 20a5 5 0 0 1-7.1-7.1l8.5-8.4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.4a1.7 1.7 0 0 1-2.4-2.3l7.8-7.8" />
+                </svg>
+                <span class="file-drop-hint">
+                  <b data-i18n="new_task.file_drop_title">Drop files here or pick them from disk</b>
+                  <span data-i18n="new_task.file_drop_hint"
+                    >several files become one task · mp4, mkv, webm, mov, mp3, m4a, wav, flac and more</span
+                  >
+                </span>
+                <button type="button" class="btn-text ghost" id="file-pick-btn" data-i18n="new_task.file_pick">
+                  Choose
+                </button>
+              </div>
+              <div class="file-list hidden" id="file-list" role="list"></div>
+              <div class="file-foot hidden" id="file-foot">
+                <span class="file-foot-text" id="file-foot-text"></span>
+                <button type="button" class="btn-text ghost" id="file-add-btn" data-i18n="new_task.file_add_more">
+                  Add more
+                </button>
+              </div>
+              <p class="file-warning hidden" id="file-warning" role="status"></p>
+            </div>
             <button
               id="submit-btn"
               class="icon-btn primary"
