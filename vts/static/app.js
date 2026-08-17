@@ -4644,6 +4644,9 @@ function repaintJsBuiltLabels() {
   if (deliverySelect && deliveryTargetsList().length > 0) {
     renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
   }
+  // The segmented filter's labels are copied from the select's options, which
+  // applyI18nToPage() has just retranslated — copy them across again.
+  renderFilterTypeSegments();
   // Task cards render their status text and step labels through t() too.
   document.querySelectorAll(".task").forEach((card) => {
     if (card._runtime && card._elements) renderTaskRuntime(card);
@@ -6670,6 +6673,7 @@ async function bootstrap() {
   await ensureI18nLoaded();
   applyI18nToPage();
   syncLocaleControl();
+  renderFilterTypeSegments();
   setVersionLabel(BUILD_VERSION);
   syncSummaryToggle();
   syncSourceType();
@@ -7733,6 +7737,9 @@ function restoreFilters() {
     if (filterInputs.type) filterInputs.type.value = saved.source_type || "";
     if (filterInputs.from) filterInputs.from.value = saved.created_from || "";
     if (filterInputs.to) filterInputs.to.value = saved.created_to || "";
+    // Same reason as the clear button: a restored filter has to show up on the
+    // segmented skin, and .value assignment fires no event.
+    renderFilterTypeSegments();
   }
   syncFilterChrome();
 }
@@ -7800,6 +7807,40 @@ function onFilterChanged({ debounce = false } = {}) {
   filterDebounceTimer = window.setTimeout(applyFilters, 300);
 }
 
+// Segmented source-type filter: a skin over the hidden #filter-type <select>.
+// Buttons are built FROM the select's options, so the labels follow
+// applyI18nToPage() (each option carries its own data-i18n) and a new option
+// needs no change here. The select keeps being the source of truth — writing to
+// it and dispatching `change` is exactly what the native control did.
+const filterTypeSeg = document.getElementById("filter-type-seg");
+
+function renderFilterTypeSegments() {
+  const select = filterInputs.type;
+  if (!select || !filterTypeSeg) return;
+  filterTypeSeg.textContent = "";
+  for (const option of Array.from(select.options)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = option.textContent;
+    btn.dataset.value = option.value;
+    const active = option.value === select.value;
+    btn.className = active ? "active" : "";
+    btn.setAttribute("aria-pressed", String(active));
+    btn.addEventListener("click", () => {
+      if (select.value === option.value) return;
+      select.value = option.value;
+      // Programmatic .value does NOT fire change, so dispatch it: every filter
+      // path (fetch, persistence, URL state) hangs off that event.
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    filterTypeSeg.appendChild(btn);
+  }
+}
+
+// Keep the buttons in step whenever the select moves for any other reason:
+// restore-from-storage, the clear button, or a future programmatic filter.
+filterInputs.type?.addEventListener("change", renderFilterTypeSegments);
+
 filterInputs.q?.addEventListener("input", () => onFilterChanged({ debounce: true }));
 filterInputs.type?.addEventListener("change", () => onFilterChanged());
 filterInputs.from?.addEventListener("change", () => onFilterChanged());
@@ -7810,6 +7851,9 @@ document.getElementById("filter-clear")?.addEventListener("click", () => {
   if (filterInputs.type) filterInputs.type.value = "";
   if (filterInputs.from) filterInputs.from.value = "";
   if (filterInputs.to) filterInputs.to.value = "";
+  // Assigning .value does not fire `change`, so the segmented skin would keep
+  // showing the cleared filter as active.
+  renderFilterTypeSegments();
   onFilterChanged();
 });
 

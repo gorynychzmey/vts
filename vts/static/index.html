@@ -440,23 +440,41 @@
           </button>
         </div>
         <div id="task-filters" class="task-filters">
-          <input
-            type="search"
-            id="filter-q"
-            class="filter-search"
-            autocomplete="off"
-            placeholder="Search name or link"
-            aria-label="Search tasks"
-            data-i18n-placeholder="filters.search"
-            data-i18n-aria-label="filters.search"
-          />
-          <select id="filter-type" class="filter-type" aria-label="Source type"
+          <div class="filter-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="m16 16 4.5 4.5" />
+            </svg>
+            <input
+              type="search"
+              id="filter-q"
+              class="filter-search-input"
+              autocomplete="off"
+              placeholder="Search name or link"
+              aria-label="Search tasks"
+              data-i18n-placeholder="filters.search"
+              data-i18n-aria-label="filters.search"
+            />
+          </div>
+          <!-- Segmented control over a hidden <select> (redesign v2). The select
+               stays the source of truth: filter state is read, restored from
+               storage and cleared through its .value, and every change still
+               fires a `change` event on it. The buttons are a skin, so none of
+               that logic changes — and the select remains the accessible
+               control for anything driving the page programmatically. -->
+          <select id="filter-type" class="filter-type sr-only" aria-label="Source type"
                   data-i18n-aria-label="filters.type">
             <option value="" data-i18n="filters.type_any">Any source</option>
             <option value="url" data-i18n="filters.type_url">Link</option>
             <option value="file" data-i18n="filters.type_file">Upload</option>
           </select>
+          <div class="segmented square filter-type-seg" id="filter-type-seg" role="group"
+               aria-label="Source type" data-i18n-aria-label="filters.type"></div>
           <span class="filter-range">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16v14H4z" />
+              <path d="M4 10h16M9 3v4M15 3v4" />
+            </svg>
             <input type="date" id="filter-from" class="filter-date"
                    title="Created from" aria-label="Created from"
                    data-i18n-title="filters.from" data-i18n-aria-label="filters.from" />
