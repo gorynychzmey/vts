@@ -5723,7 +5723,12 @@ const SPEAKER_CANDIDATE_MAX_DISTANCE = 0.55;
 // whole-set resubmit, and two copies of that payload would drift apart.
 async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
   const previous = row.selection;
+  const previousNoise = row.noise;
   row.selection = speakerId || NEW_PERSON_VALUE;
+  // Binding a person clears noise (the panel's equivalent of what
+  // onVoiceRowRebind does for the dialog): "not a person" and "is Anna" cannot
+  // both hold, and the resolution below would carry both.
+  if (speakerId) row.noise = false;
   const rows = Array.isArray(taskEl._speakerRows) ? taskEl._speakerRows : [row];
   const resolutions = rows.map((r) => {
     const chosen = r.options.find((o) => o.speaker_id === r.selection);
@@ -5760,6 +5765,7 @@ async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
   } catch (err) {
     console.error("Failed to bind the speaker", err);
     row.selection = previous;
+    row.noise = previousNoise;
     return;
   }
   await loadSpeakerPanel(taskEl, taskId);
@@ -5960,6 +5966,16 @@ function buildSpeakerRow(row, opts) {
   noiseBox.checked = row.noise;
   noiseBox.addEventListener("change", () => {
     row.noise = noiseBox.checked;
+    // Marking noise clears the binding: the two are mutually exclusive, and
+    // sending both would be a contradictory resolution. Unchecking does NOT
+    // restore the old person — the row simply goes back to undecided, because
+    // guessing which binding to revive is worse than asking again.
+    if (row.noise && row.selection !== NEW_PERSON_VALUE) {
+      row.selection = NEW_PERSON_VALUE;
+      if (select) select.value = NEW_PERSON_VALUE;
+      nameInput?.classList.remove("hidden");
+      fragmentLabel?.classList.add("hidden");
+    }
     li.classList.toggle("voice-row-noise", row.noise);
     onNoiseChange?.(row, noiseBox.checked);
   });
@@ -6177,6 +6193,17 @@ function renderVoiceList() {
 // (deleting the VoiceSample whose source_task_id == this task) happens
 // server-side keyed off source_task_id; this is only the UI confirmation.
 function onVoiceRowRebind(row, newValue, previousValue) {
+  // Picking a person clears the noise flag — the same exclusivity, from the
+  // other side. Handled here so both the <select> and the similarity chips get
+  // it, since both route through this function.
+  if (newValue !== NEW_PERSON_VALUE && row.noise) {
+    row.noise = false;
+    const li = voiceListEl?.querySelector(`[data-speaker-label="${CSS.escape(row.label)}"]`);
+    li?.classList.remove("voice-row-noise");
+    const box = li?.querySelector(".voice-row-noise-toggle input");
+    if (box) box.checked = false;
+  }
+
   if (
     row.savedBinding &&
     row.savedBinding.addedFragment &&

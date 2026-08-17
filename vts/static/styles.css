@@ -1866,90 +1866,84 @@ input[type="file"] {
     width: 100%;
   }
 
+  /* Mobile task card (redesign v2).
+     The rules this replaces were built for EIGHT icon buttons in a scrolling
+     strip — a whole apparatus of overflow, fade masks and shrink allowances to
+     make them reachable. Six of those buttons moved into the kebab, so three
+     controls remain and none of that is needed: they fit on one line beside the
+     status chip at 320px. What was left behind instead stacked the card into
+     four tiers with gaps between them. */
   .task-header-row {
-    flex-direction: column;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+
+  /* Dot + title + metadata take the first line; the status chip and the controls
+     share the second. The dot keeps its place BESIDE the title — pulling
+     .task-main ahead with order:-1 pushed the dot onto a line of its own. */
+  .task-dot {
+    order: -2;
+    margin-top: 0.65rem;
+  }
+
+  .task-main {
+    flex: 1 1 0;
+    order: -1;
+    min-width: 0;
   }
 
   .task-right {
+    display: flex;
     flex-direction: row;
     align-items: center;
-    /* Wrap rather than nowrap: sharing one line with the status chip left the
-       action toolbar ~150px for ~295px of buttons, so most of them could only
-       be reached by scrolling a stub of a strip. Letting it drop to its own
-       line gives the toolbar the card's full width, and on a card with few
-       actions nothing wraps at all (vts-nr4). */
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     width: 100%;
-    justify-content: space-between;
-    gap: 0.35rem 0.5rem;
-    overflow: hidden;
+    gap: 0.4rem;
   }
 
-  .task-toolbar-wrap {
-    position: relative;
-    /* Take the whole line once wrapped, so the scroller is as wide as the card
-       instead of the leftovers next to the status chip. */
-    flex: 1 1 100%;
+  .task-right-top {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     min-width: 0;
+  }
+
+  /* No scroller, no fade: three buttons need neither, and the pseudo-element
+     that drew the fade sat INSIDE an overflow box — the vts-nr4 invisible
+     horizontal scroll trap. */
+  .task-toolbar-wrap {
+    position: static;
+    flex: 0 0 auto;
+    min-width: 0;
+    margin-left: auto;
   }
 
   .task-toolbar-wrap::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 2rem;
-    height: 100%;
-    background: linear-gradient(to right, transparent, var(--bg-sunk));
-    pointer-events: none;
-    transition: opacity 0.2s;
-  }
-
-  .task-toolbar-wrap.scrolled-end::after {
-    opacity: 0;
+    content: none;
   }
 
   .task-right-bottom {
-    overflow-x: auto;
-    scrollbar-width: none;
-    min-width: 0;
-    /* The scroller must be free to be narrower than its buttons; without an
-       explicit basis it takes its max-content width from .task-actions-inline
-       and nothing ever scrolls. */
-    flex: 1 1 0;
-  }
-
-  /* The strip overshot the card by only a few px, so it scrolled just far
-     enough to slice the last button in half — the worst of both worlds. The
-     scroller holds the runtime label AND the button row, so both have to give:
-     spread the row across the full width and let the buttons shed a few px.
-     They then fit outright and the scroller sits idle (vts-nr4). */
-  .task-right-bottom {
+    display: flex;
+    align-items: center;
     gap: 0.3rem;
+    overflow: visible;
+    flex: 0 0 auto;
+    min-width: 0;
   }
 
   .task-right-bottom .task-actions-inline {
-    flex: 1 1 auto;
-    min-width: 0;
-    justify-content: space-between;
-    gap: 0.15rem;
+    flex: 0 0 auto;
+    gap: 0.2rem;
+    justify-content: flex-end;
   }
 
-  .task-right-bottom .task-actions-inline .icon-btn {
-    flex: 0 1 auto;
-    min-width: 1.75rem;
-  }
-
-  /* The runtime clock only needs its digits; its 3rem floor was pushing the
-     buttons out of the row. */
+  /* The runtime clock only needs its digits. */
   .task-right-bottom .task-runtime {
     flex: 0 0 auto;
     min-width: 0;
   }
 
-  .task-right-bottom::-webkit-scrollbar {
-    display: none;
-  }
 
   .url-row {
     grid-template-columns: 1fr auto;
