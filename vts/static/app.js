@@ -1156,8 +1156,19 @@ function renderTaskStats(taskEl) {
   if (stats.sourceFileCount > 1) {
     parts.push(t("stats.media_files", { count: stats.sourceFileCount }));
   }
+  // A leading separator only when the source line is actually showing, so the
+  // meta row reads as one sentence ("youtube.com/… · 29:59 · 386,5 МБ") instead
+  // of starting with a stray "·" on an upload with no source line.
+  // Both conditions: an upload with no custom name hides the element, but a
+  // link task whose url is empty leaves it visible-but-blank — and a leading
+  // "·" against nothing is exactly what that looks like on the card.
+  const sourceShowing =
+    !!elements.sourceEl &&
+    !elements.sourceEl.classList.contains("hidden") &&
+    !!elements.sourceEl.textContent.trim();
+  const text = parts.join(" · ");
   if (elements.statsTextEl) {
-    elements.statsTextEl.textContent = parts.join(" · ");
+    elements.statsTextEl.textContent = sourceShowing && text ? `· ${text}` : text;
   }
   elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }
@@ -1252,48 +1263,36 @@ function renderTaskAboutDialog(task) {
     return;
   }
   const options = task.options || {};
-  const runtime = { stats: parseTaskStats(task), baseStatus: String(task.status || "") };
+  const stats = parseTaskStats(task);
+  const runtime = { stats, baseStatus: String(task.status || "") };
   const q = (sel) => taskAboutDialog.querySelector(sel);
 
-  // Title mirrors the card's .task-link behavior: the local player when media
-  // is available (uploads AND link tasks alike), unlinked otherwise. The
-  // original URL, when there is one, is the separate .about-source-url link.
+  // Heading is the task's own name. Like the card's .task-link it points at the
+  // local player when media is available (uploads AND link tasks alike).
   const sourceUrl = task.source_url || "";
   const isUpload = sourceUrl.startsWith("file://");
   const uploadName = isUpload ? sourceUrl.slice("file://".length) : "";
   const titleEl = q(".about-source-title");
   const titleLabel = task.source_title || (isUpload ? uploadName : sourceUrl);
-  // Into the inner span, not the anchor: the anchor also holds the player glyph
-  // now, and textContent on it would delete that glyph (same trap as the card).
+  // Into the inner span, not the anchor: the anchor also holds the player glyph,
+  // and textContent on it would delete that glyph (same trap as the card).
   const titleTextEl = titleEl.querySelector(".task-link-text");
   if (titleTextEl) titleTextEl.textContent = titleLabel;
   else titleEl.textContent = titleLabel;
   const mediaReady = Boolean(task.media_path);
-  const playerHref = buildPath(`/player/${encodeURIComponent(task.id)}`);
   if (mediaReady) {
-    titleEl.href = playerHref;
+    titleEl.href = buildPath(`/player/${encodeURIComponent(task.id)}`);
     titleEl.target = "_blank";
     titleEl.rel = "noopener";
   } else {
     titleEl.removeAttribute("href");
   }
-  // Player glyph inside the title, mirroring the task card (vts-u6w #1): the
-  // title itself is the link, and the glyph marks it as playable. It is an
-  // <svg> now, not an anchor, so it only toggles visibility.
   q(".about-player-btn")?.classList.toggle("hidden", !mediaReady);
-  const sourceUrlEl = q(".about-source-url");
-  // Original url: plain text for uploads (file://…), a real link for http(s)
-  // sources. isHttpUrl guards against javascript:/data: hrefs (vts-dcc).
-  sourceUrlEl.textContent = isUpload ? uploadName : sourceUrl;
-  if (isHttpUrl(sourceUrl)) {
-    sourceUrlEl.href = sourceUrl;
-    sourceUrlEl.target = "_blank";
-    sourceUrlEl.rel = "noopener noreferrer";
-  } else {
-    sourceUrlEl.removeAttribute("href");
-  }
-  // A set was joined into one recording; list the parts and say which rule
-  // decided their order, since the user cannot change it (vts-vm0).
+
+  // Subtitle: the files this recording was built from — only for a genuine
+  // multi-file set. With one file the heading already IS that filename, so
+  // repeating it is noise. The order rule is shown because the user cannot
+  // change it (vts-vm0).
   const sourceFiles = Array.isArray(options.source_files) ? options.source_files : [];
   const filesEl = q(".about-source-files");
   if (filesEl) {
@@ -1311,9 +1310,40 @@ function renderTaskAboutDialog(task) {
       filesEl.classList.add("hidden");
     }
   }
+
+  q(".about-id").textContent = String(task.id || "");
+  // The same localized status word the card's chip shows, so the two never
+  // disagree; statusText() falls back to the raw value for an unkeyed status.
+  q(".about-status").textContent = statusText(String(task.status || ""));
+
+  q(".about-source-type").textContent = sourceFiles.length > 1
+    ? t("about.source_type_uploads", { count: sourceFiles.length })
+    : isUpload
+      ? t("about.source_type_upload")
+      : t("about.source_type_link");
+
   q(".about-created").textContent = task.created_at
     ? new Date(task.created_at).toLocaleString()
     : "";
+
+  // Duration and size of the media, the numbers the card's stats pill used to
+  // carry before it was removed to make the card compact.
+  const mediaParts = [];
+  if (sourceFiles.length > 1) mediaParts.push(t("about.media_files", { count: sourceFiles.length }));
+  if (Number.isInteger(stats.mediaSeconds) && stats.mediaSeconds > 0) {
+    mediaParts.push(formatDuration(stats.mediaSeconds));
+  }
+  if (Number.isInteger(stats.mediaBytes) && stats.mediaBytes > 0) {
+    mediaParts.push(t("stats.media_size", { size: formatMegabytes(stats.mediaBytes) }));
+  }
+  q(".about-media").textContent = mediaParts.join(" · ");
+  q(".about-row-media")?.classList.toggle("hidden", mediaParts.length === 0);
+
+  // How long WE spent on it, as opposed to how long the recording is.
+  const worktime = formatMetricDuration(stats.processingSeconds);
+  const hasWorktime = !!worktime && worktime !== "—";
+  q(".about-total-time").textContent = worktime;
+  q(".about-row-worktime")?.classList.toggle("hidden", !hasWorktime);
 
   q(".about-language").textContent = options.language || t("about.language_auto");
   setAboutBool(q(".about-audio-only"), Boolean(options.audio_only));
@@ -1323,12 +1353,30 @@ function renderTaskAboutDialog(task) {
   setAboutBool(q(".about-diarize"), Boolean(options.diarize));
   q(".about-prompts").textContent = aboutPromptNames(options).join(", ") || "—";
 
+  // Original url: a real link for http(s), plain text otherwise. isHttpUrl
+  // guards against javascript:/data: hrefs (vts-dcc). Uploads have no original
+  // url at all — the filename is already the subtitle — so the row is dropped.
+  const sourceUrlEl = q(".about-source-url");
+  const showUrlRow = !isUpload && !!sourceUrl;
+  if (sourceUrlEl) {
+    sourceUrlEl.textContent = sourceUrl;
+    if (isHttpUrl(sourceUrl)) {
+      sourceUrlEl.href = sourceUrl;
+      sourceUrlEl.target = "_blank";
+      sourceUrlEl.rel = "noopener noreferrer";
+    } else {
+      sourceUrlEl.removeAttribute("href");
+    }
+  }
+  q(".about-row-url")?.classList.toggle("hidden", !showUrlRow);
+
   const completed = String(task.status || "") === "completed";
   const resultsSection = q(".about-results-section");
+  // The section rule is :not(.hidden), so this alone hides it — see the note on
+  // `#task-about-dialog section` in styles.css.
   resultsSection.classList.toggle("hidden", !completed);
   if (completed) {
     const fmt = formatResultStats(runtime);
-    q(".about-total-time").textContent = fmt.time;
     q(".about-raw-chars").textContent = fmt.raw;
     q(".about-processed-chars").textContent = fmt.processed;
     q(".about-summary-chars").textContent = fmt.summary;
@@ -1345,6 +1393,58 @@ function renderTaskAboutDialog(task) {
       tbody.appendChild(tr);
     });
   }
+
+  renderAboutSteps(task);
+}
+
+// What actually ran, in order, with each step's outcome and how long it took.
+// Only the steps the task really has — the enabled-step list is derived from
+// its options, so a task without diarization does not show a "pending" one.
+function renderAboutSteps(task) {
+  const wrap = taskAboutDialog?.querySelector(".about-steps");
+  const section = taskAboutDialog?.querySelector(".about-steps-section");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const steps = Array.isArray(task.steps) ? task.steps : [];
+  section?.classList.toggle("hidden", steps.length === 0);
+  if (!steps.length) return;
+
+  steps.forEach((step, i) => {
+    const row = document.createElement("div");
+    row.className = "about-step-row";
+    const status = String(step.status || "");
+    // Same status vocabulary as the task card's dot, so the colours mean the
+    // same thing in both places.
+    row.classList.add(`status-${status || "pending"}`);
+
+    const dot = document.createElement("span");
+    dot.className = "about-step-dot";
+    row.appendChild(dot);
+
+    const name = document.createElement("span");
+    name.className = "about-step-name";
+    name.textContent = `${i + 1}. ${stepText(step.name)}`;
+    row.appendChild(name);
+
+    const state = document.createElement("span");
+    state.className = "about-step-state";
+    state.textContent = status ? statusText(status) : t("about.step_pending");
+    row.appendChild(state);
+
+    const dur = document.createElement("span");
+    dur.className = "about-step-time mono";
+    // Only a step that actually ran has a duration; a pending one would render
+    // a misleading 0:00.
+    const startedMs = parseIsoMs(step.started_at);
+    const finishedMs = parseIsoMs(step.finished_at);
+    dur.textContent =
+      startedMs && finishedMs && finishedMs >= startedMs
+        ? formatDuration(Math.round((finishedMs - startedMs) / 1000))
+        : "";
+    row.appendChild(dur);
+
+    wrap.appendChild(row);
+  });
 }
 
 // Populate promptsCache if it hasn't been loaded yet, so user-prompt names
@@ -2216,6 +2316,8 @@ function renderTaskCard(task) {
     expiredEl: root.querySelector(".task-expired"),
     sourceEl: root.querySelector(".task-source"),
     statsEl: root.querySelector(".task-stats"),
+    // Same node: the stats are plain text in the meta row now, not a pill with
+    // an icon and a separate label span.
     statsTextEl: root.querySelector(".task-stats-text"),
     editNameBtn: root.querySelector(".task-edit-name-btn"),
     nameEditWrap: root.querySelector(".task-name-edit"),
@@ -2251,9 +2353,6 @@ function renderTaskCard(task) {
     localProgressText: root.querySelector(".local-progress .step-progress-text"),
     messageEl: root.querySelector(".task-message")
   };
-  if (root._elements && root._elements.statsEl) {
-    root._elements.statsEl.addEventListener("click", () => openTaskAboutDialog(task));
-  }
   root._runtime = createRuntime(task);
   const _els = root._elements;
   _els.editNameBtn.addEventListener("click", () => enterTitleEdit(root));

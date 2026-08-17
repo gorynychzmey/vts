@@ -139,6 +139,17 @@ export async function openFromHeaderMenu(page, itemSelector) {
   await page.waitForTimeout(200);
 }
 
+/** Open a task's About dialog. The card used to carry a clickable stats pill
+ *  (duration · size) that opened it; redesign v2 removed the pill to make the
+ *  card compact, so the kebab menu row is now the only way in.
+ *  `cardSelector` defaults to the first card. */
+export async function openTaskAbout(page, cardSelector = ".task") {
+  await page.click(`${cardSelector} .task-menu-btn`);
+  await page.waitForTimeout(200);
+  await page.click(`${cardSelector} .task-menu.open .task-about-btn`);
+  await page.waitForTimeout(300);
+}
+
 const SHOT_DIR = "/tmp/vts-ui-verify";
 export async function screenshot(page, name) {
   fs.mkdirSync(SHOT_DIR, { recursive: true });

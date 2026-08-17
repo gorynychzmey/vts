@@ -566,15 +566,15 @@
                 </button>
               </span>
             </div>
-            <a class="task-source mono hidden"></a>
-            <button class="task-stats task-stats-chip hidden" type="button"
-                    data-i18n-title="about.open" data-i18n-aria-label="about.open">
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 11v5M12 7.5h.01" />
-              </svg>
-              <span class="task-stats-text"></span>
-            </button>
+            <!-- One meta line under the title: source, then duration/size as
+                 plain text after a separator. This used to be a clickable
+                 "stats" pill that opened the About dialog; it added a second
+                 line and a box to every card for information that is only ever
+                 read, never acted on. About stays reachable from the kebab. -->
+            <div class="task-meta-row">
+              <a class="task-source mono hidden"></a>
+              <span class="task-stats task-stats-text mono hidden"></span>
+            </div>
           </div>
           <div class="task-right">
             <div class="task-right-top">
@@ -1129,81 +1129,102 @@
       </div>
     </dialog>
 
-    <dialog id="task-about-dialog" class="tokens-dialog">
-      <div class="tokens-dialog-header">
-        <h2 data-i18n="about.title">About task</h2>
+    <!-- Redesign v2: the task's NAME is the heading (the dialog is about that
+         task, so repeating "About task" spent the most prominent line on the
+         obvious), the files it was built from are the subtitle, and everything
+         factual is one flat key/value table instead of three sections that had
+         to be scrolled past. The pipeline steps follow as their own list. -->
+    <dialog id="task-about-dialog" class="tokens-dialog about-dialog">
+      <div class="tokens-dialog-header about-head">
+        <div class="about-head-text">
+          <h2 class="about-source-title-wrap">
+            <a class="about-source-title task-link" target="_blank" rel="noopener noreferrer"
+               data-i18n-title="tasks.open_player">
+              <span class="task-link-text"></span>
+              <svg class="player-glyph about-player-btn hidden" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+                <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
+              </svg>
+            </a>
+          </h2>
+          <div class="about-source-files mono hidden"></div>
+        </div>
         <button id="task-about-close-btn" class="icon-btn ghost" type="button"
                 data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </div>
 
-      <section class="about-source">
-        <h3 data-i18n="about.section_source">Source</h3>
-        <div class="about-title-row">
-          <a class="about-source-title task-link" target="_blank" rel="noopener noreferrer"
-             data-i18n-title="tasks.open_player">
-            <span class="task-link-text"></span>
-            <svg class="player-glyph about-player-btn hidden" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
-              <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
-            </svg>
-          </a>
+      <!-- One table, one row per fact. .about-row/.about-label/.about-value are
+           kept from the old markup so the renderer and the UI tests still bind. -->
+      <div class="about-grid about-facts">
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.id">Identifier</span>
+          <span class="about-value mono about-id"></span>
         </div>
-        <a class="about-source-url task-source mono"></a>
-        <div class="about-source-files hidden"></div>
-        <div class="about-grid">
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.created">Created</span>
-            <span class="about-value about-created"></span>
-          </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.status">Status</span>
+          <span class="about-value mono about-status"></span>
         </div>
-      </section>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.source_type">Source type</span>
+          <span class="about-value mono about-source-type"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.created">Created</span>
+          <span class="about-value mono about-created"></span>
+        </div>
+        <div class="about-row about-row-media hidden">
+          <span class="about-label" data-i18n="about.media">Duration</span>
+          <span class="about-value mono about-media"></span>
+        </div>
+        <div class="about-row about-row-worktime hidden">
+          <span class="about-label" data-i18n="about.total_time">Processing time</span>
+          <span class="about-value mono about-total-time"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.language">Language</span>
+          <span class="about-value mono about-language"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.audio_only">Audio only</span>
+          <span class="about-value mono about-audio-only"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.transcript">Transcript</span>
+          <span class="about-value mono about-transcript"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.diarize">Speakers</span>
+          <span class="about-value mono about-diarize"></span>
+        </div>
+        <div class="about-row">
+          <span class="about-label" data-i18n="about.prompts">Prompts</span>
+          <span class="about-value mono about-prompts"></span>
+        </div>
+        <!-- The original URL is a fact like the rest, but it is the only one
+             that can be a link, so it keeps its own row rather than a section. -->
+        <div class="about-row about-row-url hidden">
+          <span class="about-label" data-i18n="about.source_url">Source</span>
+          <a class="about-value mono about-source-url"></a>
+        </div>
+      </div>
 
-      <section class="about-params">
-        <h3 data-i18n="about.section_params">Run parameters</h3>
-        <div class="about-grid">
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.language">Language</span>
-            <span class="about-value about-language"></span>
-          </div>
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.audio_only">Audio only</span>
-            <span class="about-value about-audio-only"></span>
-          </div>
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.transcript">Transcript</span>
-            <span class="about-value about-transcript"></span>
-          </div>
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.diarize">Speakers</span>
-            <span class="about-value about-diarize"></span>
-          </div>
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.prompts">Prompts</span>
-            <span class="about-value about-prompts"></span>
-          </div>
-        </div>
-      </section>
-
+      <!-- Only for a finished run: character counts are meaningless mid-flight. -->
       <section class="about-results-section">
-        <h3 data-i18n="about.section_results">Results</h3>
+        <h3 class="about-section-title" data-i18n="about.section_results">Results</h3>
         <div class="about-grid">
-          <div class="about-row">
-            <span class="about-label" data-i18n="about.total_time">Total time</span>
-            <span class="about-value about-total-time"></span>
-          </div>
           <div class="about-row">
             <span class="about-label" data-i18n="about.raw_chars">Raw transcript</span>
-            <span class="about-value about-raw-chars"></span>
+            <span class="about-value mono about-raw-chars"></span>
           </div>
           <div class="about-row">
             <span class="about-label" data-i18n="about.processed_chars">Processed transcript</span>
-            <span class="about-value about-processed-chars"></span>
+            <span class="about-value mono about-processed-chars"></span>
           </div>
           <div class="about-row">
             <span class="about-label" data-i18n="about.summary_chars">Summary</span>
-            <span class="about-value about-summary-chars"></span>
+            <span class="about-value mono about-summary-chars"></span>
           </div>
         </div>
         <table class="about-timings">
@@ -1215,6 +1236,14 @@
           </thead>
           <tbody class="about-prompt-timings"></tbody>
         </table>
+      </section>
+
+      <!-- What actually ran, in order, with each step's outcome and how long it
+           took — the question "where did the time go" was previously only
+           answerable by reading the log tab. -->
+      <section class="about-steps-section">
+        <h3 class="about-section-title" data-i18n="about.section_steps">Pipeline steps</h3>
+        <div class="about-steps"></div>
       </section>
     </dialog>
 

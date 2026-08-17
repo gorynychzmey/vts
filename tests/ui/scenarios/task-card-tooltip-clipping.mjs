@@ -11,7 +11,7 @@
 //  2. The About dialog never mentioned diarization at all — "Run parameters"
 //     listed language / audio-only / transcript / prompts and silently omitted
 //     the Speakers flag, so there was no way to tell whether a task diarized.
-import { startStubServer, launch, openPage, clickReal, dialogOpen } from "../harness.mjs";
+import { startStubServer, launch, openPage, clickReal, dialogOpen, openTaskAbout } from "../harness.mjs";
 
 export const name = "task-card-tooltip-clipping";
 
@@ -150,10 +150,9 @@ export async function run() {
 
     // ---- 3. About dialog exposes the diarize flag ----
     await page.mouse.move(0, 0);
-    await clickReal(page, ".task .task-stats-chip");
-    await page.waitForTimeout(300);
+    await openTaskAbout(page, ".task:nth-of-type(1)");
     if (!(await dialogOpen(page, "task-about-dialog"))) {
-      failures.push("About dialog did not open from the stats chip");
+      failures.push("About dialog did not open from the kebab menu");
     } else {
       // Booleans render as an SVG yes/no icon (setAboutBool), so textContent is
       // legitimately empty — the contract is the is-yes/is-no class plus the
@@ -191,10 +190,9 @@ export async function run() {
     // whose flag was silently dropped).
     await page.click("#task-about-close-btn").catch(() => {});
     await page.waitForTimeout(200);
-    const chips = await page.$$(".task .task-stats-chip");
-    if (chips.length > 1) {
-      await chips[1].click();
-      await page.waitForTimeout(300);
+    const cards = await page.$$(".task");
+    if (cards.length > 1) {
+      await openTaskAbout(page, ".task:nth-of-type(2)");
       const plain = await page.evaluate(() => {
         const v = document.querySelector(".about-diarize");
         return v ? { yes: v.classList.contains("is-yes"), no: v.classList.contains("is-no") } : null;

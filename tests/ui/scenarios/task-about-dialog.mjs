@@ -4,7 +4,7 @@
 // per-prompt finalize timings for a completed task; closes via the X button.
 // Also verifies a RUNNING task with no prompt_results resolves the user prompt
 // NAME from /api/prompts (not its GUID).
-import { startStubServer, launch, openPage, isVisible, clickReal, dialogOpen } from "../harness.mjs";
+import { startStubServer, launch, openPage, isVisible, clickReal, dialogOpen, openTaskAbout } from "../harness.mjs";
 
 export const name = "task-about-dialog";
 
@@ -71,10 +71,14 @@ export async function run() {
       failures.push("closed About-dialog is visible on boot");
     }
 
-    // Chips: one per task card, both visible (both have media metrics).
-    const chipCount = await page.evaluate(() => document.querySelectorAll(".task-stats-chip").length);
-    if (chipCount < 2) {
-      failures.push(`expected 2 stats chips, got ${chipCount}`);
+    // The meta line under each title carries duration/size as plain text. It was
+    // a clickable "stats" pill until redesign v2 removed the pill to make the
+    // card compact; About now opens from the kebab menu instead.
+    const statsCount = await page.evaluate(
+      () => document.querySelectorAll(".task .task-stats:not(.hidden)").length
+    );
+    if (statsCount < 2) {
+      failures.push(`expected 2 task stats lines, got ${statsCount}`);
       return failures;
     }
     // Step label for the completed task: the last step is finalize:user:u1.
@@ -89,19 +93,20 @@ export async function run() {
       failures.push(`step label missing resolved prompt name: ${JSON.stringify(stepLabel)}`);
     }
 
-    // The chip must not stretch the full card width (it sits in a grid column).
-    const chipStretched = await page.evaluate(() => {
-      const chip = document.querySelector(".task-stats-chip");
-      const parent = chip.parentElement;
-      return chip.getBoundingClientRect().width >= parent.getBoundingClientRect().width - 1;
+    // The stats sit on the SAME line as the source url, which is the whole point
+    // of dropping the pill — the card is one line shorter for it.
+    const sameLine = await page.evaluate(() => {
+      const stats = document.querySelector(".task .task-stats:not(.hidden)");
+      const src = stats?.closest(".task-meta-row")?.querySelector(".task-source");
+      if (!stats || !src || src.classList.contains("hidden")) return null;
+      return Math.abs(stats.getBoundingClientRect().top - src.getBoundingClientRect().top) < 6;
     });
-    if (chipStretched) failures.push("stats chip stretches full card width (should be content-sized)");
+    if (sameLine === false) failures.push("task stats are not on the same line as the source url");
 
     // --- Completed task (first card) ---
-    await clickReal(page, ".task:nth-of-type(1) .task-stats-chip");
-    await page.waitForTimeout(250);
+    await openTaskAbout(page, ".task:nth-of-type(1)");
     if (!(await dialogOpen(page, "task-about-dialog"))) {
-      failures.push("About-dialog did not open from the chip");
+      failures.push("About-dialog did not open from the kebab menu");
       return failures;
     }
 
@@ -179,8 +184,7 @@ export async function run() {
     if (await dialogOpen(page, "task-about-dialog")) failures.push("About-dialog did not close via X");
 
     // --- Running task (second card): name resolved from /api/prompts, not GUID ---
-    await clickReal(page, ".task:nth-of-type(2) .task-stats-chip");
-    await page.waitForTimeout(250);
+    await openTaskAbout(page, ".task:nth-of-type(2)");
     const running = await page.evaluate(() => {
       const q = (s) => document.querySelector(s)?.textContent || "";
       return {

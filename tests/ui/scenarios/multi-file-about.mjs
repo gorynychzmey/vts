@@ -1,7 +1,7 @@
 // vts-vm0: a set's About dialog lists the parts and says how they were ordered.
 // The order is decided server-side with no way to correct it, so showing which
 // rule produced it is what makes a wrong order explicable.
-import { startStubServer, launch, openPage } from "../harness.mjs";
+import { startStubServer, launch, openPage, openTaskAbout } from "../harness.mjs";
 
 export const name = "multi-file-about";
 
@@ -53,10 +53,10 @@ async function checkDialogText(baseUrl, taskId) {
     const { page, errors } = await openPage(browser, baseUrl);
     await page.waitForSelector(`[data-task-id="${taskId}"]`, { timeout: 5000 });
 
-    // The About dialog opens from the card's stats area (app.js:2016), not
-    // from a dedicated button.
-    await page.click(`[data-task-id="${taskId}"] .task-stats`, { force: true });
-    await page.waitForTimeout(400);
+    // About opens from the card's kebab menu. It used to open from a clickable
+    // stats pill on the card; redesign v2 removed that pill to make the card
+    // compact, leaving the menu row as the only way in.
+    await openTaskAbout(page, `[data-task-id="${taskId}"]`);
 
     const result = await page.evaluate(() => {
       const dialog = document.getElementById("task-about-dialog");

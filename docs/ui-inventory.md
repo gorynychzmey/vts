@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 52 capabilities · 100 routes (74 in the OpenAPI schema, 26 hidden) · 26 MCP tools · 372 English UI strings.
+**Counts:** 52 capabilities · 100 routes (74 in the OpenAPI schema, 26 hidden) · 26 MCP tools · 383 English UI strings.
 
 ## Capabilities by entity
 
@@ -198,7 +198,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 | `#presets-dialog` | Manage presets |
 | `#delivery-dialog` | Manage delivery |
 | `#restart-final-dialog` | Restart final with prompts |
-| `#task-about-dialog` | About task |
+| `#task-about-dialog` | — |
 | `#speaker-registry-dialog` | Voice registry |
 | `#voice-resolution-dialog` | Resolve voices |
 | `#speaker-picker-dialog` | Move fragment to a person (set at runtime) |

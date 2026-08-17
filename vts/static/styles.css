@@ -2151,40 +2151,30 @@ dialog:not([open]) {
 }
 
 /* Clickable stats chip (duration · size) that opens the About-task dialog. */
-.task-stats-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  /* .task-main is a grid; without this the chip stretches the full column
-     width. Keep it sized to its content and left-aligned. */
-  justify-self: start;
+/* One meta line under the title: source, then duration/size as plain text.
+   This replaced a clickable "stats" pill, which cost the card a second line and
+   a box for information that is only read, never acted on — the card is shorter
+   for it, and About is still one click away in the kebab.
+   The source may be a long URL, so it takes the slack and ellipsises; the stats
+   are short and fixed, so they keep their width. */
+.task-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.34rem;
+  min-width: 0;
   max-width: 100%;
-  padding: 0.1rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-soft);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
 }
 
-.task-stats-chip .task-stats-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.task-meta-row .task-source {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.task-stats-chip:hover {
-  background: var(--bg);
-  color: var(--ink);
-  border-color: var(--ink-soft);
-}
-
-.task-stats-chip svg {
-  width: 0.85rem;
-  height: 0.85rem;
+.task-stats-text:not(.hidden) {
   flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
 }
 
 /* Left-align the prompt rows and the action button in the restart dialog;
@@ -2764,7 +2754,11 @@ dialog:not([open]) {
   overscroll-behavior: contain;
 }
 
-#task-about-dialog section {
+/* :not(.hidden) because `.hidden` is declared far earlier and loses to a later
+   `display` at equal specificity — the same trap this file documents for the
+   dialogs, .count-pip and the file-drop zone. Without it the Results section
+   stayed visible on a running task, showing empty rows and a bare table header. */
+#task-about-dialog section:not(.hidden) {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -2779,17 +2773,6 @@ dialog:not([open]) {
 #task-about-dialog .about-source-url {
   word-break: break-all;
   font-size: 0.8rem;
-}
-
-#task-about-dialog .about-title-row {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
-}
-
-#task-about-dialog .about-title-row .about-source-title {
-  min-width: 0;
 }
 
 .about-player-btn:not(.hidden) {
@@ -2814,6 +2797,13 @@ dialog:not([open]) {
   display: contents;
 }
 
+/* `display: contents` beats `.hidden`'s display:none at equal specificity (the
+   trap this file already documents for the dialogs and .count-pip), so a hidden
+   row would still paint its cells. Same fix as everywhere else: :not(.hidden). */
+#task-about-dialog .about-row.hidden {
+  display: none;
+}
+
 #task-about-dialog .about-label {
   color: var(--ink-soft);
   font-size: 0.8rem;
@@ -2822,6 +2812,157 @@ dialog:not([open]) {
 #task-about-dialog .about-value {
   color: var(--ink);
 }
+
+/* ---------- About dialog, redesign v2 ----------
+   The task's NAME is the heading and the facts are one flat table; the old
+   three sections (Source / Run parameters / Results) each repeated a heading
+   for two or three rows, which is most of what made the dialog need scrolling. */
+
+.about-dialog .about-head {
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.about-head-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+/* The heading IS the task link, so it must not inherit the h2 blue-link look
+   or the UA underline; it reads as a title that happens to be clickable. */
+.about-source-title-wrap {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-title);
+  font-weight: 700;
+}
+
+.about-dialog .about-source-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  color: var(--ink);
+  text-decoration: none;
+  font: inherit;
+}
+
+.about-dialog .about-source-title[href]:hover .task-link-text {
+  text-decoration: underline;
+}
+
+/* Which files this recording was built from — a subtitle, not a fact row. */
+.about-dialog .about-source-files:not(.hidden) {
+  display: block;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+  word-break: break-word;
+}
+
+/* Row separators, as in the design: the table is long enough that unruled rows
+   were hard to track across the gap between label and value. */
+.about-dialog .about-facts {
+  gap: 0;
+}
+
+/* The rule must span BOTH columns. `.about-row` is display:contents, so its
+   cells are the grid items — a border on the label cell alone stops at the end
+   of the first track, which reads as a stray dash next to each label. Both
+   cells get one, and the 1rem column gap is closed here so the two halves meet
+   instead of leaving a gap in the middle of every rule. */
+/* ID-qualified to outrank `#task-about-dialog .about-grid`, which sets the
+   1rem column-gap — a class selector loses to it and the gap survived, leaving
+   a visible break in the middle of every rule. */
+#task-about-dialog .about-facts {
+  column-gap: 0;
+}
+
+#task-about-dialog .about-facts > .about-row > * {
+  padding: 0.42rem 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* The gap given up above, restored as padding INSIDE the value cell so it sits
+   under the rule rather than breaking it. */
+#task-about-dialog .about-facts > .about-row > .about-value {
+  padding-left: 1rem;
+}
+
+.about-dialog .about-section-title {
+  margin: 0.9rem 0 0.35rem;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* One row per pipeline step: dot, name, outcome, duration. The dot reuses the
+   task card's .status-* vocabulary so a colour means the same thing in both. */
+.about-steps {
+  display: flex;
+  flex-direction: column;
+}
+
+.about-step-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  padding: 0.32rem 0;
+}
+
+.about-step-dot {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 0.44rem;
+  height: 0.44rem;
+  border-radius: 50%;
+  background: var(--mute);
+}
+
+.about-step-row.status-completed .about-step-dot {
+  background: var(--ok);
+}
+
+.about-step-row.status-running .about-step-dot {
+  background: var(--accent);
+}
+
+.about-step-row.status-failed .about-step-dot {
+  background: var(--danger);
+}
+
+/* The name takes the slack so the outcome and duration stay right-aligned in
+   one column no matter how long the step's translated name is. */
+.about-step-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.about-step-state {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+}
+
+.about-step-row.status-completed .about-step-state {
+  color: var(--ok-ink);
+}
+
+.about-step-row.status-failed .about-step-state {
+  color: var(--danger-ink);
+}
+
+.about-step-time {
+  flex: 0 0 auto;
+  min-width: 2.6rem;
+  text-align: right;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+}
+
 
 /* Boolean value icons (✓ for yes, — for no). */
 #task-about-dialog .about-bool {
