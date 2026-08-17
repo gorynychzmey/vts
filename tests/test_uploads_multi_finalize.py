@@ -165,7 +165,7 @@ async def test_finalize_failure_after_rename_leaves_session_retryable(client, tm
     is exactly what makes the upload recoverable rather than orphaned.
     """
     monkeypatch.setattr(
-        "vts.api.main.probe_media",
+        "vts.api.routers.uploads.probe_media",
         lambda path: (_ for _ in ()).throw(RuntimeError("boom: simulated probe crash")),
     )
 
@@ -216,7 +216,7 @@ async def test_finalize_retry_after_crash_past_rename_succeeds(client, tmp_path,
             raise RuntimeError("boom: simulated crash after finalize_multi renamed the parts")
         return real_probe_media(path)
 
-    monkeypatch.setattr("vts.api.main.probe_media", _probe_boom_once)
+    monkeypatch.setattr("vts.api.routers.uploads.probe_media", _probe_boom_once)
 
     a = _make_audio(tmp_path / "a.m4a", 1, 440)
     b = _make_audio(tmp_path / "b.m4a", 1, 880)
@@ -390,7 +390,7 @@ async def test_concurrent_finalize_creates_exactly_one_task(client, tmp_path, mo
         time.sleep(0.05)
         return real_probe(path)
 
-    monkeypatch.setattr("vts.api.main.probe_media", _probe_with_yield)
+    monkeypatch.setattr("vts.api.routers.uploads.probe_media", _probe_with_yield)
 
     a = _make_audio(tmp_path / "a.m4a", 1, 440, creation="2026-08-01T10:00:00.000000Z")
     b = _make_audio(tmp_path / "b.m4a", 1, 880, creation="2026-08-01T10:05:00.000000Z")
