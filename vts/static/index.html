@@ -695,6 +695,28 @@
           </div>
           <div class="task-message hidden" aria-live="polite"></div>
 
+          <!-- Speakers panel (redesign v2): who is in the recording, and who they
+               are bound to, right in the card. Before this the only way to see or
+               change a binding was to open the voice-resolution dialog, so the
+               information existed but was invisible until you went looking.
+               Shown whenever diarization produced speakers, not only while a task
+               is waiting on input. Rows are filled by app.js. -->
+          <section class="speaker-box hidden" aria-live="polite">
+            <div class="speaker-box-head">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="9" cy="8" r="3.2" />
+                <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
+                <path d="M17 8.5a2.6 2.6 0 0 1 0 5" />
+                <path d="M18.5 19a4.6 4.6 0 0 0-2-3.4" />
+              </svg>
+              <span class="speaker-box-title" data-i18n="speakers.panel.title">Speakers</span>
+              <span class="speaker-box-count"></span>
+              <button type="button" class="btn-link speaker-box-registry-btn"
+                      data-i18n="speakers.panel.registry">Voice registry</button>
+            </div>
+            <div class="speaker-box-list"></div>
+          </section>
+
           <div class="tabs-bar">
             <div class="tabs">
               <button class="tab-btn active" data-tab="transcript" type="button" data-i18n="tab.transcript">

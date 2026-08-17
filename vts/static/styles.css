@@ -2397,17 +2397,17 @@ dialog:not([open]) {
   min-height: 0;
 }
 
-.speaker-row {
+.spk-panel-row {
   grid-template-columns: 1fr auto;
   cursor: pointer;
 }
 
-.speaker-row.selected {
+.spk-panel-row.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.speaker-row.editing {
+.spk-panel-row.editing {
   cursor: default;
 }
 
@@ -3646,4 +3646,269 @@ dialog:not([open]) {
 .task.menu-open {
   position: relative;
   z-index: 40;
+}
+
+
+/* ---------- Speakers panel in the task card (redesign v2) ----------
+   Who is in the recording and who they are bound to. Before this the bindings
+   lived only inside the voice-resolution dialog, so the information existed but
+   was invisible until you went looking for it. */
+.speaker-box:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--bg-sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-xl);
+}
+
+.speaker-box-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.speaker-box-head > svg {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: var(--ink-soft);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.speaker-box-title {
+  font-size: var(--fs-ui);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.speaker-box-count {
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+/* Pushed to the far edge: it leaves the card, so it should not read as one of
+   the row actions. */
+.speaker-box-registry-btn {
+  margin-left: auto;
+}
+
+.speaker-box-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.spk-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+/* An unbound voice is the one thing here that wants action, so it gets the
+   accent tint — the same signal awaiting_input uses on the card edge. */
+.spk-panel-row.unbound {
+  background: var(--accent-soft-2);
+  border-color: var(--accent-line);
+}
+
+.avatar {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-chip);
+  color: var(--ink-soft);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+}
+
+.spk-panel-row.unbound .avatar {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.spk-panel-label {
+  min-width: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spk-panel-share {
+  flex: 0 0 auto;
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+/* Right-aligned: the person is the answer to the row, so it sits at the end of
+   the line rather than next to the label. */
+.spk-panel-person,
+.spk-panel-pick {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.spk-panel-person {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 30rem) {
+  /* The label takes the first line and the metadata wraps under it, so a long
+     "Speaker N / 61% / Person" row does not squeeze the action off the card. */
+  .spk-panel-row {
+    flex-wrap: wrap;
+  }
+
+  .spk-panel-label {
+    flex: 1 1 100%;
+    order: -1;
+  }
+}
+
+
+/* Similarity chips under an unbound voice: the matcher's nearest candidates,
+   one click away. Only rendered when nobody is bound yet — a voice inside the
+   auto-bind threshold already has its answer. */
+.spk-panel-hints {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.36rem;
+  flex-wrap: wrap;
+  margin-top: 0.1rem;
+}
+
+.spk-panel-hints-label {
+  font-size: var(--fs-meta);
+  color: var(--ink-soft);
+}
+
+.speaker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: var(--bg-card);
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+
+.speaker-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The number is the reason to click, so it carries the accent rather than the
+   name it qualifies. */
+.speaker-chip-pct {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+
+/* Text-only action. Without this rule the global `button` style applies and a
+   link-looking action renders as a filled accent button — which is how the
+   speakers panel first came out. */
+.btn-link {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+
+/* The avatar doubles as the play button: the initials are the identity and the
+   click is "let me hear it", which is the same question in one control. */
+.avatar-play {
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.avatar-play:hover {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.avatar-play.playing {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+/* No clip for this voice — say so on hover instead of leaving a dead control. */
+.avatar-play.no-preview {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.spk-panel-noise {
+  flex: 0 0 auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-faint);
+}
+
+.spk-panel-noise svg {
+  width: 0.88rem;
+  height: 0.88rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.spk-panel-noise:hover {
+  background: var(--bg-chip);
+  color: var(--ink-soft);
+}
+
+.spk-panel-noise.is-on {
+  color: var(--warn-ink);
+  background: var(--warn-soft);
+}
+
+/* A voice marked as noise is settled — dim the row so the eye skips it and
+   lands on the ones still needing a decision. */
+.spk-panel-row.is-noise {
+  opacity: 0.6;
+}
+
+.spk-panel-row.is-noise.unbound {
+  background: var(--bg-card);
+  border-color: var(--line-soft);
 }

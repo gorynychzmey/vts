@@ -1995,6 +1995,7 @@ function renderTaskCard(task) {
   const pauseBtn = root.querySelector(".pause-btn");
   const resumeBtn = root.querySelector(".resume-btn");
   const resolveVoicesBtn = root.querySelector(".resolve-voices-btn");
+  const speakerRegistryLink = root.querySelector(".speaker-box-registry-btn");
   const taskMenuBtn = root.querySelector(".task-menu-btn");
   const taskMenu = root.querySelector(".task-menu");
   const taskAboutBtn = root.querySelector(".task-about-btn");
@@ -2083,6 +2084,10 @@ function renderTaskCard(task) {
       if (activeTab) {
         void activateTaskTab(root, task.id, activeTab);
       }
+      // First expand only: /speaker-matches is a real request and most cards are
+      // never opened.
+      if (!root._speakerRows) void loadSpeakerPanel(root, task.id);
+      else renderSpeakerPanel(root, task.id);
     } else {
       stopLogPolling(root);
     }
@@ -2135,6 +2140,11 @@ function renderTaskCard(task) {
       taskMenu.classList.remove("open");
       taskMenuBtn.setAttribute("aria-expanded", "false");
       root.classList.remove("menu-open");
+    });
+  }
+  if (speakerRegistryLink) {
+    speakerRegistryLink.addEventListener("click", () => {
+      document.getElementById("speaker-registry-btn")?.click();
     });
   }
   if (taskAboutBtn) {
@@ -5464,13 +5474,11 @@ async function moveSample(sample) {
           }
         );
       } catch (err) {
-        console.error("speaker sample move failed", err);
+        console.error("sample move failed", err);
         return;
       }
       closeSpeakerPicker();
-      // The fragment left this person, so both columns are now stale.
-      await refreshSpeakerSamples(selectedSpeakerId);
-      await refreshSpeakerRegistry({ keepSamples: true });
+      await refreshSpeakerRegistry();
     },
   });
 }
@@ -5616,6 +5624,269 @@ const NEW_PERSON_VALUE = "__new__";
 let voiceDialogState = null; // { taskId, rows: [...], dirty }
 
 // One row's mutable UI state, seeded from speaker_matches.json.
+// ---------------------------------------------------------------------------
+// Speakers panel in the task card (redesign v2).
+//
+// The bindings existed only inside the voice-resolution dialog, so who is in a
+// recording — and who they were bound to — was invisible until you went looking
+// for it. The panel shows that in the card, and each row is a way into the
+// existing speaker picker rather than a second implementation of it.
+//
+// Loaded lazily on first expand: /speaker-matches is a real request, and most
+// cards are never expanded.
+
+async function loadSpeakerPanel(taskEl, taskId) {
+  const box = taskEl.querySelector(".speaker-box");
+  if (!box || taskEl._speakerPanelLoading) return;
+  taskEl._speakerPanelLoading = true;
+  try {
+    const [matches, speakers] = await Promise.all([
+      api(`/api/tasks/${encodeURIComponent(taskId)}/speaker-matches`),
+      api("/api/speakers"),
+    ]);
+    const allSpeakers = Array.isArray(speakers) ? speakers : [];
+    const labels = Object.keys(matches || {}).sort();
+    // Reuse buildVoiceRow: the "which person is this bound to" logic is subtle
+    // (a saved decision outranks the auto-match, an anonymous decision stands)
+    // and duplicating it here would let the panel and the dialog disagree.
+    taskEl._speakerRows = labels
+      .map((label) => buildVoiceRow(label, matches[label] || {}, allSpeakers))
+      .sort((a, b) => b.share - a.share);
+    renderSpeakerPanel(taskEl, taskId);
+  } catch (err) {
+    console.error("Failed to load speakers for the task panel", err);
+    // Leave the panel hidden rather than showing an empty shell: a card with no
+    // diarization legitimately has nothing here.
+  } finally {
+    taskEl._speakerPanelLoading = false;
+  }
+}
+
+// One <audio> per card, created on first use. Stopping the previous clip before
+// starting a new one is the whole point: comparing two voices means hearing them
+// in turn, not at once.
+function playSpeakerPreview(taskEl, taskId, row, btn) {
+  if (!taskEl._speakerAudio) {
+    taskEl._speakerAudio = new Audio();
+    taskEl._speakerAudio.preload = "none";
+  }
+  const audio = taskEl._speakerAudio;
+  const src = buildPath(
+    `/api/tasks/${encodeURIComponent(taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`
+  );
+  const playingThis = taskEl._speakerAudioLabel === row.label && !audio.paused;
+  taskEl.querySelectorAll(".avatar-play.playing").forEach((el) => el.classList.remove("playing"));
+  if (playingThis) {
+    audio.pause();
+    taskEl._speakerAudioLabel = null;
+    return;
+  }
+  // buildPath, not a bare URL: an admin viewing another user's task has
+  // state.actingAs set, and the endpoint needs that param to authorize the
+  // fetch — without it the request 404s (vts-552).
+  audio.src = src;
+  taskEl._speakerAudioLabel = row.label;
+  btn.classList.add("playing");
+  audio.onended = () => btn.classList.remove("playing");
+  audio.onerror = () => {
+    btn.classList.remove("playing");
+    btn.classList.add("no-preview");
+    btn.setAttribute("data-tooltip", t("voices.row.preview_unavailable"));
+  };
+  void audio.play().catch(() => {
+    btn.classList.remove("playing");
+  });
+}
+
+function speakerInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+}
+
+function renderSpeakerPanel(taskEl, taskId) {
+  const box = taskEl.querySelector(".speaker-box");
+  const list = box?.querySelector(".speaker-box-list");
+  const countEl = box?.querySelector(".speaker-box-count");
+  const rows = Array.isArray(taskEl._speakerRows) ? taskEl._speakerRows : [];
+  if (!box || !list) return;
+
+  // Shown whenever diarization produced speakers — not only while the task is
+  // waiting on input (Victor's call).
+  box.classList.toggle("hidden", rows.length === 0);
+  if (!rows.length) return;
+  if (countEl) countEl.textContent = t("speakers.panel.count", { count: rows.length });
+
+  list.textContent = "";
+  for (const row of rows) {
+    // "Bound" is narrower than "preselected": buildVoiceRow pre-fills the dialog
+    // with the nearest candidate even for a grey match nobody confirmed. Only a
+    // saved operator decision or a committed auto-match counts here, otherwise
+    // the panel claims a binding the backend never made — and hides the chips
+    // that exist to make it.
+    const decided = row.decidedSpeakerId || (row.outcome === "auto" ? row.matchedSpeakerId : null);
+    const boundOption = decided ? row.options.find((o) => o.speaker_id === decided) : null;
+    const bound = Boolean(boundOption);
+
+    const item = document.createElement("div");
+    item.className = "spk-panel-row";
+    if (!bound) item.classList.add("unbound");
+
+    // Play the voice's preview clip. One shared <audio> per card rather than one
+    // per row: several players would let two clips overlap, and the point is to
+    // compare voices one at a time.
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "avatar avatar-play";
+    play.setAttribute("aria-label", t("speakers.panel.play"));
+    play.setAttribute("data-tooltip", t("speakers.panel.play"));
+    play.textContent = bound ? speakerInitials(boundOption.name) : "?";
+    play.addEventListener("click", () => playSpeakerPreview(taskEl, taskId, row, play));
+    const avatar = play;
+
+    const label = document.createElement("span");
+    label.className = "spk-panel-label";
+    label.textContent = row.displayLabel;
+
+    const share = document.createElement("span");
+    share.className = "spk-panel-share mono";
+    share.textContent = `${Math.round((row.share || 0) * 100)}%`;
+
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = bound ? "btn-link spk-panel-person" : "btn-link spk-panel-pick";
+    action.textContent = bound ? boundOption.name : t("speakers.panel.pick");
+    action.addEventListener("click", () => openSpeakerPanelPicker(taskEl, taskId, row));
+
+    const noise = document.createElement("button");
+    noise.type = "button";
+    noise.className = "spk-panel-noise" + (row.noise ? " is-on" : "");
+    noise.setAttribute("aria-pressed", String(Boolean(row.noise)));
+    noise.setAttribute("aria-label", t("speakers.panel.noise"));
+    noise.setAttribute("data-tooltip", t("speakers.panel.noise"));
+    noise.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4h4l5 4V6L7 10H3z"/><path d="m16 9 5 6M21 9l-5 6"/></svg>';
+    noise.addEventListener("click", async () => {
+      // A voice marked as noise is not a person, so binding it makes no sense —
+      // the backend records the flag with the resolution set.
+      row.noise = !row.noise;
+      await bindSpeakerRow(taskEl, taskId, row, row.selection === NEW_PERSON_VALUE ? null : row.selection);
+    });
+    if (row.noise) item.classList.add("is-noise");
+
+    item.append(avatar, label, share, noise, action);
+
+    // "Looks like" chips: only for voices nobody is bound to yet. Anything within
+    // speaker_match_max_distance_auto (0.25) was auto-bound already, so showing
+    // candidates there would restate a decision instead of helping make one.
+    if (!bound) {
+      const near = row.options
+        .filter((o) => typeof o.distance === "number" && o.distance <= SPEAKER_CANDIDATE_MAX_DISTANCE)
+        .slice(0, 3);
+      if (near.length) {
+        const hints = document.createElement("div");
+        hints.className = "spk-panel-hints";
+        const caption = document.createElement("span");
+        caption.className = "spk-panel-hints-label";
+        caption.textContent = t("speakers.panel.looks_like");
+        hints.appendChild(caption);
+        for (const cand of near) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "speaker-chip";
+          const chipName = document.createElement("span");
+          chipName.textContent = cand.name;
+          const chipPct = document.createElement("span");
+          chipPct.className = "speaker-chip-pct";
+          // Cosine distance -> a similarity the user can read. The scale is 0..1
+          // (see speaker_match_max_distance_* in vts/core/config.py), so 1 - d is
+          // honest rather than a made-up curve.
+          chipPct.textContent = `${Math.round((1 - cand.distance) * 100)}%`;
+          chip.append(chipName, chipPct);
+          chip.addEventListener("click", () => bindSpeakerRow(taskEl, taskId, row, cand.speaker_id));
+          hints.appendChild(chip);
+        }
+        item.appendChild(hints);
+      }
+    }
+
+    list.appendChild(item);
+  }
+}
+
+// One row -> the existing picker. allowNew is false here: creating a person
+// mid-list needs the naming flow the registry dialog owns, and the panel's job
+// is binding to someone who already exists.
+// Mirrors speaker_match_max_distance_candidate in vts/core/config.py: past this
+// the matcher does not treat it as a candidate at all, so neither should we.
+const SPEAKER_CANDIDATE_MAX_DISTANCE = 0.55;
+
+// Shared by the picker dialog and the similarity chips: both end in the same
+// whole-set resubmit, and two copies of that payload would drift apart.
+async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
+  const previous = row.selection;
+  row.selection = speakerId || NEW_PERSON_VALUE;
+  const rows = Array.isArray(taskEl._speakerRows) ? taskEl._speakerRows : [row];
+  const resolutions = rows.map((r) => {
+    const chosen = r.options.find((o) => o.speaker_id === r.selection);
+    const base = {
+      speaker_label: r.label,
+      outcome: r.outcome,
+      distance: chosen && typeof chosen.distance === "number" ? chosen.distance : r.matchedDistance,
+      is_noise: r.noise,
+    };
+    if (r.selection === NEW_PERSON_VALUE) {
+      return { ...base, action: "leave_anonymous", add_fragment: false };
+    }
+    if (r.outcome === "auto" && r.selection === r.matchedSpeakerId) {
+      return { ...base, action: "accept_auto", speaker_id: r.selection, add_fragment: false };
+    }
+    return { ...base, action: "bind_existing", speaker_id: r.selection, add_fragment: false };
+  });
+  // A task parked in awaiting_input is waiting for exactly this: once no voice
+  // is left undecided, binding the last one should let it carry on rather than
+  // making the user find the dialog just to press Continue. A voice marked as
+  // noise counts as decided — it is not a person and never will be.
+  const stillUndecided = rows.some(
+    (r) => !r.noise && r.selection === NEW_PERSON_VALUE && !r.hasDecision,
+  );
+  const awaiting = taskEl._runtime?.baseStatus === "awaiting_input";
+  const continueTask = awaiting && !stillUndecided;
+
+  try {
+    await api(`/api/tasks/${encodeURIComponent(taskId)}/speakers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolutions, continue_task: continueTask }),
+    });
+  } catch (err) {
+    console.error("Failed to bind the speaker", err);
+    row.selection = previous;
+    return;
+  }
+  await loadSpeakerPanel(taskEl, taskId);
+  if (continueTask) {
+    // Same in-place refresh the dialog uses: loadTasks() would rebuild the list
+    // and collapse the card the user is working in (bug #3, vts-552).
+    await refreshTaskInPlace(taskId);
+  }
+}
+
+function openSpeakerPanelPicker(taskEl, taskId, row) {
+  const candidates = row.options
+    .filter((o) => o.speaker_id !== NEW_PERSON_VALUE)
+    .map((o) => ({ id: o.speaker_id, name: o.name, distance: o.distance }));
+  openSpeakerPicker({
+    title: t("speakers.panel.pick_title", { label: row.displayLabel }),
+    candidates,
+    allowNew: false,
+    emptyText: t("speakers.panel.pick_empty"),
+    onPick: async (item) => {
+      closeSpeakerPicker();
+      await bindSpeakerRow(taskEl, taskId, row, item.id);
+    },
+  });
+}
+
 function buildVoiceRow(label, match, allSpeakers) {
   const outcome = match.outcome === "auto" || match.outcome === "grey" || match.outcome === "miss"
     ? match.outcome
@@ -5667,6 +5938,10 @@ function buildVoiceRow(label, match, allSpeakers) {
       ? match.display_label
       : label,
     matchedSpeakerId: match.speaker_id ? String(match.speaker_id) : null,
+    // Exposed for the card's speakers panel, which must tell an operator's saved
+    // decision apart from the dialog's pre-fill (see the `bound` check there).
+    decidedSpeakerId,
+    hasDecision,
     matchedDistance: typeof match.distance === "number" ? match.distance : null,
     options,
     selection: initialSelection,
@@ -6003,6 +6278,13 @@ async function submitVoiceResolutions(continueTask) {
   const taskEl = findTaskEl(voiceTaskId);
   if (taskEl && getActiveTabName(taskEl) === "transcript") {
     await loadTabContent(taskEl, voiceTaskId, "transcript");
+  }
+  // The card's speakers panel shows the same bindings this dialog just changed.
+  // Without this the two disagree on screen until the card is collapsed and
+  // reopened. Only reload a panel that has already been populated — an untouched
+  // card should stay lazy.
+  if (taskEl && taskEl._speakerRows) {
+    await loadSpeakerPanel(taskEl, voiceTaskId);
   }
 }
 
