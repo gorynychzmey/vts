@@ -15,8 +15,10 @@ derives the OpenAPI tag from the URL prefix, and an explicit tag overrides it.
 from __future__ import annotations
 
 import html as _html
+import json
 import logging
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -39,6 +41,21 @@ router = APIRouter()
 
 
 _MAX_TEXT_SLICE_CHARS = 200_000  # safety cap for JSON-mode slice length
+
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "_templates"
+
+
+@lru_cache(maxsize=None)
+def _template(name: str) -> str:
+    """Read a player asset, cached for the process.
+
+    Assets are read rather than embedded so the CSS and JS stay real files that
+    an editor, a linter and `node --check` can all read. They ship inside the
+    package, so this is a plain read, not user input — `name` is only ever a
+    literal from this module.
+    """
+    return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
 def _format_timecode(seconds: float) -> str:
@@ -228,6 +245,10 @@ def _player_page_html(
     transcript is omitted (nothing to seek).
     Sentence/label text is escaped here; start times drive the seek via
     data-start.
+
+    The shell, CSS and JS live in vts/api/_templates/ and are substituted here
+    rather than being one f-string: as an f-string every CSS and JS brace had
+    to be doubled (125 of them), which no editor or linter could check.
     """
     if media_tag is None:
         media_block = _media_unavailable_block_html()
@@ -242,10 +263,9 @@ def _player_page_html(
     # transcript hasn't arrived yet (task still processing -> blocks=[] on
     # first paint). The transcript streams in later via transcript_updated
     # + rebuildTranscript, which (re)wires the scroll listener (vts-eho).
-    import json as _json_ac
     autoscroll_html = ""
     if media_tag is not None:
-        ac_msgs = _json_ac.dumps(_PLAYER_AUTOSCROLL_MSG, ensure_ascii=False)
+        ac_msgs = json.dumps(_PLAYER_AUTOSCROLL_MSG, ensure_ascii=False)
         autoscroll_html = (
             '<label class="autoscroll-toggle">'
             '<input type="checkbox" id="autoscroll-toggle" checked>'
@@ -259,292 +279,31 @@ def _player_page_html(
     #                         (covers first assembly AND rerender after resolve)
     #   task_status canceled/deleted -> swap into the media-unavailable state
     # Plus a <video>/<audio> error handler for media that vanishes mid-session.
-    import json as _json_live
-
     live_script = ""
     if task_id:
-        tid_js = _json_live.dumps(str(task_id))
-        as_user_js = _json_live.dumps(as_user or "")
-        msgs_js = _json_live.dumps(_PLAYER_MEDIA_UNAVAILABLE_MSG, ensure_ascii=False)
-        live_script = f"""
-  var TASK_ID = {tid_js};
-  var AS_USER = {as_user_js};
-  var MEDIA_MSGS = {msgs_js};
+        live_script = (
+            _template("player_live.js")
+            .replace("__TASK_ID__", json.dumps(str(task_id)))
+            .replace("__AS_USER__", json.dumps(as_user or ""))
+            .replace(
+                "__MEDIA_MSGS__",
+                json.dumps(_PLAYER_MEDIA_UNAVAILABLE_MSG, ensure_ascii=False),
+            )
+        )
 
-  function localizedMsg(map) {{
-    var langs = (navigator.languages || [navigator.language || "en"]);
-    for (var i = 0; i < langs.length; i++) {{
-      var code = String(langs[i] || "").slice(0, 2).toLowerCase();
-      if (map[code]) return map[code];
-    }}
-    return map.en || "";
-  }}
-
-  function showMediaUnavailable() {{
-    var container = document.body;
-    var m = document.querySelector("video, audio");
-    if (m) m.remove();
-    var ol = document.querySelector(".transcript");
-    if (ol) ol.remove();
-    if (document.querySelector("[data-media-unavailable]")) return;
-    var p = document.createElement("p");
-    p.className = "media-unavailable";
-    p.setAttribute("data-media-unavailable", "");
-    p.textContent = localizedMsg(MEDIA_MSGS);
-    container.appendChild(p);
-  }}
-
-  function timecode(start) {{
-    var s = Math.max(0, Math.floor(Number(start) || 0));
-    var hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
-    return hh
-      ? hh + ":" + String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0")
-      : mm + ":" + String(ss).padStart(2, "0");
-  }}
-
-  function buildCue(sentence) {{
-    var span = document.createElement("span");
-    span.className = "cue";
-    span.setAttribute("data-start", String(sentence.start));
-    span.setAttribute("role", "button");
-    span.setAttribute("tabindex", "0");
-    span.title = timecode(sentence.start);
-    span.textContent = String(sentence.text || "");
-    return span;
-  }}
-
-  function buildBlock(block) {{
-    var li = document.createElement("li");
-    li.className = "block";
-    if (block.label) {{
-      var lab = document.createElement("div");
-      lab.className = "block-label";
-      lab.textContent = String(block.label);
-      li.appendChild(lab);
-    }}
-    var body = document.createElement("p");
-    body.className = "block-body";
-    (block.sentences || []).forEach(function(sentence, i) {{
-      if (i) body.appendChild(document.createTextNode(" "));
-      body.appendChild(buildCue(sentence));
-    }});
-    li.appendChild(body);
-    return li;
-  }}
-
-  function rebuildTranscript(blocks) {{
-    var media = document.querySelector("video, audio");
-    if (!media || !Array.isArray(blocks) || !blocks.length) return;
-    var ol = document.querySelector(".transcript");
-    if (!ol) {{
-      ol = document.createElement("ol");
-      ol.className = "transcript";
-      document.body.appendChild(ol);
-    }}
-    ol.innerHTML = "";
-    blocks.forEach(function(block) {{ ol.appendChild(buildBlock(block)); }});
-    wireCues(media);
-    wireAutoscroll();
-  }}
-
-  function refetchEntries() {{
-    var url = "/api/tasks/" + encodeURIComponent(TASK_ID) + "/transcript-entries";
-    if (AS_USER) url += "?as_user=" + encodeURIComponent(AS_USER);
-    fetch(url, {{ credentials: "same-origin" }})
-      .then(function(r) {{ return r.ok ? r.json() : null; }})
-      .then(function(data) {{ if (data && data.blocks) rebuildTranscript(data.blocks); }})
-      .catch(function() {{ /* transient; next event or reload recovers */ }});
-  }}
-
-  try {{
-    var es = new EventSource("/api/events", {{ withCredentials: false }});
-    es.addEventListener("transcript_updated", function(ev) {{
-      try {{
-        var p = JSON.parse(ev.data);
-        if (String(p.task_id) === TASK_ID) refetchEntries();
-      }} catch (e) {{}}
-    }});
-    es.addEventListener("task_status", function(ev) {{
-      try {{
-        var p = JSON.parse(ev.data);
-        if (String(p.task_id) !== TASK_ID) return;
-        var status = String((p.data && p.data.status) || "");
-        if (status === "canceled" || status === "archived" || status === "deleted") {{
-          showMediaUnavailable();
-        }}
-      }} catch (e) {{}}
-    }});
-  }} catch (e) {{ /* no SSE: page still works statically */ }}
-
-  var mediaEl = document.querySelector("video, audio");
-  if (mediaEl) {{
-    mediaEl.addEventListener("error", function() {{ showMediaUnavailable(); }});
-  }}
-"""
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>{_html.escape(title)}</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  html, body {{ margin: 0; padding: 0; background: #111; color: #ddd;
-    font-family: system-ui, sans-serif; min-height: 100vh; }}
-  body {{ display: flex; flex-direction: column; align-items: center;
-    padding: 1rem; box-sizing: border-box; }}
-  h1 {{ font-size: 1rem; font-weight: 400; margin: 0 0 1rem;
-    word-break: break-all; text-align: center; }}
-  video, audio {{ max-width: 100%; width: min(960px, 100%); }}
-  video {{ max-height: 60vh; background: #000; }}
-  .transcript {{ list-style: none; margin: 1rem 0 0; padding: 0;
-    width: min(960px, 100%); max-height: 40vh; overflow-y: auto; }}
-  .block {{ margin: 0 0 0.8rem; }}
-  .block-label {{ color: #c99; font-weight: 600; margin: 0 0 0.15rem;
-    font-size: 0.85rem; }}
-  .block-body {{ margin: 0; line-height: 1.55; }}
-  /* Sentences are inline, clickable, seek to their own start. */
-  .cue {{ cursor: pointer; border-radius: 3px; padding: 0 0.1rem; }}
-  .cue:hover {{ background: #222; }}
-  .cue.active {{ background: #2a3d55; }}
-  .cue:focus-visible {{ outline: 2px solid #7aa; outline-offset: 1px; }}
-  .media-unavailable {{ color: #ccc; font-size: 1.05rem; text-align: center;
-    margin: 3rem 1rem; }}
-  .autoscroll-toggle {{ display: flex; align-items: center; gap: 0.4rem;
-    width: min(960px, 100%); margin: 0.8rem 0 0; color: #bbb;
-    font-size: 0.85rem; cursor: pointer; }}
-  .autoscroll-toggle input {{ cursor: pointer; }}
-</style>
-</head>
-<body>
-<h1>{_html.escape(title)}</h1>
-{media_block}
-{autoscroll_html}
-{transcript_html}
-<script>
-(function() {{
-  // Localize the media-unavailable message client-side (the page has no
-  // access to app.js i18n). Runs whether or not media is present.
-  var mu = document.querySelector("[data-media-unavailable]");
-  if (mu) {{
-    try {{
-      var msgs = JSON.parse(mu.getAttribute("data-msgs") || "{{}}");
-      var langs = (navigator.languages || [navigator.language || "en"]);
-      for (var li = 0; li < langs.length; li++) {{
-        var code = String(langs[li] || "").slice(0, 2).toLowerCase();
-        if (msgs[code]) {{ mu.textContent = msgs[code]; break; }}
-      }}
-    }} catch (e) {{ /* keep the default English text */ }}
-  }}
-  // Localize the autoscroll checkbox label client-side.
-  var labelEl = document.querySelector("[data-autoscroll-label]");
-  if (labelEl) {{
-    try {{
-      var acMsgs = JSON.parse(labelEl.getAttribute("data-msgs") || "{{}}");
-      var acLangs = (navigator.languages || [navigator.language || "en"]);
-      for (var ai = 0; ai < acLangs.length; ai++) {{
-        var acCode = String(acLangs[ai] || "").slice(0, 2).toLowerCase();
-        if (acMsgs[acCode]) {{ labelEl.textContent = acMsgs[acCode]; break; }}
-      }}
-    }} catch (e) {{ /* keep the default English label */ }}
-  }}
-  // Wire seek-on-click + active-cue highlight. Re-queries .cue each call so it
-  // works after the transcript list is rebuilt from a transcript_updated event.
-  function wireCues(media) {{
-    if (!media) return;
-    var cues = Array.prototype.slice.call(document.querySelectorAll(".cue"));
-    cues.forEach(function(cue) {{
-      if (cue._wired) return;
-      cue._wired = true;
-      var start = parseFloat(cue.getAttribute("data-start"));
-      var seek = function() {{
-        if (!isNaN(start)) {{ media.currentTime = start; media.play(); }}
-      }};
-      cue.addEventListener("click", seek);
-      cue.addEventListener("keydown", function(e) {{
-        if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); seek(); }}
-      }});
-    }});
-    if (media._cueHighlightWired) return;
-    media._cueHighlightWired = true;
-    var active = null;
-    media.addEventListener("timeupdate", function() {{
-      var all = document.querySelectorAll(".cue");
-      var t = media.currentTime, current = null;
-      for (var i = 0; i < all.length; i++) {{
-        if (parseFloat(all[i].getAttribute("data-start")) <= t) current = all[i];
-        else break;
-      }}
-      if (current !== active) {{
-        if (active) active.classList.remove("active");
-        if (current) current.classList.add("active");
-        active = current;
-        if (current) maybeAutoscroll(current);
-      }}
-    }});
-  }}
-
-  var media = document.querySelector("video, audio");
-  wireCues(media);
-
-  // --- Autoscroll (vts-eho) ---
-  // The checkbox renders whenever media is present, even before the
-  // transcript exists (task still processing -> blocks=[] on first paint).
-  // ".transcript" itself may not exist yet at load time, so scrollBox starts
-  // null and maybeAutoscroll/scrollCueToCenter re-check it live. Once the
-  // transcript streams in via SSE, rebuildTranscript() calls wireAutoscroll()
-  // again to (re)acquire ".transcript" and attach the scroll listener,
-  // guarded by _autoscrollWired so it's never double-bound.
-  var scrollBox = document.querySelector(".transcript");
-  var autoToggle = document.getElementById("autoscroll-toggle");
-  var programmaticScroll = false;
-  var programmaticScrollTimer = null;
-
-  function scrollCueToCenter(cue) {{
-    if (!cue || !scrollBox) return;
-    // Mark this scroll as ours so the scroll listener doesn't treat the
-    // smooth-scroll's own events as a user gesture. Cleared on a debounce
-    // after the animation's events settle.
-    programmaticScroll = true;
-    if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
-    programmaticScrollTimer = setTimeout(function() {{
-      programmaticScroll = false;
-    }}, 150);
-    cue.scrollIntoView({{ block: "center", behavior: "smooth" }});
-  }}
-
-  function maybeAutoscroll(cue) {{
-    if (autoToggle && autoToggle.checked) scrollCueToCenter(cue);
-  }}
-
-  function wireAutoscroll() {{
-    scrollBox = document.querySelector(".transcript");
-    if (!scrollBox || scrollBox._autoscrollWired) return;
-    scrollBox._autoscrollWired = true;
-    scrollBox.addEventListener("scroll", function() {{
-      // Our own smooth-scroll fires scroll events too; ignore those.
-      if (programmaticScroll) return;
-      // A genuine user scroll turns autoscroll off.
-      if (autoToggle && autoToggle.checked) autoToggle.checked = false;
-    }});
-  }}
-
-  if (autoToggle) {{
-    autoToggle.addEventListener("change", function() {{
-      // Re-enabling brings the current sentence back into view.
-      if (autoToggle.checked) {{
-        var cur = document.querySelector(".cue.active");
-        if (cur) scrollCueToCenter(cur);
-      }}
-    }});
-  }}
-
-  wireAutoscroll();
-{live_script}
-}})();
-</script>
-</body>
-</html>"""
+    js = _template("player.js").replace("/*__LIVE_SCRIPT__*/", live_script)
+    # Title is the only caller-supplied value in the shell, and it is escaped.
+    # Substituted last, and the replacements above are ordered so that no
+    # inserted text is itself scanned for a later placeholder.
+    return (
+        _template("player.html")
+        .replace("__CSS__", _template("player.css"))
+        .replace("__JS__", js)
+        .replace("__MEDIA_BLOCK__", media_block)
+        .replace("__AUTOSCROLL__", autoscroll_html)
+        .replace("__TRANSCRIPT__", transcript_html)
+        .replace("__TITLE__", _html.escape(title))
+    )
 
 
 @router.get(
