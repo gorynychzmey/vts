@@ -12,12 +12,10 @@ import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 from starlette.middleware.sessions import SessionMiddleware
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -49,6 +47,11 @@ from vts.services.redis_bus import RedisBus
 from vts.services import task_status as _ts
 from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
 
+
+#: Bundled frontend assets. Module-level so routers can serve from it without
+#: recomputing a path relative to their own file — vts/api/routers/ is one
+#: level deeper, so parents[1] there would point somewhere else entirely.
+STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -1193,123 +1196,37 @@ def create_app() -> FastAPI:
     for route in mcp_oauth_routes:
         app.router.routes.append(route)
 
-    static_dir = Path(__file__).resolve().parents[1] / "static"
+    static_dir = STATIC_DIR
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if mcp_app is not None:
         app.mount(settings.mcp_path, mcp_app)
 
-    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-    async def root(request: Request) -> HTMLResponse:
-        if settings.oauth_enabled:
-            session_data = getattr(request, "session", None) or {}
-            if not isinstance(session_data, dict):
-                session_data = {}
-            # vts-pa9: prefer sid (current cookie shape); fall back to
-            # legacy email (cookies issued before vts-pa9). Either presence
-            # means the user has a session — the resolver will validate it
-            # on the next authenticated call.
-            has_session = bool(
-                (session_data.get("sid") or "").strip()
-                or (session_data.get("email") or "").strip()
-            )
-            if not has_session:
-                import urllib.parse
-                return RedirectResponse(
-                    url=f"/auth/login?next={urllib.parse.quote(request.url.path, safe='')}",
-                    status_code=302,
-                )
-        template = (static_dir / "index.html").read_text(encoding="utf-8")
-        content = template.replace("__VTS_VERSION__", __version__)
-        return HTMLResponse(content=content, headers=NO_CACHE_HEADERS)
-
-    @app.get("/manifest.webmanifest", include_in_schema=False)
-    async def manifest() -> FileResponse:
-        return FileResponse(
-            path=str(static_dir / "manifest.webmanifest"),
-            media_type="application/manifest+json",
-        )
-
-    @app.get("/sw.js", include_in_schema=False)
-    async def service_worker() -> FileResponse:
-        # Serve service worker from root so its scope covers the whole app.
-        return FileResponse(
-            path=str(static_dir / "sw.js"),
-            media_type="application/javascript",
-            headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
-        )
-
-    @app.post("/share", include_in_schema=False)
-    async def share_target_post() -> RedirectResponse:
-        # POST /share is normally intercepted by the service worker, which
-        # stashes any shared file and redirects the client. If the SW isn't
-        # active yet (first launch after install), fall back to the root so
-        # the user at least lands in the app.
-        return RedirectResponse(url="/?share_error=sw_not_ready", status_code=303)
-
-    @app.get("/share", include_in_schema=False)
-    async def share_target(
-        url: str | None = None,
-        text: str | None = None,
-        title: str | None = None,
-    ) -> RedirectResponse:
-        # Android share sheet passes arbitrary payloads. YouTube typically
-        # puts the URL into `text`. Forward everything and let the frontend
-        # pick the best candidate.
-        params: dict[str, str] = {}
-        if url:
-            params["share_url"] = url
-        if text:
-            params["share_text"] = text
-        if title:
-            params["share_title"] = title
-        query = f"?{urlencode(params)}" if params else ""
-        return RedirectResponse(url=f"/{query}", status_code=303)
-
-    @app.get("/healthz", include_in_schema=False)
-    async def health() -> PlainTextResponse:
-        return PlainTextResponse("ok")
-
-    @app.get("/privacy", include_in_schema=False, response_class=HTMLResponse)
-    async def privacy_policy(
-        settings: Settings = Depends(get_settings_dep),
-    ) -> HTMLResponse:
-        return HTMLResponse(_render_privacy_page(settings))
-
-    # Account, prompts/presets, push, app metadata — see vts/api/routers/meta.py.
-    from vts.api.routers.meta import router as meta_router
-
-    app.include_router(meta_router)
-
-    # Delivery config + per-task delivery status — see vts/api/routers/delivery.py.
+    # Domain routers. Imported here rather than at module scope: they reach
+    # back into this module for helpers that have not moved yet, so a
+    # top-level import would be a cycle (docs/plans/main-py-split.md).
+    #
+    # Order is the order FastAPI matches in. It matters where a literal path
+    # competes with a parameterised one, so keep related prefixes together and
+    # do not reshuffle these lines casually.
+    from vts.api.routers.artifacts import router as artifacts_router
     from vts.api.routers.delivery import router as delivery_router
-
-    app.include_router(delivery_router)
-
-
-    # Task lifecycle + SSE event stream — see vts/api/routers/tasks.py.
+    from vts.api.routers.meta import router as meta_router
+    from vts.api.routers.pages import router as pages_router
+    from vts.api.routers.speakers import router as speakers_router
     from vts.api.routers.tasks import router as tasks_router
-
-    app.include_router(tasks_router)
-
-    # Resumable chunked upload (vts-b8j) — see vts/api/routers/uploads.py.
-    # Imported here, not at module scope: that module reaches back into this
-    # one for helpers that have not moved yet, so a top-level import is a cycle.
     from vts.api.routers.uploads import router as uploads_router
 
-    app.include_router(uploads_router)
+    for domain_router in (
+        pages_router,
+        meta_router,
+        delivery_router,
+        tasks_router,
+        uploads_router,
+        artifacts_router,
+        speakers_router,
+    ):
+        app.include_router(domain_router)
 
-
-    # Artifact serving: transcript/summary/log/media/player —
-    # see vts/api/routers/artifacts.py.
-    from vts.api.routers.artifacts import router as artifacts_router
-
-    app.include_router(artifacts_router)
-
-
-    # Speaker registry + voice resolution — see vts/api/routers/speakers.py.
-    from vts.api.routers.speakers import router as speakers_router
-
-    app.include_router(speakers_router)
 
     return app
 
