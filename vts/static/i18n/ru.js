@@ -11,6 +11,7 @@ window.__VTS_I18N.ru = {
 "context.authenticated": "Аутентифицирован:",
 "context.acting_as": "Работаю как:",
 "context.admin_suffix": " (админ)",
+"context.admin_badge": "админ",
 "admin.switch_user": "Выбрать пользователя, от имени которого работать",
 "admin.apply": "Работать от имени выбранного пользователя",
 "admin.use_self": "Вернуться к работе от своего имени",

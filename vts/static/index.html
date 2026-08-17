@@ -198,10 +198,17 @@
         </div>
       </header>
 
-      <section class="card user-context">
+      <!-- Not a card (redesign v2): the context strip sits directly on the page
+           background. It is orientation, not content — wrapping it in a panel
+           gave it the same visual weight as the New Task form. -->
+      <section class="user-context">
         <div class="context-line">
+          <span class="dot-online" aria-hidden="true"></span>
           <span class="context-label" data-i18n="context.authenticated">Authenticated:</span>
-          <span id="auth-user" class="mono">-</span>
+          <span id="auth-user" class="context-value mono">-</span>
+          <!-- Filled by app.js when the account is an admin; the suffix used to
+               be appended to the username itself. -->
+          <span id="auth-admin-badge" class="badge admin hidden" data-i18n="context.admin_badge">admin</span>
         </div>
         <div id="admin-controls" class="context-line admin-controls hidden">
           <span class="context-label" data-i18n="context.acting_as">Working as:</span>
@@ -412,7 +419,10 @@
         </form>
       </section>
 
-      <section class="card">
+      <!-- Not a card (redesign v2): each task is already its own card, so
+           wrapping the list in another panel nested cards inside a card and
+           made the whole list read as one heavy block. -->
+      <section class="task-section">
         <div class="title-row">
           <h2 data-i18n="tasks.title">Tasks</h2>
           <button

@@ -873,9 +873,62 @@ input[type="file"] {
   align-items: center;
 }
 
+/* Context strip (redesign v2): one row on the page background, not a card.
+   Left cell states who you are, right cell is the impersonation control. */
 .user-context {
-  display: grid;
-  gap: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.125rem;
+}
+
+.context-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* Pushed to the far edge so the two halves read as separate statements rather
+   than one long sentence. */
+.context-line.admin-controls {
+  margin-left: auto;
+}
+
+.dot-online {
+  flex: 0 0 auto;
+  width: 0.44rem;
+  height: 0.44rem;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.context-value {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Small uppercase marker, used for the admin flag on the context strip. */
+.badge {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--r-xs);
+  padding: 0.06rem 0.36rem;
+}
+
+.badge.admin {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
 }
 
 .context-line {
@@ -3224,55 +3277,83 @@ dialog:not([open]) {
   border-color: var(--info-line);
 }
 
+/* Status dot with a halo (redesign v2). The halo is a box-shadow spread rather
+   than a second element, so it costs no markup and cannot affect layout — and
+   it is what makes the dot readable against a tinted card edge.
+   Centred on the title line, not the whole row: the row grows when a task is
+   expanded, and a dot centred on that drifts away from the name it labels. */
 .task-dot {
   flex: 0 0 auto;
   align-self: flex-start;
-  margin-top: 0.3rem;
-  width: 0.5rem;
-  height: 0.5rem;
+  margin-top: 0.42rem;
+  width: 0.56rem;
+  height: 0.56rem;
   border-radius: 50%;
   background: var(--mute);
+  box-shadow: 0 0 0 0.25rem transparent;
 }
 
 .status-running .task-dot {
   background: var(--ok);
-  animation: task-dot-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--ok) 16%, transparent);
+  animation: task-dot-pulse-ok 1.8s ease-in-out infinite;
 }
 
 .status-completed .task-dot {
   background: var(--ok);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--ok) 16%, transparent);
 }
 
 .status-failed .task-dot {
   background: var(--danger);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--danger) 16%, transparent);
 }
 
 .status-queued .task-dot,
 .status-waiting .task-dot {
   background: var(--warn);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--warn) 16%, transparent);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--warn) 16%, transparent);
 }
 
 .status-paused .task-dot,
 .status-canceled .task-dot {
   background: var(--mute);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--mute) 16%, transparent);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--mute) 16%, transparent);
 }
 
 .status-archived .task-dot {
   background: var(--info);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--info) 16%, transparent);
 }
 
 .status-awaiting_input .task-dot {
   background: var(--accent);
-  animation: task-dot-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--accent) 18%, transparent);
+  animation: task-dot-pulse-accent 1.8s ease-in-out infinite;
 }
 
-@keyframes task-dot-pulse {
+/* The HALO pulses, not the dot: fading the whole dot makes the status itself
+   look like it is flickering out, whereas a breathing ring reads as "this is
+   live". Two keyframe sets because the ring colour differs per status. */
+@keyframes task-dot-pulse-ok {
   0%,
   100% {
-    opacity: 1;
+    box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--ok) 16%, transparent);
   }
   50% {
-    opacity: 0.35;
+    box-shadow: 0 0 0 0.42rem color-mix(in oklab, var(--ok) 4%, transparent);
+  }
+}
+
+@keyframes task-dot-pulse-accent {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--accent) 18%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 0.42rem color-mix(in oklab, var(--accent) 5%, transparent);
   }
 }
 
@@ -3291,4 +3372,25 @@ dialog:not([open]) {
 .task-filters input,
 .task-filters select {
   font-size: var(--fs-ui);
+}
+
+
+/* ---------- Task section (redesign v2) ----------
+   The list sits on the page background; the cards in it provide the surface.
+   Keeps the card's horizontal rhythm so the heading and filters still line up
+   with the New Task panel above. */
+.task-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.task-section .title-row {
+  padding: 0 0.125rem;
+}
+
+/* Each task keeps its own card surface, which is now what separates it from the
+   page rather than from a parent panel. */
+.task-section .task {
+  box-shadow: var(--sh-card);
 }

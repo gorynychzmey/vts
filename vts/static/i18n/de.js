@@ -11,6 +11,7 @@ window.__VTS_I18N.de = {
 "context.authenticated": "Authentifiziert:",
 "context.acting_as": "Arbeitet als:",
 "context.admin_suffix": " (Admin)",
+"context.admin_badge": "Admin",
 "admin.switch_user": "Benutzer auswählen, als der gearbeitet wird",
 "admin.apply": "Als ausgewählter Benutzer arbeiten",
 "admin.use_self": "Zum eigenen Benutzer zurückkehren",

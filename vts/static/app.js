@@ -4101,7 +4101,11 @@ async function loadMe() {
   state.me = me;
   state.authUser = String(me.requested_by || state.authUser);
   localStorage.setItem("vts_auth_user", state.authUser);
-  authUserLabel.textContent = `${me.requested_by}${me.is_admin ? t("context.admin_suffix") : ""}`;
+  // The admin marker is a badge now, not a suffix glued onto the username:
+  // appending it meant the mono value contained prose, and it could not be
+  // styled apart from the address it followed.
+  authUserLabel.textContent = String(me.requested_by || "");
+  document.getElementById("auth-admin-badge")?.classList.toggle("hidden", !me.is_admin);
   if (!state.actingAs && me.acting_as !== me.requested_by) {
     state.actingAs = me.acting_as;
     localStorage.setItem("vts_as_user", state.actingAs);
