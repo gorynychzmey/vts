@@ -311,7 +311,9 @@ window.__VTS_I18N.de = {
 "steps.diarize": "Sprechererkennung",
 "steps.merge_transcript": "Transkript-Zusammenführung",
 "steps.prepare_llama_model": "LLM-Aufwärmen",
+"steps.match_speakers": "Sprecherzuordnung",
 "steps.prepare_summary_chunks": "Summary-Chunking",
 "steps.summarize_windows": "Fenster-Zusammenfassungen",
+"steps.pack_window_notes": "Notizen-Verdichtung",
 "steps.summarize_final": "Finale Zusammenfassung"
 };
