@@ -1678,10 +1678,11 @@ input[type="file"] {
 }
 
 .progress-caption {
-  font-size: 0.68rem;
-  letter-spacing: 0.03em;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--ink-soft);
+  color: var(--ink-faint);
 }
 
 .step-progress {
@@ -1700,8 +1701,10 @@ input[type="file"] {
   transition: width 0.18s ease;
 }
 
+/* Accent, not blue: the pair reads as "overall progress = done, current step =
+   active", and a third hue in the card added nothing. */
 .local-progress .step-progress-fill {
-  background: linear-gradient(90deg, var(--info-ink) 0%, var(--info) 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2nd) 100%);
 }
 
 .step-progress.indeterminate .step-progress-fill {
@@ -1728,7 +1731,8 @@ input[type="file"] {
   align-items: center;
   justify-content: center;
   color: var(--ink);
-  font-size: 0.76rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -1748,12 +1752,14 @@ input[type="file"] {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  /* The active tab's underline needs a baseline to sit on, otherwise it floats. */
+  border-bottom: 1px solid var(--line);
 }
 
 .tabs {
   display: flex;
   min-width: 0;
-  gap: 0.5rem;
+  gap: 0.19rem;
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: thin;
@@ -1794,12 +1800,27 @@ input[type="file"] {
   height: 2.05rem;
 }
 
+/* Underlined, not filled (redesign v2). Six filled pills in a row competed with
+   the content below them; an underline marks the active tab without turning the
+   strip into a block of colour.
+
+   The marker is an inset box-shadow, NOT a positioned ::after: this button lives
+   inside .tabs, whose mask-based scroll fade depends on nothing adding to the
+   scroller's scrollWidth. An absolutely positioned pseudo-element there is the
+   vts-nr4 invisible-horizontal-scroll trap. */
 .tab-btn {
   flex: 0 0 auto;
-  background: var(--bg-bar);
-  color: var(--ink);
+  background: transparent;
+  color: var(--ink-mute);
   font-size: var(--fs-ui);
   font-weight: 600;
+  border-radius: 0;
+  padding: 0.5rem 0.75rem 0.65rem;
+}
+
+.tab-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: transparent;
 }
 
 .tab-btn:disabled {
@@ -1808,8 +1829,10 @@ input[type="file"] {
 }
 
 .tab-btn.active {
-  background: var(--accent-2);
-  color: var(--ink-on-accent);
+  background: transparent;
+  color: var(--accent-ink);
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
 .tab-content {
