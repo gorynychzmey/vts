@@ -87,7 +87,49 @@ export async function run() {
         }
       }
 
+      // Every icon in a menu is drawn the same way: a 2px stroke on no fill.
+      // The task menu had two leftovers from the old toolbar drawn as SOLID
+      // filled paths (the rename pencil, the player triangle), so they read
+      // noticeably heavier than the rows around them — the "our icons are worse
+      // than the prototype's" note in docs/design-v2/REMAINING.md.
+      // A deliberately filled DETAIL inside an outlined glyph is fine (the play
+      // triangle inside the player's screen), so this looks at the OUTER shape:
+      // the svg's own computed fill, which is what makes a glyph look solid.
+      // The task kebab has to be OPEN for its icons to have a size — a closed
+      // menu measures 0 and would be filtered out, leaving this check silently
+      // covering only the header (which is not where the filled icons were).
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+      await page.click(".task .task-menu-btn");
+      await page.waitForTimeout(300);
+      const taskIconsVisible = await page.evaluate(
+        () => [...document.querySelectorAll(".task-menu .menu-item svg")]
+          .filter((svg) => svg.getBoundingClientRect().width > 0).length
+      );
+      if (!taskIconsVisible) {
+        failures.push(`[${locale}] task menu icons are not measurable — the fill check would be vacuous`);
+      }
+
+      const solid = await page.evaluate(() =>
+        [...document.querySelectorAll("#header-menu button svg, .task-menu .menu-item svg")]
+          .filter((svg) => svg.getBoundingClientRect().width > 0)
+          .filter((svg) => {
+            const f = getComputedStyle(svg).fill;
+            return f !== "none" && f !== "rgba(0, 0, 0, 0)";
+          })
+          .map((svg) => (svg.closest("button, a")?.className || "").trim() || "header-menu entry")
+      );
+      if (solid.length) {
+        failures.push(
+          `[${locale}] menu icons drawn as filled shapes among stroked ones: ${JSON.stringify(solid)}`
+        );
+      }
+
       // Re-applying i18n must not destroy the icons (the actual failure mode).
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+      await page.click("#header-menu-btn");
+      await page.waitForTimeout(300);
       const survived = await page.evaluate(() => {
         if (typeof applyI18n === "function") applyI18n(document);
         return [...document.querySelectorAll("#header-menu button")]
