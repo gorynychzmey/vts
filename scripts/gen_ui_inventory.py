@@ -653,7 +653,11 @@ CAPABILITIES: list[Cap] = [
     {
         "entity": "App",
         "action": "Switch interface language",
-        "label": None,
+        # The visible label is an endonym (English / Русский / Deutsch) and is
+        # deliberately NOT translated — someone looking for German scans for
+        # "Deutsch", not "Немецкий". `header.language` is the button's
+        # accessible name, which is translated.
+        "label": "header.language",
         "endpoints": [],
         "screen": "Header — `#locale-toggle-btn` cycles en/ru/de; client-side only, no endpoint",
         "states": "en / ru / de",
