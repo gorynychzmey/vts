@@ -41,8 +41,23 @@
     <div class="bg-shape"></div>
     <main class="layout">
       <header>
-        <h1 data-i18n="header.title">Video Transcribe &amp; Summarize</h1>
-        <p data-i18n="header.subtitle">Queue URL, monitor pipeline, inspect transcript and summary artifacts.</p>
+        <!-- Compact bar (redesign v2): the title and subtitle used to be a
+             full-width block that pushed the form below the fold on a phone.
+             They keep their i18n keys and their heading semantics — h1 is now
+             the brand line, and the subtitle sits beside it. -->
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M4 12h1.5M9 6.5v11M14 3.5v17M19 9v6M22 11.5h0.4" />
+            </svg>
+          </span>
+          <span class="brand-text">
+            <h1 class="brand-title" data-i18n="header.title">Video Transcribe &amp; Summarize</h1>
+            <p class="brand-sub" data-i18n="header.subtitle">
+              Queue URL, monitor pipeline, inspect transcript and summary artifacts.
+            </p>
+          </span>
+        </div>
         <div class="header-version">
           <span class="context-label" data-i18n="header.version">Version:</span>
           <span id="app-version" class="mono">-</span>
