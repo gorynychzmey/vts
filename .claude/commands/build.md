@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(git tag:*), Bash(git push origin build-*), Bash(git status --short), Bash(grep * vts/__init__.py), Bash(gh run watch *), Bash(gh run list *), Bash(gh run view *)
+allowed-tools: Bash(git tag:*), Bash(git push origin build-*), Bash(git status --short), Bash(grep * vts/__init__.py), Bash(gh run watch *), Bash(gh run list *), Bash(gh run view *), Bash(make ui-inventory), Bash(git add docs/ui-inventory.md), Bash(git commit *), Bash(git push)
 description: Tag and push a build-X.Y.Z release tag for VTS, then wait for the workflow result
 ---
 
@@ -12,6 +12,10 @@ Create and push a build tag for the current VTS version, then monitor the GitHub
 If subagents are available, prefer running the long-lived GitHub Actions monitoring in a subagent so the main agent can continue other work while the workflows are pending. Use the main agent only for the local preflight checks, tag creation, and tag push; once the remote run IDs are known, hand off the `gh run list` / `gh run watch` polling and final success or failure reporting to the subagent. If the build result is immediately blocking the very next step, waiting in the main agent is allowed.
 
 **Steps:**
+0. **Regenerate the UI inventory first.** Run `make ui-inventory`. This runs before the clean-tree check because regeneration itself may modify `docs/ui-inventory.md`:
+   - If the command fails, it means the capability table in `scripts/gen_ui_inventory.py` no longer matches the code (an endpoint or i18n key it claims has been removed or renamed). Show the error, tell the user, and stop — do not tag a build on a doc that cannot be generated.
+   - If `docs/ui-inventory.md` is now modified, that is a real change worth shipping: commit just this file with `git add docs/ui-inventory.md` and `git commit -m "docs: regenerate UI inventory"`, then `git push`. Do not bump the version for this.
+   - If it produced no change, continue silently.
 1. Run `git status --short` — if there are uncommitted changes, tell the user and stop.
 2. Read the current version from `vts/__init__.py` with `grep '__version__'`.
 3. Run `git tag build-<version>`
