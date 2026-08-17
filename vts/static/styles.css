@@ -313,24 +313,107 @@ body {
   margin: 2rem auto 4rem;
 }
 
-header h1 {
-  margin: 0;
-  font-size: clamp(1.6rem, 4vw, 2.4rem);
+/* Compact header bar (redesign v2). The title/subtitle block used to be
+   full-width and ~3 lines tall, which pushed the New Task form below the fold
+   on a phone. Brand on the left, controls on the right, one row. */
+header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1.3rem;
 }
 
-header p {
-  margin: 0.4rem 0 1.3rem;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-right: auto;
+  min-width: 0;
+}
+
+.brand-mark {
+  width: 2.125rem;
+  height: 2.125rem;
+  flex: 0 0 auto;
+  border-radius: var(--r-lg);
+  background: linear-gradient(150deg, var(--accent), var(--accent-ink));
+  color: var(--ink-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px -4px color-mix(in oklab, var(--accent) 55%, transparent);
+}
+
+.brand-mark svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  /* One line, always: the German title is the longest and wrapped to three
+     lines at 320px, which made the compact bar taller than the block it
+     replaced. min-width:0 on .brand-text is what lets this actually shrink. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-sub {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 500;
   color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 30rem) {
+  /* The subtitle is the first thing to go: it explains the app to a first-time
+     visitor and costs a line on every visit after that. */
+  .brand-sub {
+    display: none;
+  }
+
+  /* "Version:" is a label for a value the menu also shows; on a phone the two
+     icon buttons need the width more than the word does. */
+  .header-version .context-label {
+    display: none;
+  }
+
+  header {
+    gap: 0.5rem;
+  }
 }
 
 .header-version {
-  margin: -0.7rem 0 1.2rem;
+  /* No negative pull: the compact header bar is a flex row, and this block is
+     its right-hand cell. The old value existed to tuck the row under the
+     full-width title that the bar replaced. */
+  margin: 0;
   display: flex;
   gap: 0.45rem;
   align-items: center;
+  flex: 0 0 auto;
   /* Version label plus a row of icon buttons: on a 320px screen these do not
      fit on one line, and inline-flex refused to wrap them (vts-nr4). */
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* Version text stays left; the controls sit against the right edge, which is
