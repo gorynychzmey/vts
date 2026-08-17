@@ -52,7 +52,10 @@ from vts.services.upload_set import UploadSetError, classify_suffixes, verify_pr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["meta"])
+# No tags= here: _install_custom_openapi() in vts.api.main assigns the
+# OpenAPI tag from the URL prefix, and an explicit router tag overrides it
+# (it retagged /api/tasks/{task_id}/deliveries from "tasks" to "meta").
+router = APIRouter()
 
 
 def _main():
