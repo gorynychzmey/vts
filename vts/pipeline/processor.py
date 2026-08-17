@@ -88,6 +88,33 @@ class TaskProcessor:
         self._ctx = PipelineContext(self)
 
     async def process_task(self, task_id: uuid.UUID) -> None:
+        """Run one task to a terminal state.
+
+        The body is a step loop wrapped in a table of outcomes; the `except`
+        clauses are the interesting part, not incidental error handling:
+
+        | raised                | task ends as   | event + push |
+        |-----------------------|----------------|--------------|
+        | (nothing)             | `completed`    | yes, then deliveries are queued |
+        | `TaskPaused`          | `paused`       | yes |
+        | `TaskAwaitingInput`   | `awaiting_input` | yes |
+        | `_TaskGone`           | row is gone    | **no** |
+        | `DiarizationCancelled`| row is gone    | **no** |
+        | `DownloadCancelled`   | row is gone    | **no** |
+        | any other `Exception` | `failed`       | yes, with the failure code |
+
+        The three silent outcomes are one case seen from three places: the
+        user discarded the task, so announcing a failure would be noise about
+        something they already know (vts-d64). The two `*Cancelled` variants
+        exist because download and diarization run long enough to be worth
+        interrupting rather than waiting out.
+
+        Queuing deliveries is deliberately best-effort — it runs after the task
+        is already `completed`, and its failure is logged without changing that.
+
+        Before any of this, `_try_donor_clone` may satisfy the task outright
+        from someone else's identical result.
+        """
         async with self.session_factory() as session:
             repo = Repo(session)
             task = await repo.get_task_by_id(task_id)
@@ -97,41 +124,9 @@ class TaskProcessor:
                 return
             task_options = self._task_options(task.options)
 
-            # --- donor clone check ---
-            _clone_logger = logging.getLogger(f"vts.clone.{task.id}")
-            donor = None
-            if self.settings.features_donor_clone:
-                try:
-                    donor = await repo.find_completed_donor(
-                        source_url=task.source_url,
-                        options=task.options,
-                        exclude_user_id=task.user_id,
-                    )
-                except Exception as _exc:
-                    _clone_logger.warning("donor lookup failed, falling back to normal pipeline: %s", _exc)
-            if donor is not None:
-                try:
-                    await self._clone_from_donor(session, repo, task, donor)
-                    await session.commit()
-                    await self.bus.publish_event(
-                        user_id=str(task.user_id),
-                        task_id=str(task.id),
-                        event="task_status",
-                        data={"status": TaskStatus.completed.value},
-                    )
-                    return
-                except Exception as _exc:
-                    _clone_logger.warning(
-                        "donor clone failed (donor=%s), falling back to normal pipeline: %s",
-                        donor.id,
-                        _exc,
-                    )
-                    await session.rollback()
-                    # Reload task after rollback
-                    task = await repo.get_task_by_id(task_id)
-                    if task is None:
-                        return
-            # --- end donor clone check ---
+            task = await self._try_donor_clone(session, repo, task, task_id)
+            if task is None:
+                return
 
             await repo.set_task_status(task, TaskStatus.running)
             await session.commit()
@@ -299,6 +294,61 @@ class TaskProcessor:
                 # logging's manager, so the fd would leak for the life of the
                 # worker otherwise (vts-e5l).
                 self._close_task_logger(task_id)
+
+    async def _try_donor_clone(
+        self, session, repo: Repo, task: Task, task_id: uuid.UUID
+    ) -> Task | None:
+        """Satisfy the task from an existing identical result, if one exists.
+
+        A fast path, never a failure mode: if anything here goes wrong the task
+        falls through to the normal pipeline. Returns the task to keep
+        processing, or None when the caller should stop — either because the
+        clone succeeded (task is already `completed`) or because the row
+        vanished while we rolled back.
+
+        The returned task matters: after a failed clone the session is rolled
+        back and the ORM object is re-loaded, so the caller must continue with
+        the instance handed back rather than the one it passed in.
+        """
+        if task is None:
+            return None
+        clone_logger = logging.getLogger(f"vts.clone.{task.id}")
+        donor = None
+        if self.settings.features_donor_clone:
+            try:
+                donor = await repo.find_completed_donor(
+                    source_url=task.source_url,
+                    options=task.options,
+                    exclude_user_id=task.user_id,
+                )
+            except Exception as exc:
+                clone_logger.warning(
+                    "donor lookup failed, falling back to normal pipeline: %s", exc
+                )
+        if donor is None:
+            return task
+
+        try:
+            await self._clone_from_donor(session, repo, task, donor)
+            await session.commit()
+            await self.bus.publish_event(
+                user_id=str(task.user_id),
+                task_id=str(task.id),
+                event="task_status",
+                data={"status": TaskStatus.completed.value},
+            )
+            return None
+        except Exception as exc:
+            clone_logger.warning(
+                "donor clone failed (donor=%s), falling back to normal pipeline: %s",
+                donor.id,
+                exc,
+            )
+            # The clone writes through this session, so a mid-way failure
+            # leaves it dirty; roll back before the pipeline runs on top of a
+            # half-applied clone, then re-load the task the rollback expired.
+            await session.rollback()
+            return await repo.get_task_by_id(task_id)
 
     async def _run_step(
         self,

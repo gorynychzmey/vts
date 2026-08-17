@@ -15,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 from redis.asyncio import Redis
 from sqlalchemy import text
 
@@ -101,6 +102,31 @@ _PRIVACY_TEMPLATE_HTML: str | None = None
 
 
 
+
+
+#: A year, the maximum any cache should honour, plus `immutable` so browsers
+#: skip even the revalidation round-trip.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+class _ImmutableStaticFiles(StaticFiles):
+    """Serve bundled assets with a long, immutable Cache-Control.
+
+    Safe because every asset the page references is version-addressed: the
+    JS/CSS tags in index.html carry `?v=<app version>` (substituted in
+    vts/api/routers/pages.py), and fonts change name when they change content.
+    A release therefore produces new URLs rather than stale hits.
+
+    Without this the assets still cache, but only via ETag revalidation — the
+    browser pays a conditional request per asset per load just to be told 304.
+    index.html itself is NOT served from here; it is rendered by the pages
+    router with no-store, which is what lets a new version be picked up at all.
+    """
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", _IMMUTABLE_CACHE_CONTROL)
+        return response
 
 
 def _resolve_session_secret(*, env_secret: str | None, secret_file: Path) -> str:
@@ -420,7 +446,7 @@ def create_app() -> FastAPI:
     for route in mcp_oauth_routes:
         app.router.routes.append(route)
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", _ImmutableStaticFiles(directory=STATIC_DIR), name="static")
     if mcp_app is not None:
         app.mount(settings.mcp_path, mcp_app)
 
