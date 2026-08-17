@@ -510,8 +510,16 @@ button:hover {
   margin-bottom: 0.75rem;
 }
 
-.new-task-header h2 {
+/* Section headings (redesign v2 type scale). These were never given a size, so
+   they used the browser's h2 default — 24px against the design's 15px, which is
+   what made them shout. Dialog h2s keep their own larger size: a dialog title
+   IS the loudest thing in its own layer. */
+.new-task-header h2,
+.title-row h2 {
   margin: 0;
+  font-size: var(--fs-hero);
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 
 
@@ -598,7 +606,7 @@ input[type="file"] {
   border-radius: 999px;
   background: var(--bg-field);
   padding: 0.55rem 0.9rem;
-  font-size: 0.85rem;
+  font-size: var(--fs-ui);
   /* Translated labels are much longer than the English ones (de:
      "Nicht für Nachbearbeitung anhalten" needs ~274px against a ~151px grid
      cell). Allow the pill to be narrower than its text and let the label wrap
@@ -646,7 +654,7 @@ input[type="file"] {
 }
 
 .preset-label {
-  font-size: 0.85rem;
+  font-size: var(--fs-ui);
   color: var(--ink-soft);
 }
 
@@ -730,7 +738,7 @@ input[type="file"] {
 }
 
 .prompt-select-label {
-  font-size: 0.85rem;
+  font-size: var(--fs-ui);
   color: var(--ink-soft);
 }
 
@@ -879,12 +887,14 @@ input[type="file"] {
 
 .context-label {
   color: var(--ink-soft);
-  font-size: 0.85rem;
+  font-size: var(--fs-ui);
 }
 
 .mono {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.88rem;
+  font-family: var(--font-mono);
+  /* Mono runs optically larger than the sans at the same px, so the design
+     uses the control size here rather than the body size. */
+  font-size: var(--fs-ui);
 }
 
 .admin-controls select {
@@ -1367,6 +1377,7 @@ input[type="file"] {
 .task-link {
   color: var(--ink);
   text-decoration: none;
+  font-size: var(--fs-title);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1414,7 +1425,7 @@ input[type="file"] {
 
 .task-source {
   color: var(--ink-soft);
-  font-size: 0.78rem;
+  font-size: var(--fs-meta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1481,7 +1492,7 @@ input[type="file"] {
   border: 1px solid var(--line);
   background: var(--bg-chip);
   font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-meta);
   text-transform: lowercase;
 }
 
@@ -1701,6 +1712,7 @@ input[type="file"] {
   flex: 0 0 auto;
   background: var(--bg-bar);
   color: var(--ink);
+  font-size: var(--fs-ui);
   font-weight: 600;
 }
 
@@ -3270,4 +3282,13 @@ dialog:not([open]) {
   .task-dot {
     animation: none !important;
   }
+}
+
+
+/* ---------- Filter row type (redesign v2) ----------
+   The search field and the date inputs inherited the body's 16px, a full step
+   above the pills and selects they sit next to. */
+.task-filters input,
+.task-filters select {
+  font-size: var(--fs-ui);
 }
