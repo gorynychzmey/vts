@@ -5662,47 +5662,7 @@ async function loadSpeakerPanel(taskEl, taskId) {
   }
 }
 
-// One <audio> per card, created on first use. Stopping the previous clip before
-// starting a new one is the whole point: comparing two voices means hearing them
-// in turn, not at once.
-function playSpeakerPreview(taskEl, taskId, row, btn) {
-  if (!taskEl._speakerAudio) {
-    taskEl._speakerAudio = new Audio();
-    taskEl._speakerAudio.preload = "none";
-  }
-  const audio = taskEl._speakerAudio;
-  const src = buildPath(
-    `/api/tasks/${encodeURIComponent(taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`
-  );
-  const playingThis = taskEl._speakerAudioLabel === row.label && !audio.paused;
-  taskEl.querySelectorAll(".avatar-play.playing").forEach((el) => el.classList.remove("playing"));
-  if (playingThis) {
-    audio.pause();
-    taskEl._speakerAudioLabel = null;
-    return;
-  }
-  // buildPath, not a bare URL: an admin viewing another user's task has
-  // state.actingAs set, and the endpoint needs that param to authorize the
-  // fetch — without it the request 404s (vts-552).
-  audio.src = src;
-  taskEl._speakerAudioLabel = row.label;
-  btn.classList.add("playing");
-  audio.onended = () => btn.classList.remove("playing");
-  audio.onerror = () => {
-    btn.classList.remove("playing");
-    btn.classList.add("no-preview");
-    btn.setAttribute("data-tooltip", t("voices.row.preview_unavailable"));
-  };
-  void audio.play().catch(() => {
-    btn.classList.remove("playing");
-  });
-}
 
-function speakerInitials(name) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "?";
-  return parts.slice(0, 2).map((w) => w[0].toUpperCase()).join("");
-}
 
 function renderSpeakerPanel(taskEl, taskId) {
   const box = taskEl.querySelector(".speaker-box");
@@ -5715,101 +5675,40 @@ function renderSpeakerPanel(taskEl, taskId) {
   // waiting on input (Victor's call).
   box.classList.toggle("hidden", rows.length === 0);
   if (!rows.length) return;
-  if (countEl) countEl.textContent = t("speakers.panel.count", { count: rows.length });
+
+  // Count what is LEFT TO DO, not what is done: "2 still to bind" says what to
+  // do next, while "1 of 3 bound" makes the reader subtract to find that out.
+  // It also disappears on its own once everything is bound. A voice marked as
+  // noise is settled, so it is not pending.
+  const pending = rows.filter(
+    (r) => !r.noise && !(r.decidedSpeakerId || (r.outcome === "auto" && r.matchedSpeakerId)),
+  ).length;
+  if (countEl) {
+    countEl.textContent = pending
+      ? t("speakers.panel.pending", { count: pending })
+      : t("speakers.panel.count", { count: rows.length });
+    countEl.classList.toggle("is-pending", pending > 0);
+  }
 
   list.textContent = "";
+  const play = makePreviewPlayer(list, () => taskId);
   for (const row of rows) {
-    // "Bound" is narrower than "preselected": buildVoiceRow pre-fills the dialog
-    // with the nearest candidate even for a grey match nobody confirmed. Only a
-    // saved operator decision or a committed auto-match counts here, otherwise
-    // the panel claims a binding the backend never made — and hides the chips
-    // that exist to make it.
-    const decided = row.decidedSpeakerId || (row.outcome === "auto" ? row.matchedSpeakerId : null);
-    const boundOption = decided ? row.options.find((o) => o.speaker_id === decided) : null;
-    const bound = Boolean(boundOption);
-
-    const item = document.createElement("div");
-    item.className = "spk-panel-row";
-    if (!bound) item.classList.add("unbound");
-
-    // Play the voice's preview clip. One shared <audio> per card rather than one
-    // per row: several players would let two clips overlap, and the point is to
-    // compare voices one at a time.
-    const play = document.createElement("button");
-    play.type = "button";
-    play.className = "avatar avatar-play";
-    play.setAttribute("aria-label", t("speakers.panel.play"));
-    play.setAttribute("data-tooltip", t("speakers.panel.play"));
-    play.textContent = bound ? speakerInitials(boundOption.name) : "?";
-    play.addEventListener("click", () => playSpeakerPreview(taskEl, taskId, row, play));
-    const avatar = play;
-
-    const label = document.createElement("span");
-    label.className = "spk-panel-label";
-    label.textContent = row.displayLabel;
-
-    const share = document.createElement("span");
-    share.className = "spk-panel-share mono";
-    share.textContent = `${Math.round((row.share || 0) * 100)}%`;
-
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = bound ? "btn-link spk-panel-person" : "btn-link spk-panel-pick";
-    action.textContent = bound ? boundOption.name : t("speakers.panel.pick");
-    action.addEventListener("click", () => openSpeakerPanelPicker(taskEl, taskId, row));
-
-    const noise = document.createElement("button");
-    noise.type = "button";
-    noise.className = "spk-panel-noise" + (row.noise ? " is-on" : "");
-    noise.setAttribute("aria-pressed", String(Boolean(row.noise)));
-    noise.setAttribute("aria-label", t("speakers.panel.noise"));
-    noise.setAttribute("data-tooltip", t("speakers.panel.noise"));
-    noise.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4h4l5 4V6L7 10H3z"/><path d="m16 9 5 6M21 9l-5 6"/></svg>';
-    noise.addEventListener("click", async () => {
-      // A voice marked as noise is not a person, so binding it makes no sense —
-      // the backend records the flag with the resolution set.
-      row.noise = !row.noise;
-      await bindSpeakerRow(taskEl, taskId, row, row.selection === NEW_PERSON_VALUE ? null : row.selection);
-    });
-    if (row.noise) item.classList.add("is-noise");
-
-    item.append(avatar, label, share, noise, action);
-
-    // "Looks like" chips: only for voices nobody is bound to yet. Anything within
-    // speaker_match_max_distance_auto (0.25) was auto-bound already, so showing
-    // candidates there would restate a decision instead of helping make one.
-    if (!bound) {
-      const near = row.options
-        .filter((o) => typeof o.distance === "number" && o.distance <= SPEAKER_CANDIDATE_MAX_DISTANCE)
-        .slice(0, 3);
-      if (near.length) {
-        const hints = document.createElement("div");
-        hints.className = "spk-panel-hints";
-        const caption = document.createElement("span");
-        caption.className = "spk-panel-hints-label";
-        caption.textContent = t("speakers.panel.looks_like");
-        hints.appendChild(caption);
-        for (const cand of near) {
-          const chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "speaker-chip";
-          const chipName = document.createElement("span");
-          chipName.textContent = cand.name;
-          const chipPct = document.createElement("span");
-          chipPct.className = "speaker-chip-pct";
-          // Cosine distance -> a similarity the user can read. The scale is 0..1
-          // (see speaker_match_max_distance_* in vts/core/config.py), so 1 - d is
-          // honest rather than a made-up curve.
-          chipPct.textContent = `${Math.round((1 - cand.distance) * 100)}%`;
-          chip.append(chipName, chipPct);
-          chip.addEventListener("click", () => bindSpeakerRow(taskEl, taskId, row, cand.speaker_id));
-          hints.appendChild(chip);
-        }
-        item.appendChild(hints);
-      }
-    }
-
-    list.appendChild(item);
+    list.appendChild(
+      buildSpeakerRow(row, {
+        variant: "panel",
+        playPreview: play,
+        // A chip binds straight away; the action opens the picker.
+        onPickPerson: (r, speakerId) => {
+          if (speakerId) void bindSpeakerRow(taskEl, taskId, r, speakerId);
+          else openSpeakerPanelPicker(taskEl, taskId, r);
+        },
+        // Marking noise is a decision like any other, so it saves immediately —
+        // the panel has no Save button to defer it to.
+        onNoiseChange: (r) => {
+          void bindSpeakerRow(taskEl, taskId, r, r.selection === NEW_PERSON_VALUE ? null : r.selection);
+        },
+      })
+    );
   }
 }
 
@@ -5988,86 +5887,117 @@ function glyphForOutcome(outcome) {
   return "🔴";
 }
 
-function renderVoiceList() {
-  if (!voiceListEl || !voiceDialogState) return;
-  voiceListEl.innerHTML = "";
-  const rows = voiceDialogState.rows;
-  voiceListEmptyEl?.classList.toggle("hidden", rows.length > 0);
-  voiceListEl.classList.toggle("hidden", rows.length === 0);
+// ---------------------------------------------------------------------------
+// One speaker row, used by BOTH the resolution dialog and the card panel.
+//
+// These started as two implementations of the same thing and immediately began
+// to drift — the panel had chips and a play button the dialog lacked, the
+// dialog had a noise checkbox and a fragment option the panel lacked, and each
+// had its own idea of what "bound" meant. One builder, two variants of the same
+// markup, so a fix lands in both places at once.
+//
+// variant "dialog": the full row — select, new-name input, add-fragment.
+// variant "panel":  the compact row — bound name or a pick action.
+// Both get the play control, the similarity chips and the noise toggle.
+function buildSpeakerRow(row, opts) {
+  const { variant, onRebind, onPickPerson, onNoiseChange, playPreview } = opts;
+  const li = document.createElement("li");
+  li.className = "tokens-row voice-row";
+  if (variant === "panel") li.classList.add("voice-row-compact");
+  li.dataset.speakerLabel = row.label;
 
-  rows.forEach((row) => {
-    const li = document.createElement("li");
-    li.className = "tokens-row voice-row";
-    li.dataset.speakerLabel = row.label;
+  // Play/stop the preview clip. Stop rather than pause: the clips are a few
+  // seconds long, so resuming from the middle is never what you want.
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "voice-play-btn";
+  play.setAttribute("aria-label", t("voices.row.play"));
+  play.setAttribute("data-tooltip", t("voices.row.play"));
+  play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="play-icon" d="m9 7 9 5-9 5z"/><rect class="stop-icon hidden" x="8" y="8" width="8" height="8" rx="1.5"/></svg>';
+  play.addEventListener("click", () => playPreview(row, play));
+  li.appendChild(play);
 
-    const glyph = document.createElement("span");
-    glyph.className = "voice-glyph";
-    glyph.textContent = glyphForOutcome(row.outcome);
-    glyph.title = t(`voices.status.${row.outcome}`);
-    glyph.setAttribute("aria-label", t(`voices.status.${row.outcome}`));
-    li.appendChild(glyph);
+  const body = document.createElement("div");
+  body.className = "voice-row-body";
 
-    const body = document.createElement("div");
-    body.className = "voice-row-body";
+  const head = document.createElement("div");
+  head.className = "voice-row-head";
 
-    const labelEl = document.createElement("div");
-    labelEl.className = "voice-row-label";
-    // Show the transcript-consistent "Голос N" / name label, not the raw
-    // technical SPEAKER_NN tag (bug #2, vts-552).
-    labelEl.textContent = row.displayLabel;
-    body.appendChild(labelEl);
+  const labelEl = document.createElement("span");
+  labelEl.className = "voice-row-label";
+  // The transcript-consistent "Голос N" / name label, not the raw technical
+  // SPEAKER_NN tag (bug #2, vts-552).
+  labelEl.textContent = row.displayLabel;
+  head.appendChild(labelEl);
 
-    const audio = document.createElement("audio");
-    audio.className = "voice-preview-audio";
-    audio.controls = true;
-    audio.preload = "none";
-    // buildPath, not a bare URL: an admin viewing another user's task has
-    // state.actingAs set, and buildPath carries the as_user param the endpoint
-    // needs to authorize the fetch. Without it the request resolves to the
-    // admin's own (nonexistent) task and 404s, so every preview showed
-    // "preview unavailable" with a 0:00 player — exactly the sibling
-    // voice-sample player's contract at buildPath(/api/speakers/...) (vts-552).
-    audio.src = buildPath(`/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`);
-    const previewNote = document.createElement("span");
-    previewNote.className = "voice-preview-unavailable hidden";
-    previewNote.textContent = t("voices.row.preview_unavailable");
-    // Graceful fallback: if this row has no preview clip (or the file is
-    // otherwise unreachable) the request 404s harmlessly - swap the player
-    // for the "unavailable" note instead of leaving a broken control.
-    audio.addEventListener("error", () => {
-      audio.classList.add("hidden");
-      previewNote.classList.remove("hidden");
-    });
-    body.appendChild(audio);
-    body.appendChild(previewNote);
+  // Share display (vts-552): "13% · 2:05". row.seconds is the REAL diarized
+  // speaking time — not share * media length, which over-states it because the
+  // media includes silence. Falls back to percent alone for older tasks.
+  const shareEl = document.createElement("span");
+  shareEl.className = "voice-row-share";
+  const percent = Math.round(row.share * 100);
+  shareEl.textContent = row.seconds > 0
+    ? t("voices.row.share", { percent, duration: formatDuration(row.seconds) })
+    : t("voices.row.share_percent_only", { percent });
+  head.appendChild(shareEl);
 
-    const select = document.createElement("select");
+  // Noise: not a person and never will be, so a row marked as noise is settled.
+  const noiseWrap = document.createElement("label");
+  noiseWrap.className = "voice-row-noise-toggle";
+  const noiseBox = document.createElement("input");
+  noiseBox.type = "checkbox";
+  noiseBox.checked = row.noise;
+  noiseBox.addEventListener("change", () => {
+    row.noise = noiseBox.checked;
+    li.classList.toggle("voice-row-noise", row.noise);
+    onNoiseChange?.(row, noiseBox.checked);
+  });
+  const noiseText = document.createElement("span");
+  noiseText.textContent = t("voices.row.noise");
+  noiseWrap.append(noiseBox, noiseText);
+  head.appendChild(noiseWrap);
+
+  let select = null;
+  let nameInput = null;
+  let fragmentLabel = null;
+
+  if (variant === "dialog") {
+    select = document.createElement("select");
     select.className = "voice-select";
-    const addNewOption = () => {
+    for (const option of row.options) {
       const opt = document.createElement("option");
-      opt.value = NEW_PERSON_VALUE;
-      opt.textContent = t("voices.row.new_person");
-      return opt;
-    };
-    // miss: "<Add new person>" at the TOP (model missed; person list follows
-    // in case the user recognizes the voice by ear anyway).
-    if (row.outcome === "miss") {
-      select.appendChild(addNewOption());
+      opt.value = option.speaker_id;
+      opt.textContent = option.distance === null || option.distance === undefined
+        ? option.name
+        : `${option.name} · ${Number(option.distance).toFixed(3)}`;
+      select.appendChild(opt);
     }
-    row.options.forEach((opt) => {
-      const el = document.createElement("option");
-      el.value = opt.speaker_id;
-      el.textContent = opt.name;
-      select.appendChild(el);
-    });
-    // grey/auto: "<Add new person>" at the BOTTOM.
-    if (row.outcome !== "miss") {
-      select.appendChild(addNewOption());
-    }
+    const newOpt = document.createElement("option");
+    newOpt.value = NEW_PERSON_VALUE;
+    newOpt.textContent = t("voices.row.new_person");
+    select.appendChild(newOpt);
     select.value = row.selection;
-    body.appendChild(select);
+    head.appendChild(select);
+  } else {
+    // Panel: the answer to the row, or the way to give one.
+    const bound = row.options.find((o) => o.speaker_id === row.selection)
+      && row.selection !== NEW_PERSON_VALUE
+      && (row.decidedSpeakerId || (row.outcome === "auto" && row.matchedSpeakerId));
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "btn-link voice-row-action";
+    action.textContent = bound
+      ? (row.options.find((o) => o.speaker_id === row.selection) || {}).name
+      : t("speakers.panel.pick");
+    action.addEventListener("click", () => onPickPerson(row));
+    head.appendChild(action);
+    if (!bound) li.classList.add("voice-row-unbound");
+  }
 
-    const nameInput = document.createElement("input");
+  body.appendChild(head);
+
+  if (variant === "dialog") {
+    nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.className = "voice-new-name";
     nameInput.maxLength = 255;
@@ -6076,75 +6006,152 @@ function renderVoiceList() {
     nameInput.classList.toggle("hidden", row.selection !== NEW_PERSON_VALUE);
     body.appendChild(nameInput);
 
-    const fragmentLabel = document.createElement("label");
+    fragmentLabel = document.createElement("label");
     fragmentLabel.className = "voice-add-fragment";
     const fragmentCheckbox = document.createElement("input");
     fragmentCheckbox.type = "checkbox";
     fragmentCheckbox.checked = row.addFragment;
     fragmentLabel.appendChild(fragmentCheckbox);
     fragmentLabel.appendChild(document.createTextNode(t("voices.row.add_fragment")));
-    // Only meaningful when binding to an existing candidate (grey/auto path);
-    // hidden while "add new" is selected (fragment is implied there — a
-    // brand-new person's first fragment isn't optional the way an addition
-    // to an existing person's registry is).
+    // Only meaningful when binding to an existing candidate; hidden while "add
+    // new" is selected, where the first fragment is implied rather than optional.
     fragmentLabel.classList.toggle("hidden", row.selection === NEW_PERSON_VALUE);
     body.appendChild(fragmentLabel);
 
     select.addEventListener("change", () => {
       const previousSelection = row.selection;
-      onVoiceRowRebind(row, select.value, previousSelection);
+      onRebind(row, select.value, previousSelection);
       nameInput.classList.toggle("hidden", row.selection !== NEW_PERSON_VALUE);
       fragmentLabel.classList.toggle("hidden", row.selection === NEW_PERSON_VALUE);
-      if (row.selection === NEW_PERSON_VALUE) {
-        nameInput.focus();
+      if (row.selection === NEW_PERSON_VALUE) nameInput.focus();
+    });
+    nameInput.addEventListener("input", () => { row.newName = nameInput.value; });
+    fragmentCheckbox.addEventListener("change", () => { row.addFragment = fragmentCheckbox.checked; });
+  }
+
+  // Similarity chips: the matcher's nearest candidates, one click from binding.
+  // Only for rows nobody is bound to — anything inside the auto threshold was
+  // already decided, so listing candidates there restates a decision instead of
+  // helping make one.
+  const settled = row.decidedSpeakerId || (row.outcome === "auto" && row.matchedSpeakerId);
+  if (!settled) {
+    const near = row.options
+      .filter((o) => typeof o.distance === "number" && o.distance <= SPEAKER_CANDIDATE_MAX_DISTANCE)
+      .slice(0, 3);
+    if (near.length) {
+      const hints = document.createElement("div");
+      hints.className = "voice-row-hints";
+      const caption = document.createElement("span");
+      caption.className = "voice-row-hints-label";
+      caption.textContent = t("speakers.panel.looks_like");
+      hints.appendChild(caption);
+      for (const cand of near) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "speaker-chip";
+        const chipName = document.createElement("span");
+        chipName.textContent = cand.name;
+        const chipPct = document.createElement("span");
+        chipPct.className = "speaker-chip-pct";
+        // Cosine distance -> readable similarity. The metric really is 0..1
+        // (speaker_match_max_distance_* in vts/core/config.py), so 1 - d is
+        // honest rather than a curve invented for the display.
+        chipPct.textContent = `${Math.round((1 - cand.distance) * 100)}%`;
+        chip.append(chipName, chipPct);
+        chip.addEventListener("click", () => {
+          if (variant === "dialog") {
+            onRebind(row, cand.speaker_id, row.selection);
+            if (select) select.value = row.selection;
+            nameInput?.classList.toggle("hidden", row.selection !== NEW_PERSON_VALUE);
+            fragmentLabel?.classList.toggle("hidden", row.selection === NEW_PERSON_VALUE);
+          } else {
+            onPickPerson(row, cand.speaker_id);
+          }
+        });
+        hints.appendChild(chip);
       }
-    });
-    nameInput.addEventListener("input", () => {
-      row.newName = nameInput.value;
-    });
-    fragmentCheckbox.addEventListener("change", () => {
-      row.addFragment = fragmentCheckbox.checked;
-    });
-
-    // Share display (vts-552): "13% · 2:05". row.seconds is the speaker's REAL
-    // diarized speaking time from speaker_matches.json — not share * media
-    // length, which over-states it because media includes silence. Falls back
-    // to percent alone when seconds are unavailable (older tasks).
-    const shareEl = document.createElement("span");
-    shareEl.className = "voice-row-share";
-    const percent = Math.round(row.share * 100);
-    shareEl.textContent = row.seconds > 0
-      ? t("voices.row.share", { percent, duration: formatDuration(row.seconds) })
-      : t("voices.row.share_percent_only", { percent });
-    body.appendChild(shareEl);
-
-    // Noise checkbox (vts-552): pre-filled from the matcher; checked -> the row
-    // is dimmed (voice-row-noise) and the resolution carries is_noise=true.
-    const noiseWrap = document.createElement("label");
-    noiseWrap.className = "voice-row-noise-toggle";
-    const noiseBox = document.createElement("input");
-    noiseBox.type = "checkbox";
-    noiseBox.checked = row.noise;
-    noiseBox.addEventListener("change", () => {
-      row.noise = noiseBox.checked;
-      li.classList.toggle("voice-row-noise", row.noise);
-    });
-    const noiseText = document.createElement("span");
-    noiseText.textContent = t("voices.row.noise");
-    noiseWrap.append(noiseBox, noiseText);
-    body.appendChild(noiseWrap);
-    li.classList.toggle("voice-row-noise", row.noise);
-
-    // Auto-detected-noise hint: only shown when the matcher set the flag.
-    if (row.noiseAuto) {
-      const hint = document.createElement("span");
-      hint.className = "voice-row-noise-hint";
-      hint.textContent = t("voices.row.noise_auto_hint");
-      body.appendChild(hint);
+      body.appendChild(hints);
     }
+  }
 
-    li.appendChild(body);
-    voiceListEl.appendChild(li);
+  // Auto-detected-noise hint: only when the matcher set the flag.
+  if (row.noiseAuto) {
+    const hint = document.createElement("span");
+    hint.className = "voice-row-noise-hint";
+    hint.textContent = t("voices.row.noise_auto_hint");
+    body.appendChild(hint);
+  }
+
+  li.classList.toggle("voice-row-noise", row.noise);
+  li.appendChild(body);
+  return li;
+}
+
+// One <audio> per surface, created on first use. Stopping the previous clip
+// before starting another is the point: comparing voices means hearing them in
+// turn, not at once.
+function makePreviewPlayer(host, getTaskId) {
+  return (row, btn) => {
+    if (!host._previewAudio) {
+      host._previewAudio = new Audio();
+      host._previewAudio.preload = "none";
+    }
+    const audio = host._previewAudio;
+    const stopAll = () => {
+      host.querySelectorAll(".voice-play-btn.playing").forEach((el) => {
+        el.classList.remove("playing");
+        el.querySelector(".play-icon")?.classList.remove("hidden");
+        el.querySelector(".stop-icon")?.classList.add("hidden");
+      });
+    };
+    const playingThis = host._previewLabel === row.label && !audio.paused;
+    audio.pause();
+    stopAll();
+    if (playingThis) {
+      host._previewLabel = null;
+      return;
+    }
+    // buildPath, not a bare URL: an admin viewing another user's task has
+    // state.actingAs set, and the endpoint needs that param to authorize the
+    // fetch — without it the request 404s (vts-552).
+    audio.src = buildPath(
+      `/api/tasks/${encodeURIComponent(getTaskId())}/speaker-previews/${encodeURIComponent(row.label)}/0/audio`
+    );
+    host._previewLabel = row.label;
+    btn.classList.add("playing");
+    btn.querySelector(".play-icon")?.classList.add("hidden");
+    btn.querySelector(".stop-icon")?.classList.remove("hidden");
+    const reset = () => {
+      btn.classList.remove("playing");
+      btn.querySelector(".play-icon")?.classList.remove("hidden");
+      btn.querySelector(".stop-icon")?.classList.add("hidden");
+    };
+    audio.onended = reset;
+    audio.onerror = () => {
+      reset();
+      btn.classList.add("no-preview");
+      btn.setAttribute("data-tooltip", t("voices.row.preview_unavailable"));
+    };
+    void audio.play().catch(reset);
+  };
+}
+
+function renderVoiceList() {
+  if (!voiceListEl || !voiceDialogState) return;
+  voiceListEl.innerHTML = "";
+  const rows = voiceDialogState.rows;
+  voiceListEmptyEl?.classList.toggle("hidden", rows.length > 0);
+  voiceListEl.classList.toggle("hidden", rows.length === 0);
+
+  const play = makePreviewPlayer(voiceListEl, () => voiceDialogState.taskId);
+  rows.forEach((row) => {
+    voiceListEl.appendChild(
+      buildSpeakerRow(row, {
+        variant: "dialog",
+        onRebind: onVoiceRowRebind,
+        playPreview: play,
+      })
+    );
   });
 }
 

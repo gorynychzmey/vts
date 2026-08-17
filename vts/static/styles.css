@@ -2397,17 +2397,17 @@ dialog:not([open]) {
   min-height: 0;
 }
 
-.spk-panel-row {
+.speaker-row {
   grid-template-columns: 1fr auto;
   cursor: pointer;
 }
 
-.spk-panel-row.selected {
+.speaker-row.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.spk-panel-row.editing {
+.speaker-row.editing {
   cursor: default;
 }
 
@@ -3650,9 +3650,9 @@ dialog:not([open]) {
 
 
 /* ---------- Speakers panel in the task card (redesign v2) ----------
-   Who is in the recording and who they are bound to. Before this the bindings
-   lived only inside the voice-resolution dialog, so the information existed but
-   was invisible until you went looking for it. */
+   Who is in the recording and who they are bound to. The rows are the SAME
+   component the resolution dialog uses (buildSpeakerRow), in its compact
+   variant — two implementations had already started to drift apart. */
 .speaker-box:not(.hidden) {
   display: flex;
   flex-direction: column;
@@ -3692,8 +3692,14 @@ dialog:not([open]) {
   color: var(--ink-soft);
 }
 
-/* Pushed to the far edge: it leaves the card, so it should not read as one of
-   the row actions. */
+/* Pending voices are the reason to look at this panel, so the count carries the
+   accent while there is work left and falls back to plain metadata once done. */
+.speaker-box-count.is-pending {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+/* Leaves the card, so it should not read as one of the row actions. */
 .speaker-box-registry-btn {
   margin-left: auto;
 }
@@ -3702,130 +3708,10 @@ dialog:not([open]) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-
-.spk-panel-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-width: 0;
-  padding: 0.4rem 0.5rem;
-  background: var(--bg-card);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-md);
-}
-
-/* An unbound voice is the one thing here that wants action, so it gets the
-   accent tint — the same signal awaiting_input uses on the card edge. */
-.spk-panel-row.unbound {
-  background: var(--accent-soft-2);
-  border-color: var(--accent-line);
-}
-
-.avatar {
-  flex: 0 0 auto;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-chip);
-  color: var(--ink-soft);
-  font-size: var(--fs-micro);
-  font-weight: 700;
-}
-
-.spk-panel-row.unbound .avatar {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-
-.spk-panel-label {
-  min-width: 0;
-  font-size: var(--fs-ui);
-  font-weight: 600;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.spk-panel-share {
-  flex: 0 0 auto;
-  font-size: var(--fs-meta);
-  color: var(--ink-soft);
-}
-
-/* Right-aligned: the person is the answer to the row, so it sits at the end of
-   the line rather than next to the label. */
-.spk-panel-person,
-.spk-panel-pick {
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
-.spk-panel-person {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-@media (max-width: 30rem) {
-  /* The label takes the first line and the metadata wraps under it, so a long
-     "Speaker N / 61% / Person" row does not squeeze the action off the card. */
-  .spk-panel-row {
-    flex-wrap: wrap;
-  }
-
-  .spk-panel-label {
-    flex: 1 1 100%;
-    order: -1;
-  }
-}
-
-
-/* Similarity chips under an unbound voice: the matcher's nearest candidates,
-   one click away. Only rendered when nobody is bound yet — a voice inside the
-   auto-bind threshold already has its answer. */
-.spk-panel-hints {
-  flex: 1 1 100%;
-  display: flex;
-  align-items: center;
-  gap: 0.36rem;
-  flex-wrap: wrap;
-  margin-top: 0.1rem;
-}
-
-.spk-panel-hints-label {
-  font-size: var(--fs-meta);
-  color: var(--ink-soft);
-}
-
-.speaker-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.36rem;
-  padding: 0.22rem 0.5rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-pill);
-  background: var(--bg-card);
-  color: var(--ink);
-  font-size: var(--fs-meta);
-  font-weight: 600;
-}
-
-.speaker-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-/* The number is the reason to click, so it carries the accent rather than the
-   name it qualifies. */
-.speaker-chip-pct {
-  color: var(--accent-ink);
-  font-weight: 700;
-}
-
 
 /* Text-only action. Without this rule the global `button` style applies and a
    link-looking action renders as a filled accent button — which is how the
@@ -3870,45 +3756,125 @@ dialog:not([open]) {
   cursor: default;
 }
 
-.spk-panel-noise {
+
+
+/* Pending voices are the reason to look at this panel, so the count carries the
+   accent while there is work left and falls back to plain metadata once done. */
+.speaker-box-count.is-pending {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+
+/* ---------- Shared speaker row: play control and compact variant ---------- */
+
+/* Play/stop the preview. Stop rather than pause — the clips are seconds long,
+   so resuming from the middle is never what the user wants. */
+.voice-play-btn {
   flex: 0 0 auto;
-  width: 1.5rem;
-  height: 1.5rem;
+  align-self: start;
+  width: 1.75rem;
+  height: 1.75rem;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--ink-faint);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 
-.spk-panel-noise svg {
-  width: 0.88rem;
-  height: 0.88rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
+.voice-play-btn svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  fill: currentColor;
+  stroke: none;
 }
 
-.spk-panel-noise:hover {
-  background: var(--bg-chip);
+.voice-play-btn:hover {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.voice-play-btn.playing {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+/* No clip for this voice — say so on hover rather than leaving a dead control. */
+.voice-play-btn.no-preview {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.voice-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Compact variant, used by the card panel: no select, no fragment option — the
+   dialog is where a full review happens. */
+.voice-row-compact {
+  background: var(--bg-card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: 0.44rem 0.5rem;
+}
+
+/* An unbound voice is the one thing here that wants action, so it gets the same
+   accent tint awaiting_input uses on the card edge. */
+.voice-row-compact.voice-row-unbound {
+  background: var(--accent-soft-2);
+  border-color: var(--accent-line);
+}
+
+.voice-row-action {
+  margin-left: auto;
+}
+
+/* Similarity chips, shown under a row nobody is bound to. */
+.voice-row-hints {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.36rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.voice-row-hints-label {
+  font-size: var(--fs-meta);
   color: var(--ink-soft);
 }
 
-.spk-panel-noise.is-on {
-  color: var(--warn-ink);
-  background: var(--warn-soft);
-}
 
-/* A voice marked as noise is settled — dim the row so the eye skips it and
-   lands on the ones still needing a decision. */
-.spk-panel-row.is-noise {
-  opacity: 0.6;
-}
-
-.spk-panel-row.is-noise.unbound {
+/* Similarity chip: a candidate one click from being bound. Needs its own rule —
+   the global `button` style would otherwise render it as a filled accent
+   button, which is how it first came out. */
+.speaker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
   background: var(--bg-card);
-  border-color: var(--line-soft);
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+
+.speaker-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The number is the reason to click, so it carries the accent rather than the
+   name it qualifies. */
+.speaker-chip-pct {
+  color: var(--accent-ink);
+  font-weight: 700;
 }
