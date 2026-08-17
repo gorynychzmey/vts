@@ -18,7 +18,7 @@ import uuid
 import pytest
 
 from tests.conftest import _TEST_USER_ID
-from vts.api.main import _player_page_html
+from vts.api.routers.artifacts import _player_page_html
 
 
 # --------------------------------------------------------------- pure renderer
