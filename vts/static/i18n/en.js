@@ -7,6 +7,7 @@ window.__VTS_I18N.en = {
 "theme.system": "Theme: system",
 "theme.light": "Theme: light",
 "theme.dark": "Theme: dark",
+"header.language": "Interface language",
 "context.authenticated": "Authenticated:",
 "context.acting_as": "Working as:",
 "context.admin_suffix": " (admin)",

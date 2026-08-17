@@ -7,6 +7,7 @@ window.__VTS_I18N.ru = {
 "theme.system": "Тема: системная",
 "theme.light": "Тема: светлая",
 "theme.dark": "Тема: тёмная",
+"header.language": "Язык интерфейса",
 "context.authenticated": "Аутентифицирован:",
 "context.acting_as": "Работаю как:",
 "context.admin_suffix": " (админ)",

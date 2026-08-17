@@ -4,12 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>vts</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Self-hosted fonts, not a CDN link: the app is self-hosted and ships as
+         a PWA, so fetching from fonts.gstatic.com leaked every user's IP to
+         Google on first load, left the PWA unable to render offline, and made
+         the UI suite fail intermittently when that CDN 404'd. -->
+    <link rel="stylesheet" href="/static/fonts.css?v=__VTS_VERSION__" />
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
@@ -139,6 +138,10 @@
                 type="button"
                 id="locale-toggle-btn"
                 aria-live="polite"
+                data-i18n-title="header.language"
+                data-i18n-aria-label="header.language"
+                title="Interface language"
+                aria-label="Interface language"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" />

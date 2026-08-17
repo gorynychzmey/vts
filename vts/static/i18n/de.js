@@ -7,6 +7,7 @@ window.__VTS_I18N.de = {
 "theme.system": "Design: System",
 "theme.light": "Design: hell",
 "theme.dark": "Design: dunkel",
+"header.language": "Oberflächensprache",
 "context.authenticated": "Authentifiziert:",
 "context.acting_as": "Arbeitet als:",
 "context.admin_suffix": " (Admin)",

@@ -15,6 +15,8 @@ const CT = {
   ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml",
   ".webmanifest": "application/manifest+json",
+  // Fonts are self-hosted now; served as text/plain the browser rejects them.
+  ".woff2": "font/woff2", ".woff": "font/woff", ".png": "image/png",
 };
 
 export const DEFAULT_API = {
@@ -47,6 +49,14 @@ export async function startStubServer(overrides = {}) {
     let f = url === "/" ? "/index.html" : url.replace("/static/", "/");
     const fp = path.join(STATIC_DIR, f);
     if (!fp.startsWith(STATIC_DIR) || !fs.existsSync(fp)) { res.statusCode = 404; res.end("nf"); return; }
+    // Binary assets (fonts, icons) must not be round-tripped through a string:
+    // toString() mangles them and the browser rejects the result.
+    const ext = path.extname(fp);
+    if (ext === ".woff2" || ext === ".woff" || ext === ".png") {
+      res.setHeader("Content-Type", CT[ext]);
+      res.end(fs.readFileSync(fp));
+      return;
+    }
     let body = fs.readFileSync(fp).toString();
     if (f === "/index.html") {
       body = body.replaceAll("__VTS_VERSION__", "verify");
