@@ -31,9 +31,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from vts.api._helpers.serialization import _speaker_ordering_entries, can_resolve_speakers_task
 from vts.api.deps import (
     get_current_user,
-    get_current_user_session_only,
     get_diarization_backend_dep,
     get_redis,
     get_session_dep,
@@ -51,7 +51,7 @@ from vts.api.schemas import (
     VoiceSampleOut,
 )
 from vts.core.config import Settings, get_settings
-from vts.db.models import StepStatus, TaskStatus
+from vts.db.models import TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.rerender import rerender_transcript
 from vts.pipeline.steps.transcription import effective_language
@@ -61,19 +61,6 @@ from vts.services.redis_bus import RedisBus
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _main():
-    """Late-bound access to helpers still in `vts.api.main`.
-
-    `main` imports this module to mount the router, so a module-scope import
-    back would be a cycle. `can_resolve_speakers_task` and
-    `_speaker_ordering_entries` stay in `main` because `serialize_task` uses
-    them too; they move when that helper does.
-    """
-    from vts.api import main
-
-    return main
 
 
 @router.get("/api/speakers", response_model=list[SpeakerOut])
@@ -307,7 +294,7 @@ async def get_speaker_matches(
         task.options if isinstance(task.options, dict) else {},
         {"outputs": outputs},
     )
-    ordering_entries = _main()._speaker_ordering_entries(outputs, matches)
+    ordering_entries = _speaker_ordering_entries(outputs, matches)
     display = label_map(ordering_entries, speaker_label_word(language))
 
     # Candidate names were frozen into speaker_matches.json at match time, so
@@ -400,7 +387,7 @@ async def resolve_task_speakers(
     task = await repo.get_task_for_user(user_id, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not _main().can_resolve_speakers_task(task):
+    if not can_resolve_speakers_task(task):
         raise HTTPException(status_code=409, detail="cannot_resolve_speakers")
 
     artifact_dir = Path(task.artifact_dir)

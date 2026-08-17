@@ -22,21 +22,12 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    PlainTextResponse,
-    Response,
-)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vts.api.deps import (
-    get_current_user,
-    get_current_user_session_only,
-    get_session_dep,
-    get_settings_dep,
-)
+from vts.api._helpers.artifact_store import _load_player_blocks
+from vts.api._helpers.base import _find_media_file
+from vts.api.deps import get_current_user, get_session_dep
 from vts.api.schemas import TextSliceOut
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
@@ -45,18 +36,6 @@ from vts.services.media_kind import media_content_type, media_kind
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _main():
-    """Late-bound access to helpers still in `vts.api.main`.
-
-    `_find_media_file` and `_load_player_blocks` stay there because
-    `serialize_task` and the transcript-entries endpoint use them too;
-    a module-scope import back would be a cycle.
-    """
-    from vts.api import main
-
-    return main
 
 
 _MAX_TEXT_SLICE_CHARS = 200_000  # safety cap for JSON-mode slice length
@@ -633,7 +612,7 @@ async def get_transcript_entries(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"blocks": await _main()._load_player_blocks(task, session)}
+    return {"blocks": await _load_player_blocks(task, session)}
 
 
 @router.get(
@@ -772,7 +751,7 @@ async def get_media(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    media_file = _main()._find_media_file(task.artifact_dir)
+    media_file = _find_media_file(task.artifact_dir)
     if media_file is None:
         raise HTTPException(status_code=404, detail="Media file not available")
     return FileResponse(
@@ -793,7 +772,7 @@ async def media_player(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    media_file = _main()._find_media_file(task.artifact_dir)
+    media_file = _find_media_file(task.artifact_dir)
     # Propagate admin impersonation through the page: the media <src>, the
     # SSE entries re-fetch, all must resolve as the same acting user.
     acting_as = request.query_params.get("as_user")
@@ -827,7 +806,7 @@ async def media_player(
         if kind == "video"
         else f'<audio controls autoplay src="{_html.escape(src, quote=True)}"></audio>'
     )
-    blocks = await _main()._load_player_blocks(task, session)
+    blocks = await _load_player_blocks(task, session)
     html = _player_page_html(
         title=title,
         media_tag=tag,

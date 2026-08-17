@@ -240,7 +240,7 @@ async def test_audio_set_produces_combined_artefact_for_playback(tmp_path):
     st = _State(dirs, options)
     await ExtractAudioStep().run(_Ctx(), st)
 
-    from vts.api.main import _find_media_file
+    from vts.api._helpers.base import _find_media_file
 
     resolved = _find_media_file(str(tmp_path))
     assert resolved is not None

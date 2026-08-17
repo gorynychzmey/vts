@@ -32,24 +32,13 @@ from fastapi.responses import (
 )
 
 from vts import __version__
+from vts.api._helpers.pages_assets import NO_CACHE_HEADERS, STATIC_DIR, _render_privacy_page
 from vts.api.deps import get_settings_dep
 from vts.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _main():
-    """Late-bound access to `vts.api.main` (STATIC_DIR, NO_CACHE_HEADERS,
-    `_render_privacy_page`).
-
-    `main` imports this module to mount the router, so a module-scope import
-    back would be a cycle.
-    """
-    from vts.api import main
-
-    return main
 
 
 @router.get("/", include_in_schema=False, response_class=HTMLResponse)
@@ -72,14 +61,14 @@ async def root(request: Request) -> HTMLResponse:
                 url=f"/auth/login?next={urllib.parse.quote(request.url.path, safe='')}",
                 status_code=302,
             )
-    template = (_main().STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    template = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     content = template.replace("__VTS_VERSION__", __version__)
-    return HTMLResponse(content=content, headers=_main().NO_CACHE_HEADERS)
+    return HTMLResponse(content=content, headers=NO_CACHE_HEADERS)
 
 @router.get("/manifest.webmanifest", include_in_schema=False)
 async def manifest() -> FileResponse:
     return FileResponse(
-        path=str(_main().STATIC_DIR / "manifest.webmanifest"),
+        path=str(STATIC_DIR / "manifest.webmanifest"),
         media_type="application/manifest+json",
     )
 
@@ -87,7 +76,7 @@ async def manifest() -> FileResponse:
 async def service_worker() -> FileResponse:
     # Serve service worker from root so its scope covers the whole app.
     return FileResponse(
-        path=str(_main().STATIC_DIR / "sw.js"),
+        path=str(STATIC_DIR / "sw.js"),
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-store"},
     )
@@ -127,4 +116,4 @@ async def health() -> PlainTextResponse:
 async def privacy_policy(
     settings: Settings = Depends(get_settings_dep),
 ) -> HTMLResponse:
-    return HTMLResponse(_main()._render_privacy_page(settings))
+    return HTMLResponse(_render_privacy_page(settings))

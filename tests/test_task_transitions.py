@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from _db import make_test_engine
-from vts.api.main import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task
+from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task
 from vts.api.schemas import PromptRef, TaskCreateRequest
 from vts.db.base import Base
 from vts.db.models import StepStatus, Task, TaskStatus
@@ -241,7 +241,7 @@ def test_summary_stages_is_subset_of_summary_step_names():
     # relationship is _SUMMARY_STAGES ⊆ SUMMARY_STEP_NAMES, not equality. Assert the
     # subset relationship, and print the symmetric difference on failure so a future
     # drift (e.g. a renamed/removed step) names the exact offending step.
-    from vts.api.main import SUMMARY_STEP_NAMES
+    from vts.api._helpers.base import SUMMARY_STEP_NAMES
     from vts.mcp.tools import _SUMMARY_STAGES
 
     missing_from_step_names = _SUMMARY_STAGES - SUMMARY_STEP_NAMES
@@ -259,7 +259,7 @@ def test_summary_step_names_are_real_pipeline_steps():
     # is the one exception — it's a finalize/tail step appended per selected prompt
     # by build_dag_steps(), not part of the static DAG_HEAD, so it's covered via
     # DAG_STEPS (DAG_HEAD + "summarize_final") instead of DAG_HEAD alone.
-    from vts.api.main import SUMMARY_STEP_NAMES
+    from vts.api._helpers.base import SUMMARY_STEP_NAMES
     from vts.pipeline.types import DAG_STEPS
 
     unknown_steps = SUMMARY_STEP_NAMES - set(DAG_STEPS)

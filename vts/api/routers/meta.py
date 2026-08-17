@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts import __version__
 from vts.api.csrf import require_same_site
+from vts.api._helpers.pages_assets import NO_CACHE_HEADERS
 from vts.api.deps import (
     get_current_user,
     get_current_user_session_only,
@@ -36,7 +37,6 @@ from vts.api.schemas import (
     ApiTokenCreateRequest,
     ApiTokenOut,
     MeOut,
-    MessageOut,
     PresetCreateRequest,
     PresetOptions,
     PresetOut,
@@ -71,20 +71,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _main():
-    """Late-bound access to helpers still in `vts.api.main`.
-
-    `main` imports this module to mount the router, so a module-scope import
-    back would be a cycle.
-    """
-    from vts.api import main
-
-    return main
-
-
 @router.get("/api/version")
 async def version() -> JSONResponse:
-    return JSONResponse({"version": __version__}, headers=_main().NO_CACHE_HEADERS)
+    return JSONResponse({"version": __version__}, headers=NO_CACHE_HEADERS)
 
 
 @router.get("/api/status-config")
@@ -98,7 +87,7 @@ async def status_config(
             "status_flags": _ts.status_flags(),
             "tasks_page_size": settings.tasks_page_size,
         },
-        headers=_main().NO_CACHE_HEADERS,
+        headers=NO_CACHE_HEADERS,
     )
 
 

@@ -913,14 +913,14 @@ def _task_with_matches(tmp_path, *, status, write_matches):
 
 
 def test_can_resolve_speakers_true_when_matches_written(tmp_path):
-    from vts.api.main import can_resolve_speakers_task
+    from vts.api._helpers.serialization import can_resolve_speakers_task
     from vts.db.models import TaskStatus
     task = _task_with_matches(tmp_path, status=TaskStatus.completed, write_matches=True)
     assert can_resolve_speakers_task(task) is True
 
 
 def test_can_resolve_speakers_false_without_matches_file(tmp_path):
-    from vts.api.main import can_resolve_speakers_task
+    from vts.api._helpers.serialization import can_resolve_speakers_task
     from vts.db.models import TaskStatus
     # A non-diarized task: match_speakers completed but wrote no speaker_matches.json,
     # so there is nothing to resolve and the dialog must stay hidden. This is the
@@ -931,7 +931,7 @@ def test_can_resolve_speakers_false_without_matches_file(tmp_path):
 
 
 def test_can_resolve_speakers_false_when_archived(tmp_path):
-    from vts.api.main import can_resolve_speakers_task
+    from vts.api._helpers.serialization import can_resolve_speakers_task
     from vts.db.models import TaskStatus
     task = _task_with_matches(tmp_path, status=TaskStatus.archived, write_matches=True)
     assert can_resolve_speakers_task(task) is False

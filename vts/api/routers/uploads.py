@@ -5,11 +5,9 @@ docs/plans/main-py-split.md. The handlers already took `settings` and the
 other request-scoped objects via `Depends`, so nothing here relied on the
 old enclosing closure; only `app` became `router`.
 
-`_ALLOWED_UPLOAD_SUFFIXES` and the task-creation helpers still live in
-`vts.api.main`; they are reached through the `_main()` accessor below rather
-than a module-scope import, because `main` imports this module to mount the
-router and a top-level import back would be a cycle. Those helpers move out
-of `main` as later steps of the split land.
+`_ALLOWED_UPLOAD_SUFFIXES` and the task-creation helpers are shared with the
+`POST /api/tasks/upload` path in `vts.api.routers.tasks`, so they live in
+`vts.api._helpers.task_input`.
 """
 
 from __future__ import annotations
@@ -27,6 +25,9 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from vts.api._helpers.base import _user_hash_dir
+from vts.api._helpers.serialization import serialize_task
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -56,19 +57,6 @@ logger = logging.getLogger(__name__)
 # OpenAPI tag from the URL prefix, and an explicit router tag overrides it
 # (it retagged /api/tasks/{task_id}/deliveries from "tasks" to "meta").
 router = APIRouter()
-
-
-def _main():
-    """Late-bound access to helpers still living in `vts.api.main`.
-
-    `main` imports this module to mount the router, so importing it back at
-    module scope would be a cycle. These are pure helpers with no request
-    state; they move here (or to a shared module) as later steps of the split
-    land — see docs/plans/main-py-split.md.
-    """
-    from vts.api import main
-
-    return main
 
 
 @router.get("/api/uploads/config", response_model=UploadConfigOut)
@@ -103,13 +91,13 @@ async def uploads_init(
         except UploadSetError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        normalized_prompts = _main()._normalize_prompts_json(payload.prompts)
+        normalized_prompts = _normalize_prompts_json(payload.prompts)
         if normalized_prompts and not payload.transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
         if payload.diarize and not payload.transcript:
             raise HTTPException(status_code=422, detail="diarize requires transcript")
         normalized_delivery = await _validated_delivery(
-            session, user, _main()._normalize_delivery_json(payload.delivery)
+            session, user, _normalize_delivery_json(payload.delivery)
         )
 
         upload_id = uuid.uuid4()
@@ -135,7 +123,7 @@ async def uploads_init(
         UploadSession.init_multi(
             settings.artifacts_root, user.username,
             user_id=user.id, upload_id=upload_id, files=spec_files, kind=kind,
-            options=options, display_name=_main().normalize_display_name(payload.display_name),
+            options=options, display_name=normalize_display_name(payload.display_name),
             created_at=datetime.now(tz=timezone.utc).isoformat(),
         )
         return UploadInitOut(
@@ -145,19 +133,19 @@ async def uploads_init(
         )
 
     suffix = Path(payload.filename).suffix.lower()
-    if suffix not in _main()._ALLOWED_UPLOAD_SUFFIXES:
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
     if payload.total_size <= 0:
         raise HTTPException(status_code=422, detail="total_size must be positive")
     if payload.total_size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
-    normalized_prompts = _main()._normalize_prompts_json(payload.prompts)
+    normalized_prompts = _normalize_prompts_json(payload.prompts)
     if normalized_prompts and not payload.transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     if payload.diarize and not payload.transcript:
         raise HTTPException(status_code=422, detail="diarize requires transcript")
     normalized_delivery = await _validated_delivery(
-        session, user, _main()._normalize_delivery_json(payload.delivery)
+        session, user, _normalize_delivery_json(payload.delivery)
     )
     upload_id = uuid.uuid4()
     options = {
@@ -177,7 +165,7 @@ async def uploads_init(
         settings.artifacts_root, user.username,
         user_id=user.id, upload_id=upload_id, suffix=suffix,
         total_size=payload.total_size, options=options,
-        display_name=_main().normalize_display_name(payload.display_name),
+        display_name=normalize_display_name(payload.display_name),
         filename=payload.filename,
         created_at=datetime.now(tz=timezone.utc).isoformat(),
     )
@@ -351,20 +339,20 @@ async def uploads_finalize(
         # freshly-created path below: get_task_for_user eagerly loads the
         # real steps, and a retry may well arrive after the pipeline has
         # started producing them.
-        queue_positions = await _main()._get_cached_queue_positions(
+        queue_positions = await _get_cached_queue_positions(
             redis, existing_repo, settings.redis_prefix
         )
-        lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await existing_repo.get_asr_progress_for_tasks([existing.id])
         summary_progress = {existing.id: summary_progress_for_task(existing)}
-        return _main().serialize_task(
+        return serialize_task(
             existing, queue_positions, asr_progress, summary_progress, lane_positions
         )
 
     uid, meta = _load_owned_session(settings, user, upload_id)
 
     if meta.get("files"):
-        media_dir = Path(settings.artifacts_root) / _main()._user_hash_dir(user.username) / str(uid) / "media"
+        media_dir = Path(settings.artifacts_root) / _user_hash_dir(user.username) / str(uid) / "media"
 
         # Recover any `ordered.NNN.*` leftovers from an interrupted
         # concat-order reorder (vts-vm0 blocker 2, "second, dirtier
@@ -580,7 +568,7 @@ async def uploads_finalize(
             await asyncio.to_thread(meta_path.unlink)
         except OSError:
             pass
-        return await _main()._enqueue_uploaded_task(task, repo, redis, settings)
+        return await _enqueue_uploaded_task(task, repo, redis, settings)
 
     part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
     if UploadSession.received_bytes(part) != meta["total_size"]:
@@ -599,4 +587,4 @@ async def uploads_finalize(
         source_title=meta.get("display_name"),
     )
     await session.commit()
-    return await _main()._enqueue_uploaded_task(task, repo, redis, settings)
+    return await _enqueue_uploaded_task(task, repo, redis, settings)

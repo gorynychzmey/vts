@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vts.api.main import _MAX_DISPLAY_NAME_CHARS, normalize_display_name
+from vts.api._helpers.task_input import _MAX_DISPLAY_NAME_CHARS, normalize_display_name
 
 
 def test_none_stays_none() -> None:

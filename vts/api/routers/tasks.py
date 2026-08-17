@@ -8,12 +8,10 @@ task state.
 Split out of `vts.api.main.create_app()` — see docs/plans/main-py-split.md.
 Handler bodies are unchanged.
 
-This was the most connected block of the split: it leans on 19 helpers that
-are still in `vts.api.main` (`serialize_task`, the summary-reset family, the
-queue-position cache, ...), reached through the `_main()` accessor below.
-Those helpers are the natural subject of a follow-up move — most of them are
-task-shaped and would sit here — but that is a behaviour-neutral change of its
-own and is deliberately not mixed into this one.
+This is the most connected router: it leans on 19 shared helpers
+(`serialize_task`, the summary-reset family, the queue-position cache, ...).
+They live in `vts.api._helpers` rather than here because other routers need
+them too — four of them render tasks.
 
 No `tags=` on the router: `_install_custom_openapi()` in `vts.api.main`
 derives the OpenAPI tag from the URL prefix, and an explicit tag overrides it.
@@ -27,7 +25,7 @@ import logging
 import shutil
 import uuid
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +45,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
+from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step, _reset_summary_artifacts, _reset_summary_steps
+from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -70,23 +71,11 @@ from vts.services import task_status as _ts
 from vts.services.auth import AuthenticatedUser
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
-from vts.services.task_progress import selected_prompt_refs, summary_progress_for_task
+from vts.services.task_progress import summary_progress_for_task
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _main():
-    """Late-bound access to the helpers still living in `vts.api.main`.
-
-    `main` imports this module to mount the router, so importing it back at
-    module scope would be a cycle. See the module docstring: moving these
-    helpers is follow-up work, not part of this split.
-    """
-    from vts.api import main
-
-    return main
 
 
 @router.post("/api/tasks", response_model=TaskOut)
@@ -135,11 +124,11 @@ async def create_task(
         data={"status": task.status.value},
     )
     set_committed_value(task, "steps", [])
-    queue_positions = await _main()._get_cached_queue_positions(redis, repo, settings.redis_prefix)
-    lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+    queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return _main().serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
 
 @router.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
@@ -178,15 +167,15 @@ async def upload_task(
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> TaskOut:
-    normalized_prompts = _main()._normalize_prompts_json(prompts)
-    normalized_delivery = _main()._normalize_delivery_json(delivery)
+    normalized_prompts = _normalize_prompts_json(prompts)
+    normalized_delivery = _normalize_delivery_json(delivery)
     if normalized_prompts and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     if diarize and not transcript:
         raise HTTPException(status_code=422, detail="diarize requires transcript")
     original_filename = file.filename or "upload"
     suffix = Path(original_filename).suffix.lower()
-    if suffix not in _main()._ALLOWED_UPLOAD_SUFFIXES:
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
 
     from vts.services.delivery_submit import (
@@ -237,10 +226,10 @@ async def upload_task(
         options=options,
         artifact_dir=str(artifact),
         task_id=task_id,
-        source_title=_main().normalize_display_name(display_name),
+        source_title=normalize_display_name(display_name),
     )
     await session.commit()
-    return await _main()._enqueue_uploaded_task(task, repo, redis, settings)
+    return await _enqueue_uploaded_task(task, repo, redis, settings)
 
 
 @router.get(
@@ -322,18 +311,18 @@ async def list_tasks(
         tasks = await repo.list_tasks_for_user(
             uuid.UUID(user.id), limit=limit, offset=offset,
         )
-    queue_positions = await _main()._get_cached_queue_positions(redis, repo, settings.redis_prefix)
-    lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+    queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     task_ids = [task.id for task in tasks]
     asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
     summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
     if compact:
         return [
-            _main().serialize_task_compact(task, queue_positions, asr_progress, summary_progress, lane_positions)
+            serialize_task_compact(task, queue_positions, asr_progress, summary_progress, lane_positions)
             for task in tasks
         ]
     return [
-        _main().serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+        serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
         for task in tasks
     ]
 
@@ -346,7 +335,7 @@ async def get_queue_positions(
     settings: Settings = Depends(get_settings_dep),
 ) -> JSONResponse:
     repo = Repo(session)
-    positions = await _main()._get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
     return JSONResponse({str(k): v for k, v in positions.items()})
 
 
@@ -362,11 +351,11 @@ async def get_task(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    queue_positions = await _main()._get_cached_queue_positions(redis, repo, settings.redis_prefix)
-    lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+    queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return _main().serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
 
 @router.patch("/api/tasks/{task_id}", response_model=TaskOut)
@@ -382,13 +371,13 @@ async def update_task(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    task.source_title = _main().normalize_display_name(payload.display_name)
+    task.source_title = normalize_display_name(payload.display_name)
     await session.commit()
-    queue_positions = await _main()._get_cached_queue_positions(redis, repo, settings.redis_prefix)
-    lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+    queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
+    lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return _main().serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
 
 
 @router.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
@@ -412,7 +401,7 @@ async def restart_summary_task(
 
     artifact_resets: list[asyncio.Task[None]] = []
     if request.mode == "final_only":
-        if not _main().can_restart_final_summary_task(task):
+        if not can_restart_final_summary_task(task):
             raise HTTPException(
                 status_code=409,
                 detail=f"cannot_restart_final:{task.status.value}",
@@ -429,20 +418,20 @@ async def restart_summary_task(
             new_options = dict(task.options or {})
             new_options["prompts"] = new_refs
             task.options = new_options
-            await _main()._rebuild_finalize_tail(repo, task, new_options)
+            await _rebuild_finalize_tail(repo, task, new_options)
         else:
-            _main()._reset_final_summary_step(task)
+            _reset_final_summary_step(task)
             downgrade_system_summary_entry(task)
-            artifact_resets.append(asyncio.to_thread(_main()._reset_final_summary_artifacts, task))
+            artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
     else:
-        if not _main().can_restart_summary_task(task):
+        if not can_restart_summary_task(task):
             raise HTTPException(
                 status_code=409,
                 detail=f"cannot_restart:{task.status.value}",
             )
-        _main()._reset_summary_steps(task)
+        _reset_summary_steps(task)
         downgrade_all_result_entries(task)
-        artifact_resets.append(asyncio.to_thread(_main()._reset_summary_artifacts, task))
+        artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
     task.summary_path = None
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
@@ -471,7 +460,7 @@ async def pause_tasks(
         if task is None:
             results[tid] = "not_found"
             continue
-        if not _main().can_pause_task(task.status):
+        if not can_pause_task(task.status):
             results[tid] = f"cannot_pause:{task.status.value}"
             continue
         await repo.set_task_status(task, TaskStatus.paused)
@@ -500,7 +489,7 @@ async def resume_tasks(
         if task is None:
             results[tid] = "not_found"
             continue
-        if not _main().can_resume_task(task.status):
+        if not can_resume_task(task.status):
             results[tid] = f"cannot_resume:{task.status.value}"
             continue
         await bus.clear_pause_request(task_id)
@@ -569,7 +558,7 @@ async def archive_tasks(
         if not _ts.can_archive(task.status):
             results[tid] = f"cannot_archive:{task.status.value}"
             continue
-        await asyncio.to_thread(_main()._archive_task_artifacts, task)
+        await asyncio.to_thread(_archive_task_artifacts, task)
         await repo.set_task_status(task, TaskStatus.archived)
         results[tid] = "archived"
     await session.commit()
