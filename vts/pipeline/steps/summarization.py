@@ -671,6 +671,19 @@ class PrepareSummaryChunksStep(Step):
 
 
 class SummarizeWindowsStep(Step):
+    """Stage A — turn the transcript into one summary per window.
+
+    Runs in one of two modes, decided upstream by PrepareSummaryChunksStep and
+    read back from `chunks.json`:
+
+    * `whole` — a single chunk holding the entire transcript, rewritten in one
+      LLM call. Cheaper and better, but only viable if it fits in n_ctx.
+    * `split` — many chunks, one call each.
+
+    `whole` is attempted optimistically and can still fail at call time, so
+    this step owns the fallback into `split` (see `run`).
+    """
+
     name = "summarize_windows"
     lane = None
 
@@ -686,6 +699,27 @@ class SummarizeWindowsStep(Step):
         return isinstance(windows, list)
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        """Summarize every window, resuming and re-chunking as needed.
+
+        Two things make this longer than a loop over chunks.
+
+        **Resume.** Windows already summarized by a previous attempt are
+        recovered by `restore_windows` and skipped; when every window is
+        already present the step rewrites its outputs and returns without a
+        single LLM call. Each window is persisted as soon as it comes back
+        (its own `window_NN.txt`, then both windows.json copies), so an
+        interrupted run never loses more than the window in flight.
+
+        **Whole-transcript fallback.** In `whole` mode the one call can exceed
+        the context window in a way only the LLM can report. That surfaces as
+        `_WholeTranscriptOverflow`, caught by the `while True` loop, which
+        re-chunks the transcript into `split` windows, resets the accumulated
+        state and starts over — hence a loop rather than straight-line code.
+        The reset is deliberate: windows summarized under the old
+        segmentation describe spans that no longer exist.
+
+        Returns True; failures raise.
+        """
         summary_dir = st.dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
         output = summary_dir / "windows.json"
@@ -940,6 +974,22 @@ class PackWindowNotesStep(Step):
         return packed_file.exists()
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        """Compact the window notes until prompt + notes fit the final budget.
+
+        The common case is a no-op: if everything already fits, the step still
+        writes `packed_notes.json` with `packing_triggered=False` so
+        FinalizePromptStep has one file to read either way, and so a rerun can
+        tell "packing was not needed" from "packing has not run yet".
+
+        When it does not fit, notes are compressed in passes. Each pass groups
+        them into batches under `pack_batch_max_input_tokens`, summarizes each
+        batch into one note, and re-measures. The loop continues while the
+        result still does not fit AND there is more than nothing left to
+        compress — that second condition is what stops a transcript which
+        cannot be squeezed further from looping forever.
+
+        Returns True; failures raise.
+        """
         summary_dir = st.dirs["root"] / "summary"
         summary_dir.mkdir(parents=True, exist_ok=True)
         packed_file = summary_dir / "packed_notes.json"
@@ -1178,6 +1228,23 @@ class FinalizePromptStep(Step):
         return await self._restore_if_present(ctx, st)
 
     async def run(self, ctx: "PipelineContext", st: StepState) -> bool:
+        """Render the final document for this step's prompt.
+
+        Input is whichever of the two upstream artifacts exists:
+        `packed_notes.json` when PackWindowNotesStep ran, else the window
+        summaries. Both are reached through the same branch, so the fallback
+        is not an error case — a task whose notes already fit produces no
+        packed notes under the older artifact layout.
+
+        A previous run's output is restored by `_restore_if_present` before
+        anything else, which is what makes "restart final summary only" cheap:
+        re-running this step alone does not re-summarize the windows.
+
+        For the built-in summary prompt the result is also written back to the
+        task row, so the API can serve it without touching the artifact dir.
+
+        Returns True; failures raise.
+        """
         source = self.source
         id = self.id
         if await self._restore_if_present(ctx, st):
