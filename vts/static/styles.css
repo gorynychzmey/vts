@@ -1,13 +1,289 @@
+/* ============================================================================
+   Design tokens (redesign v2, docs/design-v2/vts-theme.css).
+
+   The theme is variables ONLY — no component rule is duplicated per theme.
+   Three selectors carry it:
+     :root                         -> light values
+     :root[data-theme="dark"]      -> manual dark (button in the top bar)
+     @media (prefers-color-scheme: dark) :root:not([data-theme="light"])
+                                   -> follow the OS, unless light was chosen
+
+   That third selector is why "no data-theme attribute" means "follow the
+   system": absence is the default state, not a third set of values. The
+   manual and media dark blocks are byte-identical by construction — keep
+   them in sync when editing.
+   ========================================================================= */
+
 :root {
-  --bg: #f6f4ef;
-  --bg-card: #fffdf6;
-  --ink: #152018;
-  --ink-soft: #4a5a4e;
-  --line: #d7d1c0;
-  --accent: #d65d2b;
-  --accent-2: #2f8f73;
-  --danger: #ba2c2c;
+  /* surfaces */
+  --bg: #efeae0;
+  --bg-tint-a: rgba(197, 83, 42, 0.10);
+  --bg-tint-b: rgba(47, 143, 115, 0.10);
+  --bg-card: #fffdf8;
+  --bg-sunk: #fdfbf5;
+  --bg-inset: #fffdf7;
+  --bg-field: #ffffff;
+  --bg-chip: #f4f0e7;
+  --bg-rail: #f0ece1;
+  --bg-bar: #ece5d6;
+  --bar-topbar: rgba(245, 242, 235, 0.82);
+  --backdrop: rgba(29, 37, 31, 0.42);
+
+  /* ink */
+  --ink: #1d251f;
+  --ink-soft: #5f6b62;
+  --ink-mute: #7c867d;
+  --ink-faint: #9aa39a;
+  --ink-ghost: #a8a294;
+  --ink-on-accent: #ffffff;
+
+  /* lines */
+  --line: #e6e1d4;
+  --line-strong: #ddd6c6;
+  --line-soft: #f2ede3;
+  --line-dashed: #d8cfbd;
+
+  /* accent (warm) */
+  --accent: #c5532a;
+  --accent-ink: #a8401d;
+  --accent-2nd: #e07a4b;
+  --accent-soft: #fbeee7;
+  --accent-soft-2: #fdf7ee;
+  --accent-line: #f0d6c8;
+
+  /* success / running */
+  --ok: #2f9f7d;
+  --ok-ink: #1f7a5e;
+  --ok-soft: #e7f4ee;
+  --ok-line: #bfe3d4;
+
+  /* warning / queued */
+  --warn: #caa23e;
+  --warn-ink: #8a6a1e;
+  --warn-soft: #f8efd9;
+  --warn-line: #e8d7a8;
+
+  /* danger / failed */
+  --danger: #cf4b3e;
+  --danger-ink: #a8362c;
+  --danger-soft: #fbe9e7;
+  --danger-line: #f0c9c3;
+
+  /* neutral / paused, canceled */
+  --mute: #9aa1a8;
+  --mute-ink: #5b6168;
+  --mute-soft: #eef0f1;
+  --mute-line: #dadee1;
+
+  /* info / archived, built-in */
+  --info: #7d97ad;
+  --info-ink: #496379;
+  --info-soft: #eaf0f5;
+  --info-line: #cfdce6;
+
+  /* buttons */
+  --ghost-bg: #efe9db;
+  --ghost-bg-hover: #e6dece;
+  --neutral-bg: #f2ede3;
+  --neutral-bg-hover: #e9e2d4;
+
+  /* type */
+  --font-sans: "Manrope", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --fs-hero: 15px;
+  --fs-body: 13.5px;
+  --fs-ui: 12.5px;
+  --fs-meta: 11.5px;
+  --fs-micro: 10.5px;
+  --fs-title: 14.5px;
+  --fs-field: 14.5px;
+
+  /* radii */
+  --r-xs: 5px;
+  --r-sm: 8px;
+  --r-md: 9px;
+  --r-lg: 10px;
+  --r-xl: 13px;
+  --r-2xl: 15px;
+  --r-3xl: 18px;
+  --r-pill: 999px;
+
+  /* metrics */
+  --h-control: 34px;
+  --h-control-sm: 28px;
+  --h-field: 50px;
+  --h-topbar: 60px;
+  --page: 880px;
+  --gutter: 16px;
+
+  /* elevation */
+  --sh-card: 0 1px 2px rgba(40, 30, 10, 0.04);
+  --sh-raise: 0 1px 2px rgba(40, 30, 10, 0.04), 0 20px 40px -34px rgba(40, 30, 10, 0.4);
+  --sh-pop: 0 12px 32px -10px rgba(40, 30, 10, 0.32);
+  --sh-modal: 0 30px 70px -24px rgba(20, 15, 5, 0.5);
+  --sh-accent: 0 8px 18px -8px rgba(197, 83, 42, 0.7);
+  --sh-accent-sm: 0 6px 14px -8px rgba(197, 83, 42, 0.8);
+  --focus-ring: 0 0 0 3px rgba(197, 83, 42, 0.22);
+
+  /* pwa manifest, light: theme_color / background_color */
+  --pwa-theme: #c5532a;
+  --pwa-bg: #efeae0;
+
+  color-scheme: light;
 }
+
+:root[data-theme="dark"] {
+  --bg: #191512;
+  --bg-tint-a: rgba(224, 122, 75, 0.14);
+  --bg-tint-b: rgba(47, 159, 125, 0.12);
+  --bg-card: #221d18;
+  --bg-sunk: #1e1a16;
+  --bg-inset: #26201a;
+  --bg-field: #1c1814;
+  --bg-chip: #2a241d;
+  --bg-rail: #241f19;
+  --bg-bar: #322a22;
+  --bar-topbar: rgba(25, 21, 18, 0.86);
+  --backdrop: rgba(9, 7, 6, 0.62);
+
+  --ink: #f3ece1;
+  --ink-soft: #c3bbab;
+  --ink-mute: #a9a08f;
+  --ink-faint: #948b7b;
+  --ink-ghost: #8b8272;
+  --ink-on-accent: #1a1310;
+
+  --line: #362e26;
+  --line-strong: #43392e;
+  --line-soft: #2c251e;
+  --line-dashed: #4a3f33;
+
+  --accent: #ef8354;
+  --accent-ink: #f59a6f;
+  --accent-2nd: #f3a578;
+  --accent-soft: #35231a;
+  --accent-soft-2: #2c1f18;
+  --accent-line: #5b3826;
+
+  --ok: #4cc79e;
+  --ok-ink: #6fd9b4;
+  --ok-soft: #16302a;
+  --ok-line: #2a5546;
+
+  --warn: #dfb75c;
+  --warn-ink: #edc978;
+  --warn-soft: #322613;
+  --warn-line: #574327;
+
+  --danger: #ef6a5c;
+  --danger-ink: #f68b7f;
+  --danger-soft: #351d1b;
+  --danger-line: #5c322d;
+
+  --mute: #98a0a6;
+  --mute-ink: #b6bdc2;
+  --mute-soft: #262a2c;
+  --mute-line: #3b4144;
+
+  --info: #8fb2cc;
+  --info-ink: #a7c6dc;
+  --info-soft: #1c2833;
+  --info-line: #33485a;
+
+  --ghost-bg: #2e281f;
+  --ghost-bg-hover: #3a3227;
+  --neutral-bg: #2a241d;
+  --neutral-bg-hover: #352d24;
+
+  --sh-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-raise: 0 1px 2px rgba(0, 0, 0, 0.4), 0 24px 48px -34px rgba(0, 0, 0, 0.8);
+  --sh-pop: 0 14px 34px -10px rgba(0, 0, 0, 0.7);
+  --sh-modal: 0 34px 80px -26px rgba(0, 0, 0, 0.85);
+  --sh-accent: 0 8px 18px -10px rgba(239, 131, 84, 0.6);
+  --sh-accent-sm: 0 6px 14px -9px rgba(239, 131, 84, 0.6);
+  --focus-ring: 0 0 0 3px rgba(239, 131, 84, 0.3);
+
+  --pwa-theme: #191512;
+  --pwa-bg: #191512;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #191512;
+    --bg-tint-a: rgba(224, 122, 75, 0.14);
+    --bg-tint-b: rgba(47, 159, 125, 0.12);
+    --bg-card: #221d18;
+    --bg-sunk: #1e1a16;
+    --bg-inset: #26201a;
+    --bg-field: #1c1814;
+    --bg-chip: #2a241d;
+    --bg-rail: #241f19;
+    --bg-bar: #322a22;
+    --bar-topbar: rgba(25, 21, 18, 0.86);
+    --backdrop: rgba(9, 7, 6, 0.62);
+    --ink: #f3ece1;
+    --ink-soft: #c3bbab;
+    --ink-mute: #a9a08f;
+    --ink-faint: #948b7b;
+    --ink-ghost: #8b8272;
+    --ink-on-accent: #1a1310;
+    --line: #362e26;
+    --line-strong: #43392e;
+    --line-soft: #2c251e;
+    --line-dashed: #4a3f33;
+    --accent: #ef8354;
+    --accent-ink: #f59a6f;
+    --accent-2nd: #f3a578;
+    --accent-soft: #35231a;
+    --accent-soft-2: #2c1f18;
+    --accent-line: #5b3826;
+    --ok: #4cc79e;
+    --ok-ink: #6fd9b4;
+    --ok-soft: #16302a;
+    --ok-line: #2a5546;
+    --warn: #dfb75c;
+    --warn-ink: #edc978;
+    --warn-soft: #322613;
+    --warn-line: #574327;
+    --danger: #ef6a5c;
+    --danger-ink: #f68b7f;
+    --danger-soft: #351d1b;
+    --danger-line: #5c322d;
+    --mute: #98a0a6;
+    --mute-ink: #b6bdc2;
+    --mute-soft: #262a2c;
+    --mute-line: #3b4144;
+    --info: #8fb2cc;
+    --info-ink: #a7c6dc;
+    --info-soft: #1c2833;
+    --info-line: #33485a;
+    --ghost-bg: #2e281f;
+    --ghost-bg-hover: #3a3227;
+    --neutral-bg: #2a241d;
+    --neutral-bg-hover: #352d24;
+    --sh-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --sh-raise: 0 1px 2px rgba(0, 0, 0, 0.4), 0 24px 48px -34px rgba(0, 0, 0, 0.8);
+    --sh-pop: 0 14px 34px -10px rgba(0, 0, 0, 0.7);
+    --sh-modal: 0 34px 80px -26px rgba(0, 0, 0, 0.85);
+    --sh-accent: 0 8px 18px -10px rgba(239, 131, 84, 0.6);
+    --sh-accent-sm: 0 6px 14px -9px rgba(239, 131, 84, 0.6);
+    --focus-ring: 0 0 0 3px rgba(239, 131, 84, 0.3);
+    --pwa-theme: #191512;
+    --pwa-bg: #191512;
+    color-scheme: dark;
+  }
+}
+
+/* Back-compat aliases: names used by rules written before the token set was
+   expanded. --accent-2 is the old name for the success/running colour, which
+   now lives in the semantic --ok group. Keeping the alias means the existing
+   var() call sites keep working and get themed for free. */
+:root {
+  --accent-2: var(--ok);
+}
+
 
 * {
   box-sizing: border-box;
@@ -102,7 +378,10 @@ select {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
-  background: #fff;
+  /* Both are needed: a themed background without a themed colour leaves the
+     inherited ink on it, which is invisible in the dark theme. */
+  background: var(--bg-field);
+  color: var(--ink);
   line-height: 1.4;
 }
 
@@ -117,7 +396,9 @@ button {
   border-radius: 10px;
   padding: 0.6rem 0.9rem;
   background: var(--accent);
-  color: #fff;
+  /* Not #fff: the dark theme lightens --accent, where white text falls to
+     2.6:1. --ink-on-accent inverts to dark ink there and stays white here. */
+  color: var(--ink-on-accent);
   font-weight: 700;
   cursor: pointer;
 }
@@ -281,7 +562,7 @@ input[type="file"] {
 
 .preset-label {
   font-size: 0.85rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
 }
 
 /* Small "?" affordance next to the preset label: the term needs explaining
@@ -298,15 +579,15 @@ input[type="file"] {
   border-radius: 50%;
   font-size: 0.7rem;
   line-height: 1;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
   cursor: help;
   user-select: none;
 }
 
 .preset-hint:hover,
 .preset-hint:focus-visible {
-  color: var(--fg, #111);
-  border-color: var(--muted, #555);
+  color: var(--ink);
+  border-color: var(--ink-soft);
 }
 
 /* The marker sits ~85px into the form, so the globally right-anchored bubble
@@ -349,7 +630,7 @@ input[type="file"] {
   gap: 0.5rem;
   margin-top: 0.4rem;
   font-size: 0.82rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
 }
 
 .preset-dangling-hint[hidden] {
@@ -365,7 +646,7 @@ input[type="file"] {
 
 .prompt-select-label {
   font-size: 0.85rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
 }
 
 .prompt-select {
@@ -411,7 +692,7 @@ input[type="file"] {
 
 .prompt-select-caret {
   font-size: 0.7rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
 }
 
 .prompt-select-popover {
@@ -467,7 +748,7 @@ input[type="file"] {
   border-radius: 999px;
   padding: 0.1rem 0.45rem;
   border: 1px solid var(--line);
-  color: var(--muted, #555);
+  color: var(--ink-soft);
   background: #f5f5f5;
 }
 
@@ -549,7 +830,9 @@ input[type="file"] {
 
 .icon-btn.primary {
   background: var(--accent);
-  color: #fff;
+  /* See the base button rule: white ink fails on the dark theme's lighter
+     accent, --ink-on-accent flips to dark ink there. */
+  color: var(--ink-on-accent);
 }
 
 /* A hairline outline on every ghost icon button. The fill alone is close to
@@ -558,9 +841,9 @@ input[type="file"] {
    differ in BORDER, not just opacity — a flat 0.45 alpha made "greyed out" and
    "just low contrast" look the same (vts-nr4). */
 .icon-btn.ghost {
-  background: #efe9db;
+  background: var(--ghost-bg);
   color: var(--ink);
-  border: 1px solid #d5cbb4;
+  border: 1px solid var(--line-strong);
 }
 
 .icon-btn.ghost:hover {
@@ -1047,7 +1330,7 @@ input[type="file"] {
 /* Only the link form (a real original URL) reads as clickable. Without href
    the same element is just muted text (uploads / non-http sources). */
 .task-source[href] {
-  color: var(--link, #2563eb);
+  color: var(--accent-ink);
 }
 
 .task-source[href]:hover {
@@ -1788,7 +2071,7 @@ dialog:not([open]) {
 
 .btn-text.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--ink-on-accent);
 }
 
 .btn-text.primary:hover {
@@ -1796,7 +2079,7 @@ dialog:not([open]) {
 }
 
 .btn-text.ghost {
-  background: #efe9db;
+  background: var(--ghost-bg);
   color: var(--ink);
 }
 
@@ -2582,14 +2865,14 @@ dialog:not([open]) {
 
 .upload-toast-count {
   font-size: 0.78rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
   flex: 0 0 auto;
 }
 
 /* The filename is the one unbounded string here; never let it widen the toast. */
 .upload-toast-file {
   font-size: 0.76rem;
-  color: var(--muted, #555);
+  color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
