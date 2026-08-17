@@ -57,8 +57,11 @@ class _FakeRequest:
     uvicorn waits for connections BEFORE running the lifespan.
     """
 
-    def __init__(self, disconnected: bool = False) -> None:
+    def __init__(self, disconnected: bool = False, app=None) -> None:
         self._disconnected = disconnected
+        # The handler reads the shutdown flag off `request.app.state` (it lives
+        # in a router now, so there is no enclosing `app` to close over).
+        self.app = app
 
     async def is_disconnected(self) -> bool:
         return self._disconnected
@@ -67,7 +70,7 @@ class _FakeRequest:
 async def _call_events_endpoint(app):
     """Invoke the /api/events handler directly, bypassing the transport.
 
-    The endpoint is a closure inside create_app, so it is reached through the
+    The endpoint lives in vts.api.routers.tasks; it is reached through the
     router rather than imported. Dependencies are supplied by hand because we
     are not going through FastAPI's dependency injection here.
     """
@@ -86,7 +89,7 @@ async def _call_events_endpoint(app):
         acting_as="tester",
     )
     return await route.endpoint(
-        request=_FakeRequest(), user=user, redis=app.state.redis, settings=get_settings()
+        request=_FakeRequest(app=app), user=user, redis=app.state.redis, settings=get_settings()
     )
 
 
@@ -175,7 +178,7 @@ async def test_event_stream_ends_when_the_client_disconnects(client, authed_app)
     route = next(
         r for r in app.router.routes if getattr(r, "path", None) == "/api/events"
     )
-    request = _FakeRequest(disconnected=False)
+    request = _FakeRequest(disconnected=False, app=app)
     response = await route.endpoint(
         request=request,
         user=AuthenticatedUser(

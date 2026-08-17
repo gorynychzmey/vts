@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
-from vts.api.main import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts, _get_lane_positions, serialize_task
+from vts.api._helpers.artifact_store import ARCHIVED_LOG_MESSAGE, _archive_task_artifacts
+
+from vts.api._helpers.serialization import serialize_task
+
+from vts.api._helpers.task_input import _get_lane_positions
 from vts.services.task_progress import summary_progress_for_task as _summary_progress_for_task
 from vts.db.models import StepStatus, TaskStatus
 
@@ -412,7 +416,7 @@ def test_capabilities_completed_without_summary_prompt_cannot_restart_summary(tm
 
 
 def test_capabilities_compact_serializer_matches_full(tmp_path: Path) -> None:
-    from vts.api.main import serialize_task_compact
+    from vts.api._helpers.serialization import serialize_task_compact
 
     task = _task(
         tmp_path,

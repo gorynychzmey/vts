@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased notes (1.2 → 1.6)
+
+Releases between 1.2 and 1.6 were shipped without individual entries here;
+the highlights below cover the user-facing subsystems added in that range.
+See `git log` for the full detail.
+
+### Delivery (vts-ouq, vts-929, vts-j2kh, vts-9y7, vts-j8gz)
+
+Finished results can be pushed to an external system automatically.
+
+- Configure **connections** (credentials) and **destinations** (where a result
+  goes) in the web UI; a task can deliver any of its results, including the
+  output of a user prompt.
+- Adapters are pluggable and live out of tree. The adapter contract is
+  versioned (major = breaking, minor = additive) and validated at load time;
+  a plugin loader installs adapters from GitHub Releases.
+- Delivery runs asynchronously with retries and backoff; per-task delivery
+  status and a manual retry are exposed over HTTP and MCP.
+
+### Multi-file upload (vts-vm0)
+
+Several files can be uploaded and processed as a single recording. Order is
+resolved from `creation_time`, then mtime, then natural filename order, and is
+shown in the UI along with the source file list. Audio sets are stream-copied
+where possible; incompatible video sets are rejected at validation.
+
+### Speaker diarization and registry (vts-4rt, vts-552, vts-5xz, vts-4nx)
+
+Optional per-task diarization labels who is speaking, and a persistent speaker
+registry matches recurring voices across recordings. Unresolved speakers pause
+the task in `awaiting_input` for a manual decision. Requires a diarization
+sidecar; registry matching needs sidecar `1.1.0+`.
+
+### Task list filtering (vts-rhx)
+
+The task list can be filtered by name, date range and source type.
+
 ## 1.1.8 — Task option presets (vts-hp7)
 
 Save a named bundle of task-creation options (language, audio-only,

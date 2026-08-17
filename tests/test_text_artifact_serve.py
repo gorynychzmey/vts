@@ -10,7 +10,11 @@ import pytest
 from starlette.requests import Request
 
 from tests.conftest import _TEST_USER_ID
-from vts.api.main import _MAX_TEXT_SLICE_CHARS, _parse_range_header, _serve_text
+from vts.api.routers.artifacts import (
+    _MAX_TEXT_SLICE_CHARS,
+    _parse_range_header,
+    _serve_text,
+)
 
 
 def _make_request(headers: dict[str, str] | None = None) -> Request:

@@ -128,6 +128,135 @@ def tokenizer_path(settings: Settings) -> str | None:
     return str(p) if p is not None else None
 
 
+async def count_tokens(
+    ctx: "PipelineContext", text: str, *, timeout_seconds: int
+) -> int:
+    """Token count for `text` under the configured model and tokenizer.
+
+    Every call site passed the same model/tokenizer pair, so only the text and
+    the timeout are worth naming here (12 identical call sites before this).
+    """
+    return await ctx.llm.count_tokens(
+        text=text,
+        model=ctx.settings.llm_model,
+        timeout_seconds=timeout_seconds,
+        tokenizer_path=tokenizer_path(ctx.settings),
+    )
+
+
+def load_window_summaries(
+    summary_dir: Path, st: StepState, *, missing_detail: str = ""
+) -> list[Any]:
+    """Read the window summaries, from the step dir or the outputs mirror.
+
+    Both locations are load-bearing: `summary/windows.json` is what
+    SummarizeWindowsStep writes, and `outputs/window_summaries.json` is the
+    mirror that survives an artifact reset. Three steps read them, and each
+    used to carry its own copy of this fallback — a rename in one place would
+    have left the others looking for the old name.
+    """
+    windows_file = summary_dir / "windows.json"
+    if not windows_file.exists():
+        windows_file = st.dirs["outputs"] / "window_summaries.json"
+    if not windows_file.exists():
+        raise RuntimeError(f"Missing window summaries{missing_detail}")
+    windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
+    if not isinstance(windows, list):
+        raise RuntimeError("Invalid window summaries payload")
+    return windows
+
+
+def restore_windows(
+    output: Path, summary_dir: Path, total_windows: int
+) -> dict[int, dict[str, Any]]:
+    """Recover already-summarized windows so a resumed run skips them.
+
+    Read from two places on purpose, because a crash can leave them
+    disagreeing:
+
+    * `windows.json` — written after every window, so it is the complete
+      record right up to the moment the process died;
+    * `window_NN.txt` — written first, one file per window, so a window can
+      exist on disk with no line in `windows.json` yet.
+
+    The per-file pass only fills gaps (`idx in windows_by_index` -> skip), so
+    `windows.json` wins where both have an entry. Anything malformed is
+    skipped rather than raising: a half-written file from a kill -9 must not
+    make the whole step unresumable.
+
+    Indices above `total_windows` are dropped — after the whole-transcript
+    fallback re-chunks, the old run's higher-numbered windows describe a
+    segmentation that no longer exists.
+    """
+    windows_by_index: dict[int, dict[str, Any]] = {}
+    if output.exists():
+        try:
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        raw_windows = payload.get("windows") if isinstance(payload, dict) else None
+        if isinstance(raw_windows, list):
+            for item in raw_windows:
+                if not isinstance(item, dict):
+                    continue
+                raw_index = item.get("window_index")
+                try:
+                    idx = int(raw_index)
+                except (TypeError, ValueError):
+                    continue
+                if idx < 1:
+                    continue
+                summary_payload = item.get("summary")
+                path = item.get("path")
+                if not isinstance(path, str) or not path.strip():
+                    path = str(summary_dir / f"window_{idx:02d}.txt")
+                windows_by_index[idx] = {
+                    "window_index": idx,
+                    "summary": summary_payload,
+                    "path": path,
+                }
+
+    file_pattern = re.compile(r"^window_(\d+)\.txt$")
+    for window_path in sorted(summary_dir.glob("window_*.txt")):
+        match = file_pattern.match(window_path.name)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx in windows_by_index:
+            continue
+        content = window_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(content)
+            summary: str | dict = parsed if isinstance(parsed, dict) else content
+        except json.JSONDecodeError:
+            summary = content
+        windows_by_index[idx] = {
+            "window_index": idx,
+            "summary": summary,
+            "path": str(window_path),
+        }
+
+    for idx in list(windows_by_index.keys()):
+        if idx > total_windows:
+            windows_by_index.pop(idx, None)
+    return windows_by_index
+
+
+def write_window_summaries(
+    output: Path, output_mirror: Path, windows_by_index: dict[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Persist the windows collected so far to both locations, in index order.
+
+    Returns the ordered list, since callers need it right after writing.
+    Written to both paths every time: a crash between the two would leave the
+    mirror describing a different set of windows than the step dir.
+    """
+    ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
+    write_json(output, {"windows": ordered})
+    write_json(output_mirror, {"windows": ordered})
+    return ordered
+
+
 def token_budget_config(settings: Settings, n_ctx: int) -> TokenBudgetConfig:
     _defaults = TokenBudgetConfig()
     s = settings
@@ -495,18 +624,8 @@ class PrepareSummaryChunksStep(Step):
             load_prompt(ctx.settings.prompts_dir, "segment_prompt.md", _SEGMENT_PROMPT_FALLBACK),
             effective_language(st.task_options, st.dirs),
         )
-        prompt_tokens = await ctx.llm.count_tokens(
-            text=segment_prompt,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
-        transcript_tokens = await ctx.llm.count_tokens(
-            text=transcript,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
+        prompt_tokens = await count_tokens(ctx, segment_prompt, timeout_seconds=timeout_seconds)
+        transcript_tokens = await count_tokens(ctx, transcript, timeout_seconds=timeout_seconds)
 
         send_whole = False
         if mode == "never":
@@ -606,65 +725,13 @@ class SummarizeWindowsStep(Step):
             ctx, st, output_language
         )
 
-        windows_by_index: dict[int, dict[str, Any]] = {}
-        if output.exists():
-            try:
-                payload = json.loads(output.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                payload = {}
-            raw_windows = payload.get("windows") if isinstance(payload, dict) else None
-            if isinstance(raw_windows, list):
-                for item in raw_windows:
-                    if not isinstance(item, dict):
-                        continue
-                    raw_index = item.get("window_index")
-                    try:
-                        idx = int(raw_index)
-                    except (TypeError, ValueError):
-                        continue
-                    if idx < 1:
-                        continue
-                    summary_payload = item.get("summary")
-                    path = item.get("path")
-                    if not isinstance(path, str) or not path.strip():
-                        path = str(summary_dir / f"window_{idx:02d}.txt")
-                    windows_by_index[idx] = {
-                        "window_index": idx,
-                        "summary": summary_payload,
-                        "path": path,
-                    }
-
-        file_pattern = re.compile(r"^window_(\d+)\.txt$")
-        for window_path in sorted(summary_dir.glob("window_*.txt")):
-            match = file_pattern.match(window_path.name)
-            if not match:
-                continue
-            idx = int(match.group(1))
-            if idx in windows_by_index:
-                continue
-            content = window_path.read_text(encoding="utf-8")
-            try:
-                parsed = json.loads(content)
-                summary: str | dict = parsed if isinstance(parsed, dict) else content
-            except json.JSONDecodeError:
-                summary = content
-            windows_by_index[idx] = {
-                "window_index": idx,
-                "summary": summary,
-                "path": str(window_path),
-            }
-
-        for idx in list(windows_by_index.keys()):
-            if idx > total_windows:
-                windows_by_index.pop(idx, None)
+        windows_by_index = restore_windows(output, summary_dir, total_windows)
 
         restored = sum(1 for idx in windows_by_index if 1 <= idx <= total_windows)
         if restored:
             st.logger.info("restored summarized windows: %s/%s", restored, total_windows)
         if restored == total_windows:
-            ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
-            write_json(output, {"windows": ordered})
-            write_json(output_mirror, {"windows": ordered})
+            ordered = write_window_summaries(output, output_mirror, windows_by_index)
             redacted_path = st.dirs["outputs"] / "redacted_transcript.txt"
             redacted_path.write_text(
                 "".join(str(w.get("summary", "")).rstrip("\n") + "\n\n" for w in ordered),
@@ -710,12 +777,7 @@ class SummarizeWindowsStep(Step):
 
                     # Stage A: adaptive token budget
                     user_prompt = f"Window {idx}/{len(chunks)}\n\n{chunk}"
-                    input_tokens = await ctx.llm.count_tokens(
-                        text=user_prompt,
-                        model=ctx.settings.llm_model,
-                        timeout_seconds=timeout_seconds,
-                        tokenizer_path=tokenizer_path(ctx.settings),
-                    )
+                    input_tokens = await count_tokens(ctx, user_prompt, timeout_seconds=timeout_seconds)
                     window_cfg = uncap_segment_for_input(budget_cfg, input_tokens)
                     target_tokens, min_out, max_out = compute_segment_budget(input_tokens, window_cfg)
                     budgeted_prompt = render_prompt_vars(
@@ -762,12 +824,7 @@ class SummarizeWindowsStep(Step):
                                 raise _WholeTranscriptOverflow() from exc
                             raise
                         _win_t_ms = round((time.monotonic() - _win_t0) * 1000)
-                    actual_output_tokens = await ctx.llm.count_tokens(
-                        text=raw,
-                        model=ctx.settings.llm_model,
-                        timeout_seconds=timeout_seconds,
-                        tokenizer_path=tokenizer_path(ctx.settings),
-                    )
+                    actual_output_tokens = await count_tokens(ctx, raw, timeout_seconds=timeout_seconds)
                     log_metrics(st.logger, SummarizationMetrics(
                         stage_name="segment",
                         input_tokens=input_tokens,
@@ -804,9 +861,7 @@ class SummarizeWindowsStep(Step):
                     window_path = summary_dir / f"window_{idx:02d}.txt"
                     window_path.write_text(raw, encoding="utf-8")
                     windows_by_index[idx] = {"window_index": idx, "summary": raw, "path": str(window_path)}
-                    ordered = [windows_by_index[item_idx] for item_idx in sorted(windows_by_index)]
-                    write_json(output, {"windows": ordered})
-                    write_json(output_mirror, {"windows": ordered})
+                    ordered = write_window_summaries(output, output_mirror, windows_by_index)
                     redacted_path = st.dirs["outputs"] / "redacted_transcript.txt"
                     with redacted_path.open("a", encoding="utf-8") as rf:
                         rf.write(raw.rstrip("\n") + "\n\n")
@@ -830,12 +885,7 @@ class SummarizeWindowsStep(Step):
                     "falling back to segmentation: %s",
                     overflow.__cause__,
                 )
-                prompt_tokens = await ctx.llm.count_tokens(
-                    text=segment_prompt,
-                    model=ctx.settings.llm_model,
-                    timeout_seconds=int(getattr(ctx.settings, "llm_chat_timeout_seconds", 600)),
-                    tokenizer_path=tokenizer_path(ctx.settings),
-                )
+                prompt_tokens = await count_tokens(ctx, segment_prompt, timeout_seconds=int(getattr(ctx.settings, "llm_chat_timeout_seconds", 600)))
                 window_tokens = derive_window_tokens(
                     budget_cfg,
                     prompt_tokens,
@@ -869,9 +919,7 @@ class SummarizeWindowsStep(Step):
                 st.logger.info("fallback segmentation: %s windows", len(chunks))
                 continue
             break
-        ordered = [windows_by_index[idx] for idx in sorted(windows_by_index)]
-        write_json(output, {"windows": ordered})
-        write_json(output_mirror, {"windows": ordered})
+        ordered = write_window_summaries(output, output_mirror, windows_by_index)
         st.logger.info("window summaries generated: %s", len(ordered))
         return True
 
@@ -899,14 +947,9 @@ class PackWindowNotesStep(Step):
             return True
 
         # Load window notes
-        windows_file = summary_dir / "windows.json"
-        if not windows_file.exists():
-            windows_file = st.dirs["outputs"] / "window_summaries.json"
-        if not windows_file.exists():
-            raise RuntimeError("Missing window summaries for packing step")
-        windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
-        if not isinstance(windows, list):
-            raise RuntimeError("Invalid window summaries payload")
+        windows = load_window_summaries(
+            summary_dir, st, missing_detail=" for packing step"
+        )
 
         output_language = effective_language(st.task_options, st.dirs)
         timeout_seconds = int(getattr(ctx.settings, "llm_final_timeout_seconds", 1800))
@@ -923,12 +966,7 @@ class PackWindowNotesStep(Step):
                 output_language,
             ),
         )
-        final_prompt_tokens = await ctx.llm.count_tokens(
-            text=final_prompt_text,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
+        final_prompt_tokens = await count_tokens(ctx, final_prompt_text, timeout_seconds=timeout_seconds)
         st.logger.info(
             "pack_window_notes: final_prompt_tokens=%d",
             final_prompt_tokens,
@@ -938,12 +976,7 @@ class PackWindowNotesStep(Step):
         notes_texts: list[str] = [extract_window_text(w) for w in windows]
         note_token_counts: list[int] = []
         for text in notes_texts:
-            tc = await ctx.llm.count_tokens(
-                text=text,
-                model=ctx.settings.llm_model,
-                timeout_seconds=timeout_seconds,
-                tokenizer_path=tokenizer_path(ctx.settings),
-            )
+            tc = await count_tokens(ctx, text, timeout_seconds=timeout_seconds)
             note_token_counts.append(tc)
         total_notes_tokens = sum(note_token_counts)
 
@@ -1002,12 +1035,7 @@ class PackWindowNotesStep(Step):
                 for b_idx, batch in enumerate(batches, 1):
                     await ctx.check_paused(st.task_id)
                     batch_input = "\n\n".join(batch)
-                    batch_input_tokens = await ctx.llm.count_tokens(
-                        text=batch_input,
-                        model=ctx.settings.llm_model,
-                        timeout_seconds=timeout_seconds,
-                        tokenizer_path=tokenizer_path(ctx.settings),
-                    )
+                    batch_input_tokens = await count_tokens(ctx, batch_input, timeout_seconds=timeout_seconds)
                     target_tokens, min_out, max_out = compute_pack_budget(
                         batch_input_tokens, budget_cfg
                     )
@@ -1036,12 +1064,7 @@ class PackWindowNotesStep(Step):
                             thinking=ctx.settings.llm_thinking,
                             num_ctx=budget_cfg.n_ctx,
                         )
-                    packed_tc = await ctx.llm.count_tokens(
-                        text=packed_text,
-                        model=ctx.settings.llm_model,
-                        timeout_seconds=timeout_seconds,
-                        tokenizer_path=tokenizer_path(ctx.settings),
-                    )
+                    packed_tc = await count_tokens(ctx, packed_text, timeout_seconds=timeout_seconds)
                     log_metrics(st.logger, SummarizationMetrics(
                         stage_name="pack",
                         input_tokens=batch_input_tokens,
@@ -1187,14 +1210,7 @@ class FinalizePromptStep(Step):
                 packing_triggered,
             )
         else:
-            windows_file = summary_dir / "windows.json"
-            if not windows_file.exists():
-                windows_file = st.dirs["outputs"] / "window_summaries.json"
-            if not windows_file.exists():
-                raise RuntimeError("Missing window summaries")
-            windows = json.loads(windows_file.read_text(encoding="utf-8")).get("windows", [])
-            if not isinstance(windows, list):
-                raise RuntimeError("Invalid window summaries payload")
+            windows = load_window_summaries(summary_dir, st)
             # Build merged with [Segment N] prefix (same as original behaviour)
             parts: list[str] = []
             for w in windows:
@@ -1220,19 +1236,9 @@ class FinalizePromptStep(Step):
             ctx, id, output_language, st.user_id
         )
         # Stage C: adaptive token budget
-        input_tokens = await ctx.llm.count_tokens(
-            text=merged,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
+        input_tokens = await count_tokens(ctx, merged, timeout_seconds=timeout_seconds)
         target_tokens, min_out, max_out = compute_final_budget(input_tokens, budget_cfg)
-        final_prompt_tokens = await ctx.llm.count_tokens(
-            text=global_prompt_base,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
+        final_prompt_tokens = await count_tokens(ctx, global_prompt_base, timeout_seconds=timeout_seconds)
         # global_prompt.md carries the participant lists too, so they must be
         # substituted here as well or the placeholder reaches the model raw.
         final_named, final_anonymous = await _participants_for_task(ctx, st, output_language)
@@ -1273,12 +1279,7 @@ class FinalizePromptStep(Step):
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 
-        actual_output_tokens = await ctx.llm.count_tokens(
-            text=raw,
-            model=ctx.settings.llm_model,
-            timeout_seconds=timeout_seconds,
-            tokenizer_path=tokenizer_path(ctx.settings),
-        )
+        actual_output_tokens = await count_tokens(ctx, raw, timeout_seconds=timeout_seconds)
         log_metrics(st.logger, SummarizationMetrics(
             stage_name="final",
             input_tokens=input_tokens,

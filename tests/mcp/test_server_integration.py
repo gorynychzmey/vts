@@ -45,17 +45,19 @@ async def test_server_integration_list_tasks_smoke(monkeypatch) -> None:
 
     # Import the server module fresh so monkeypatch can swap its imported names
     import vts.mcp.server as server_mod
+    import vts.mcp.tools_registry.tasks as tasks_mod
     from vts.core.config import Settings
 
-    # Three patches in vts.mcp.server:
-    # mcp_authenticate now calls get_http_request() internally, so only the
-    # function itself needs patching here.
+    # Three patches, applied to vts.mcp.tools_registry.tasks: that is where the
+    # list_tasks body now resolves these names, since the tool bodies moved out
+    # of build_mcp_server. Patching vts.mcp.server instead fails in a way worth
+    # remembering — the tool still runs, just against the real session factory.
     async def _fake_mcp_authenticate(session):
         return user, Settings()
 
-    monkeypatch.setattr(server_mod, "mcp_authenticate", _fake_mcp_authenticate)
-    monkeypatch.setattr(server_mod, "get_db_session_factory", _fake_session_factory)
-    monkeypatch.setattr(server_mod, "Repo", lambda _session: repo)
+    monkeypatch.setattr(tasks_mod, "mcp_authenticate", _fake_mcp_authenticate)
+    monkeypatch.setattr(tasks_mod, "get_db_session_factory", _fake_session_factory)
+    monkeypatch.setattr(tasks_mod, "Repo", lambda _session: repo)
 
     mcp = server_mod.build_mcp_server()
     async with Client(mcp) as client:

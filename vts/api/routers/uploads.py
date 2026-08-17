@@ -5,11 +5,9 @@ docs/plans/main-py-split.md. The handlers already took `settings` and the
 other request-scoped objects via `Depends`, so nothing here relied on the
 old enclosing closure; only `app` became `router`.
 
-`_ALLOWED_UPLOAD_SUFFIXES` and the task-creation helpers still live in
-`vts.api.main`; they are reached through the `_main()` accessor below rather
-than a module-scope import, because `main` imports this module to mount the
-router and a top-level import back would be a cycle. Those helpers move out
-of `main` as later steps of the split land.
+`_ALLOWED_UPLOAD_SUFFIXES` and the task-creation helpers are shared with the
+`POST /api/tasks/upload` path in `vts.api.routers.tasks`, so they live in
+`vts.api._helpers.task_input`.
 """
 
 from __future__ import annotations
@@ -27,6 +25,9 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from vts.api._helpers.base import _user_hash_dir
+from vts.api._helpers.serialization import serialize_task
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -52,20 +53,10 @@ from vts.services.upload_set import UploadSetError, classify_suffixes, verify_pr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["meta"])
-
-
-def _main():
-    """Late-bound access to helpers still living in `vts.api.main`.
-
-    `main` imports this module to mount the router, so importing it back at
-    module scope would be a cycle. These are pure helpers with no request
-    state; they move here (or to a shared module) as later steps of the split
-    land — see docs/plans/main-py-split.md.
-    """
-    from vts.api import main
-
-    return main
+# No tags= here: _install_custom_openapi() in vts.api.main assigns the
+# OpenAPI tag from the URL prefix, and an explicit router tag overrides it
+# (it retagged /api/tasks/{task_id}/deliveries from "tasks" to "meta").
+router = APIRouter()
 
 
 @router.get("/api/uploads/config", response_model=UploadConfigOut)
@@ -100,13 +91,13 @@ async def uploads_init(
         except UploadSetError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        normalized_prompts = _main()._normalize_prompts_json(payload.prompts)
+        normalized_prompts = _normalize_prompts_json(payload.prompts)
         if normalized_prompts and not payload.transcript:
             raise HTTPException(status_code=422, detail="prompts require transcript")
         if payload.diarize and not payload.transcript:
             raise HTTPException(status_code=422, detail="diarize requires transcript")
         normalized_delivery = await _validated_delivery(
-            session, user, _main()._normalize_delivery_json(payload.delivery)
+            session, user, _normalize_delivery_json(payload.delivery)
         )
 
         upload_id = uuid.uuid4()
@@ -132,7 +123,7 @@ async def uploads_init(
         UploadSession.init_multi(
             settings.artifacts_root, user.username,
             user_id=user.id, upload_id=upload_id, files=spec_files, kind=kind,
-            options=options, display_name=_main().normalize_display_name(payload.display_name),
+            options=options, display_name=normalize_display_name(payload.display_name),
             created_at=datetime.now(tz=timezone.utc).isoformat(),
         )
         return UploadInitOut(
@@ -142,19 +133,19 @@ async def uploads_init(
         )
 
     suffix = Path(payload.filename).suffix.lower()
-    if suffix not in _main()._ALLOWED_UPLOAD_SUFFIXES:
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=422, detail=f"Unsupported file type: {suffix or '(none)'}")
     if payload.total_size <= 0:
         raise HTTPException(status_code=422, detail="total_size must be positive")
     if payload.total_size > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
-    normalized_prompts = _main()._normalize_prompts_json(payload.prompts)
+    normalized_prompts = _normalize_prompts_json(payload.prompts)
     if normalized_prompts and not payload.transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     if payload.diarize and not payload.transcript:
         raise HTTPException(status_code=422, detail="diarize requires transcript")
     normalized_delivery = await _validated_delivery(
-        session, user, _main()._normalize_delivery_json(payload.delivery)
+        session, user, _normalize_delivery_json(payload.delivery)
     )
     upload_id = uuid.uuid4()
     options = {
@@ -174,7 +165,7 @@ async def uploads_init(
         settings.artifacts_root, user.username,
         user_id=user.id, upload_id=upload_id, suffix=suffix,
         total_size=payload.total_size, options=options,
-        display_name=_main().normalize_display_name(payload.display_name),
+        display_name=normalize_display_name(payload.display_name),
         filename=payload.filename,
         created_at=datetime.now(tz=timezone.utc).isoformat(),
     )
@@ -219,6 +210,25 @@ def _entry_for_index(meta: dict, index: int) -> dict:
         if entry.get("index") == index:
             return entry
     raise HTTPException(status_code=404, detail=f"No file at index {index}")
+
+
+def _finish_interrupted_reorder(media_dir: Path) -> None:
+    """Finish a concat-order reorder that a previous finalize died inside.
+
+    A crash between the two rename passes in `uploads_finalize` leaves files
+    under `ordered.NNN.*`, a name nothing else recognises (vts-vm0 blocker 2,
+    "second, dirtier window"). That name already encodes the target
+    concat-order position, so finishing pass 2 for it needs no re-probing and
+    no re-resolution of order — which is why this can run before the
+    completeness check, on every call, without consulting `resolved_order`.
+
+    Cannot collide with entries that have not been reordered yet: `ordered.*`
+    is a distinct prefix from `audio.original.*`, and each position is unique
+    across the set.
+    """
+    for stray in sorted(media_dir.glob("ordered.*")):
+        target = media_dir / part_name(int(stray.stem.split(".")[1]), stray.suffix)
+        stray.rename(target)
 
 
 async def _lock_upload(session: AsyncSession, upload_id: uuid.UUID) -> None:
@@ -318,6 +328,41 @@ async def uploads_finalize(
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> TaskOut:
+    """Create the Task for a completed upload session (idempotent)."""
+    # This handler's docstring is published as the OpenAPI description and is
+    # capped at 300 chars for ChatGPT Actions (see test_openapi_spec.py), so
+    # the design notes live here as a comment instead.
+    #
+    # Written to be RESUMABLE: every client retry re-enters here, and a
+    # previous attempt may have died at any point. The whole body runs under
+    # pg_advisory_xact_lock (see _lock_upload), so attempts are serialized per
+    # upload_id rather than interleaved.
+    #
+    # Progress is not tracked by a status field but inferred from what is on
+    # disk, which gives four recovery points:
+    #
+    # 1. A Task row already exists -> the retry (or the loser of a concurrent
+    #    pair) gets that task back, not a primary-key crash. Checked under the
+    #    lock, so it cannot change while we look.
+    # 2. `ordered.NNN.*` files present -> a crash between the two rename
+    #    passes. _finish_interrupted_reorder completes pass 2 from the names
+    #    alone; it needs no order decision, so it runs first, unconditionally.
+    # 3. `resolved_order` persisted in the sidecar (`already_resolved`) -> a
+    #    previous attempt got as far as deciding the concat order. That
+    #    decision is made exactly ONCE and written before any rename touches
+    #    disk, because it is derived from probing files the renames then move:
+    #    after a reorder, the selection-index names those probes matched no
+    #    longer exist. So a retry reuses it verbatim and skips the
+    #    completeness check, finalize_multi and probing — all three of which
+    #    would otherwise fail or lie on a set that is already correct.
+    # 4. Sidecar still on disk -> kept (remove_meta=False) until the Task row
+    #    is committed, since it is what makes the session findable and keeps
+    #    the GC away. Unlinked only on success.
+    #
+    # The invariant tying 2-4 together: THE ORDER DECISION IS NEVER
+    # RE-DERIVED. That is what makes the two-pass reorder safe to redo from
+    # wherever it stopped. Splitting these steps into separate helpers would
+    # hide it.
     # Parse the id WITHOUT requiring the sidecar to still be on disk:
     # a successful finalize unlinks it, so _load_owned_session would 404
     # a legitimate retry before the already-finalized check below could
@@ -348,42 +393,26 @@ async def uploads_finalize(
         # freshly-created path below: get_task_for_user eagerly loads the
         # real steps, and a retry may well arrive after the pipeline has
         # started producing them.
-        queue_positions = await _main()._get_cached_queue_positions(
+        queue_positions = await _get_cached_queue_positions(
             redis, existing_repo, settings.redis_prefix
         )
-        lane_positions = await _main()._get_lane_positions(redis, settings.redis_prefix)
+        lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await existing_repo.get_asr_progress_for_tasks([existing.id])
         summary_progress = {existing.id: summary_progress_for_task(existing)}
-        return _main().serialize_task(
+        return serialize_task(
             existing, queue_positions, asr_progress, summary_progress, lane_positions
         )
 
     uid, meta = _load_owned_session(settings, user, upload_id)
 
     if meta.get("files"):
-        media_dir = Path(settings.artifacts_root) / _main()._user_hash_dir(user.username) / str(uid) / "media"
+        media_dir = Path(settings.artifacts_root) / _user_hash_dir(user.username) / str(uid) / "media"
 
-        # Recover any `ordered.NNN.*` leftovers from an interrupted
-        # concat-order reorder (vts-vm0 blocker 2, "second, dirtier
-        # window"): a crash between the two rename passes below leaves
-        # files under a name nothing else recognises. `ordered.NNN.*`
-        # already encodes the target concat-order position in its own
-        # name — finishing pass 2 for it needs no re-probing and no
-        # re-resolution of order, so this is safe to do unconditionally,
-        # before the completeness check, on every finalize call (a no-op
-        # when there is nothing to recover). This can never collide with
-        # entries not yet reordered: `ordered.*` is a distinct name
-        # prefix from `audio.original.*`, and each `position` is unique
-        # across the whole set.
-        def _finish_interrupted_reorder() -> None:
-            for stray in sorted(media_dir.glob("ordered.*")):
-                target = media_dir / part_name(
-                    int(stray.stem.split(".")[1]), stray.suffix
-                )
-                stray.rename(target)
-
+        # Recovery pass, safe to run unconditionally on every finalize
+        # (a no-op when there is nothing to recover) — see
+        # _finish_interrupted_reorder.
         if media_dir.exists():
-            await asyncio.to_thread(_finish_interrupted_reorder)
+            await asyncio.to_thread(_finish_interrupted_reorder, media_dir)
 
         # Whether a PREVIOUS (crashed) attempt already got far enough to
         # persist the concat-order decision (see below). Used to skip
@@ -577,7 +606,7 @@ async def uploads_finalize(
             await asyncio.to_thread(meta_path.unlink)
         except OSError:
             pass
-        return await _main()._enqueue_uploaded_task(task, repo, redis, settings)
+        return await _enqueue_uploaded_task(task, repo, redis, settings)
 
     part = UploadSession.part_path(settings.artifacts_root, user.username, uid, meta["suffix"])
     if UploadSession.received_bytes(part) != meta["total_size"]:
@@ -596,4 +625,4 @@ async def uploads_finalize(
         source_title=meta.get("display_name"),
     )
     await session.commit()
-    return await _main()._enqueue_uploaded_task(task, repo, redis, settings)
+    return await _enqueue_uploaded_task(task, repo, redis, settings)

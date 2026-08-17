@@ -380,7 +380,7 @@ async def test_concurrent_finalize_creates_exactly_one_task(client, tmp_path, mo
     """
     import asyncio
 
-    from vts.api.main import probe_media as real_probe
+    from vts.api.routers.uploads import probe_media as real_probe
 
     def _probe_with_yield(path):
         # probe_media is called via asyncio.to_thread in a lambda; making it

@@ -12,8 +12,15 @@ import pytest
 
 @pytest.fixture
 def main_module():
-    from vts.api import main  # noqa: F401
-    return main
+    """The privacy-page renderer, wherever it lives.
+
+    Named `main_module` for history: these helpers used to sit in
+    `vts.api.main` and moved to `vts.api._helpers.pages_assets` when the
+    routers were split out (docs/plans/main-py-split.md).
+    """
+    from vts.api._helpers import pages_assets
+
+    return pages_assets
 
 
 def _settings(**overrides):

@@ -15,13 +15,13 @@ def test_upload_settings_defaults(monkeypatch):
 
 
 def test_allowed_suffixes_module_level():
-    from vts.api.main import _ALLOWED_UPLOAD_SUFFIXES
+    from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES
     assert ".mp4" in _ALLOWED_UPLOAD_SUFFIXES
     assert ".m4a" in _ALLOWED_UPLOAD_SUFFIXES
 
 
 def test_normalize_prompts_json_default_and_parse():
-    from vts.api.main import _normalize_prompts_json
+    from vts.api._helpers.task_input import _normalize_prompts_json
     assert _normalize_prompts_json(None) == [{"source": "system", "id": "summary"}]
     out = _normalize_prompts_json('[{"source":"system","id":"summary"}]')
     assert out == [{"source": "system", "id": "summary"}]
@@ -29,7 +29,7 @@ def test_normalize_prompts_json_default_and_parse():
 
 def test_normalize_prompts_json_rejects_bad():
     from fastapi import HTTPException
-    from vts.api.main import _normalize_prompts_json
+    from vts.api._helpers.task_input import _normalize_prompts_json
     with pytest.raises(HTTPException):
         _normalize_prompts_json("{not json")
     with pytest.raises(HTTPException):

@@ -17,14 +17,14 @@ Status legend:
 | Git workflow contract (checks + commit + push) | PASS | Documented in `PROJECT_RULES.md`; automated helper: `scripts/prepare_commit.sh`. |
 | Semantic versioning rules and storage | PASS | `vts/__init__.py`, `/api/version`, Docker label `org.opencontainers.image.version`, bump automation in `scripts/bump_version.py`. |
 | Deploy workflow (manual, bump minor, commit, push, build/push images, SSH pull, systemd restart) | PASS | Implemented in `deploy.sh`; build/push flow in `build.sh`; unit templates in `systemd/`. |
-| Architecture (webapi + worker + Postgres + Redis + external Whisper + external llama.cpp) | PASS | Internal services implemented; external Whisper/llama explicitly not implemented in repo. |
+| Architecture (webapi + worker + Postgres + Redis + external Whisper + external OpenAI-compatible LLM) | PASS | Internal services implemented; external Whisper/LLM (and the optional diarization sidecar) explicitly not implemented in repo. |
 | Auth model (`X-Forwarded-User` only from trusted proxy, auto-create user, per-user isolation) | PASS | Enforced in `vts/services/auth.py`; per-user task filtering in API/Repo methods. |
 | Postgres async SQLAlchemy + Alembic + required tables + indexes | PASS | Implemented in `vts/db/models.py` and `alembic/versions/0001_initial.py`. |
 | WAL enabled | PASS | `docker-compose.yml` starts Postgres with `-c wal_level=replica`. |
 | Redis prefix/queue/pubsub + event throttle 4/sec | PASS | Prefix default `vts:` (`vts/core/config.py`), queue/pubsub and throttle in `vts/services/redis_bus.py`. |
 | Storage layout `/srv/vts-data/{user_hash}/{task_id}` and `/opt/vts/*` config/prompts | PASS | `vts/services/storage.py` and defaults in `vts/core/config.py`, `config.yaml`. |
 | Detailed processing contract (download/transcribe/summarize) | PASS | Full section-by-section audit is in `docs/PROCESSING_CONTRACT.md`. |
-| DAG steps and pipeline behavior | EXTENDED | Baseline 7 steps implemented plus extra warm-up step `prepare_llama_model` before summarization. |
+| DAG steps and pipeline behavior | EXTENDED | Baseline 7 steps implemented, plus `prepare_llama_model` (LLM warm-up), `diarize`, `match_speakers` and `pack_window_notes`. The finalize tail is dynamic — one step per selected prompt — see the DAG table in `docs/ARCHITECTURE.md`. |
 | Step idempotency, output checks, DB status updates, SSE events, task logs | PASS | Implemented in `vts/pipeline/processor.py`; logs at `logs/task.log`. |
 | Crash resume behavior | PASS | Worker startup requeues stale `running` tasks to `queued`, restores queued backlog into Redis, and resumes processing automatically. |
 | Download via yt-dlp API with progress | PASS | Hook-based video/audio progress, explicit merge/postprocess phases, artifacts `video.mkv` and `audio.original.<ext>`. |

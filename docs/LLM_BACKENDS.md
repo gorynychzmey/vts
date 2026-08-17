@@ -25,32 +25,67 @@ out of the box.
 | **OpenAI / Anthropic** | yes | no | no | ⚠️ Same; also paid |
 | **LiteLLM proxy** | yes | depends on backend | depends on backend | Depends — useful as a router |
 
-## Option A: Ollama (what the author runs)
+The shipped prompts are tuned for the Option A setup; llama.cpp (Option C) is
+the API vts was implemented against and needs no extra settings.
 
-The shipped prompts in `./prompts/` are tuned for **Qwen 3.5 9B** running
-under Ollama. This is the path the maintainer uses in production.
+## Option A: LiteLLM (recommended)
 
-vts works with two caveats compared to llama.cpp:
+The shipped prompts in `./prompts/` are tuned for **Qwen 3.6 35B**
+(`qwen3.6:35b`) served over an OpenAI-compatible proxy such as
+[LiteLLM](https://github.com/BerriAI/litellm). LiteLLM routes to any backend
+(local Ollama/vLLM, or hosted OpenAI / Anthropic / Mistral), so it is also
+the way to point vts at a hosted model.
 
-1. **Token counting falls back to a local tokenizer file.** Without it, vts calls
-   `/tokenize` on every request and Ollama returns 404, breaking the run. Mount a
-   HuggingFace `tokenizer.json` for the model and point vts at it:
+LiteLLM does not implement the llama.cpp-only endpoints, so both caveats below
+apply:
 
-   ```yaml
-   services:
-     llm:
-       url: http://ollama:11434/v1
-       model: qwen3.5:9b
-   llm_tokenizer_path: /opt/vts/tokenizers/qwen3.5/tokenizer.json
-   ```
+1. **Token counting falls back to a local tokenizer file.** Without it, vts
+   calls `/tokenize` on every request, gets a 404, and the run breaks. Mount a
+   HuggingFace `tokenizer.json` for the model and point vts at it.
 
-2. **`n_ctx` is not auto-detected.** vts normally reads it from `/props`. Without
-   that, set it explicitly in `config.yaml`:
+2. **`n_ctx` is not auto-detected.** vts normally reads it from `/props`. Set
+   it explicitly instead.
 
-   ```yaml
-   summary:
-     n_ctx: 32768  # match what your Ollama model was launched with
-   ```
+```yaml
+services:
+  llm:
+    url: http://litellm:4000/v1
+    model: qwen3.6:35b
+    api_key: sk-anything       # LiteLLM accepts any non-empty bearer
+    tokenizer_path: /path/to/tokenizer.json   # HF tokenizer.json for the model
+    temperature: 0.15
+    min_p: 0.05
+summary:
+  n_ctx: 32768   # match what the underlying model was launched with
+```
+
+LiteLLM is not bundled in the default `docker-compose.yml`. A minimal
+addition:
+
+```yaml
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/litellm_config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm_config.yaml:/app/litellm_config.yaml:ro
+    ports:
+      - "4000:4000"
+```
+
+## Option B: Ollama
+
+Ollama speaks OpenAI-compatible `/v1` but not the llama.cpp endpoints, so it
+needs the same two settings as Option A:
+
+```yaml
+services:
+  llm:
+    url: http://ollama:11434/v1
+    model: qwen3.5:9b
+    tokenizer_path: /path/to/tokenizer.json   # HF tokenizer.json for the model
+summary:
+  n_ctx: 32768  # match what your Ollama model was launched with
+```
 
 After starting the stack, pull the model:
 
@@ -59,14 +94,14 @@ docker compose --profile llm-ollama up -d
 docker compose exec ollama ollama pull qwen3.5:9b
 ```
 
-## Option B: llama.cpp
+## Option C: llama.cpp
 
 The API vts is implemented against. One container, one `.gguf` file, no
 tokenizer file or n_ctx wrangling needed (vts reads them from `/props` and
-`/tokenize`). The default `compose.yaml` ships with a Qwen2.5-7B example
-because Qwen3.5 GGUFs are not (yet) publicly distributed; expect summary
-quality to differ slightly from the Ollama+Qwen3.5 path the prompts are
-tuned for.
+`/tokenize`). The default `docker-compose.yml` ships with a Qwen2.5-7B
+example because Qwen3.x GGUFs are not (yet) publicly distributed; expect
+summary quality to differ from the Qwen3.6 35B path the prompts are tuned
+for.
 
 ```bash
 mkdir -p models
@@ -84,37 +119,6 @@ services:
   llm:
     url: http://llama:8000/v1
     model: Qwen2.5-7B-Instruct-Q4_K_M
-```
-
-## Option C: LiteLLM in front of Ollama / OpenAI / etc.
-
-If you want to point vts at hosted models (OpenAI, Anthropic, Mistral, …) or
-mix-and-match, run [LiteLLM](https://github.com/BerriAI/litellm) as a proxy.
-LiteLLM exposes an OpenAI-compatible API and can route to any backend. The
-`/props`, `/tokenize`, `/detokenize` caveats from Option B still apply unless
-your underlying backend implements them — in practice you will set
-`llm_tokenizer_path` and a static `summary.n_ctx`.
-
-LiteLLM is not bundled in the default `compose.yaml`. A minimal addition:
-
-```yaml
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    command: ["--config", "/app/litellm_config.yaml", "--port", "4000"]
-    volumes:
-      - ./litellm_config.yaml:/app/litellm_config.yaml:ro
-    ports:
-      - "4000:4000"
-```
-
-Then point vts at it:
-
-```yaml
-services:
-  llm:
-    url: http://litellm:4000/v1
-    api_key: sk-anything  # litellm will accept any non-empty bearer
-    model: my-routed-model
 ```
 
 ## Why these llama.cpp endpoints matter

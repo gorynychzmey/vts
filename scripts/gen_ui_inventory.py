@@ -119,8 +119,28 @@ def load_migrations() -> list[tuple[str, str]]:
 
 
 def load_mcp_tools() -> list[str]:
-    src = (ROOT / "vts" / "mcp" / "server.py").read_text(encoding="utf-8")
-    return re.findall(r'@mcp\.tool\(name="([a-z_]+)"', src)
+    """Tool names from the per-domain registration modules.
+
+    They lived in `vts/mcp/server.py` until the tool bodies moved into
+    `vts/mcp/tools_registry/`; `server.py` now only calls `register(mcp)` per
+    domain and declares no tools of its own. Modules are read in the order
+    `server.py` registers them so the generated list stays stable.
+    """
+    registry = ROOT / "vts" / "mcp" / "tools_registry"
+    server_src = (ROOT / "vts" / "mcp" / "server.py").read_text(encoding="utf-8")
+    order = re.search(r"for domain in \(([^)]*)\)", server_src)
+    domains = (
+        [d.strip() for d in order.group(1).split(",") if d.strip()]
+        if order
+        else sorted(p.stem for p in registry.glob("*.py") if p.stem != "__init__")
+    )
+    names: list[str] = []
+    for domain in domains:
+        src = (registry / f"{domain}.py").read_text(encoding="utf-8")
+        names += re.findall(r'@mcp\.tool\(name="([a-z_]+)"', src)
+    if not names:
+        raise SystemExit("ui-inventory: found no MCP tools — has the registry moved?")
+    return names
 
 
 def load_frontend_calls() -> set[str]:
@@ -837,7 +857,7 @@ def render(
     add("## MCP tools")
     add("")
     add(
-        "`vts/mcp/server.py` exposes the same capabilities to agents. Tools with "
+        "`vts/mcp/tools_registry/` exposes the same capabilities to agents. Tools with "
         "no matching UI control are the practical reason the “no screen” list "
         "above is not a gap."
     )

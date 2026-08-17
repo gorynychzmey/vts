@@ -34,9 +34,10 @@ Deploy these services separately (they are not built in this repository):
 - Whisper ASR webservice
   - image: `ghcr.io/ahmetoner/whisper-asr-webservice:latest`
   - docs: `https://github.com/ahmetoner/whisper-asr-webservice`
-- llama.cpp OpenAI-compatible server
-  - image: `ghcr.io/ggerganov/llama.cpp:server`
-  - docs: `https://github.com/ggerganov/llama.cpp/tree/master/examples/server`
+- An OpenAI-compatible LLM server. The shipped prompts are tuned for Qwen 3.6
+  35B behind a proxy such as LiteLLM; llama.cpp is the API vts was implemented
+  against (image `ghcr.io/ggml-org/llama.cpp:server`).
+  See [docs/LLM_BACKENDS.md](LLM_BACKENDS.md) for the trade-offs.
 
 `vts` worker calls llama via OpenAI-compatible API and includes a `prepare_llama_model` DAG step to warm up the configured model before summarization.
 
