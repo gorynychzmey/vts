@@ -1854,6 +1854,13 @@ function renderTaskRuntime(taskEl) {
   renderTaskTitle(taskEl);
   renderTaskStats(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition, runtime.queue);
+  // The status also drives the card itself (redesign v2): a coloured left edge
+  // and the dot in the header row. Carried as a class on the card so the CSS
+  // owns the mapping — the pill's own class is scoped to the pill.
+  for (const cls of Array.from(taskEl.classList)) {
+    if (cls.startsWith("status-")) taskEl.classList.remove(cls);
+  }
+  taskEl.classList.add(`status-${runtime.baseStatus}`);
   const canPause = statusPred.canPause(runtime.baseStatus);
   const canResume = statusPred.canResume(runtime.baseStatus);
   const canRestartSummary = statusPred.canRestartSummary(runtime);
