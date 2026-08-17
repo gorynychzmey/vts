@@ -62,7 +62,18 @@ export async function run() {
       return { bg: cs.backgroundColor, color: cs.color, borderW: cs.borderTopWidth,
                borderC: cs.borderTopColor, whiteSpace: cs.whiteSpace, rest: cs.opacity };
     }, AUDIO_PILL);
-    if (style.bg !== "rgb(255, 255, 255)") failures.push(`bubble background should be white, got ${style.bg}`);
+    // The intent is "light surface, dark text" like the native tooltip — not one
+    // exact white. Asserting a literal rgb() froze the bubble out of the theme:
+    // it has to follow --bg-card so it inverts with everything else in dark mode.
+    // Check the relationship instead: the surface must be far lighter than the text.
+    const lum = (rgb) => {
+      const [r, g, b] = rgb.match(/\d+/g).slice(0, 3).map(Number);
+      const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    if (lum(style.bg) < 0.7) failures.push(`bubble surface should be light, got ${style.bg}`);
+    if (lum(style.bg) - lum(style.color) < 0.5)
+      failures.push(`bubble should be dark text on a light surface, got ${style.color} on ${style.bg}`);
     if (style.borderW === "0px") failures.push("bubble has no border — should read like the native tooltip");
     if (style.color === "rgb(255, 255, 255)") failures.push("bubble text is white on white");
     // Long tooltips must wrap; a nowrap bubble overflows its container (vts-7rj).
