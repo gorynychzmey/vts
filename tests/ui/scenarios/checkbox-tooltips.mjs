@@ -261,6 +261,10 @@ export async function run() {
         seen[sel] = [
           cs.backgroundColor, cs.color, cs.borderTopWidth, cs.borderTopColor, cs.borderTopLeftRadius,
           cs.fontWeight, cs.fontSize, cs.fontFamily, cs.letterSpacing, cs.textTransform, cs.fontStyle,
+          // Elevation is what separates the bubble from what it covers: its
+          // surface IS --bg-card, so over a card it has no contrast of its own
+          // and only the shadow says "this floats".
+          cs.boxShadow,
         ].join("|");
       }
       return seen;
@@ -278,6 +282,25 @@ export async function run() {
     const distinct = new Set(Object.values(styles));
     if (Object.keys(styles).length > 1 && distinct.size > 1) {
       failures.push(`tooltip styles diverge between controls: ${JSON.stringify(styles)}`);
+    }
+
+    // The bubble must read as RAISED, not as part of the surface it covers.
+    // Its background is --bg-card by design, identical to the card underneath
+    // (measured delta 0) and within 7 of a white input, so a faint shadow made
+    // it look like page furniture in some places and a real panel in others.
+    const lift = await page.evaluate(() => {
+      const el = document.querySelector("#audio-only-pill");
+      const bubble = getComputedStyle(el, "::after").boxShadow;
+      const popover = getComputedStyle(document.querySelector(".popover") || document.body).boxShadow;
+      return { bubble, popover };
+    });
+    if (!lift.bubble || lift.bubble === "none") {
+      failures.push("the tooltip has no shadow — it cannot read as floating above the card it covers");
+    } else if (lift.popover && lift.popover !== "none" && lift.bubble !== lift.popover) {
+      failures.push(
+        `the tooltip's elevation differs from the popover's, so overlays do not read as one system: ` +
+        `${JSON.stringify(lift)}`
+      );
     }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));

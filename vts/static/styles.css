@@ -1196,7 +1196,14 @@ input[type="file"] {
   background: var(--bg-card);
   color: var(--ink);
   border: 1px solid var(--ink);
-  box-shadow: 0 2px 6px rgb(21 32 24 / 0.18);
+  /* Separated by ELEVATION, not by a different fill — the same thing that makes
+     .popover read as floating. The surface here is --bg-card, which is exactly
+     the card the bubble usually covers (measured delta 0) and within 7 of a
+     white input, so a soft 2px shadow left it looking like part of the page in
+     some places and like a real panel in others. That is what "the background
+     differs between tooltips" was: the surfaces underneath differed, not the
+     bubble itself. Reusing the popover shadow keeps one overlay language. */
+  box-shadow: var(--sh-pop);
   font-size: 0.72rem;
   line-height: 1.25;
   /* Pin the WHOLE typography, not just the size. A ::after inherits from its
