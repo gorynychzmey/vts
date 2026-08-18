@@ -10,7 +10,7 @@
 // The tokens dialog is deliberately NOT in this set: it has no editor (a token
 // cannot be edited, only created and revoked), so its rows legitimately keep a
 // Revoke button. It is covered by its own row-shape assertions below instead.
-import { startStubServer, launch, openPage, openFromHeaderMenu } from "../harness.mjs";
+import { startStubServer, launch, openPage, openFromHeaderMenu, settled } from "../harness.mjs";
 
 export const name = "manager-dialogs-two-column";
 
@@ -73,7 +73,10 @@ export async function run() {
 
     for (const m of MANAGERS) {
       await openFromHeaderMenu(page, m.open);
-      await page.waitForTimeout(350);
+      // The dialog is populated when its list is on screen; waiting for the
+      // list itself states that precondition instead of assuming a duration.
+      await page.waitForSelector(`${m.list} .mgr-item`, { state: "attached" }).catch(() => {});
+      await settled(page);
 
       const shape = await page.evaluate((sel) => {
         const list = document.querySelector(sel);
@@ -116,7 +119,9 @@ export async function run() {
           await page.waitForTimeout(250);
           continue;
         }
-        await page.waitForTimeout(300);
+        // Picking a row re-renders the editor synchronously; only the relayout
+        // needs waiting for, and the assertions below read that layout.
+        await settled(page);
         const picked = await page.evaluate(([sel, delSel]) => ({
           active: document.querySelectorAll(`${sel} .mgr-item.active`).length,
           deleteShown: (() => {
@@ -133,13 +138,14 @@ export async function run() {
       }
 
       await page.keyboard.press("Escape");
-      await page.waitForTimeout(250);
+      await settled(page);
     }
 
     // ---- Tokens: no editor, so rows keep Revoke — but the row shape is the
     // designed one (name headline, "prefix… · last used" underneath).
     await openFromHeaderMenu(page, "#tokens-btn");
-    await page.waitForTimeout(350);
+    await page.waitForSelector(".tokens-row", { state: "attached" }).catch(() => {});
+    await settled(page);
     const tok = await page.evaluate(() => {
       const row = document.querySelector(".tokens-row");
       if (!row) return null;

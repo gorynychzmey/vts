@@ -134,9 +134,23 @@ export async function clickReal(page, selector) {
 // (vts-nr4). Opens the menu, then clicks the entry.
 export async function openFromHeaderMenu(page, itemSelector) {
   await page.click("#header-menu-btn");
-  await page.waitForTimeout(150);
+  // The menu opens by toggling a class, so it is usable as soon as the entry is
+  // actually clickable. Playwright's actionability check already waits for that,
+  // but asserting it explicitly keeps the failure message pointed at the menu
+  // rather than at whatever the entry was supposed to open.
+  await page.waitForSelector(itemSelector, { state: "visible" });
   await page.click(itemSelector);
-  await page.waitForTimeout(200);
+  // Several of these entries open their dialog only AFTER awaiting fetches
+  // (#presets-btn loads prompts and presets before showModal()), so the dialog
+  // is not open when the click returns and settling on the still-unchanged page
+  // would resolve immediately. Wait for a dialog to actually be open, which is
+  // the postcondition every caller relies on. Bounded and non-fatal: a caller
+  // that legitimately opens no dialog (or asserts that none opened) still
+  // proceeds and makes its own assertion, exactly as it did before.
+  await page
+    .waitForFunction(() => [...document.querySelectorAll("dialog")].some((d) => d.open), null, { timeout: 5000 })
+    .catch(() => {});
+  await settled(page);
 }
 
 /** Open a task's About dialog. The card used to carry a clickable stats pill
@@ -145,9 +159,12 @@ export async function openFromHeaderMenu(page, itemSelector) {
  *  `cardSelector` defaults to the first card. */
 export async function openTaskAbout(page, cardSelector = ".task") {
   await page.click(`${cardSelector} .task-menu-btn`);
-  await page.waitForTimeout(200);
+  // `.task-menu.open` IS the menu-opened condition, so wait for the real thing.
+  await page.waitForSelector(`${cardSelector} .task-menu.open .task-about-btn`, { state: "visible" });
   await page.click(`${cardSelector} .task-menu.open .task-about-btn`);
-  await page.waitForTimeout(300);
+  // The About dialog renders its content synchronously once opened; callers read
+  // its geometry, so settle rather than sleep.
+  await settled(page);
 }
 
 const SHOT_DIR = "/tmp/vts-ui-verify";
@@ -156,4 +173,43 @@ export async function screenshot(page, name) {
   const p = `${SHOT_DIR}/${name}.png`;
   await page.screenshot({ path: p });
   return p;
+}
+
+/** Wait for layout to settle instead of sleeping a fixed guess.
+ *
+ *  Most `waitForTimeout` calls in the scenarios mean "let the DOM finish
+ *  reacting", not "this product behaviour genuinely takes N ms". This resolves
+ *  as soon as two consecutive animation frames report the same layout for the
+ *  watched elements — which is the condition those sleeps were approximating —
+ *  and is bounded so a wedged page still fails on its assertion rather than
+ *  hanging the suite.
+ *
+ *  It is deliberately NOT a drop-in for every wait: where a sleep encodes real
+ *  product timing (a CSS show-delay, the 300ms filter debounce, an SSE
+ *  reconnect), replacing it with this would let the assertion run before the
+ *  behaviour under test has happened, and the scenario would pass against a
+ *  broken UI. Those sleeps are left exactly as they are.
+ */
+export async function settled(page, { timeout = 2000 } = {}) {
+  await page.evaluate(async (budget) => {
+    const deadline = performance.now() + budget;
+    const frame = () => new Promise((r) => requestAnimationFrame(r));
+    const snap = () => {
+      // Cheap whole-layout fingerprint: geometry of every element that occupies
+      // space. If two frames agree on this, layout has stopped moving.
+      let s = "";
+      for (const el of document.querySelectorAll("body *")) {
+        const r = el.getBoundingClientRect();
+        if (r.width || r.height) s += `${r.x},${r.y},${r.width},${r.height};`;
+      }
+      return s;
+    };
+    let prev = snap();
+    while (performance.now() < deadline) {
+      await frame();
+      const now = snap();
+      if (now === prev) return;
+      prev = now;
+    }
+  }, timeout);
 }

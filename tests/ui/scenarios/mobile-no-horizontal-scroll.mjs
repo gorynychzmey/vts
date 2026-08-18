@@ -14,7 +14,7 @@
 // Asserts the user-facing symptom directly (can the document actually be
 // scrolled left?) across narrow widths, rather than any one CSS property — the
 // property that broke it is not the property that would break it next time.
-import { startStubServer, launch } from "../harness.mjs";
+import { startStubServer, launch, settled } from "../harness.mjs";
 
 export const name = "mobile-no-horizontal-scroll";
 
@@ -63,7 +63,9 @@ export async function run() {
         const page = await context.newPage();
         await page.setViewportSize({ width, height: 900 });
         await page.goto(baseUrl, { waitUntil: "networkidle" });
-        await page.waitForTimeout(500);
+        // Pure layout wait: the assertions below only read geometry, so waiting
+        // for layout to stop moving is both stricter and faster than a guess.
+        await settled(page);
 
         const r = await page.evaluate((vw) => {
           // The symptom itself: try to scroll right and see if anything moved.
@@ -120,7 +122,9 @@ export async function run() {
         // at that, so the card burst its bounds the moment File was picked.
         // The radio itself is display:none (styled through its label).
         await page.click("label:has(#source-type-file)");
-        await page.waitForTimeout(300);
+        // syncSourceType() swaps the URL input for the file drop synchronously;
+        // only the resulting relayout needs waiting for.
+        await settled(page);
         const f = await page.evaluate((vw) => {
           const de = document.scrollingElement || document.documentElement;
           const before = de.scrollLeft;
