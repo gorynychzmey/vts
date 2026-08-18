@@ -218,4 +218,25 @@ jobs:
         # If a CVE is published before a fix exists upstream, add a one-line
         # `--ignore-vuln <ID>` here with a comment pointing at the tracking
         # issue, rather than blocking the whole pipeline.
-        run: pip-audit --strict --requirement requirements.txt
+        #
+        # Retried because pip-audit queries the PyPI API once PER DEPENDENCY:
+        # a single connection reset anywhere in that sequence kills the whole
+        # run, and it took the build down on 2026-08-18 with a
+        # ConnectionResetError and no vulnerability involved. The retry covers
+        # ONLY that transport failure — a real finding fails identically on
+        # every attempt, so this cannot hide one.
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            # `status` must be captured from the command itself, not after an
+            # `if` — inside the branch $? is the IF's status (always 0) and the
+            # warning would report a misleading "exit 0" for a real failure.
+            pip-audit --strict --requirement requirements.txt && exit 0
+            status=$?
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::pip-audit attempt $attempt failed (exit $status); retrying in $((attempt * 15))s"
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "::error::pip-audit failed on all 3 attempts — treat as a real finding, not a network blip"
+          exit 1
