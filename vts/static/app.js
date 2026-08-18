@@ -2105,7 +2105,21 @@ function renderTaskRuntime(taskEl) {
     }
     elements.taskRuntimeEl.textContent = formatDuration(elapsedMs / 1000);
   } else {
-    elements.taskRuntimeEl.textContent = "";
+    // A FINISHED task keeps its number: "how long did this take" is a question
+    // the user asks after the fact, and blanking the column the moment a task
+    // completed threw that away (Victor, 2026-08-18). Prefer the backend's
+    // processing_seconds — it is the authoritative total and, unlike the live
+    // sum, survives a page reload with no steps loaded. Fall back to the summed
+    // step durations for a task whose stats predate that field.
+    const finalSeconds = Number.isInteger(runtime.stats?.processingSeconds)
+      && runtime.stats.processingSeconds > 0
+        ? runtime.stats.processingSeconds
+        : (runtime.completedStepMs || 0) / 1000;
+    // Still blank for a task that never ran (queued, or cancelled before its
+    // first step): a 00:00 there reads as "took no time" rather than "no time
+    // to report".
+    elements.taskRuntimeEl.textContent =
+      finalSeconds > 0 ? formatDuration(finalSeconds) : "";
   }
 
   const activeStep = resolveActiveStep(runtime);

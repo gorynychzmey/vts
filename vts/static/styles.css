@@ -1833,6 +1833,30 @@ input[type="file"] {
   display: inline-flex;
   gap: 0.3rem;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+/* Pause/resume is the ONLY control on a card that comes and goes: the pair is
+   mutually exclusive, and neither applies to a finished task, so this slot holds
+   one button or nothing. When it held nothing the whole strip — status chip and
+   clock included — slid right by a button's width plus the gap, so the chips did
+   not line up down the list, which is exactly what the eye scans.
+   The PAUSE button keeps the slot open when it is hidden: `visibility` instead of
+   `.hidden`'s display:none preserves its geometry while still removing it from
+   the accessibility tree and from tab order, and app.js also leaves it disabled,
+   so a hidden control can never be activated. Resume is NOT given the same
+   treatment — it takes the slot only when it is actually shown, so the pair never
+   reserves two boxes. */
+.task-actions-inline .pause-btn.hidden {
+  display: inline-flex;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ...except when resume IS visible: then resume already fills the slot, and a
+   reserved pause box beside it would widen the row again. */
+.task-actions-inline:has(> .resume-btn:not(.hidden)) .pause-btn.hidden {
+  display: none;
 }
 
 .toggle-btn svg {
