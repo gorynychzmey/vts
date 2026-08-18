@@ -253,7 +253,15 @@ export async function run() {
         if (!el) continue;
         if (!el.hasAttribute("data-tooltip")) { seen[sel] = "NO-BUBBLE"; continue; }
         const cs = getComputedStyle(el, "::after");
-        seen[sel] = [cs.backgroundColor, cs.color, cs.borderTopWidth, cs.borderTopColor, cs.borderTopLeftRadius].join("|");
+        // TYPOGRAPHY, not just the box. A ::after inherits from its host, and
+        // the hosts differ (preset pill 700, delivery pill 600, option pill
+        // 400), so the bubbles rendered at three visibly different weights
+        // while every colour and border matched — which is exactly what an
+        // earlier version of this check compared, and missed.
+        seen[sel] = [
+          cs.backgroundColor, cs.color, cs.borderTopWidth, cs.borderTopColor, cs.borderTopLeftRadius,
+          cs.fontWeight, cs.fontSize, cs.fontFamily, cs.letterSpacing, cs.textTransform, cs.fontStyle,
+        ].join("|");
       }
       return seen;
     });

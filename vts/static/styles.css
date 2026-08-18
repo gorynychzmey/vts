@@ -1199,6 +1199,17 @@ input[type="file"] {
   box-shadow: 0 2px 6px rgb(21 32 24 / 0.18);
   font-size: 0.72rem;
   line-height: 1.25;
+  /* Pin the WHOLE typography, not just the size. A ::after inherits from its
+     host, and the hosts differ: the preset pill is 700, the delivery pill 600,
+     an option pill 400 — so the same bubble rendered at three different weights
+     and read as three different components. Font-family, letter-spacing and
+     text-transform are pinned for the same reason: an uppercase, letter-spaced
+     host (a .popover-title, a field label) would otherwise shout its tooltip. */
+  font-family: inherit;
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
   padding: 0.3rem 0.5rem;
   border-radius: 6px;
   opacity: 0;
