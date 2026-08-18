@@ -1192,6 +1192,45 @@ function renderTaskStats(taskEl) {
   elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }
 
+// Size of each produced artefact, as chips at the bottom of the card. Rendered
+// from whatever exists RIGHT NOW, so a running task shows the raw transcript as
+// soon as it lands and gains the summary chip later — the same numbers the
+// About dialog reports, from the same stats object, so the two cannot disagree.
+//
+// Only the three pipeline artefacts. A user prompt's result is NOT shown: each
+// already has its own tab, and one chip per prompt would grow this row without
+// bound on a task with many of them.
+function renderTaskSizes(taskEl) {
+  const row = taskEl?._elements?.sizeRowEl;
+  const runtime = taskEl?._runtime;
+  if (!row || !runtime) return;
+  const stats = runtime.stats || {};
+  const chips = [
+    ["stats.chip_raw", stats.transcriptChars],
+    ["stats.chip_processed", stats.redactedChars],
+    ["stats.chip_summary", stats.summaryChars],
+  ].filter(([, value]) => Number.isInteger(value) && value > 0);
+
+  row.textContent = "";
+  // Hidden entirely until something exists: a row of "n/a" chips on a queued
+  // task is noise, and it would make every card taller for nothing.
+  row.classList.toggle("hidden", chips.length === 0);
+  if (!chips.length) return;
+
+  for (const [key, value] of chips) {
+    const chip = document.createElement("span");
+    chip.className = "task-size-chip";
+    const label = document.createElement("span");
+    label.className = "task-size-label";
+    label.textContent = t(key);
+    const num = document.createElement("span");
+    num.className = "task-size-value mono";
+    num.textContent = t("stats.chars", { count: formatMetricNumber(value) });
+    chip.append(label, num);
+    row.appendChild(chip);
+  }
+}
+
 // Shared formatter for the completed-run numbers (total time + char counts).
 // Used by the About-task dialog. Returns localized display strings.
 function formatResultStats(runtime) {
@@ -1980,6 +2019,9 @@ function renderTaskRuntime(taskEl) {
 
   renderTaskTitle(taskEl);
   renderTaskStats(taskEl);
+  // Re-rendered on every runtime refresh (which is what a task update triggers),
+  // so the chips appear as each artefact lands rather than only on reload.
+  renderTaskSizes(taskEl);
   setTaskStatusAppearance(elements.statusEl, runtime.baseStatus, runtime.queuePosition, runtime.queue);
   // The status also drives the card itself (redesign v2): a coloured left edge
   // and the dot in the header row. Carried as a class on the card so the CSS
@@ -2335,6 +2377,7 @@ function renderTaskCard(task) {
     expiredEl: root.querySelector(".task-expired"),
     sourceEl: root.querySelector(".task-source"),
     statsEl: root.querySelector(".task-stats"),
+    sizeRowEl: root.querySelector(".task-size-row"),
     // Same node: the stats are plain text in the meta row now, not a pill with
     // an icon and a separate label span.
     statsTextEl: root.querySelector(".task-stats-text"),
@@ -2421,6 +2464,12 @@ function updateSentinel() {
   sentinel.hidden = false;
   sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
   sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+  // Shown whenever there IS a next page and we are not already fetching it.
+  // Infinite scroll still does the work on a long list; this is what makes the
+  // next page reachable when the list is too short to scroll (compact cards
+  // make that ordinary), and it is also the manual retry after a failed fetch.
+  const more = sentinel.querySelector("#task-load-more");
+  if (more) more.hidden = p.exhausted || p.loading || !p.tail;
 }
 
 function isNewerThan(ts, id, cursor) {
@@ -3436,7 +3485,9 @@ function presetSummary(preset) {
   if (o.transcript) parts.push(t("new_task.transcript"));
   if (o.diarize) parts.push(t("new_task.diarize"));
   const promptCount = Array.isArray(o.prompts) ? o.prompts.length : 0;
-  if (promptCount) parts.push(t("delivery.selected_count", { count: promptCount }));
+  // Its OWN key, not the delivery selector's generic "selected: N": in a preset
+  // row the number is prompts, and "selected: 2" left the reader to guess what.
+  if (promptCount) parts.push(t("preset.prompts_count", { count: promptCount }));
   if (o.language) parts.push(o.language);
   return parts.join(" · ");
 }
@@ -7607,6 +7658,10 @@ async function bootstrap() {
   }, { rootMargin: "200px" });
   const _sentinelEl = document.getElementById("task-sentinel");
   if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
+  // Same call the observer makes; loadNextPage() already guards against
+  // re-entry and against there being no next page.
+  document.getElementById("task-load-more")
+    ?.addEventListener("click", () => void loadNextPage());
   await loadPushConfig();
   await loadProgressWeights();
   await loadUploadConfig();

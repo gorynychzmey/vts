@@ -1492,6 +1492,22 @@ input[type="file"] {
   font-size: 0.82rem;
 }
 
+/* `[hidden]` loses to a later `display` at equal specificity — the trap this
+   file documents for the dialogs, .count-pip and the file-drop zone — and
+   .btn-text sets display:inline-flex, so without this the button would show
+   even when there is no next page. */
+.task-load-more:not([hidden]) {
+  display: inline-flex;
+  border: 1px dashed var(--line-strong);
+  color: var(--accent-ink);
+  background: transparent;
+}
+
+.task-load-more:hover {
+  background: var(--bg-chip);
+  border-style: solid;
+}
+
 .task-sentinel[hidden] {
   display: none;
 }
@@ -2269,6 +2285,37 @@ dialog:not([open]) {
 .task-meta-row .task-source {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* Size of each produced artefact, under the meta line. Chips rather than a run
+   of text: the three numbers are independent facts that appear at different
+   times, and a chip that is simply absent reads better than "summary: n/a". */
+.task-size-row:not(.hidden) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+  min-width: 0;
+}
+
+.task-size-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--r-pill);
+  background: var(--bg-chip);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.task-size-label {
+  color: var(--ink-faint);
+}
+
+.task-size-value {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .task-stats-text:not(.hidden) {

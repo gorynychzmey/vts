@@ -539,8 +539,14 @@
           No tasks match these filters.
         </p>
         <div id="task-list" class="task-list"></div>
+        <!-- Infinite scroll STAYS; this button is the fallback for when it
+             cannot fire. The observer only triggers when the sentinel scrolls
+             into view, so a short list — which compact cards make likely — never
+             loads page 2 at all: there is nothing to scroll. -->
         <div id="task-sentinel" class="task-sentinel" hidden>
           <span class="task-sentinel-spinner" aria-hidden="true"></span>
+          <button type="button" id="task-load-more" class="btn-text ghost task-load-more" hidden
+                  data-i18n="tasks.load_more">Load more</button>
           <span class="task-sentinel-end" data-i18n="tasks.no_more" hidden></span>
         </div>
       </section>
@@ -581,6 +587,12 @@
               <a class="task-source mono hidden"></a>
               <span class="task-stats task-stats-text mono hidden"></span>
             </div>
+            <!-- Size of what was produced, filled in as each artefact lands, so
+                 a running task shows the raw transcript before the summary
+                 exists. User prompts are deliberately NOT here: their results
+                 have their own tabs, and one chip per prompt would grow the row
+                 without bound (Victor, 2026-08-18). -->
+            <div class="task-size-row hidden"></div>
           </div>
           <!-- ONE row, not two: the expand chevron used to sit on a line of its
                own above the other buttons, which made every card two rows tall
