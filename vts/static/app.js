@@ -267,12 +267,41 @@ function stepText(stepName) {
   return translated === key ? name : translated;
 }
 
+// The pipeline writes "YYYY-MM-DD HH:MM:SS,mmm" at the start of each log line,
+// in the SERVER's zone — which in practice is UTC, because the `timezone`
+// setting that would change it is not configured. Reading "13:37" for something
+// that happened at 15:37 local time makes the log hard to line up with anything
+// the user remembers.
+//
+// Converted for DISPLAY only; the file on disk stays as written, so grepping it
+// and correlating with other server logs still works. Deliberately anchored to
+// the start of a line: the same pattern can appear inside a message (a quoted
+// filename, an ffmpeg dump) and rewriting that would corrupt content rather
+// than relabel it.
+const LOG_TS_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),(\d{3})/gm;
+
+function logTimestampsToLocal(text) {
+  return text.replace(LOG_TS_RE, (whole, y, mo, d, h, mi, sec, ms) => {
+    // Date.UTC, not `new Date(string)`: parsing "2026-08-18 13:37:02" without a
+    // zone is implementation-defined and Safari reads it as LOCAL, which would
+    // silently shift the timestamps by the offset instead of correcting them.
+    const at = Date.UTC(+y, +mo - 1, +d, +h, +mi, +sec, +ms);
+    if (!Number.isFinite(at)) return whole;
+    const local = new Date(at);
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    return (
+      `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ` +
+      `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())},${pad(local.getMilliseconds(), 3)}`
+    );
+  });
+}
+
 function localizeLogText(text) {
   const value = String(text || "");
   if (value.trim() === ARCHIVED_LOG_MARKER) {
     return t("log.archived");
   }
-  return value;
+  return logTimestampsToLocal(value);
 }
 
 function applyI18n(root = document) {
