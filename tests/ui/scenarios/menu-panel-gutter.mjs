@@ -125,6 +125,36 @@ export async function run() {
     check("task menu", await measure(page, ".task-menu.open"));
     failures.push(...await checkTips(page, ".task-menu.open", "task menu"));
 
+    // A DISABLED row's tooltip must stay readable. `opacity` applies to an
+    // element's whole subtree, including its ::after, so dimming the row itself
+    // dimmed its bubble too — on exactly the rows whose tooltip explains why
+    // they are unavailable, which is when it is most needed. The dimming moved
+    // onto the icon and label instead.
+    const dimmed = await page.evaluate(() => {
+      const out = [];
+      for (const row of document.querySelectorAll(".task-menu.open .menu-item")) {
+        if (!row.disabled || row.getBoundingClientRect().height === 0) continue;
+        const rowOpacity = parseFloat(getComputedStyle(row).opacity);
+        if (rowOpacity < 1) {
+          out.push({ label: row.textContent.trim().slice(0, 24), opacity: rowOpacity });
+        }
+      }
+      return out;
+    });
+    for (const d of dimmed) {
+      failures.push(
+        `disabled row "${d.label}" dims the whole row (opacity ${d.opacity}) — ` +
+        `its tooltip inherits that and becomes unreadable`
+      );
+    }
+    const disabledCount = await page.evaluate(
+      () => [...document.querySelectorAll(".task-menu.open .menu-item")]
+        .filter((r) => r.disabled && r.getBoundingClientRect().height > 0).length
+    );
+    if (!disabledCount) {
+      failures.push("no disabled row in the task menu — the tooltip-opacity check is vacuous");
+    }
+
     // The restart sub-panel is a second .btn-menu, opened from a row of the first.
     await clickReal(page, ".task-menu.open .restart-summary-btn");
     await page.waitForTimeout(250);

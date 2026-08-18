@@ -86,12 +86,14 @@
                  would wipe out a sibling <svg>. Icons are the ones these entries
                  carried when they were toolbar buttons (vts-nr4). -->
             <div class="btn-menu header-menu" id="header-menu">
-              <button id="push-toggle-btn" class="hidden" type="button">
+              <!-- What a task is built FROM. Presets first: a preset bundles prompts,
+                   delivery and options, so it is the entry point the others feed. -->
+              <button type="button" id="presets-btn">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-                  <path d="M10 21a2 2 0 0 0 4 0" />
+                  <path d="M5 8h14M5 16h14" />
+                  <path d="M9 5v6M15 13v6" />
                 </svg>
-                <span data-i18n="action.enable_notifications">Enable notifications</span>
+                <span data-i18n="preset.manage.open">Manage presets</span>
               </button>
               <button type="button" id="prompts-btn">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -99,13 +101,6 @@
                   <path d="M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
                 </svg>
                 <span data-i18n="prompts.manage.open">Manage prompts</span>
-              </button>
-              <button type="button" id="presets-btn">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5 8h14M5 16h14" />
-                  <path d="M9 5v6M15 13v6" />
-                </svg>
-                <span data-i18n="preset.manage.open">Manage presets</span>
               </button>
               <button type="button" id="speaker-registry-btn">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -125,11 +120,15 @@
                 </svg>
                 <span data-i18n="delivery.manage.open">Manage delivery</span>
               </button>
-              <!-- Language cycles en -> ru -> de. The label is the endonym
-                   (the language written in itself), because someone hunting for
-                   German in a Russian UI scans for "Deutsch", not "Немецкий".
-                   A globe rather than flags: a flag names a country, not a
-                   language, and none of these three map cleanly onto one. -->
+              <div class="menu-sep"></div>
+              <!-- How this interface behaves for me — set once, rarely revisited. -->
+              <button id="push-toggle-btn" class="hidden" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                  <path d="M10 21a2 2 0 0 0 4 0" />
+                </svg>
+                <span data-i18n="action.enable_notifications">Enable notifications</span>
+              </button>
               <button
                 type="button"
                 id="locale-toggle-btn"
@@ -165,6 +164,8 @@
                 </svg>
                 <span id="theme-toggle-label" data-i18n="theme.system">Theme: system</span>
               </button>
+              <div class="menu-sep"></div>
+              <!-- Access for things that are not this browser. -->
               <button type="button" id="tokens-btn">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="6.5" cy="12" r="3.5" />
@@ -669,39 +670,48 @@
                   </svg>
                 </button>
                 <div class="btn-menu task-menu">
-                  <button class="menu-item task-edit-name-btn" type="button" data-i18n-title="action.edit_name">
-                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/></svg>
-                    <span data-i18n="menu.rename">Rename</span>
-                  </button>
-                  <button class="menu-item task-about-btn" type="button" data-i18n-title="about.open">
-                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5h.01"/></svg>
-                    <span data-i18n="menu.about">About this task</span>
-                  </button>
-                  <button class="menu-item resolve-voices-btn hidden" type="button"
-                          data-i18n-title="action.resolve_voices">
-                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a3 3 0 0 1 3 3v4a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg>
-                    <span data-i18n="menu.resolve_voices">Review all voices</span>
-                  </button>
+                  <!-- Look at what the task produced. First because it is what most
+                       visits to this menu are for; the player is hidden when there is
+                       no media, so this group can start with About instead. -->
                   <a class="menu-item task-player-btn hidden" target="_blank" rel="noopener"
                      data-i18n-title="tasks.open_player">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none"/></svg>
                     <span data-i18n="menu.open_player">Open the transcript player</span>
                   </a>
+                  <button class="menu-item task-about-btn" type="button" data-i18n-title="about.open">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5h.01"/></svg>
+                    <span data-i18n="menu.about">About this task</span>
+                  </button>
+                  <button class="menu-item download-media-btn" type="button" data-i18n-title="action.download_media" disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13"/><path d="m8 12 4 4 4-4"/><path d="M3 18h18"/></svg>
+                    <span data-i18n="menu.download_media">Download media</span>
+                  </button>
+                  <div class="menu-sep"></div>
+                  <!-- Act on the task: change what it contains, or re-run part of it.
+                       Rename sits here rather than first — it is an edit, and it was
+                       only at the top because this menu grew in that order. -->
+                  <button class="menu-item resolve-voices-btn hidden" type="button"
+                          data-i18n-title="action.resolve_voices">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a3 3 0 0 1 3 3v4a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg>
+                    <span data-i18n="menu.resolve_voices">Review all voices</span>
+                  </button>
                   <button class="menu-item has-submenu restart-summary-btn" type="button" data-i18n-title="action.restart_summary">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>
                     <span data-i18n="menu.restart_summary">Restart summary</span>
                     <!-- Marks the row as leading to a sub-panel rather than acting. -->
                     <svg class="submenu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
                   </button>
-                  <button class="menu-item download-media-btn" type="button" data-i18n-title="action.download_media" disabled>
-                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13"/><path d="m8 12 4 4 4-4"/><path d="M3 18h18"/></svg>
-                    <span data-i18n="menu.download_media">Download media</span>
+                  <button class="menu-item task-edit-name-btn" type="button" data-i18n-title="action.edit_name">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/></svg>
+                    <span data-i18n="menu.rename">Rename</span>
                   </button>
+                  <div class="menu-sep"></div>
+                  <!-- Put it away. Both remove the task from the list; delete is last
+                       and stays visually separated as the one that cannot be undone. -->
                   <button class="menu-item archive-btn" type="button" data-i18n-title="action.archive">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h18"/><path d="M5 8h14v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 12h6"/></svg>
                     <span data-i18n="menu.archive">Archive</span>
                   </button>
-                  <div class="menu-sep"></div>
                   <button class="menu-item danger delete-btn" type="button" data-i18n-title="action.delete">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M9 7V5h6v2M9 10v8M15 10v8M7 7l1 12h8l1-12"/></svg>
                     <span data-i18n="menu.delete">Delete</span>

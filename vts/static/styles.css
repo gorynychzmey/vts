@@ -4160,9 +4160,19 @@ dialog:not([open]) {
   background: var(--bg-chip);
 }
 
+/* Dim the row's CONTENTS, not the row. `opacity` on the element applies to its
+   whole subtree — including the ::after tooltip — so a disabled row's bubble
+   came out semi-transparent and unreadable, which is exactly the row whose
+   tooltip explains WHY it is unavailable. Dimming the icon and label instead
+   leaves the bubble at full strength. */
 .menu-item:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
+}
+
+.menu-item:disabled > svg,
+.menu-item:disabled > span,
+.menu-item:disabled > b {
+  opacity: 0.45;
 }
 
 .menu-item svg {
