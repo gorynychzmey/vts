@@ -51,6 +51,12 @@ const TASKS = [
   }),
   card(1, { stats: { transcript_chars: 4120 } }),   // only the raw transcript exists yet
   card(2),                                          // nothing produced yet
+  // Still RUNNING and has no media yet — must NOT claim the media was deleted.
+  // Keyed on "no media" alone, the note fired here too, on freshly created
+  // tasks that simply had not downloaded anything yet.
+  card(91, { status: "running", media_path: undefined }),
+  // Finished with no media: this is the real "pruned by retention" case.
+  card(92, { media_path: undefined }),
   // A resumable card: it renders the play button where cards 0 and 2 render
   // none, so the chip-alignment check sees both states.
   card(90, { status: "paused" }),
@@ -150,6 +156,29 @@ export async function run() {
         `status chips are not in one column across button states: ` +
         JSON.stringify(chipCols.map((c) => `${c.status}:${c.buttons}btn@${c.right}`))
       );
+    }
+
+    // ---- 1c. "media deleted" only when it really was ----------------------
+    const expired = await page.evaluate(() =>
+      [...document.querySelectorAll(".task")].map((c) => ({
+        status: c.querySelector(".task-status")?.textContent.trim() || "",
+        hasMedia: !!c.querySelector(".task-link[href]"),
+        note: !c.querySelector(".task-expired")?.classList.contains("hidden"),
+      }))
+    );
+    for (const row of expired) {
+      // A running task has nothing to say about deleted media — it may simply
+      // not have downloaded it yet.
+      if (row.note && row.status.toLowerCase().includes("running")) {
+        failures.push(`a running task claims its media was deleted (status "${row.status}")`);
+      }
+      // And a task that still HAS its media must never say otherwise.
+      if (row.note && row.hasMedia) {
+        failures.push(`a task with playable media claims the media was deleted`);
+      }
+    }
+    if (!expired.some((r) => r.note)) {
+      failures.push("no task shows the media-deleted note — the fixture no longer covers it");
     }
 
     // ---- 2. Size chips ----

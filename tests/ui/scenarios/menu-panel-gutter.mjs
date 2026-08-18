@@ -80,6 +80,42 @@ export async function run() {
     }
   };
 
+  // Every menu tooltip must fit inside its panel. The shared [data-tooltip] rule
+  // right-anchors a max-content bubble to its trigger, so a long tooltip on a
+  // menu row started ~31px left of the panel — and .btn-menu sets
+  // `overflow: hidden` to keep rows inside its rounded corners, so the overhang
+  // was cut off mid-word (reported from the shipped build).
+  // Measured on the PAINTED box: an overhang to the LEFT adds no scrollWidth, so
+  // the sideways-scroll probes elsewhere in this suite cannot see this.
+  const checkTips = async (page, panelSel, label) => {
+    const bad = await page.evaluate((sel) => {
+      const panel = document.querySelector(sel);
+      if (!panel) return null;
+      const pr = panel.getBoundingClientRect();
+      const out = [];
+      for (const row of panel.querySelectorAll("[data-tooltip]")) {
+        if (row.getBoundingClientRect().height === 0) continue;
+        const cs = getComputedStyle(row, "::after");
+        const w = parseFloat(cs.width);
+        if (!w) continue;
+        const r = row.getBoundingClientRect();
+        const left = cs.left !== "auto" ? r.left + parseFloat(cs.left) : r.right - w;
+        if (left < pr.left - 1 || left + w > pr.right + 1) {
+          out.push({
+            tip: (row.getAttribute("data-tooltip") || "").slice(0, 30),
+            spans: `${Math.round(left)}..${Math.round(left + w)}`,
+            panel: `${Math.round(pr.left)}..${Math.round(pr.right)}`,
+          });
+        }
+      }
+      return out;
+    }, panelSel);
+    if (bad === null) return [`${label}: panel not found`];
+    return bad.map(
+      (c) => `${label}: tooltip "${c.tip}" spans ${c.spans}, panel is ${c.panel} — clipped by overflow:hidden`
+    );
+  };
+
   try {
     const { page } = await openPage(browser, baseUrl, { width: 1100, height: 800 });
 
@@ -87,6 +123,7 @@ export async function run() {
     await clickReal(page, ".task .task-menu-btn");
     await page.waitForTimeout(250);
     check("task menu", await measure(page, ".task-menu.open"));
+    failures.push(...await checkTips(page, ".task-menu.open", "task menu"));
 
     // The restart sub-panel is a second .btn-menu, opened from a row of the first.
     await clickReal(page, ".task-menu.open .restart-summary-btn");
@@ -99,6 +136,7 @@ export async function run() {
     await clickReal(page, "#header-menu-btn");
     await page.waitForTimeout(250);
     check("header menu", await measure(page, "#header-menu.open"));
+    failures.push(...await checkTips(page, "#header-menu.open", "header menu"));
 
     await page.close();
   } finally {

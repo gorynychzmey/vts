@@ -2045,7 +2045,14 @@ function renderTaskTitle(taskEl) {
   elements.linkEl.querySelector(".player-glyph")?.classList.toggle("hidden", !mediaReady);
 
   if (elements.expiredEl) {
-    elements.expiredEl.classList.toggle("hidden", mediaReady);
+    // "Media deleted" only for a task that FINISHED and no longer has its file.
+    // Keyed on mediaReady alone it also fired on a task that is still running —
+    // one that has not downloaded its media YET was told the media was deleted
+    // (reported: the note hung on a freshly created task). A running task simply
+    // has nothing to say here, so it says nothing, and the note appears if and
+    // when the retention policy actually prunes the file.
+    const mediaPruned = !mediaReady && statusPred.isFinished(runtime.baseStatus);
+    elements.expiredEl.classList.toggle("hidden", !mediaPruned);
   }
 
   // The source line under the title: for link tasks, the ORIGINAL url as a

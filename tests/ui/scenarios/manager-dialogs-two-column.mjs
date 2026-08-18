@@ -119,8 +119,21 @@ export async function run() {
           await page.waitForTimeout(250);
           continue;
         }
-        // Picking a row re-renders the editor synchronously; only the relayout
-        // needs waiting for, and the assertions below read that layout.
+        // Wait for the POSTCONDITION, not for layout to stop moving. `settled()`
+        // resolves as soon as two frames agree, which on a page that has not
+        // re-rendered YET is immediately — so under parallel load this read the
+        // list before the pick had been applied and reported "0 active rows".
+        // (Seen once in a full parallel run; the scenario passed in isolation
+        // every time, which is the signature of exactly this race.)
+        // Bounded and non-fatal: if the row genuinely never activates, the
+        // assertions below still run and report it properly.
+        await page
+          .waitForFunction(
+            (sel) => document.querySelectorAll(`${sel} .mgr-item.active`).length === 1,
+            m.list,
+            { timeout: 5000 },
+          )
+          .catch(() => {});
         await settled(page);
         const picked = await page.evaluate(([sel, delSel]) => ({
           active: document.querySelectorAll(`${sel} .mgr-item.active`).length,

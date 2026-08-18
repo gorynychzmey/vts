@@ -4182,6 +4182,29 @@ dialog:not([open]) {
   background: var(--danger-soft);
 }
 
+/* Tooltips on menu rows must fit INSIDE the panel.
+   The shared [data-tooltip] rule right-anchors a max-content bubble to its
+   trigger, so a long tooltip on a ~250px menu row (Russian "Удалить задачу со
+   всеми файлами — необратимо" renders 256px) starts ~31px left of the panel —
+   and .btn-menu sets `overflow: hidden` to keep rows inside its rounded
+   corners, so the overhang is simply cut off mid-word.
+   The row is the bubble's containing block (.menu-item is positioned for this),
+   so pinning the bubble to the row's own box makes it exactly as wide as the
+   row: it cannot overhang either edge, and the text wraps to more lines
+   instead. Menu rows are full-width, so there is no narrow-trigger case here
+   the way there is on the option pills. */
+.btn-menu .menu-item[data-tooltip]::after,
+.popover .menu-item[data-tooltip]::after {
+  left: 0;
+  right: auto;
+  width: 100%;
+  max-width: none;
+  /* The shared rule adds padding and a border, and `width: 100%` resolves
+     against the content box — without this the bubble is that much wider than
+     the row and re-introduces the overhang it is meant to remove. */
+  box-sizing: border-box;
+}
+
 /* Separates Delete from everything above it — the one entry that cannot be
    undone should not sit flush against Archive. */
 .menu-sep {
