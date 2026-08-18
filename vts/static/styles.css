@@ -4926,6 +4926,19 @@ dialog:not([open]) {
   max-width: min(58rem, calc(100vw - 2rem));
 }
 
+/* No sideways scrolling in a manager dialog. Every [data-tooltip] bubble is an
+   absolutely-positioned ::after that is WIDER than the control it hangs off
+   (~256px on a ~113px pill), so it inflates the dialog's scrollWidth even
+   though nothing visible sticks out — the invisible horizontal scrollbar of
+   vts-nr4, which cost a lot of time to chase here. The bubbles are positioned
+   inside the dialog already (there are anchor rules per control for exactly
+   that), so clipping the axis loses nothing.
+   Only the X axis: these dialogs must still scroll vertically. */
+.prompts-dialog,
+.presets-dialog {
+  overflow-x: hidden;
+}
+
 
 /* ---------- Preset editor (redesign v2) ----------
    The presets manager moved to the same list+editor shape as the prompts one.
@@ -4968,35 +4981,66 @@ dialog:not([open]) {
   max-width: 100%;
 }
 
-/* Below 40rem .options-row becomes a 2-column GRID (vts-nr4), where the pill is
-   sized by its track, not by its content. The `min-width: auto` above then stops
-   it shrinking into that track and it overflows the dialog — which is the exact
-   regression min-width:0 was added to prevent. Hand the grid layout back its
-   own rules. */
-@media (max-width: 40rem) {
+/* Below 40rem .options-row becomes a 2-column GRID (vts-nr4) and the pill is
+   sized by its TRACK, not by its content — a track can be ~178px while the
+   label needs ~274px. The pill cannot simply shrink: `.option-pill > span`
+   carries min-width:0 + overflow-wrap:break-word, so a squeezed label collapses
+   to 0px wide and wraps one character per line (the 300px-tall column of
+   letters this file documents on .preset-default-pill).
+
+   So: one pill per row, and when even a full row is too narrow (a phone at
+   320px, or a long German label) let the LABEL wrap onto a second line inside
+   the pill. Wrapping is fine — collapsing is not — and the difference is
+   `white-space: normal` with the shrink still pinned off, so the wrap happens
+   at word boundaries rather than per character. */
+@media (max-width: 48rem) {
+  .presets-dialog .preset-edit-options {
+    grid-template-columns: 1fr;
+  }
+
   .presets-dialog .preset-edit-options .option-pill {
     min-width: 0;
+    max-width: 100%;
   }
 
   .presets-dialog .preset-edit-options .option-pill > span {
     min-width: 0;
     flex-shrink: 1;
+    white-space: normal;
+    /* `break-word` (inherited) would still split mid-word once the box is very
+       narrow; `normal` keeps whole words together and simply overflows a single
+       unbreakable word, which no label here has. */
+    overflow-wrap: normal;
   }
 }
 
-/* The label may wrap inside a pill that hit that max-width. The .preset-edit-options
-   rule above pins `flex-shrink: 0` on this span for the grid layout it was written
-   for; here the pill is already content-sized, so the span only needs permission
-   to wrap when its pill is capped. */
+/* The label keeps its own width. Letting it shrink here (min-width:0 +
+   flex-shrink:1, which an earlier pass added to stop the pill overflowing) is
+   what CAUSES the one-character-per-line collapse: with overflow-wrap:break-word
+   a squeezed label goes to 0px wide and 300px tall. The pill is content-sized
+   and capped at 100% above, so the label never needs to shrink — the pill wraps
+   to the next line instead. `.preset-edit-options > .option-pill > span` (the
+   rule ~1700 lines up) already pins flex-shrink:0 for exactly this reason. */
 .presets-dialog .preset-edit-options .option-pill > span {
-  min-width: 0;
+  flex-shrink: 0;
+  /* Wrap at word boundaries when the pill is capped at the column width. The
+     inherited `break-word` splits mid-word ("Nachbearbeitu / ng") once the box
+     gets very narrow; `normal` keeps words whole. Shrink stays off so a label
+     with room never collapses to one character per line. */
   white-space: normal;
-  /* Overrides the `flex-shrink: 0` the .preset-edit-options rule above sets for
-     the grid layout. Kept there (that rule stops "Audio only" breaking across
-     three lines when there IS room); here the pill is already capped at the
-     column width, so a label that still does not fit must be allowed to shrink
-     and wrap — otherwise it sticks out past the dialog edge. */
-  flex-shrink: 1;
+  overflow-wrap: normal;
+}
+
+/* The checkbox ate the whole pill (518px of a 518px pill), pushing the label
+   past the pill's own right edge and out of the dialog — an invisible
+   horizontal scrollbar. `.option-pill input` sets `flex: 0 0 auto` but no
+   width, so its basis is `auto`, which in a stretched row resolves to the free
+   space rather than the control's own size. Exactly the same trap as
+   .preset-default-pill above; an explicit size is what pins it. */
+.presets-dialog .preset-edit-options .option-pill > input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
 }
 
 /* A full-width row, unlike the artifact pills it shares a class with: this is

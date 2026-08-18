@@ -215,6 +215,54 @@ export async function run() {
       );
     }
 
+    // ---- NARROW WIDTHS ----------------------------------------------------
+    // Two separate defects lived here, both invisible until measured:
+    //  * the artifact pills' labels collapsed to 0px wide and wrapped ONE
+    //    CHARACTER per line (a ~300px-tall column of letters) because
+    //    `.option-pill > span` carries min-width:0 + overflow-wrap:break-word;
+    //  * the pill's checkbox took the pill's whole width (no explicit size, so
+    //    its `flex: 0 0 auto` basis resolved to the free space), pushing the
+    //    label out past the dialog edge.
+    // Asserting the SYMPTOMS, not the CSS: a real horizontal scrollbar, a box
+    // painted outside the dialog, and a label that is too narrow to read.
+    for (const width of [1100, 800, 700, 600, 420, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(250);
+      const narrow = await page.evaluate(() => {
+        const d = document.getElementById("presets-dialog");
+        const dr = d.getBoundingClientRect();
+        const cs = getComputedStyle(d);
+        // A horizontal scrollBAR exists only if the box reserves height for it.
+        // scrollWidth alone lies here: every [data-tooltip]::after bubble is
+        // wider than its control and inflates it without being visible.
+        const bt = parseFloat(cs.borderTopWidth), bb = parseFloat(cs.borderBottomWidth);
+        const escaped = [...d.querySelectorAll("*")]
+          .filter((e) => {
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && (r.right > dr.right + 1 || r.left < dr.left - 1);
+          })
+          .map((e) => e.tagName + "." + String(e.className).slice(0, 30));
+        const labels = [...d.querySelectorAll(".preset-edit-options .option-pill > span")]
+          .map((el) => ({ t: el.textContent.trim().slice(0, 20), w: Math.round(el.getBoundingClientRect().width) }));
+        return {
+          scrollbar: Math.round(d.offsetHeight - d.clientHeight - bt - bb),
+          escaped: escaped.slice(0, 3),
+          collapsed: labels.filter((l) => l.w < 20),
+        };
+      });
+      if (narrow.scrollbar > 0) {
+        failures.push(`[${width}px] presets dialog has a horizontal scrollbar (${narrow.scrollbar}px tall)`);
+      }
+      if (narrow.escaped.length) {
+        failures.push(`[${width}px] painted outside the dialog: ${JSON.stringify(narrow.escaped)}`);
+      }
+      if (narrow.collapsed.length) {
+        failures.push(`[${width}px] option labels collapsed: ${JSON.stringify(narrow.collapsed)}`);
+      }
+    }
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.waitForTimeout(200);
+
     // Close via the X button.
     await clickReal(page, "#presets-close-btn");
     await page.waitForTimeout(200);
