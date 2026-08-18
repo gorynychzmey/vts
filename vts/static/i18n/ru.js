@@ -241,6 +241,7 @@ window.__VTS_I18N.ru = {
 "tokens.revoke_confirm": "Отозвать этот токен? Скрипты, использующие его, перестанут работать.",
 "tokens.copy_warning": "Скопируйте токен сейчас — он больше не будет показан.",
 "tokens.copy": "Копировать",
+"tasks.media_expired_note": "медиа удалено",
 "tasks.media_expired_badge": "удалено",
 "tasks.media_expired_tooltip": "Исходный файл удалён по политике хранения.",
 "tasks.open_player": "Открыть плеер с транскриптом",

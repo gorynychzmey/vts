@@ -33,10 +33,14 @@ const TASK = {
   },
   stats: { media_seconds: 3860, media_bytes: 176000000, processing_seconds: 453 },
   steps: [
+    // Supplied ALPHABETICALLY on purpose: that is the order the API serves them
+    // in (serialization.py sorts on item.name), and rendering that order made the
+    // dialog read as if the pipeline ran language-detection before the download.
+    step("detect_language", "completed", "2026-08-17T10:07:39Z", "2026-08-17T10:08:00Z"),
     step("download", "completed", "2026-08-17T10:00:00Z", "2026-08-17T10:04:13Z"),
     step("extract_audio", "completed", "2026-08-17T10:04:13Z", "2026-08-17T10:07:39Z"),
-    step("transcribe_segments", "completed", "2026-08-17T10:07:39Z", "2026-08-17T10:11:00Z"),
     step("summarize_final", "completed", "2026-08-17T10:11:00Z", "2026-08-17T10:13:27Z"),
+    step("transcribe_segments", "completed", "2026-08-17T10:08:00Z", "2026-08-17T10:11:00Z"),
   ],
 };
 
@@ -135,6 +139,26 @@ export async function run() {
       }
     }
     // Each of these steps ran to completion, so each must report how long it took.
+    // Steps must read in PIPELINE order, not the alphabetical order the API
+    // serves them in. The fixture above is deliberately alphabetical, so this
+    // fails unless the dialog re-orders. Asserted by position of known steps
+    // rather than by a full expected list, so adding a step to the pipeline
+    // does not break it.
+    const names = dlg.steps.map((s) => s.name);
+    const at = (needle) => names.findIndex((n) => n.toLowerCase().includes(needle));
+    const download = at("download");
+    const extract = at("extraction");
+    const transcribe = at("transcription");
+    const summary = at("final summary");
+    if (download < 0 || extract < 0 || transcribe < 0 || summary < 0) {
+      failures.push(`could not locate the known steps in ${JSON.stringify(names)}`);
+    } else if (!(download < extract && extract < transcribe && transcribe < summary)) {
+      failures.push(
+        `pipeline steps are out of order — download/extract/transcribe/summary ` +
+        `landed at ${download}/${extract}/${transcribe}/${summary}: ${JSON.stringify(names)}`
+      );
+    }
+
     const untimed = dlg.steps.filter((s) => !s.time);
     if (untimed.length) {
       failures.push(`completed steps with no duration: ${JSON.stringify(untimed.map((s) => s.name))}`);

@@ -1653,23 +1653,43 @@ input[type="file"] {
   min-width: 0;
 }
 
+/* Hug the title rather than stretch across the column. `flex: 1 1 auto` made
+   this box the full available width — measured 749px for a 91px title — and the
+   tooltip bubble is right-anchored to its trigger, so the bubble appeared
+   hundreds of pixels away from the name it describes (reported from the shipped
+   build). `0 1 auto` still shrinks, so a long title ellipsises exactly as
+   before; it just no longer claims space it is not using. */
 .task-title-row .task-link {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
-.task-expired {
+/* "media deleted" as a quiet note in the meta line, not a bordered badge beside
+   the title. As a badge it read as a warning about the TASK, which is wrong —
+   the task and every text result it produced are intact; only the source media
+   was pruned by the retention policy. Styled like its neighbours (duration,
+   size) because it is the same kind of fact about the same thing. */
+.task-expired:not(.hidden) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
   flex: 0 0 auto;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--warn-ink);
-  border: 1px solid currentColor;
-  border-radius: 3px;
-  padding: 0 0.35rem;
-  line-height: 1.4;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
   cursor: help;
+}
+
+/* The player glyph with a slash through it: the same shape whose presence on a
+   title means "this is playable", so its negation reads without a legend. */
+.task-expired-glyph {
+  width: 0.95em;
+  height: 0.95em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .task-source {
@@ -2962,11 +2982,14 @@ dialog:not([open]) {
 /* These sit in the flex .task-title-row next to a long, greedy title. Flex
    items default to shrinkable, so the pencil was squeezed from its 2.25rem
    square down to ~16px and read as a squashed, foreign-looking control
-   (vts-nr4). Pin them at their icon-button size. */
-.task-edit-name-btn,
+   (vts-nr4). Pin them at their icon-button size.
+   `.task-edit-name-btn` is NOT in this list any more: rename moved into the
+   kebab as a labelled `.menu-item`, where a hard 16px height squashed the whole
+   ROW to 16px against its 33px neighbours. The rule outlived the layout it was
+   written for — it only ever applied to controls in the title row, and rename
+   left. Only the two edit-mode buttons are still there. */
 .task-name-ok-btn,
 .task-name-cancel-btn,
-.task-edit-name-btn svg,
 .task-name-ok-btn svg,
 .task-name-cancel-btn svg {
   width: 16px;

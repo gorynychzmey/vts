@@ -241,6 +241,7 @@ window.__VTS_I18N.en = {
 "tokens.revoke_confirm": "Revoke this token? Scripts using it will stop working.",
 "tokens.copy_warning": "Copy this token now — it will not be shown again.",
 "tokens.copy": "Copy",
+"tasks.media_expired_note": "media deleted",
 "tasks.media_expired_badge": "expired",
 "tasks.media_expired_tooltip": "Original media file has been removed by retention policy.",
 "tasks.open_player": "Open player with transcript",

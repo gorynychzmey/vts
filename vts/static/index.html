@@ -567,7 +567,6 @@
                   <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
                 </svg>
               </a>
-              <span class="task-expired hidden" data-i18n="tasks.media_expired_badge" data-i18n-title="tasks.media_expired_tooltip"></span>
               <span class="task-name-edit hidden">
                 <input class="task-name-input" type="text" maxlength="500" />
                 <button class="icon-btn ghost task-name-ok-btn" type="button" data-i18n-title="action.save_name" data-i18n-aria-label="action.save_name">
@@ -586,6 +585,20 @@
             <div class="task-meta-row">
               <a class="task-source mono hidden"></a>
               <span class="task-stats task-stats-text mono hidden"></span>
+              <!-- "media deleted" belongs with the other facts about the media
+                   (duration, size), not as a badge beside the NAME: up there it
+                   read as a warning about the task itself, which confused
+                   users, when the task and all its text results are intact.
+                   The glyph is the player icon with a slash through it — the
+                   same shape whose presence means "playable". -->
+              <span class="task-expired hidden" data-i18n-title="tasks.media_expired_tooltip">
+                <svg class="task-expired-glyph" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+                  <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" />
+                  <path d="M3 21 21 3" />
+                </svg>
+                <span data-i18n="tasks.media_expired_note">media deleted</span>
+              </span>
             </div>
             <!-- Size of what was produced, filled in as each artefact lands, so
                  a running task shows the raw transcript before the summary

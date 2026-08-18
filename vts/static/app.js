@@ -1493,7 +1493,24 @@ function renderAboutSteps(task) {
   const section = taskAboutDialog?.querySelector(".about-steps-section");
   if (!wrap) return;
   wrap.innerHTML = "";
-  const steps = Array.isArray(task.steps) ? task.steps : [];
+  const raw = Array.isArray(task.steps) ? task.steps : [];
+  // The API returns steps sorted ALPHABETICALLY by name (serialization.py sorts
+  // on item.name), which puts "detect_language" before "download" and makes the
+  // list read as if the pipeline ran out of order. Re-order to the real pipeline
+  // sequence, which getEnabledSteps() already derives from the task's options —
+  // the same list the card's "step N of M" counter uses, so the dialog and the
+  // card can never disagree about what runs when.
+  const order = getEnabledSteps(task);
+  const rank = new Map(order.map((name, i) => [name, i]));
+  const steps = [...raw].sort((a, b) => {
+    // A step that is not in the enabled list (an older task whose options no
+    // longer imply it, say) keeps its relative place at the END rather than
+    // being dropped — the dialog reports what RAN, not what should have.
+    const ra = rank.has(a.name) ? rank.get(a.name) : Number.MAX_SAFE_INTEGER;
+    const rb = rank.has(b.name) ? rank.get(b.name) : Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return String(a.name).localeCompare(String(b.name));
+  });
   section?.classList.toggle("hidden", steps.length === 0);
   if (!steps.length) return;
 
@@ -1988,11 +2005,18 @@ function renderTaskTitle(taskEl) {
     elements.linkEl.target = "_blank";
     elements.linkEl.rel = "noopener";
     elements.linkEl.classList.remove("expired");
+    elements.linkEl.setAttribute("data-tooltip", t("tasks.open_player"));
   } else {
     elements.linkEl.removeAttribute("href");
     elements.linkEl.removeAttribute("target");
     elements.linkEl.removeAttribute("rel");
     elements.linkEl.classList.add("expired");
+    // Without media the name is not a link, so "open the transcript player" is
+    // a promise the card cannot keep — it was still offering it on hover, on an
+    // element nothing happens when you click. applyI18n sets this attribute
+    // from data-i18n-title on every render, so it has to be removed HERE rather
+    // than in the markup; the meta line now carries "media deleted" instead.
+    elements.linkEl.removeAttribute("data-tooltip");
   }
 
   // The player lives in the task menu (redesign v2). It used to be an icon next
@@ -4315,10 +4339,39 @@ function appendStreamingText(taskId, readyFlag, panelKey, promptKey, text, separ
 
 function appendTranscriptSegment(taskId, text) {
   appendStreamingText(taskId, "transcriptReady", "transcriptPanel", "tab.prompt_transcript", text, " ");
+  bumpStreamingChars(taskId, "transcriptChars", text, " ");
 }
 
 function appendRedactedSegment(taskId, text) {
   appendStreamingText(taskId, "redactedReady", "redactedPanel", "tab.prompt_redacted", text, "\n");
+  bumpStreamingChars(taskId, "redactedChars", text, "\n");
+}
+
+/** Grow the card's character count as segments stream in.
+ *
+ *  The size chips are rendered from `runtime.stats`, which only changes when a
+ *  task update arrives — so during a long transcription the transcript chip sat
+ *  frozen at its first value while text was visibly still arriving. The segment
+ *  events carry the text, so the count can follow them.
+ *
+ *  Deliberately an ESTIMATE that the server later corrects: it counts what this
+ *  client received, and a reconnect or a missed event would undercount. Every
+ *  task update overwrites it with the authoritative figure from stats, so any
+ *  drift is transient and self-healing — which is the right trade for a number
+ *  whose job is to show that something is happening.
+ */
+function bumpStreamingChars(taskId, field, text, joiner) {
+  const taskEl = findTaskEl(taskId);
+  const runtime = taskEl && taskEl._runtime;
+  if (!runtime) return;
+  const added = String(text || "").length;
+  if (!added) return;
+  const stats = runtime.stats || (runtime.stats = {});
+  const previous = Number.isInteger(stats[field]) ? stats[field] : 0;
+  // The joiner is real text in the assembled artefact, so count it too — but
+  // not before the first segment, where nothing is being joined to.
+  stats[field] = previous + added + (previous > 0 ? String(joiner || "").length : 0);
+  renderTaskSizes(taskEl);
 }
 
 function updateQueueWatcher(tasks) {
@@ -7024,6 +7077,39 @@ function setPresetFormMode(editId) {
   if (presetSubmitBtn) presetSubmitBtn.disabled = !!presetEditing && !editable;
 }
 
+/** Make the open preset the default.
+ *
+ *  Applied on CHANGE rather than on save, because "default" is a property of
+ *  the USER, not of the preset: a system preset cannot be edited, so its Save
+ *  button is disabled, and routing this through save made the checkbox dead for
+ *  exactly the presets a new user is most likely to pick (reported: "the
+ *  checkbox does not work"). Unticking is not offered — something must be the
+ *  default — so the box only ever sets, and disables itself once set.
+ */
+async function applyPresetDefaultToggle() {
+  if (!presetEditDefault || !presetEditing) return;
+  if (!presetEditDefault.checked || presetEditDefault.disabled) return;
+  const ref = { source: presetEditing.source, id: String(presetEditing.id) };
+  try {
+    await api("/api/me/default_preset", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ref),
+    });
+  } catch (err) {
+    // Put the box back: leaving it ticked would claim a default that the
+    // server never accepted.
+    console.error("Failed to set default preset", err);
+    presetEditDefault.checked = false;
+    return;
+  }
+  presetsManagerDefaultRef = ref;
+  presetEditDefault.disabled = true;
+  presetDefaultPill?.classList.add("disabled");
+  await refreshPresetsManager();
+  await loadPresets();
+}
+
 // Same dependency as the create form's pill (syncSpeakerNoManualStopToggle):
 // meaningless without diarize, never cleared on disable (only dimmed) so a
 // stray toggle doesn't mark the preset dirty.
@@ -7253,6 +7339,13 @@ presetCancelBtn?.addEventListener("click", () => {
 
 presetEditDiarize?.addEventListener("change", syncPresetSpeakerNoManualStopToggle);
 
+// Applied immediately, not on save — see applyPresetDefaultToggle. Only when a
+// preset is actually open; on the empty create form there is nothing to point
+// the default at yet, and the save path handles that case once an id exists.
+presetEditDefault?.addEventListener("change", () => {
+  if (presetEditing) void applyPresetDefaultToggle();
+});
+
 presetForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const editId = presetEditIdInput?.value || "";
@@ -7283,22 +7376,18 @@ presetForm?.addEventListener("submit", async (event) => {
       });
     }
     if (!resp.ok) return;
-    // "Default" is a separate endpoint, but from the user's side it is one of
-    // the fields they just filled in, so it is saved with the rest. Only ever
-    // set: the box is disabled once checked (something must be the default).
-    if (presetEditDefault?.checked && !presetEditDefault.disabled) {
+    // For an EXISTING preset the box is applied the moment it is ticked (see
+    // applyPresetDefaultToggle), because a system preset's Save is disabled and
+    // routing it through save made the box dead there. A brand-new preset has
+    // no id until this response arrives, so that one case is still handled here.
+    if (!editId && presetEditDefault?.checked && !presetEditDefault.disabled) {
       const saved = await resp.json().catch(() => null);
-      const ref = editId && presetEditing
-        ? { source: presetEditing.source, id: presetEditing.id }
-        : saved && saved.id
-          ? { source: saved.source || "user", id: saved.id }
-          : null;
-      if (ref) {
+      if (saved && saved.id) {
         try {
           await api("/api/me/default_preset", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(ref),
+            body: JSON.stringify({ source: saved.source || "user", id: String(saved.id) }),
           });
         } catch (err) {
           console.error("Failed to set default preset", err);

@@ -241,6 +241,7 @@ window.__VTS_I18N.de = {
 "tokens.revoke_confirm": "Diesen Token widerrufen? Skripte, die ihn verwenden, funktionieren nicht mehr.",
 "tokens.copy_warning": "Kopiere den Token jetzt — er wird nicht erneut angezeigt.",
 "tokens.copy": "Kopieren",
+"tasks.media_expired_note": "Medien gelöscht",
 "tasks.media_expired_badge": "abgelaufen",
 "tasks.media_expired_tooltip": "Die Originaldatei wurde gemäss Aufbewahrungsrichtlinie entfernt.",
 "tasks.open_player": "Player mit Transkript öffnen",
