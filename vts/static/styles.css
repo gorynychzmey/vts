@@ -1642,7 +1642,12 @@ input[type="file"] {
   cursor: default;
 }
 
-.task-link.expired:hover {
+/* The underline lives on the inner .task-link-text (the anchor also holds the
+   player glyph, which must not be underlined), so clearing it on the ANCHOR
+   alone did nothing — a name with no media still underlined on hover and read
+   as clickable when nothing happens on click. Both are cleared here. */
+.task-link.expired:hover,
+.task-link.expired:hover .task-link-text {
   text-decoration: none;
 }
 

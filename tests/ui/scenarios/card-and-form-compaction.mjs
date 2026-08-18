@@ -181,6 +181,43 @@ export async function run() {
       failures.push("no task shows the media-deleted note — the fixture no longer covers it");
     }
 
+    // ---- 1d. A name with no media must not pretend to be a link -----------
+    // The underline lives on the inner .task-link-text, so clearing it on the
+    // ANCHOR alone (which is what .task-link.expired:hover did) left the name
+    // underlining on hover — it read as clickable while nothing happens on
+    // click. Checked on hover, because that is the only state it appears in.
+    for (const [sel, label, shouldLink] of [
+      [".task .task-link.expired", "a task without media", false],
+      [".task .task-link:not(.expired)", "a task with media", true],
+    ]) {
+      const exists = await page.$(sel);
+      if (!exists) {
+        failures.push(`${label}: no card in that state — this check is vacuous`);
+        continue;
+      }
+      await page.hover(sel);
+      await page.waitForTimeout(150);
+      const state = await page.evaluate((s) => {
+        const a = document.querySelector(s);
+        const t = a.querySelector(".task-link-text");
+        return {
+          href: a.hasAttribute("href"),
+          underlined: getComputedStyle(t).textDecorationLine.includes("underline"),
+          cursor: getComputedStyle(a).cursor,
+        };
+      }, sel);
+      await page.mouse.move(0, 0);
+      if (state.href !== shouldLink) {
+        failures.push(`${label}: href presence is ${state.href}, expected ${shouldLink}`);
+      }
+      if (state.underlined !== shouldLink) {
+        failures.push(
+          `${label}: underlined on hover is ${state.underlined}, expected ${shouldLink}` +
+          (shouldLink ? "" : " — it reads as clickable but nothing happens on click")
+        );
+      }
+    }
+
     // ---- 2. Size chips ----
     const chips = await page.evaluate(() =>
       [...document.querySelectorAll(".task")].slice(0, 3).map((c) =>
