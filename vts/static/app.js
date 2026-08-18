@@ -1,3 +1,19 @@
+// Inline meta-line icons. `title` (not aria-label) so the meaning is reachable
+// on hover for a sighted user, and an <svg role="img"> with a <title> child is
+// what a screen reader announces — the count beside it is a bare number, so the
+// icon has to carry the noun. 2px stroke on no fill, matching every other icon
+// in this UI after the prototype pass.
+const ICON_FILES_INLINE =
+  '<svg class="stat-icon" viewBox="0 0 24 24" role="img" aria-label="files">' +
+  '<title>files</title>' +
+  '<path d="M8 3h7l4 4v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>' +
+  '<path d="M15 3v4h4"/><path d="M5 7v12a2 2 0 0 0 2 2h9"/></svg>';
+const ICON_SPEAKERS_INLINE =
+  '<svg class="stat-icon" viewBox="0 0 24 24" role="img" aria-label="speakers">' +
+  '<title>speakers</title>' +
+  '<circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/>' +
+  '<circle cx="17" cy="8.5" r="2.5"/><path d="M16 13.5a4.5 4.5 0 0 1 4.5 4.5"/></svg>';
+
 const ICON_EDIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.58z"/></svg>';
 const ICON_DELETE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
 const ICON_DUPLICATE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
@@ -1080,6 +1096,9 @@ function parseTaskStats(task) {
     redactedChars: parseNonNegativeInt(stats && stats.redacted_chars),
     mediaSeconds: parseNonNegativeInt(stats && stats.media_seconds),
     mediaBytes: parseNonNegativeInt(stats && stats.media_bytes),
+    // null when diarization did not run, 0 when it ran and found nobody —
+    // parseNonNegativeInt keeps both distinguishable (null vs 0).
+    speakerCount: parseNonNegativeInt(stats && stats.speaker_count),
     // How many files the user actually uploaded. Not from `stats` (which
     // describes the single concatenated media file) but from the options the
     // finalize step already writes for every multi-file upload — so this works
@@ -1169,11 +1188,19 @@ function renderTaskStats(taskEl) {
   if (Number.isInteger(stats.mediaBytes) && stats.mediaBytes > 0) {
     parts.push(t("stats.media_size", { size: formatMegabytes(stats.mediaBytes) }));
   }
-  // Only for a genuine multi-file task (Diana): "1 файл" next to every single
-  // upload would be noise, and the count is what disambiguates a task whose
-  // title shows just the first file's name.
+  // Icons instead of a word for the two counts (Victor, 2026-08-18): the meta
+  // line is scanned, not read, and "файлов: 3 · спикеров: 2" spends most of its
+  // width on labels. Built as HTML fragments here because the line is assembled
+  // by joining strings; see renderTaskStats' use of innerHTML below, which is
+  // safe precisely because every part is either a literal icon or a number that
+  // went through parseNonNegativeInt.
   if (stats.sourceFileCount > 1) {
-    parts.push(t("stats.media_files", { count: stats.sourceFileCount }));
+    parts.push(`${ICON_FILES_INLINE}<span class="stat-num">${stats.sourceFileCount}</span>`);
+  }
+  // Diarization only. `null` means it never ran — showing "0 speakers" there
+  // would claim a result the pipeline never produced.
+  if (Number.isInteger(stats.speakerCount) && stats.speakerCount > 0) {
+    parts.push(`${ICON_SPEAKERS_INLINE}<span class="stat-num">${stats.speakerCount}</span>`);
   }
   // A leading separator only when the source line is actually showing, so the
   // meta row reads as one sentence ("youtube.com/… · 29:59 · 386,5 МБ") instead
@@ -1187,7 +1214,10 @@ function renderTaskStats(taskEl) {
     !!elements.sourceEl.textContent.trim();
   const text = parts.join(" · ");
   if (elements.statsTextEl) {
-    elements.statsTextEl.textContent = sourceShowing && text ? `· ${text}` : text;
+    // innerHTML, not textContent: the file/speaker parts carry an inline SVG.
+    // Every interpolated value is a literal icon constant or an integer from
+    // parseNonNegativeInt, so nothing user-controlled reaches this.
+    elements.statsTextEl.innerHTML = sourceShowing && text ? `· ${text}` : text;
   }
   elements.statsEl.classList.toggle("hidden", parts.length === 0);
 }

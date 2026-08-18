@@ -179,7 +179,34 @@ def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
         "redacted_chars": _text_length_from_path(redacted_path, prefer_json_text_field=False),
         "media_seconds": media_seconds,
         "media_bytes": media_bytes,
+        "speaker_count": _speaker_count_for_task(task),
     }
+
+
+def _speaker_count_for_task(task: Task) -> int | None:
+    """How many distinct people diarization found, or None if it did not run.
+
+    Read from speaker_matches.json, which the match step writes keyed by
+    diarization label. Entries flagged ``noise`` are excluded: they are audio
+    the diarizer separated but which is not a person, so counting them would
+    report more speakers than the transcript ever names.
+
+    None (not 0) when the file is missing or unreadable, so the UI can tell
+    "diarization did not run" apart from "ran and found nobody" — the card
+    shows nothing in the first case rather than a misleading zero.
+    """
+    path = Path(task.artifact_dir) / "outputs" / "speaker_matches.json"
+    try:
+        matches = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(matches, dict):
+        return None
+    return sum(
+        1
+        for entry in matches.values()
+        if isinstance(entry, dict) and not entry.get("noise", False)
+    )
 
 def _media_seconds_for_file(media_file: Path) -> int | None:
     """Media (audio/video) length in whole seconds, probed via ffprobe.

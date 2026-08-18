@@ -2342,6 +2342,28 @@ dialog:not([open]) {
   font-variant-numeric: tabular-nums;
 }
 
+/* Icons standing in for the words "files" and "speakers" in the meta line: it
+   is scanned rather than read, and the labels cost more width than the numbers.
+   Sized in `em` so they track the line's font-size, and nudged down slightly —
+   a glyph aligned on the text baseline sits visibly high next to digits. */
+.stat-icon {
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.15em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Keeps the number glued to its icon: the meta line joins its parts with " · ",
+   so without this the separator could wrap between an icon and its count. */
+.stat-num {
+  margin-left: 0.25em;
+  white-space: nowrap;
+}
+
 .task-stats-text:not(.hidden) {
   flex: 0 0 auto;
   color: var(--ink-faint);

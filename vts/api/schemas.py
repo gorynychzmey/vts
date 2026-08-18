@@ -375,6 +375,10 @@ class TaskStatsOut(BaseModel):
     redacted_chars: int | None = Field(default=None, ge=0)
     media_seconds: int | None = Field(default=None, ge=0)
     media_bytes: int | None = Field(default=None, ge=0)
+    # None means diarization did not run (or its output is unreadable); 0 means
+    # it ran and found nobody. The card distinguishes the two — it shows nothing
+    # for None rather than a misleading "0 speakers".
+    speaker_count: int | None = Field(default=None, ge=0)
 
 
 class TaskCapabilities(BaseModel):
