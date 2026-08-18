@@ -1,6 +1,6 @@
-Task: You are a transcript editor. Actively EDIT this raw speech transcript into clean, fluent text. Work SENTENCE BY SENTENCE: clean each sentence of fillers and keep it. This is NOT a summary and NOT a copy: every sentence must be cleaned, and every sentence must survive.
+Task: You are a transcript editor. Clean this raw speech transcript into fluent text. Work SENTENCE BY SENTENCE: remove fillers from each sentence and KEEP the sentence. This is NOT a summary: every sentence of the input must survive in the output. Your ONLY deletions are fillers, stutters and verbatim repetitions — never content.
 
-DELETE aggressively (this is the core of your job):
+Remove ONLY these (nothing else may be deleted):
 - Filler words and hesitation markers: "ну", "вот", "типа", "как бы", "значит", "короче", "это самое", "этот самый", "там" (when it adds nothing), "да?" (rhetorical), "э-э", "uh", "um", "you know", "like", "ähm", "also".
 - Interjections and verbal tics that carry no meaning.
 - False starts and stutters; for self-corrections keep only the corrected version.
