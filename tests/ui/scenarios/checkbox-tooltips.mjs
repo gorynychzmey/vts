@@ -21,6 +21,10 @@ async function titleOf(page, sel) {
   }, sel);
 }
 
+// Phone widths where .options-row becomes a two-column grid (vts-nr4), so a
+// left-column pill is far narrower than its own tooltip.
+const NARROW = [320, 360, 412];
+
 export async function run() {
   const failures = [];
   const { server, baseUrl } = await startStubServer({});
@@ -153,6 +157,49 @@ export async function run() {
     if (on.langDimmed || on.langDisabled) failures.push("transcript on: language still dimmed/disabled");
     if (on.promptsDimmed) failures.push("transcript on: prompts still dimmed");
     if (on.langValue !== "ru") failures.push(`transcript on: language value lost ("${on.langValue}")`);
+
+    // --- the bubble must FIT ON SCREEN at phone widths -------------------
+    // Reported from the shipped build: on a phone the option tooltip was cut
+    // off at the left edge, mid-sentence. Below 40rem .options-row is a
+    // two-column grid, so a left-column pill is ~180px while the bubble is up
+    // to 256px — and the shared rule right-anchors the bubble to its trigger,
+    // which put its left edge at x=-74. `max-width` could not save it: that
+    // caps the bubble's WIDTH, not where it starts.
+    //
+    // Measured on the PAINTED box, not on scrollWidth: a bubble that overflows
+    // to the LEFT never adds scrollWidth, so the sideways-scroll probes used
+    // elsewhere in this suite are blind to exactly this failure. That blindness
+    // is why it reached a release.
+    for (const width of NARROW) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(200);
+      const clipped = await page.evaluate(() => {
+        const vw = document.documentElement.clientWidth;
+        const out = [];
+        for (const pill of document.querySelectorAll("#task-form .option-pill[data-tooltip]")) {
+          const cs = getComputedStyle(pill, "::after");
+          const w = parseFloat(cs.width);
+          if (!w) continue;
+          const r = pill.getBoundingClientRect();
+          // Derive the bubble's box from whichever edge it is anchored to.
+          const left = cs.left !== "auto" ? r.left + parseFloat(cs.left) : r.right - w;
+          if (left < -1 || left + w > vw + 1) {
+            out.push({
+              pill: (pill.textContent || "").trim().slice(0, 24),
+              spans: `${Math.round(left)}..${Math.round(left + w)}`,
+              viewport: vw,
+            });
+          }
+        }
+        return out;
+      });
+      for (const c of clipped) {
+        failures.push(
+          `[${width}px] option tooltip runs off screen: "${c.pill}" spans ${c.spans} of 0..${c.viewport}`
+        );
+      }
+    }
+    await page.setViewportSize({ width: 1100, height: 700 });
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));
   } finally {

@@ -2190,6 +2190,44 @@ input[type="file"] {
     grid-column: 1 / -1;
   }
 
+  /* Tooltip bubbles on the option pills, on a phone.
+     The shared [data-tooltip] rule right-anchors the bubble to its trigger,
+     which is correct on a wide form. In this 2-column grid a LEFT-column pill
+     is only ~180px wide while the bubble is up to 256px, so right-anchoring
+     started it at x=-74 — clipped off the screen edge, which is what Victor
+     saw. Anchoring by column is what fixes the position; `max-width` alone
+     could not, because it caps the bubble's WIDTH and not where it begins.
+     Left column opens rightwards, right column keeps opening leftwards, and
+     each is capped at the viewport minus the page gutter so neither can spill
+     the other way instead. Selected by grid line rather than :nth-child, so
+     hiding or reordering a pill cannot silently flip a bubble's anchor. */
+  /* Size and anchor the bubble to its PILL instead of letting it overhang.
+     The shared rule right-anchors a max-content bubble to the trigger, which on
+     a wide form is fine but here put a 256px bubble on a ~180px left-column
+     pill — starting at x=-74, clipped off the screen edge mid-sentence.
+     Anchoring per column was the obvious fix and it is wrong: `nth-child(odd)`
+     selects by child ORDER, and switching to FILE mode hides the "audio only"
+     pill, shifting every index and flipping the anchors onto the wrong pills
+     (mobile-no-horizontal-scroll caught it). Which grid column a pill occupies
+     is not expressible in CSS here.
+     So stop trying. `.option-pill` is already `position: relative`, so it is the
+     bubble's containing block: pinning left:0 and width:100% makes the bubble
+     exactly as wide as the pill it belongs to and start where the pill starts.
+     It then cannot clip on either side, in any locale or source mode, because
+     it is bounded by a box that is itself already inside the form. The text
+     wraps to more lines instead, which is the right trade on a phone. */
+  .options-row > .option-pill[data-tooltip]::after {
+    left: 0;
+    right: auto;
+    width: 100%;
+    max-width: none;
+    /* The shared bubble rule sets padding and a border, and `width: 100%`
+       resolves against the row's content box — so without this the bubble is
+       its own padding+border WIDER than the row and overflows by exactly that
+       (17px, reported identically at every width and locale). */
+    box-sizing: border-box;
+  }
+
   .preset-field {
     grid-column: 1 / -1;
     flex-wrap: nowrap;
