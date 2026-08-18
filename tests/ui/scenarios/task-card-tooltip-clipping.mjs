@@ -130,7 +130,11 @@ export async function run() {
     }
 
     // ---- 2. A real tooltip on a task action button must not be clipped ----
-    const btnSel = ".task .task-right [data-tooltip]";
+    // The KEBAB specifically, not "the first [data-tooltip] in .task-right":
+    // that strip also holds pause/resume, which are `.hidden` for most states
+    // (only one of the pair ever shows), so the loose selector resolved to an
+    // invisible button and the hover timed out. The kebab is on every card.
+    const btnSel = ".task .task-menu-btn[data-tooltip]";
     const btn = await page.$(btnSel);
     if (!btn) {
       failures.push("no task action button with [data-tooltip] found");

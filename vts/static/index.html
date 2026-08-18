@@ -572,21 +572,13 @@
               <span class="task-stats task-stats-text mono hidden"></span>
             </div>
           </div>
+          <!-- ONE row, not two: the expand chevron used to sit on a line of its
+               own above the other buttons, which made every card two rows tall
+               on the right even when the left side needed one. Order follows the
+               design: status chip, elapsed time, then the three controls. -->
           <div class="task-right">
             <div class="task-right-top">
               <span class="task-status"></span>
-              <button
-                class="icon-btn ghost toggle-btn"
-                type="button"
-                title="Expand task details"
-                aria-label="Expand"
-                data-i18n-title="action.expand"
-                data-i18n-aria-label="action.expand"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
             </div>
             <div class="task-toolbar-wrap">
             <div class="task-right-bottom">
@@ -698,6 +690,18 @@
                   </button>
                 </div>
               </div>
+              <button
+                class="icon-btn ghost toggle-btn"
+                type="button"
+                title="Expand task details"
+                aria-label="Expand"
+                data-i18n-title="action.expand"
+                data-i18n-aria-label="action.expand"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
             </div>
             </div>
             </div>

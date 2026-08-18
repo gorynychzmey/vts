@@ -1611,13 +1611,16 @@ input[type="file"] {
   white-space: nowrap;
 }
 
+/* ONE row (was a column of two). The chevron sat on its own line above the
+   other buttons, so the card's right side was always two rows tall even when
+   the left side needed one — the card is shorter for merging them. */
 .task-right {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.3rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
   flex-shrink: 0;
-  /* The action toolbar below is a horizontal scroller; it can only clip if its
+  /* The action toolbar is a horizontal scroller; it can only clip if its
      ancestors are allowed to be narrower than it. */
   min-width: 0;
   max-width: 100%;
@@ -1634,6 +1637,14 @@ input[type="file"] {
   align-items: center;
   gap: 0.4rem;
   cursor: pointer;
+}
+
+/* Room on the right of the chip for the elapsed clock, so the chip does not
+   shift left the moment a task starts running and a time appears next to it.
+   The chips vary in width ("завершено" vs "в очереди #2"), so they are
+   right-aligned as a group and the clock keeps its own fixed column. */
+.task-right .task-status {
+  flex: 0 0 auto;
 }
 
 .task-status {
@@ -1710,10 +1721,15 @@ input[type="file"] {
   color: var(--mute-ink);
 }
 
+/* Fixed width for HH:MM:SS. The clock is empty until a task starts and grows a
+   digit at the one-hour mark; without a reserved column the buttons beside it
+   would shift on both events. `ch` on the mono face is exactly 8 digits wide. */
 .task-runtime {
-  min-width: 3rem;
+  flex: 0 0 auto;
+  min-width: 8ch;
   text-align: right;
   color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .task-actions-inline {
@@ -3610,12 +3626,14 @@ dialog:not([open]) {
 /* Status dot with a halo (redesign v2). The halo is a box-shadow spread rather
    than a second element, so it costs no markup and cannot affect layout — and
    it is what makes the dot readable against a tinted card edge.
-   Centred on the title line, not the whole row: the row grows when a task is
-   expanded, and a dot centred on that drifts away from the name it labels. */
+   Centred on the header row: the collapsed card is now two short lines (title,
+   then the meta line), and a dot pinned to the title's line sat visibly high
+   against that block. `.task-header-row` is the flex parent and does not grow
+   when the card expands — the body is a separate block below it — so centring
+   here does not drift the way centring on the whole card would. */
 .task-dot {
   flex: 0 0 auto;
-  align-self: flex-start;
-  margin-top: 0.42rem;
+  align-self: center;
   width: 0.56rem;
   height: 0.56rem;
   border-radius: 50%;
