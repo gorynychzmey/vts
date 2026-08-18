@@ -2,7 +2,7 @@
 // Until this existed the interface language came only from navigator.languages
 // and could not be overridden. Cycles en -> ru -> de -> en, persists the
 // choice, and outranks browser detection on the next load.
-import { startStubServer, launch, openPage, isVisible, clickReal } from "../harness.mjs";
+import { startStubServer, launch, openPage, isVisible, clickReal, settled } from "../harness.mjs";
 
 export const name = "locale-toggle";
 
@@ -34,7 +34,11 @@ export async function run() {
 
     // en -> ru
     await clickReal(page, "#locale-toggle-btn");
-    await page.waitForTimeout(400);
+    // The toggle re-renders through applyI18n synchronously, so the switch is
+    // done as soon as <html lang> flips; polling for that is both faster and a
+    // stricter statement of what the click is supposed to achieve.
+    await page.waitForFunction(() => document.documentElement.lang === "ru");
+    await settled(page);
     st = await readState(page);
     if (st.lang !== "ru") failures.push(`after 1st click <html lang> = "${st.lang}"`);
     if (st.stored !== "ru") failures.push(`after 1st click stored = "${st.stored}"`);
@@ -47,14 +51,16 @@ export async function run() {
 
     // ru -> de
     await clickReal(page, "#locale-toggle-btn");
-    await page.waitForTimeout(400);
+    await page.waitForFunction(() => document.documentElement.lang === "de");
+    await settled(page);
     st = await readState(page);
     if (st.lang !== "de") failures.push(`after 2nd click <html lang> = "${st.lang}"`);
     if (st.endonym !== "Deutsch") failures.push(`de endonym = "${st.endonym}"`);
 
     // de -> en (wraps)
     await clickReal(page, "#locale-toggle-btn");
-    await page.waitForTimeout(400);
+    await page.waitForFunction(() => document.documentElement.lang === "en");
+    await settled(page);
     st = await readState(page);
     if (st.lang !== "en") failures.push(`after 3rd click <html lang> = "${st.lang}", expected wrap to en`);
 
@@ -67,11 +73,15 @@ export async function run() {
       await fresh.goto(baseUrl, { waitUntil: "networkidle" });
       await fresh.evaluate((l) => localStorage.setItem("vts_locale", l), start);
       await fresh.reload({ waitUntil: "networkidle" });
-      await fresh.waitForTimeout(400);
+      // The stored locale is applied during boot, so wait for it to land rather
+      // than guessing how long boot takes.
+      await fresh.waitForFunction((l) => document.documentElement.lang === l, start);
+      await settled(fresh);
       await fresh.click("#header-menu-btn");
-      await fresh.waitForTimeout(200);
+      await settled(fresh);
       await fresh.click("#locale-toggle-btn");
-      await fresh.waitForTimeout(500);
+      await fresh.waitForFunction((l) => document.documentElement.lang === l, want);
+      await settled(fresh);
       const got = await fresh.evaluate(() => ({
         lang: document.documentElement.lang,
         pill: document.querySelector("#prompt-select .prompt-select-summary")?.textContent?.trim(),
@@ -90,7 +100,8 @@ export async function run() {
     // Persistence: the stored choice must beat browser detection on reload.
     await page.evaluate(() => localStorage.setItem("vts_locale", "de"));
     await page.reload({ waitUntil: "networkidle" });
-    await page.waitForTimeout(400);
+    await page.waitForFunction(() => document.documentElement.lang === "de");
+    await settled(page);
     st = await readState(page);
     if (st.lang !== "de") failures.push(`stored locale not restored on reload: lang = "${st.lang}"`);
     if (st.endonym !== "Deutsch") failures.push(`endonym after reload = "${st.endonym}"`);

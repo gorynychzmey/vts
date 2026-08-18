@@ -13,7 +13,7 @@
 //     truncate rather than push it out.
 //
 // Asserts the last toolbar button is fully inside the scroller's client box.
-import { startStubServer, launch } from "../harness.mjs";
+import { startStubServer, launch, settled } from "../harness.mjs";
 
 export const name = "task-toolbar-fits-card";
 
@@ -57,7 +57,11 @@ export async function run() {
         const page = await context.newPage();
         await page.setViewportSize({ width, height: 900 });
         await page.goto(baseUrl, { waitUntil: "networkidle" });
-        await page.waitForTimeout(500);
+        // The card must exist before its toolbar can be measured, and the
+        // assertions below are pure geometry — so wait for the card and then
+        // for layout to stop moving instead of guessing an interval.
+        await page.waitForSelector("article.task", { state: "attached" }).catch(() => {});
+        await settled(page);
 
         const r = await page.evaluate(() => {
           const card = document.querySelector("article.task");

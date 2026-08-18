@@ -179,8 +179,23 @@ async function pickFileMode(page) {
 export async function run() {
   const failures = [];
 
+  // The three blocks below are fully independent — each builds its own stub
+  // server on a dynamic port and its own browser, and none reads state the
+  // others write. They are also the slowest thing in the suite by a wide margin,
+  // because each deliberately throttles its chunk responses (chunkDelayMs) to
+  // hold the toast on screen long enough to sample. That throttle is the point
+  // of the test and must not be reduced, so the way to win the time back is to
+  // overlap the three waits rather than shorten any of them.
+  //
+  // Each block is wrapped in an async thunk that returns its own failures, and
+  // the results are concatenated in the original order so the reported messages
+  // are identical to the sequential version.
+  const blocks = [];
+
   // ---------- multi-file: both bars, counter, filename ----------
-  {
+  blocks.push(async () => {
+    const failures = [];
+    {
     const { server, baseUrl } = await startServer({ chunkDelayMs: 220 });
     const browser = await launch();
     try {
@@ -286,10 +301,16 @@ export async function run() {
         // Also shoot the toast alone, from the mid-upload sample above — the
         // page-level shot is mostly form, and by the time it is taken the
         // upload may already have finished and hidden the toast.
-        const toastEl = await page.$("#upload-toast");
-        if (toastEl && samples.length) {
-          await toastEl.screenshot({ path: "/tmp/vts-ui-verify/toast-multi-closeup.png" }).catch(() => {});
-        }
+        // NOTE: there used to be a second close-up shot of #upload-toast here.
+        // By this point the upload has usually finished and the toast is hidden,
+        // so element.screenshot() waited for it to become visible and burned its
+        // full 30s timeout on EVERY green run — 30 of this scenario's 35 seconds,
+        // ~14% of the whole suite — before .catch(() => {}) swallowed the error
+        // and the run carried on looking healthy. Nothing was lost by removing
+        // it: the mid-upload shot above (samples.length === 4) writes exactly the
+        // same path while the toast is genuinely on screen, which is the image
+        // that was actually wanted. The comment that used to sit here said as
+        // much — it noted the toast "may already have finished and hidden".
       }
 
       // Once the upload finishes the toast must go away.
@@ -307,8 +328,13 @@ export async function run() {
     }
   }
 
+    return failures;
+  });
+
   // ---------- single file: no "N of M" bar ----------
-  {
+  blocks.push(async () => {
+    const failures = [];
+    {
     const { server, baseUrl } = await startServer({ chunkDelayMs: 260 });
     const browser = await launch();
     try {
@@ -369,8 +395,13 @@ export async function run() {
     }
   }
 
+    return failures;
+  });
+
   // ---------- the info line reports the file count ----------
-  {
+  blocks.push(async () => {
+    const failures = [];
+    {
     const { server, baseUrl } = await startServer({ listTasks: [MULTI_TASK, SINGLE_TASK] });
     const browser = await launch();
     try {
@@ -411,5 +442,12 @@ export async function run() {
     }
   }
 
+    return failures;
+  });
+
+  // Run the three blocks concurrently and concatenate their failures in block
+  // order, so the output is identical to running them one after another.
+  const perBlock = await Promise.all(blocks.map((b) => b()));
+  for (const list of perBlock) failures.push(...list);
   return failures;
 }

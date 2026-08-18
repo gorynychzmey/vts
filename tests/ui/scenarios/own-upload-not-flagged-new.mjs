@@ -189,7 +189,18 @@ export async function run() {
     await page.click("#submit-btn", { force: true });
 
     // Wait for the upload round-trip (finalize is deliberately held ~900ms).
-    await page.waitForTimeout(2500);
+    // Poll for the card this scenario is about rather than sleeping past the
+    // worst case: the hold is server-side and real, but its exact duration is
+    // not what is under test — the card appearing (and not being flagged new)
+    // is. Bounded, and deliberately NOT fatal: if the card never arrives the
+    // assertions below still run and report the actual problem.
+    await page
+      .waitForFunction(
+        (id) => [...document.querySelectorAll(".task")].some((c) => c.dataset.taskId === id),
+        OWN_ID,
+        { timeout: 5000 },
+      )
+      .catch(() => {});
 
     // 1. The card must be in the DOM, and at the TOP of the list.
     const placement = await page.evaluate((ownId) => {
