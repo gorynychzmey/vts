@@ -220,6 +220,29 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
+    async def count_tasks_page(
+        self,
+        user_id: uuid.UUID,
+        *,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        source_type: str | None = None,
+    ) -> int:
+        """How many of the user's tasks match these filters, ignoring paging.
+
+        Deliberately shares ``_apply_task_filters`` with ``list_tasks_page`` so
+        the count can never disagree with the list it labels: a second hand-written
+        WHERE clause is exactly how a "showing 20 of 17" bug happens.
+        No cursor and no limit — that is the point.
+        """
+        stmt = select(func.count()).select_from(Task).where(Task.user_id == user_id)
+        stmt = self._apply_task_filters(
+            stmt, q=q, created_from=created_from,
+            created_to=created_to, source_type=source_type,
+        )
+        return int((await self.session.scalar(stmt)) or 0)
+
     async def list_tasks_for_user_filtered(
         self,
         user_id: uuid.UUID,

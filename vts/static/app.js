@@ -2552,6 +2552,10 @@ async function loadFirstPage() {
     renderTasks(tasks);
     p.exhausted = tasks.length < p.pageSize;
     updateHeadTail();
+    // Not awaited: the count is a label on a list that is already on screen, so
+    // a slow count must not hold up the render. It carries the epoch so a stale
+    // response cannot overwrite a newer filter's number.
+    void refreshTasksCount(myEpoch);
   } finally {
     // Only the call that owns the current epoch clears `loading`/repaints
     // the sentinel; a stale call must not clobber a newer call's state.
@@ -3037,15 +3041,29 @@ function updatePromptSelectSummary(container) {
   // because :has() cannot see the popover's checkboxes from the toggle button.
   container.querySelector(".prompt-select-toggle")
     ?.classList.toggle("has-selection", checked.length > 0);
+  // The pill names the FIRST selected prompt, plus "+N" when there are more
+  // (Victor, 2026-08-18). The "Prompts" caption beside the pill is gone, so the
+  // pill has to say what it holds on its own — and a bare "3 prompts" said how
+  // many without saying which, which is the part the user actually recognises.
+  const firstName = () => {
+    const row = checked[0].closest(".prompt-row");
+    const name = row && row.querySelector(".prompt-name");
+    return name ? name.textContent.trim() : "";
+  };
   let text;
   if (checked.length === 0) {
     text = t("new_task.prompts_none");
-  } else if (checked.length === 1) {
-    const label = checked[0].closest(".prompt-row");
-    const name = label && label.querySelector(".prompt-name");
-    text = name ? name.textContent : t("new_task.prompts_count", { count: 1 });
   } else {
-    text = t("new_task.prompts_count", { count: checked.length });
+    const name = firstName();
+    if (!name) {
+      // No row to read a name from (shouldn't happen, but the count is still
+      // truthful and is better than an empty pill).
+      text = t("new_task.prompts_count", { count: checked.length });
+    } else if (checked.length === 1) {
+      text = name;
+    } else {
+      text = t("new_task.prompts_more", { name, count: checked.length - 1 });
+    }
   }
   summary.textContent = text;
 }
@@ -8675,6 +8693,39 @@ function hasActiveFilters() {
  * of that day, otherwise picking the same day for both bounds matches only
  * tasks created exactly at midnight — which reads as "the filter is broken".
  */
+const tasksCountEl = document.getElementById("tasks-count");
+
+/** Total matching the current filters (all tasks when none are set).
+ *
+ *  Cannot be derived from the rendered list: it is paginated, so counting cards
+ *  would show one page's worth and creep upward as the user scrolls. The count
+ *  comes from the server with the SAME filter params the list used
+ *  (appendFilterParams), so the two cannot disagree.
+ *
+ *  `epoch` is the paging epoch at request time; a response that arrives after
+ *  the filters changed again is dropped rather than shown against the new list.
+ */
+async function refreshTasksCount(epoch) {
+  if (!tasksCountEl) return;
+  try {
+    const params = appendFilterParams(new URLSearchParams());
+    const body = await api(`/api/tasks/count?${params.toString()}`);
+    if (epoch !== undefined && epoch !== state.taskPaging.epoch) return;
+    const total = Number(body && body.total);
+    if (!Number.isFinite(total)) {
+      tasksCountEl.classList.add("hidden");
+      return;
+    }
+    tasksCountEl.textContent = String(total);
+    tasksCountEl.classList.remove("hidden");
+  } catch (err) {
+    // A failed count must not look like "you have 0 tasks": hide the pip and
+    // leave the list, which is the real content, speaking for itself.
+    console.error("Failed to load task count", err);
+    tasksCountEl.classList.add("hidden");
+  }
+}
+
 function appendFilterParams(params) {
   const f = currentFilters();
   if (f.q) params.set("q", f.q);

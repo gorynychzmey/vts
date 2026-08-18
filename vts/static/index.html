@@ -338,14 +338,14 @@
                  the value holder — app.js reads and writes selectedPresetRef
                  through it, and it is the accessible control. -->
             <div class="preset-field pop-wrap">
-              <span class="preset-label" data-i18n="new_task.preset">Preset</span>
-              <!-- Kept from vts-lbgg: "preset" is opaque to Russian speakers, so
-                   the control carries an explanation rather than assuming the
-                   term is understood. -->
-              <span class="preset-hint" tabindex="0" role="note"
-                    title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
-                    data-i18n-title="new_task.preset_hint"
-                    data-i18n-aria-label="new_task.preset_hint">?</span>
+              <!-- The "Preset" label and the "?" marker are gone (Victor,
+                   2026-08-18): the pill shows the chosen preset's NAME, which
+                   says what the control is without a caption beside it.
+                   The vts-lbgg explanation is NOT lost — "preset" is opaque to
+                   Russian speakers, so the same new_task.preset_hint text is
+                   still on the pill's own tooltip AND on the <select>'s, which
+                   is what a screen reader reads. Do not drop those two as
+                   "duplicates": they are now the only copies. -->
               <select id="preset-select" class="sr-only"
                       title="A saved set of task settings: language, transcript, speakers and prompts. Pick one to fill in every setting at once."
                       data-i18n-title="new_task.preset_hint"
@@ -378,6 +378,10 @@
                 </button>
               </div>
             </div>
+            <!-- The preset is a different KIND of control from the pills after
+                 it: it fills in all of them at once, rather than being one of
+                 them. The rule says so without a caption. -->
+            <span class="options-divider" aria-hidden="true"></span>
             <label
               class="option-pill"
               id="audio-only-pill"
@@ -413,10 +417,11 @@
               <input id="speaker_no_manual_stop" name="speaker_no_manual_stop" type="checkbox" disabled />
               <span data-i18n="new_task.speaker_no_manual_stop">Don't stop for review</span>
             </label>
-            <div class="prompt-select-field">
-              <span class="prompt-select-label" tabindex="0" role="note"
-                    data-i18n="new_task.prompts"
-                    data-i18n-title="new_task.prompts_tooltip">Prompts</span>
+            <!-- No "Prompts" caption (Victor, 2026-08-18): the pill names the
+                 first selected prompt (+N for the rest), which identifies the
+                 control better than the word did. The explanatory tooltip moves
+                 onto the pill wrapper so it is not lost with the label. -->
+            <div class="prompt-select-field" data-i18n-title="new_task.prompts_tooltip">
               <div class="prompt-select" id="prompt-select"></div>
             </div>
             <div class="prompt-select-field delivery-select-field" id="delivery-select-field" hidden>
@@ -454,6 +459,11 @@
       <section class="task-section">
         <div class="title-row">
           <h2 data-i18n="tasks.title">Tasks</h2>
+          <!-- How many tasks the current filters match (all of them when no
+               filter is set). Comes from /api/tasks/count, NOT from counting
+               rendered cards: the list is paginated, so counting the DOM would
+               show one page's worth and grow as the user scrolls. -->
+          <span id="tasks-count" class="tasks-count hidden" aria-live="polite"></span>
           <button
             id="refresh-btn"
             class="icon-btn ghost"

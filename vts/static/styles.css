@@ -604,6 +604,29 @@ input[type="file"] {
   align-items: center;
 }
 
+/* Separates the preset pill from the option pills it fills in. `align-self`
+   rather than a fixed height so the rule matches the pill height, and it
+   disappears when the row wraps and it would land at the start of a line —
+   a divider hanging under nothing reads as a stray mark. */
+.options-divider {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 1px;
+  min-height: 1.6rem;
+  margin: 0 0.15rem;
+  background: var(--line);
+}
+
+/* Below 40rem .options-row is a 2-column GRID, where this rule takes a whole
+   CELL — it pushed the first two pills onto separate rows and added 5px of
+   width to the form. The preset pill gets its own full-width line there
+   anyway, so the separation it marks is already visible without it. */
+@media (max-width: 40rem) {
+  .options-divider {
+    display: none;
+  }
+}
+
 .option-pill {
   display: inline-flex;
   align-items: center;
@@ -705,6 +728,32 @@ input[type="file"] {
      (File mode lays out narrower than URL; ru wraps wider than de at equal
      width). Keeps a readable 188x86 bubble at 320px. */
   max-width: min(16rem, calc(100vw - 132px));
+}
+
+/* The pill carries the vts-lbgg explanation now that the "?" marker beside it
+   is gone, so it inherits the marker's problem: the globally centred bubble is
+   256px wide on a control near the form's left edge, so it started ~85px off
+   the left of a phone screen and was clipped mid-word. The scroll probe cannot
+   see that — overflow to the LEFT never adds scrollWidth — which is why the UI
+   scenario measures the painted box instead.
+   Left-anchored, and capped so the spill does not simply move to the right
+   edge where it WOULD add sideways scroll. */
+.preset-pill[data-tooltip]::after {
+  left: 0;
+  right: auto;
+  transform: none;
+  text-align: left;
+  /* The subtrahend covers the page gutter PLUS the pill's own offset from the
+     viewport edge — the bubble is anchored to the pill, not to the page, so a
+     bare gutter is not enough. The spill is INVISIBLE (an ::after adds
+     scrollWidth without painting past the edge), so it shows up only as a stray
+     sideways scroll — vts-nr4, and the reason the neighbouring .preset-hint rule
+     carries a measured constant too.
+     132px is that same measured value: it is the widest cap with no overflow
+     across BOTH source modes and all three locales (FILE mode lays the form out
+     narrower than URL mode, so a cap tuned on URL alone overflows by ~5px the
+     moment the user switches to a file upload). */
+  max-width: min(20rem, calc(100vw - 132px));
 }
 
 /* #preset-select is a hidden value holder now (the pill drives it), so it must
@@ -886,6 +935,34 @@ input[type="file"] {
   align-items: center;
 }
 
+/* How many tasks match the current filters, next to the heading. Reuses the
+   accent-soft pill look of the other counters rather than inventing a badge. */
+.tasks-count:not(.hidden) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.4rem;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent-ink);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The heading and its count belong together; the refresh button stays pushed to
+   the far edge by .title-row's space-between. */
+.title-row h2 {
+  margin-right: 0.5rem;
+}
+
+.title-row .tasks-count {
+  margin-right: auto;
+}
+
 /* Context strip (redesign v2): one row on the page background, not a card.
    Left cell states who you are, right cell is the impersonation control. */
 .user-context {
@@ -894,6 +971,10 @@ input[type="file"] {
   gap: 0.6rem;
   flex-wrap: wrap;
   padding: 0.125rem;
+  /* .layout sets no gap between its children and neither box carries a margin,
+     so this strip sat flush against the new-task card below it (measured: 0px)
+     — the two read as one block. */
+  margin-bottom: 1rem;
 }
 
 .context-line {
@@ -1983,9 +2064,13 @@ input[type="file"] {
 
   /* Dot + title + metadata take the first line; the status chip and the controls
      share the second. The dot keeps its place BESIDE the title — pulling
-     .task-main ahead with order:-1 pushed the dot onto a line of its own. */
+     .task-main ahead with order:-1 pushed the dot onto a line of its own.
+     On a phone the header row WRAPS (title line, then controls line), so the
+     row's centre is not the title's centre — align to the top of the title
+     instead of inheriting the desktop `align-self: center`. */
   .task-dot {
     order: -2;
+    align-self: flex-start;
     margin-top: 0.65rem;
   }
 

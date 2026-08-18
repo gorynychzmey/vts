@@ -9,9 +9,13 @@
 //     translated but never rendered (or rendered but never translated) is
 //     caught either way. The presets dialog is opened for real, because it
 //     holds most of the occurrences and starts closed.
-//  2. The "?" marker is visible and its tooltip carries the Russian hint,
-//     on hover AND on focus — the bubble is the only tooltip that works on
-//     touch, so a hover-only affordance would be invisible on a phone.
+//  2. The explanation is reachable. It used to hang off a "?" marker beside a
+//     "Шаблон" caption; both were removed in 1.7.21 because the pill now shows
+//     the preset's NAME, which identifies the control better than the word did.
+//     The hint text moved onto the pill itself and the sr-only <select> — those
+//     are the ONLY copies, so do not delete either as a duplicate. Checked on
+//     hover AND on focus: the bubble is the only tooltip that works on touch,
+//     so a hover-only affordance would be invisible on a phone.
 //  3. Adding an element to .preset-field must not bring back the invisible
 //     horizontal scroll of vts-nr4. That regression was caused by a
 //     [data-tooltip]::after box — exactly what this change adds a new one of —
@@ -121,22 +125,28 @@ export async function run() {
       failures.push(`document lang expected "ru", got "${lang}" — rest of this scenario is meaningless`);
     }
 
-    // (1) The label itself.
-    const label = await page.evaluate(
-      () => document.querySelector(".preset-field .preset-label")?.textContent.trim() ?? null,
+    // (1) The pill names the selected preset. The "Шаблон" caption and the "?"
+    // marker beside it were removed (Victor, 2026-08-18) because the name says
+    // what the control is — but the EXPLANATION they carried must survive, and
+    // that is what the rest of this scenario now checks.
+    const pillLabel = await page.evaluate(
+      () => document.querySelector("#preset-pill-label")?.textContent.trim() ?? null,
     );
-    if (label !== "Шаблон") {
-      failures.push(`preset label expected "Шаблон", got ${JSON.stringify(label)}`);
+    if (!pillLabel) {
+      failures.push("the preset pill shows no name — nothing identifies the control now");
     }
 
-    // (2) The "?" marker is really on screen (not just in the DOM).
-    const hintPresent = await isVisible(page, ".preset-hint");
+    // (2) The pill is really on screen (not just in the DOM).
+    const hintPresent = await isVisible(page, "#preset-pill");
     if (!hintPresent) {
-      failures.push(".preset-hint is not visible next to the preset selector");
+      failures.push("#preset-pill is not visible");
     }
 
-    // Tooltip text landed on both the marker and the select.
-    for (const sel of [".preset-hint", "#preset-select"]) {
+    // The vts-lbgg explanation must still be reachable. It lives on the pill
+    // (what a sighted user hovers) AND on the sr-only <select> (what a screen
+    // reader announces). These are the ONLY copies now, so losing either one
+    // silently re-opens the problem the "?" was added to solve.
+    for (const sel of ["#preset-pill", "#preset-select"]) {
       const tip = await page.evaluate(
         (s) => document.querySelector(s)?.getAttribute("data-tooltip") ?? null,
         sel,
@@ -150,7 +160,7 @@ export async function run() {
     // A hint that only answers to hover is unreachable by touch and keyboard.
     const bubbleOpacity = async () =>
       page.evaluate(() => {
-        const el = document.querySelector(".preset-hint");
+        const el = document.querySelector("#preset-pill");
         if (!el) return null;
         const cs = getComputedStyle(el, "::after");
         return { opacity: cs.opacity, visibility: cs.visibility };
@@ -165,7 +175,7 @@ export async function run() {
         failures.push(`hint bubble should start hidden, got visibility=${hiddenState.visibility}`);
       }
 
-      await page.hover(".preset-hint");
+      await page.hover("#preset-pill");
       await page.waitForTimeout(750); // 0.5s show-delay + transition
       const hovered = await bubbleOpacity();
       if (!hovered || hovered.visibility !== "visible" || hovered.opacity !== "1") {
@@ -174,13 +184,13 @@ export async function run() {
 
       await page.mouse.move(0, 0);
       await page.waitForTimeout(300);
-      await page.evaluate(() => document.querySelector(".preset-hint").focus());
+      await page.evaluate(() => document.querySelector("#preset-pill").focus());
       await page.waitForTimeout(750);
       const focused = await bubbleOpacity();
       if (!focused || focused.visibility !== "visible") {
         failures.push(`hint bubble did not appear on keyboard focus: ${JSON.stringify(focused)}`);
       }
-      await page.evaluate(() => document.querySelector(".preset-hint").blur());
+      await page.evaluate(() => document.querySelector("#preset-pill").blur());
     }
 
     // (4) No "пресет" anywhere the user can read — main form first.
@@ -240,11 +250,11 @@ export async function run() {
       }
 
       // And while the bubble is actually painted — the wide box only exists then.
-      const hintThere = await isVisible(p, ".preset-hint");
+      const hintThere = await isVisible(p, "#preset-pill");
       if (!hintThere) {
-        failures.push(`[${width}px] .preset-hint is not visible on a phone-width layout`);
+        failures.push(`[${width}px] #preset-pill is not visible on a phone-width layout`);
       } else {
-        await p.hover(".preset-hint");
+        await p.hover("#preset-pill");
         await p.waitForTimeout(750);
         const shown = await p.evaluate(scrollProbe, width);
         if (shown.maxScrollLeft !== 0) {
@@ -263,7 +273,7 @@ export async function run() {
         // right-anchored 256px bubble on a trigger 85px from the edge, clipped
         // mid-word off-screen. Measure the painted box against the viewport.
         const bubble = await p.evaluate(() => {
-          const el = document.querySelector(".preset-hint");
+          const el = document.querySelector("#preset-pill");
           if (!el) return null;
           const trigger = el.getBoundingClientRect();
           const cs = getComputedStyle(el, "::after");

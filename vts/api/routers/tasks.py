@@ -339,6 +339,45 @@ async def get_queue_positions(
     return JSONResponse({str(k): v for k, v in positions.items()})
 
 
+@router.get("/api/tasks/count", include_in_schema=False)
+async def count_tasks(
+    q: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    source_type: str | None = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> JSONResponse:
+    """How many tasks match the current filters, ignoring pagination.
+
+    The list endpoint returns one PAGE, so the UI cannot derive this by counting
+    what it rendered — with infinite scroll that would show "8" until you
+    scrolled. Same filter arguments as `/api/tasks`, validated the same way, so
+    a request the list rejects is not silently counted here instead.
+
+    MUST stay above `/api/tasks/{task_id}`: that route would otherwise match
+    "count" and fail parsing it as a UUID (the same ordering constraint the
+    queue-positions route above has).
+    """
+    if source_type is not None and source_type not in ("file", "url"):
+        raise HTTPException(
+            status_code=422, detail="source_type must be 'file' or 'url'"
+        )
+    if created_from is not None and created_to is not None and created_from > created_to:
+        raise HTTPException(
+            status_code=422, detail="created_from must not be after created_to"
+        )
+    repo = Repo(session)
+    total = await repo.count_tasks_page(
+        uuid.UUID(user.id),
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        source_type=source_type,
+    )
+    return JSONResponse({"total": total})
+
+
 @router.get("/api/tasks/{task_id}", response_model=TaskOut)
 async def get_task(
     task_id: uuid.UUID,
