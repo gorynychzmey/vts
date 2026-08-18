@@ -16,6 +16,17 @@ import { startStubServer, launch, openPage } from "../harness.mjs";
 
 export const name = "card-and-form-compaction";
 
+// Mirrors vts.services.task_status.status_flags() — only the fields the card
+// reads. `running` is pausable and `paused`/`failed` resumable, so the fixture
+// below produces cards with DIFFERING button counts, which is what makes the
+// chip-alignment assertion meaningful.
+const FLAGS = {
+  running:   { is_active: true,  is_pending: false, is_finished: false, shows_progress: true,  can_pause: true,  can_resume: false, can_archive: false },
+  paused:    { is_active: false, is_pending: false, is_finished: false, shows_progress: false, can_pause: false, can_resume: true,  can_archive: false },
+  completed: { is_active: false, is_pending: false, is_finished: true,  shows_progress: true,  can_pause: false, can_resume: false, can_archive: true  },
+  failed:    { is_active: false, is_pending: false, is_finished: true,  shows_progress: true,  can_pause: false, can_resume: true,  can_archive: true  },
+};
+
 const iso = new Date().toISOString();
 const card = (i, extra = {}) => ({
   id: `t${i}`,
@@ -40,6 +51,9 @@ const TASKS = [
   }),
   card(1, { stats: { transcript_chars: 4120 } }),   // only the raw transcript exists yet
   card(2),                                          // nothing produced yet
+  // A resumable card: it renders the play button where cards 0 and 2 render
+  // none, so the chip-alignment check sees both states.
+  card(90, { status: "paused" }),
   ...Array.from({ length: 7 }, (_, i) => card(i + 3)),
 ];
 
@@ -47,7 +61,11 @@ export async function run() {
   const { server, baseUrl } = await startStubServer({
     "/api/tasks": TASKS,
     "/api/tasks/count": { total: 42 },
-    "/api/status-config": { status_flags: {}, tasks_page_size: 10 },
+    // Real flags, not {}: pause/resume visibility is driven by these, and with
+    // an empty map no card renders that button — which would make the
+    // chip-alignment check below pass against anything. Mirrors
+    // vts.services.task_status.status_flags().
+    "/api/status-config": { status_flags: FLAGS, tasks_page_size: 10 },
     "/api/presets": [{ source: "user", id: "p1", name: "Quick summary", editable: true,
       options: { transcript: true, prompts: [{ source: "system", id: "summary" }] } }],
     "/api/me/default_preset": { source: "user", id: "p1" },
@@ -93,6 +111,46 @@ export async function run() {
     if (cols.size !== 1) failures.push(`the clock column shifts between cards: ${[...cols].join(" vs ")}`);
     const kebabs = new Set(rows.map((r) => r.kebabLeft));
     if (kebabs.size !== 1) failures.push(`the kebab is not in one column: ${[...kebabs].join(" vs ")}`);
+
+    // ---- 1b. Chips line up regardless of which buttons a card shows --------
+    // Pause/resume is the only control that comes and goes, so a card without
+    // it used to be a button narrower and its chip sat ~41px right of its
+    // neighbours'. The pause button now holds the slot open when hidden, and
+    // THIS is the assertion that would have caught the drift: the earlier
+    // checks all use cards in the same state, so they cannot see it.
+    // Needs real status flags — pause/resume visibility is driven by
+    // /api/status-config, and without them no card renders the button at all.
+    const chipCols = await page.evaluate(() =>
+      [...document.querySelectorAll(".task")].map((c) => ({
+        status: c.querySelector(".task-status")?.textContent.trim() || "",
+        right: Math.round(c.querySelector(".task-status").getBoundingClientRect().right),
+        // Count only buttons the user can actually press. The reserved
+        // pause slot still occupies width (that is the fix), so measuring by
+        // width alone reports the same number for every card and the vacuity
+        // guard below could never fire.
+        buttons: [...c.querySelectorAll(".task-actions-inline button, .toggle-btn")]
+          .filter((b) => {
+            const cs = getComputedStyle(b);
+            return b.getBoundingClientRect().width > 0
+              && cs.visibility !== "hidden"
+              && cs.display !== "none";
+          }).length,
+      }))
+    );
+    const varied = new Set(chipCols.map((c) => c.buttons));
+    if (varied.size < 2) {
+      failures.push(
+        `this fixture no longer produces cards with DIFFERING button counts ` +
+        `(${[...varied].join(",")}), so the chip-alignment check is vacuous`
+      );
+    }
+    const rightEdges = new Set(chipCols.map((c) => c.right));
+    if (rightEdges.size !== 1) {
+      failures.push(
+        `status chips are not in one column across button states: ` +
+        JSON.stringify(chipCols.map((c) => `${c.status}:${c.buttons}btn@${c.right}`))
+      );
+    }
 
     // ---- 2. Size chips ----
     const chips = await page.evaluate(() =>
