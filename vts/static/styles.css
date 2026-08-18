@@ -4208,6 +4208,19 @@ dialog:not([open]) {
    row: it cannot overhang either edge, and the text wraps to more lines
    instead. Menu rows are full-width, so there is no narrow-trigger case here
    the way there is on the option pills. */
+/* The FIRST row's tooltip opens downward. Every bubble is anchored above its
+   trigger, which for the topmost row lands ~25px above the panel — and
+   .btn-menu clips (overflow: hidden), so that row's tooltip simply never
+   appeared. Selected by :first-child rather than a markup attribute so it keeps
+   working when the menu is reordered, which just happened.
+   `.menu-sep` and comments are not elements that can be first here; the first
+   child of a menu panel is always a row. */
+.btn-menu .menu-item:first-child[data-tooltip]::after,
+.popover .menu-item:first-child[data-tooltip]::after {
+  bottom: auto;
+  top: calc(100% + 0.35rem);
+}
+
 .btn-menu .menu-item[data-tooltip]::after,
 .popover .menu-item[data-tooltip]::after {
   left: 0;

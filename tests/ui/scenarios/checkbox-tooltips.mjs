@@ -27,7 +27,29 @@ const NARROW = [320, 360, 412];
 
 export async function run() {
   const failures = [];
-  const { server, baseUrl } = await startStubServer({});
+  // Delivery data so the DELIVERY PILL actually renders: it is built by JS after
+  // the page's applyI18n pass and was the control drawing a native browser
+  // tooltip, so a fixture without it makes the checks below assert nothing.
+  const { server, baseUrl } = await startStubServer({
+    "/api/delivery-adapters": {
+      adapters: [{
+        name: "outline",
+        config_schema: { type: "object", properties: { base_url: { type: "string" } }, required: ["base_url"] },
+        secret_keys: [], connection_fields: ["base_url"], option_fields: [], supports_check: false,
+      }],
+      incompatible: {},
+      variants: [{ value: "summary", label: "delivery.variant.summary" }],
+    },
+    "/api/delivery-credentials": [{
+      id: "c1", name: "outline-main", adapter: "outline",
+      config: { base_url: "https://outline.example" }, secrets: {},
+      adapter_available: true, used_by: 1,
+    }],
+    "/api/delivery-targets": [{
+      id: "t1", name: "meetings", adapter: "outline", credential_id: "c1",
+      config: {}, adapter_available: true,
+    }],
+  });
   const browser = await launch();
 
   try {
@@ -200,6 +222,55 @@ export async function run() {
       }
     }
     await page.setViewportSize({ width: 1100, height: 700 });
+
+    // --- ONE tooltip style, everywhere -----------------------------------
+    // Three visibly different tooltips shipped: the styled bubble, and — on the
+    // delivery pill — the browser's own native tooltip. That pill is built by
+    // JS AFTER applyI18n has run over the page, and it set a raw `title` as well
+    // as data-i18n-title, so nothing ever converted it. A raw `title` left on
+    // any element is the tell, so assert on that rather than on colours.
+    const rawTitles = await page.evaluate(() =>
+      [...document.querySelectorAll("#task-form [title]")].map(
+        (e) => e.tagName + "." + String(e.className).slice(0, 30)
+      )
+    );
+    if (rawTitles.length) {
+      failures.push(
+        `elements still carry a raw title=, so the browser draws its own tooltip ` +
+        `instead of the styled bubble: ${JSON.stringify(rawTitles)}`
+      );
+    }
+
+    // And the bubbles that DO exist must all look the same.
+    const styles = await page.evaluate(() => {
+      const pick = ["#preset-pill", "#audio-only-pill", ".delivery-pill"];
+      const seen = {};
+      for (const sel of pick) {
+        const el = document.querySelector(sel);
+        // A control with no data-tooltip is the regression itself: its
+        // data-i18n-title was never converted, so the browser draws its own
+        // tooltip instead of the styled bubble. Record it rather than skip it.
+        if (!el) continue;
+        if (!el.hasAttribute("data-tooltip")) { seen[sel] = "NO-BUBBLE"; continue; }
+        const cs = getComputedStyle(el, "::after");
+        seen[sel] = [cs.backgroundColor, cs.color, cs.borderTopWidth, cs.borderTopColor, cs.borderTopLeftRadius].join("|");
+      }
+      return seen;
+    });
+    // The delivery pill is the one that regressed, so its absence would make
+    // both checks above vacuous. Fail loudly rather than quietly pass.
+    if (!styles[".delivery-pill"]) {
+      failures.push("the delivery pill did not render — these tooltip checks assert nothing without it");
+    } else if (styles[".delivery-pill"] === "NO-BUBBLE") {
+      failures.push(
+        "the delivery pill has no data-tooltip — its data-i18n-title was not converted, " +
+        "so the browser draws its own native tooltip instead of the styled bubble"
+      );
+    }
+    const distinct = new Set(Object.values(styles));
+    if (Object.keys(styles).length > 1 && distinct.size > 1) {
+      failures.push(`tooltip styles diverge between controls: ${JSON.stringify(styles)}`);
+    }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));
   } finally {

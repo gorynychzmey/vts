@@ -8464,9 +8464,12 @@ function renderDeliveryMultiselect(container, selected) {
   toggle.setAttribute("aria-haspopup", "true");
   toggle.setAttribute("aria-expanded", "false");
   // The sibling label is gone (the pill says it), so the explanation it carried
-  // moves here.
+  // moves here. Only `data-i18n-title` — applyI18n() below turns that into the
+  // styled `data-tooltip` bubble. Setting `title` here as well left a raw title
+  // on a node built AFTER applyI18n had already run over the page, so nothing
+  // converted it and the browser drew its own native tooltip: the third,
+  // odd-looking tooltip style in the UI.
   toggle.setAttribute("data-i18n-title", "new_task.delivery_tooltip");
-  toggle.setAttribute("title", t("new_task.delivery_tooltip"));
   toggle.innerHTML =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/></svg>';
 
@@ -8524,6 +8527,9 @@ function renderDeliveryMultiselect(container, selected) {
   popover.addEventListener("change", () => updateDeliverySummary(container));
 
   container.append(toggle, popover);
+  // Render this subtree's data-i18n-* attributes: it is built after the page's
+  // own applyI18n pass, so without this its tooltip stays an unconverted title.
+  applyI18n(container);
   updateDeliverySummary(container);
 }
 
