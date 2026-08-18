@@ -1255,7 +1255,14 @@ function renderTaskSizes(taskEl) {
     label.textContent = t(key);
     const num = document.createElement("span");
     num.className = "task-size-value mono";
-    num.textContent = t("stats.chars", { count: formatMetricNumber(value) });
+    num.textContent = formatMetricNumber(value);
+    // No unit on the card (Victor, 2026-08-18). Repeated across all three chips
+    // it was most of the row's width — "Zeichen" three times in German pushed
+    // them onto three lines while the numbers, the actual information, got a
+    // third of the space. The label already says which quantity this is, and the
+    // unit never varies. An icon was considered and rejected: there is no
+    // glyph for "character" that a user would recognise rather than learn.
+    // The About dialog, which has room and states each figure once, keeps it.
     chip.append(label, num);
     row.appendChild(chip);
   }

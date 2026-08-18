@@ -2191,6 +2191,17 @@ input[type="file"] {
     min-width: 0;
   }
 
+  /* Tighter chips on a phone: three of them have to share one line. The unit is
+     already gone everywhere (see renderTaskSizes), so this is only padding. */
+  .task-size-chip {
+    gap: 0.22rem;
+    padding: 0.08rem 0.36rem;
+  }
+
+  .task-size-row:not(.hidden) {
+    gap: 0.22rem;
+  }
+
 
   .url-row {
     grid-template-columns: 1fr auto;
@@ -2399,6 +2410,7 @@ dialog:not([open]) {
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
 }
+
 
 /* Icons standing in for the words "files" and "speakers" in the meta line: it
    is scanned rather than read, and the labels cost more width than the numbers.
