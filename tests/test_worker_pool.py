@@ -22,6 +22,8 @@ class FakeBus:
     def __init__(self) -> None:
         self._cancels: set[uuid.UUID] = set()
         self._pauses: set[uuid.UUID] = set()
+        self._restarts: set[uuid.UUID] = set()
+        self.queued_notifications = 0
 
     async def request_cancel(self, task_id: uuid.UUID) -> None:
         self._cancels.add(task_id)
@@ -40,6 +42,18 @@ class FakeBus:
 
     async def is_pause_requested(self, task_id: uuid.UUID) -> bool:
         return task_id in self._pauses
+
+    async def request_restart(self, task_id: uuid.UUID) -> None:
+        self._restarts.add(task_id)
+
+    async def clear_restart_request(self, task_id: uuid.UUID) -> None:
+        self._restarts.discard(task_id)
+
+    async def is_restart_requested(self, task_id: uuid.UUID) -> bool:
+        return task_id in self._restarts
+
+    async def notify_queued(self) -> None:
+        self.queued_notifications += 1
 
 
 class FakeProcessor:
@@ -414,3 +428,43 @@ async def test_pre_start_pause_skip(factory):
     assert await bus.is_pause_requested(task_id) is False, (
         "the flag must be cleared, or the task loops on the next restart"
     )
+
+
+@pytest.mark.asyncio
+async def test_reap_performs_a_requested_restart(factory):
+    """A restart asked for while the worker held the task is done on release.
+
+    The endpoint cannot reset the artefacts under a running worker — it would
+    race the very step it is trying to discard — so it flags the task and
+    returns. The reset belongs here, at the one moment the task is provably
+    nobody's: after `reap` has collected it.
+    """
+    ids = await _seed_queued(factory, 1)
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_restart(ids[0])
+    await bus.request_cancel(ids[0])
+    await pool.watch_cancels()
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_count == 0
+    assert await bus.is_restart_requested(ids[0]) is False, "the flag must be cleared"
+
+    async with factory() as session:
+        row = await session.get(Task, ids[0])
+        assert row is not None
+        assert row.status == TaskStatus.queued, "a restarted task must be re-queued"
+    assert bus.queued_notifications >= 1, "the worker must be woken for the re-queued task"

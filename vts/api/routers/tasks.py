@@ -468,6 +468,16 @@ async def restart_summary_task(
                 status_code=409,
                 detail=f"cannot_restart:{task.status.value}",
             )
+        if task.status in (TaskStatus.running, TaskStatus.paused):
+            # A worker still holds this task, so resetting the artefacts here
+            # would race the step writing to them. Flag the restart, cancel
+            # the task, and return: the worker resets once it has reaped it
+            # (WorkerPool._restart_if_requested). Returning "restarting"
+            # rather than "queued" keeps the response honest — the task is
+            # not queued yet, and will not be for a second or two.
+            await bus.request_restart(task.id)
+            await bus.request_cancel(task.id)
+            return MessageOut(status="restarting")
         _reset_summary_steps(task)
         downgrade_all_result_entries(task)
         artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))

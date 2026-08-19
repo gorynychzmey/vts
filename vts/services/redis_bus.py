@@ -40,6 +40,9 @@ class RedisBus:
     def _pause_key(self, task_id: uuid.UUID) -> str:
         return f"{self.settings.redis_prefix}task:{task_id}:pause"
 
+    def _restart_key(self, task_id: uuid.UUID) -> str:
+        return f"{self.settings.redis_prefix}task:{task_id}:restart"
+
     async def notify_queued(self) -> None:
         """Wake the worker up via pub/sub after a task is committed to queued status."""
         await self.redis.publish(f"{self.settings.redis_prefix}queue:notify", "1")
@@ -62,6 +65,24 @@ class RedisBus:
 
     async def is_pause_requested(self, task_id: uuid.UUID) -> bool:
         return bool(await self.redis.exists(self._pause_key(task_id)))
+
+    async def request_restart(self, task_id: uuid.UUID) -> None:
+        """Mark a task the worker still holds for a summary restart.
+
+        The API cannot reset the artefacts while a worker is writing to them,
+        so it marks the task and returns; the worker resets once it has
+        actually released it. Sharing the cancel TTL means a marker orphaned
+        by a crash expires rather than pinning the task forever.
+        """
+        await self.redis.set(
+            self._restart_key(task_id), "1", ex=self.settings.task_cancel_ttl_seconds
+        )
+
+    async def clear_restart_request(self, task_id: uuid.UUID) -> None:
+        await self.redis.delete(self._restart_key(task_id))
+
+    async def is_restart_requested(self, task_id: uuid.UUID) -> bool:
+        return bool(await self.redis.exists(self._restart_key(task_id)))
 
     def _evict_stale_throttle_keys(self, now: float, interval: float) -> None:
         """Drop throttle entries that can no longer suppress anything (vts-swg1).

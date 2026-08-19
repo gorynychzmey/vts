@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import get_settings
 from vts.core.logging import configure_logging
-from vts.db.models import TaskStatus
+from sqlalchemy.orm import selectinload
+
+from vts.db.models import Task, TaskStatus
+from vts.api._helpers.artifact_store import _reset_summary_artifacts, _reset_summary_steps
+from vts.services.prompt_results import downgrade_all_result_entries
 from vts.db.repo import Repo
 from vts.db.session import SessionLocal
 from vts.delivery.consumer import delivery_loop
@@ -306,6 +310,48 @@ class WorkerPool:
                 self._active.pop(task_id, None)
                 self._cancel_sent.discard(task_id)
                 self._pause_deadline.pop(task_id, None)
+                await self._restart_if_requested(task_id)
+
+    async def _restart_if_requested(self, task_id: uuid.UUID) -> None:
+        """Reset a task's summary stages if a restart was asked for.
+
+        The API cannot do this itself while a worker holds the task: it would
+        reset the artefacts under the very step still writing to them, and the
+        step would then finish and write its window back over the cleared
+        state. Here the task is provably nobody's — it has just been reaped —
+        so the reset is safe.
+
+        Failures are logged and swallowed: a task left un-restarted keeps its
+        current status and can be restarted again, whereas letting the error
+        escape would abort the reap loop and strand every other finished task.
+        """
+        if not await self._bus.is_restart_requested(task_id):
+            return
+        try:
+            async with self._session_factory() as session:
+                repo = Repo(session)
+                # Eager-load `steps`: the reset helpers walk them, and a lazy
+                # load from a thread (or from _reset_summary_artifacts) raises
+                # MissingGreenlet under the async session.
+                task = await session.get(
+                    Task, task_id, options=[selectinload(Task.steps)]
+                )
+                if task is None:
+                    self._log.info("restart requested for a task that is gone: %s", task_id)
+                    return
+                _reset_summary_steps(task)
+                downgrade_all_result_entries(task)
+                await asyncio.to_thread(_reset_summary_artifacts, task)
+                task.summary_path = None
+                await repo.set_task_summary_progress(task, 0, 0)
+                await repo.set_task_status(task, TaskStatus.queued)
+                await session.commit()
+            await self._bus.notify_queued()
+            self._log.info("summary restarted for task %s", task_id)
+        except Exception:
+            self._log.exception("restart failed for task %s", task_id)
+        finally:
+            await self._bus.clear_restart_request(task_id)
 
     async def cancel_all(self) -> None:
         """Cancel every active task and await it (teardown)."""

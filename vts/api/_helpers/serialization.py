@@ -34,6 +34,11 @@ def can_restart_summary_task(task: Task) -> bool:
         return False
     if task.status == TaskStatus.completed:
         return True
+    # A task the worker still holds can be restarted too: the endpoint flags
+    # it and the worker performs the reset once it has released the task, so
+    # there is no race with the step still writing its window (vts-gouq).
+    if task.status in (TaskStatus.running, TaskStatus.paused):
+        return True
     if task.status != TaskStatus.failed:
         return False
     return any(step.name in SUMMARY_STEP_NAMES and step.status == StepStatus.failed for step in task.steps)
