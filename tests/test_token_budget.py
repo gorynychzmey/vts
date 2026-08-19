@@ -293,6 +293,27 @@ def test_derive_window_tokens_floor_cap_and_middle() -> None:
     assert derive_window_tokens(mid, prompt_tokens=232, cap=8192) == 5500
 
 
+def test_derive_window_tokens_floor_is_configurable() -> None:
+    """A cap below the legacy 2000 floor must be reachable.
+
+    The segment stage is a filler-cleanup pass; measured 2026-08-19, the model
+    stops editing and echoes the input verbatim once the window grows past
+    ~1500 tokens. Reaching the working range therefore needs a window under the
+    legacy floor, and clamp(value, floor, cap) returns floor whenever
+    cap < floor -- so without an adjustable floor the setting is silently a
+    no-op.
+    """
+    from vts.pipeline.token_budget import derive_window_tokens
+
+    big = TokenBudgetConfig(n_ctx=114688, safety_margin=768)
+    # Legacy floor swallows a smaller cap...
+    assert derive_window_tokens(big, prompt_tokens=300, cap=1255) == 2000
+    # ...unless the floor is lowered with it.
+    assert derive_window_tokens(big, prompt_tokens=300, cap=1255, floor=1000) == 1255
+    # Lowering the floor alone must not shrink an unconstrained window.
+    assert derive_window_tokens(big, prompt_tokens=300, cap=8192, floor=1000) == 8192
+
+
 def test_uncap_segment_for_input_scales_max_cap() -> None:
     from vts.pipeline.token_budget import uncap_segment_for_input
 

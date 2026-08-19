@@ -650,6 +650,7 @@ class PrepareSummaryChunksStep(Step):
                 budget_cfg,
                 prompt_tokens,
                 cap=int(getattr(ctx.settings, "summary_segment_window_cap", 8192)),
+                floor=int(getattr(ctx.settings, "summary_segment_window_floor", 2000)),
             )
             st.logger.info(
                 "summary segmentation: split (mode=%s tokens=%d window=%d n_ctx=%d)",
@@ -924,6 +925,7 @@ class SummarizeWindowsStep(Step):
                     budget_cfg,
                     prompt_tokens,
                     cap=int(getattr(ctx.settings, "summary_segment_window_cap", 8192)),
+                    floor=int(getattr(ctx.settings, "summary_segment_window_floor", 2000)),
                 )
                 chunks = await ctx.llm.chunk_text(
                     text=chunks[0],

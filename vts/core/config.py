@@ -289,6 +289,11 @@ class Settings(BaseSettings):
     # Upper bound for the context-derived segment window when splitting.
     # YAML: summary.segment.window_cap.
     summary_segment_window_cap: int = 8192
+    # Lower bound for that window. Measured 2026-08-19: the segment stage is a
+    # filler-cleanup pass, and past ~1500 tokens of input the model stops
+    # editing and echoes the text back verbatim, so the window must be able to
+    # go below the legacy 2000 floor. YAML: summary.segment.window_floor.
+    summary_segment_window_floor: int = 2000
 
     # Verbatim-smooth rewrite targets (see TokenBudgetConfig): input minus
     # fillers/repetitions, not a synopsis.
