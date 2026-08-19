@@ -683,6 +683,25 @@ def test_derive_stream_ceiling_clamps_to_floor_and_cap() -> None:
     assert derive_stream_ceiling(None, **kw) == 3600
 
 
+def test_parse_sse_content_extracts_only_content_deltas() -> None:
+    from vts.services.summarizer import parse_sse_content
+
+    assert parse_sse_content(
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}'
+    ) == "Hello"
+    # A role-only opening chunk carries no text.
+    assert parse_sse_content('data: {"choices":[{"delta":{"role":"assistant"}}]}') is None
+    # Terminator, keep-alive comment, blank line, and non-SSE noise.
+    assert parse_sse_content("data: [DONE]") is None
+    assert parse_sse_content(": keep-alive") is None
+    assert parse_sse_content("") is None
+    assert parse_sse_content("event: ping") is None
+    # Malformed JSON must not raise — a truncated frame is not fatal.
+    assert parse_sse_content('data: {"choices":[{"delta"') is None
+    # Empty-string content is not progress and must not reset the idle timer.
+    assert parse_sse_content('data: {"choices":[{"delta":{"content":""}}]}') is None
+
+
 def test_stream_settings_map_from_nested_yaml() -> None:
     from vts.core.config import _normalize_yaml_overrides
 

@@ -192,6 +192,36 @@ def derive_stream_ceiling(
     return float(max(floor_seconds, min(raw, cap_seconds)))
 
 
+def parse_sse_content(line: str) -> str | None:
+    """Text carried by one SSE line, or None if it carries none.
+
+    Returns None rather than raising on malformed JSON: a stream can legally
+    interleave comments and keep-alives, and one unparsable frame should not
+    fail a completion that is otherwise arriving normally.
+
+    Empty-string content counts as no content, so it cannot reset the idle
+    timer — otherwise a backend emitting empty deltas would look alive while
+    producing nothing.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return None
+    payload = stripped[len("data:") :].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    try:
+        content = parsed["choices"][0]["delta"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not isinstance(content, str) or not content:
+        return None
+    return content
+
+
 def _is_transient_http_error(exc: Exception) -> bool:
     return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError))
 
