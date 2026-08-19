@@ -1,6 +1,6 @@
 # vts-gouq — LLM streaming: interruptible generation and visible progress
 
-**Beads:** vts-gouq (related: vts-94wf, vts-4jsi)
+**Beads:** vts-gouq (related: vts-94wf, vts-96lt)
 **Date:** 2026-08-19
 **Status:** Design approved, ready for implementation plan
 
@@ -25,8 +25,8 @@ total elapsed time.
 - A user-facing Cancel action. Forced cancellation already exists
   (`WorkerPool.watch_cancels` → `atask.cancel()`); exposing it in the UI is a
   separate task.
-- Fixing `max_tokens` / `cache_prompt` being dropped on the way to Ollama
-  (see *Known backend gaps*).
+- Fixing `max_tokens` on the way to Ollama, and dropping the redundant
+  `cache_prompt` from the payload (see *Known backend gaps*).
 
 ## Background — why generation could not be stopped
 
@@ -122,7 +122,7 @@ that had not finished after 10 minutes; the same limit as Ollama's native
 `num_predict: 200` stopped at exactly 200 tokens (`done_reason: length`) in 66 s.
 On the real segment prompt, `max_tokens: 600` returned **1070** tokens with
 `finish_reason: stop`. The parameter is dropped somewhere between the proxy and
-Ollama — the same class of silent loss as `cache_prompt` (vts-4jsi).
+Ollama (vts-96lt).
 
 And where it *is* honoured, it truncates mid-word: the native-limit run ended
 `"...увидел птиц. Леген"`. A hard token cap enforces a byte count, not a finished
@@ -208,13 +208,15 @@ closes the Ollama request promptly (the manual measurement above, automated).
 
 Out of scope here:
 
-- **`max_tokens` is not forwarded** (evidence above). Tracked with vts-4jsi.
-- **`cache_prompt`** was rejected by Ollama 0.20 with
-  `invalid option provided option=cache_prompt`. Re-checked on 0.32.14: the
-  warning is gone and requests carrying it pass, both through the proxy and
-  direct. Whether the prefix is actually reused was not measured — absence of a
-  warning is not proof of caching. vts-4jsi should verify that before assuming
-  either way.
+- **`max_tokens` is not forwarded** (evidence above). Tracked with vts-96lt.
+- **`cache_prompt` is dead weight, not a broken feature.** Ollama 0.20 rejected
+  it with `invalid option provided option=cache_prompt`; 0.32.14 no longer warns.
+  Measured on 0.32.14 **without sending the flag at all**: the same ~4000-token
+  prefix with a different short tail took 44.9 s to evaluate cold, then 12.0 s
+  on each repeat, and Ollama logged `cached n_tokens = 3004` — 3004 of 4027
+  prompt tokens reused, only the differing 1022 recomputed. Prefix caching is
+  automatic in llama.cpp and needs no flag, so the parameter should simply be
+  dropped from the payload. vts-96lt.
 
 Worth noting for whoever picks those up: LiteLLM's `/model/update` API returns
 `200` while silently not persisting `model_info` for models absent from its
