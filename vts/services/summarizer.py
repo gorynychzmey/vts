@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from vts.metrics.quality import split_sentences
 from vts.services.diarization.merge import LABEL_WORDS
 
 logger = logging.getLogger(__name__)
@@ -804,22 +805,76 @@ class LLMClient:
                 window_tokens=window_tokens,
                 tokenizer_path=tokenizer_path,
             )
-        tokens = await self.tokenize(model=model, text=text, tokenizer_path=tokenizer_path)
-        if not tokens:
-            return []
+        # `overlap_ratio` is accepted for call compatibility but no longer
+        # used. It existed to stitch context torn mid-sentence by a token
+        # window; packing whole sentences tears nothing, so the overlap would
+        # only duplicate text. On the segment stage that duplication is
+        # visible in the output — the stage cleans sentence by sentence rather
+        # than summarizing, so a passage processed twice appears twice.
+        # Measured on production 2026-08-19: 585 characters, 14.7% of one
+        # window, repeated verbatim from the previous one.
+        return await self._pack_units(
+            units=split_sentences(text),
+            model=model,
+            window_tokens=window_tokens,
+            tokenizer_path=tokenizer_path,
+            joiner=" ",
+        )
 
-        overlap = max(int(window_tokens * overlap_ratio), 1)
-        step = max(window_tokens - overlap, 1)
+    async def _pack_units(
+        self,
+        *,
+        units: list[str],
+        model: str,
+        window_tokens: int,
+        tokenizer_path: str | None,
+        joiner: str,
+    ) -> list[str]:
+        """Pack whole units into windows without overlap.
+
+        Shared by both chunking modes because the argument is the same at
+        either granularity: a window that ends on a unit boundary tears
+        nothing, so there is no torn context for an overlap to stitch — and an
+        overlap would instead duplicate the text it repeats. `units` are
+        utterances for a diarized transcript and sentences otherwise; the only
+        difference is what counts as indivisible, and how the pieces are
+        joined back together.
+
+        A unit longer than the whole window is cut by tokens as a last resort
+        (`_split_long_utterance`), which is the one place a tear is
+        unavoidable.
+        """
         chunks: list[str] = []
-        cursor = 0
-        while cursor < len(tokens):
-            part = tokens[cursor : cursor + window_tokens]
-            chunk = await self.detokenize(model=model, tokens=part, tokenizer_path=tokenizer_path)
-            if chunk.strip():
-                chunks.append(chunk)
-            if cursor + window_tokens >= len(tokens):
-                break
-            cursor += step
+        current: list[str] = []
+        current_tokens = 0
+
+        for unit in units:
+            tokens = await self.tokenize(model=model, text=unit, tokenizer_path=tokenizer_path)
+            size = len(tokens)
+
+            if size > window_tokens:
+                if current:
+                    chunks.append(joiner.join(current))
+                    current, current_tokens = [], 0
+                chunks.extend(
+                    await self._split_long_utterance(
+                        utterance=unit,
+                        tokens=tokens,
+                        model=model,
+                        window_tokens=window_tokens,
+                        tokenizer_path=tokenizer_path,
+                    )
+                )
+                continue
+
+            if current_tokens + size > window_tokens and current:
+                chunks.append(joiner.join(current))
+                current, current_tokens = [], 0
+            current.append(unit)
+            current_tokens += size
+
+        if current:
+            chunks.append(joiner.join(current))
         return chunks
 
     async def _chunk_by_utterances(
@@ -830,44 +885,14 @@ class LLMClient:
         window_tokens: int,
         tokenizer_path: str | None,
     ) -> list[str]:
-        """Pack whole utterances into windows.
-
-        No overlap: overlap exists to stitch context torn mid-sentence, and
-        utterance boundaries tear nothing. Keeping 15% would duplicate whole
-        utterances across windows and double them in the summary.
-        """
-        chunks: list[str] = []
-        current: list[str] = []
-        current_tokens = 0
-
-        for utterance in split_utterances(text):
-            tokens = await self.tokenize(model=model, text=utterance, tokenizer_path=tokenizer_path)
-            size = len(tokens)
-
-            if size > window_tokens:
-                if current:
-                    chunks.append("\n\n".join(current))
-                    current, current_tokens = [], 0
-                chunks.extend(
-                    await self._split_long_utterance(
-                        utterance=utterance,
-                        tokens=tokens,
-                        model=model,
-                        window_tokens=window_tokens,
-                        tokenizer_path=tokenizer_path,
-                    )
-                )
-                continue
-
-            if current_tokens + size > window_tokens and current:
-                chunks.append("\n\n".join(current))
-                current, current_tokens = [], 0
-            current.append(utterance)
-            current_tokens += size
-
-        if current:
-            chunks.append("\n\n".join(current))
-        return chunks
+        """Pack whole utterances into windows, keeping speaker labels intact."""
+        return await self._pack_units(
+            units=split_utterances(text),
+            model=model,
+            window_tokens=window_tokens,
+            tokenizer_path=tokenizer_path,
+            joiner="\n\n",
+        )
 
     async def _split_long_utterance(
         self,

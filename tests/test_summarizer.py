@@ -701,11 +701,17 @@ def test_count_tokens_local(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 5 tokens total, window=3, overlap_ratio=0 → 2 chunks
+    """A sentence longer than the window is still cut, as a last resort.
+
+    Packing whole sentences cannot help when one sentence exceeds the window
+    on its own, so `_split_long_utterance` cuts it by tokens — the one place a
+    tear remains unavoidable. This is the path that used to be the only
+    behaviour of `chunk_text`.
+    """
     all_tokens = [10, 20, 30, 40, 50]
     decode_map = {
         (10, 20, 30): "chunk one",
-        (30, 40, 50): "chunk two",
+        (40, 50): "chunk two",
     }
 
     enc = MagicMock()
@@ -718,14 +724,58 @@ def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
 
     chunks = asyncio.run(
         _client().chunk_text(
-            text="some long text",
+            text="one long sentence with no break",
             model="any-model",
             window_tokens=3,
             overlap_ratio=0.0,
             tokenizer_path="/fake/tokenizer.json",
         )
     )
+    # No overlap: token 30 belongs to the first chunk only.
     assert chunks == ["chunk one", "chunk two"]
+
+
+def test_chunk_text_packs_whole_sentences_without_overlap() -> None:
+    """Undiarized chunking must not tear sentences or repeat text.
+
+    The segment stage cleans a transcript sentence by sentence, so both
+    defects of token-window chunking land straight in the output: a window cut
+    mid-sentence hands the model a fragment, and the 15% overlap makes it
+    process the same passage twice, so the passage appears twice in the
+    cleaned transcript. Measured on production 2026-08-19, window 2 of a real
+    task repeated 585 characters (14.7%) of window 1 verbatim.
+
+    Diarized chunking already packs whole utterances for exactly this reason
+    (see `_chunk_by_utterances`); sentences are the same argument one level
+    down.
+    """
+    text = "First one. Second one. Third one. Fourth one."
+
+    # One token per character keeps the arithmetic legible: the window fits
+    # two sentences but not three.
+    tok = MagicMock()
+    tok.encode.side_effect = lambda s: MagicMock(ids=list(range(len(s))))
+    tok.decode.side_effect = lambda ids: "x" * len(ids)
+
+    with patch("vts.services.summarizer._load_tokenizer", lambda path: tok):
+        chunks = asyncio.run(
+            _client().chunk_text(
+                text=text,
+                model="any-model",
+                window_tokens=25,
+                overlap_ratio=0.15,
+                tokenizer_path="/fake/tokenizer.json",
+            )
+        )
+
+    joined = " ".join(chunks)
+    for sentence in ("First one.", "Second one.", "Third one.", "Fourth one."):
+        assert joined.count(sentence) == 1, f"{sentence!r} must appear exactly once"
+    # Every chunk ends on a sentence boundary, so nothing is handed to the
+    # model mid-thought.
+    for chunk in chunks:
+        assert chunk.rstrip().endswith("."), f"chunk does not end on a sentence: {chunk!r}"
+    assert len(chunks) > 1, "the window was too small to hold the whole text"
 
 
 def test_derive_stream_ceiling_clamps_to_floor_and_cap() -> None:
