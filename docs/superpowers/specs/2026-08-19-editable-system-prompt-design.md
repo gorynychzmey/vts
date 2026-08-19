@@ -81,8 +81,12 @@ Without it, a worker and the API creating the copy at the same moment produce
 two rows and the user sees a duplicate. With it the loser gets an
 `IntegrityError` and re-reads.
 
-Alembic migration: add the column with `server_default='false'`, drop the
-server default, create the index.
+`updated_at` also changes — see *`updated_at` becomes explicit* below.
+
+Alembic migration: add `is_system` with `server_default='false'` and drop the
+server default; make `updated_at` nullable; create the index. Existing rows
+keep their `updated_at`, which is correct — they are user prompts, and their
+timestamps mean what they always meant.
 
 ## Lazy creation
 
@@ -110,23 +114,48 @@ later would never reach anyone who had already run a summary. On startup,
 every copy that still matches the vendor file is rewritten from it; every copy
 the user has edited is left alone.
 
-**"Edited" is decided by comparing the text, not by a flag or a timestamp.**
-The alternative — storing the file's mtime at creation and comparing later —
-looked appealing but does not survive contact with the build: measured on the
+**"Edited" is recorded, not inferred.** `updated_at` answers exactly one
+question — *when did the user change this?* — and `NULL` means *never*. The
+refresh rewrites `WHERE is_system AND updated_at IS NULL`.
+
+Two ways of inferring it were considered and both fail:
+
+*Comparing the copy to the file* breaks on the second release. A copy made
+from v1 and never touched does not match v2 either, so every untouched copy
+reads as edited the moment a new prompt ships — which is precisely when the
+refresh needs to work.
+
+*Storing the file's mtime* does not survive the build: measured on the
 production host, `global_prompt.md` has mtime `19:45:23` inside the container
 against `19:29:32` in the checkout, because the timestamp is set when the file
-is copied into the image. Every rebuild would therefore mark every untouched
-copy as stale. Comparing the text answers the actual question — did the user
-change this? — and needs no new column, since both strings are already there.
+is copied into the image. Every rebuild would mark every untouched copy as
+stale.
 
-Both sides are normalised before comparison (strip, and `\r\n` → `\n`): a copy
-saved through the web form can differ from the file by a line ending alone,
-and that must not read as an edit.
+### `updated_at` becomes explicit
 
-The prompts are small — 1.4 KB for `global_prompt.md`, 3.7 KB for the largest
-of the three — so comparing them costs nothing worth measuring. `system_prompt`
-is a `Text` column with no length limit, and the API validates only
-`min_length=1`.
+The column loses `default=utcnow` and `onupdate=utcnow` and becomes nullable.
+Both are filled in by hand instead:
+
+| path | `updated_at` |
+|---|---|
+| user creates a prompt | `utcnow()` |
+| system copy is created | `NULL` — the user has not touched it |
+| any prompt is edited | `utcnow()` |
+
+Verified against SQLAlchemy: a plain `session.add(...)` with `updated_at=None`
+does **not** keep the `NULL` — the column default overrides it, and the row
+lands with the current time. Only a Core `insert()` bypasses the default. So
+the choice is between working around the ORM in one function and hoping
+nobody replaces it with `session.add()` later, or removing the default and
+assigning explicitly everywhere. The second is more code and less to go wrong.
+
+`created_at` keeps its default: it is always "now" and never `NULL`, so
+automation fits it. The asymmetry is deliberate — `updated_at` now carries
+meaning rather than just a timestamp, which is what earns it an explicit
+assignment.
+
+The blast radius is small: `Prompt` is constructed in exactly one place in
+`vts/db/repo.py` and updated in one other.
 
 **Where it runs.** In the `migrate` initContainer, alongside `alembic upgrade
 head` (`docker/vts-entrypoint.sh`). That is the one place that executes once
@@ -223,8 +252,13 @@ per-user copy of it right now would work against the experiments in progress.
 - an edit survives and is what the pipeline uses
 - `DELETE` followed by a resolution returns the vendor text
 - the migration sets `is_system=false` on existing rows
-- the startup refresh rewrites an untouched copy and leaves an edited one
-- a copy differing only by a trailing newline counts as untouched
+- the startup refresh rewrites a copy with `updated_at IS NULL` and leaves an
+  edited one alone
+- a system copy is created with `updated_at = NULL`, and editing it sets a
+  timestamp — the guard against a future `session.add()` quietly restoring the
+  column default
+- an untouched copy is still refreshed after the vendor prompt changes twice
+  (the case that defeats comparing text to the current file)
 - the refresh reports the counts it acted on
 - `PromptOut` carries `is_system`
 - UI: the button reads "Restore" for the system prompt and "Delete"
