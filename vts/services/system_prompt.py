@@ -26,10 +26,21 @@ _FALLBACK = "Produce a structured knowledge document from the notes."
 
 
 def vendor_text(prompts_dir: Path) -> str:
-    """The vendor's own wording, straight from the file."""
+    """The vendor's own wording, straight from the file.
+
+    `load_prompt` only falls back when the file is missing. An empty file
+    (a truncated write during deploy, say) or an unreadable one (bad
+    permissions, a failed mount) must fall back the same way a missing file
+    does — restoring later just deletes the row and re-reads this same file,
+    so a silently empty or broken copy would stay broken forever.
+    """
     spec = next((p for p in list_system_prompts() if p.key == _SUMMARY_KEY), None)
     file = spec.file if spec is not None else "global_prompt.md"
-    return load_prompt(prompts_dir, file, _FALLBACK)
+    try:
+        text = load_prompt(prompts_dir, file, _FALLBACK)
+    except OSError:
+        return _FALLBACK
+    return text if text.strip() else _FALLBACK
 
 
 def vendor_name(default: str = "Summary") -> str:
@@ -53,14 +64,19 @@ async def get_or_create_system_prompt(
         return existing
 
     try:
-        created = await Repo(session).create_prompt(
-            user_id, vendor_name(), vendor_text(prompts_dir), is_system=True
-        )
-        await session.flush()
+        # A nested transaction (SAVEPOINT) scopes the rollback below to just
+        # this INSERT. A bare `session.rollback()` would roll back the whole
+        # outer transaction, discarding any work the caller already staged in
+        # this session before calling us (a worker task's pending status/
+        # progress edits, for instance) — exactly the scenario the partial
+        # unique index is meant to make safe.
+        async with session.begin_nested():
+            created = await Repo(session).create_prompt(
+                user_id, vendor_name(), vendor_text(prompts_dir), is_system=True
+            )
         return created
     except IntegrityError:
         # The partial unique index rejected us: another caller created the copy
         # between our SELECT and INSERT. That is the race resolving correctly —
         # re-read and use theirs.
-        await session.rollback()
         return (await session.scalars(stmt)).one()

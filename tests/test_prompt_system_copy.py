@@ -146,6 +146,52 @@ async def test_get_or_create_reads_the_file_once_then_reuses_the_row(
 
 
 @pytest.mark.asyncio
+async def test_get_or_create_does_not_attempt_an_insert_on_the_reuse_path(
+    factory, tmp_path
+) -> None:
+    """The reuse path must short-circuit on the existing-row SELECT alone.
+
+    Without that check, a second call would still attempt `create_prompt`,
+    hit the partial unique index, and recover via the `IntegrityError`
+    handler — landing on the same row and passing a test that only counts
+    rows. Counting INSERT *attempts* instead is what actually distinguishes
+    "found the row and skipped creation" from "tried to create it and lost
+    the race but recovered".
+    """
+    from unittest.mock import patch
+
+    from vts.db.repo import Repo
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=user_id, username="prompt-lazy-no-reinsert@example.invalid"))
+        await session.commit()
+
+        first = await get_or_create_system_prompt(session, user_id, tmp_path)
+        await session.commit()
+        first_id = first.id
+
+    create_attempts = 0
+    real_create_prompt = Repo.create_prompt
+
+    async def counting_create_prompt(self, *args, **kwargs):
+        nonlocal create_attempts
+        create_attempts += 1
+        return await real_create_prompt(self, *args, **kwargs)
+
+    async with factory() as session:
+        with patch.object(Repo, "create_prompt", counting_create_prompt):
+            again = await get_or_create_system_prompt(session, user_id, tmp_path)
+            await session.commit()
+
+    assert again.id == first_id
+    assert create_attempts == 0, "the reuse path must not attempt to insert at all"
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_returns_an_edited_copy_unchanged(factory, tmp_path) -> None:
     """Once the user has edited it, the file is no longer consulted."""
     from vts.db.repo import Repo
@@ -169,3 +215,108 @@ async def test_get_or_create_returns_an_edited_copy_unchanged(factory, tmp_path)
     async with factory() as session:
         again = await get_or_create_system_prompt(session, user_id, tmp_path)
     assert again.system_prompt == "my own wording"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_survives_a_race_without_losing_the_callers_work(
+    factory, tmp_path
+) -> None:
+    """Losing the INSERT race must not roll back the caller's own pending work.
+
+    `get_or_create_system_prompt` is meant to be called mid-transaction by
+    callers (API, worker pipeline) that already hold other changes in the same
+    session — a worker task typically has status/progress edits pending. A
+    bare `session.rollback()` after a lost race would discard the *whole*
+    transaction, not just the failed INSERT, silently dropping that work. This
+    reproduces the race with two sessions and asserts the caller's own edit
+    survives.
+    """
+    from unittest.mock import patch
+
+    from vts.db.repo import Repo
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as setup:
+        setup.add(User(id=user_id, username="prompt-race@example.invalid"))
+        await setup.commit()
+
+    winner_id: uuid.UUID | None = None
+    real_scalars = AsyncSession.scalars
+
+    async with factory() as loser:
+        # The caller already has unrelated work pending in this session, the
+        # way a worker task would have its own status/progress edits pending
+        # before it ever asks for the system prompt.
+        await Repo(loser).create_prompt(user_id, "Mine", "caller's work")
+
+        async def scalars_that_lets_another_session_win_first(self, *args, **kwargs):
+            # Called for `loser`'s own lookup SELECT inside
+            # `get_or_create_system_prompt`. Right after it returns "no row
+            # yet", another session creates and commits the row — the exact
+            # race window the brief describes: a second caller wins between
+            # our SELECT and our INSERT. Only `loser`'s own call triggers
+            # this — the winner's internal SELECT must run unpatched, or the
+            # two sessions would spawn each other forever.
+            nonlocal winner_id
+            result = await real_scalars(self, *args, **kwargs)
+            if self is loser and winner_id is None:
+                async with factory() as winner:
+                    winner_row = await get_or_create_system_prompt(winner, user_id, tmp_path)
+                    await winner.commit()
+                    winner_id = winner_row.id
+            return result
+
+        with patch.object(
+            AsyncSession, "scalars", scalars_that_lets_another_session_win_first
+        ):
+            # `loser` now loses the INSERT race on the partial unique index.
+            again = await get_or_create_system_prompt(loser, user_id, tmp_path)
+        await loser.commit()
+
+    assert again.id == winner_id, "the loser must return the winner's row"
+
+    async with factory() as session:
+        mine = (
+            await session.scalars(
+                sa.select(Prompt).where(Prompt.user_id == user_id, Prompt.name == "Mine")
+            )
+        ).one_or_none()
+    assert mine is not None, "the caller's own pending work must survive the lost race"
+    assert mine.system_prompt == "caller's work"
+
+
+def test_vendor_text_falls_back_on_an_empty_file(tmp_path) -> None:
+    """An empty (e.g. truncated by a failed deploy write) file must not win.
+
+    `load_prompt` only substitutes the fallback when the file is *missing*.
+    An empty file exists, so without an explicit check `vendor_text` would
+    return `""`, and every new user would get a copy with an empty system
+    prompt forever — the restore path just deletes the row and re-reads the
+    same empty file.
+    """
+    from vts.services.system_prompt import _FALLBACK, vendor_text
+
+    (tmp_path / "global_prompt.md").write_text("", encoding="utf-8")
+
+    assert vendor_text(tmp_path) == _FALLBACK
+
+
+def test_vendor_text_falls_back_on_an_unreadable_file(tmp_path) -> None:
+    """A file the process cannot read (bad permissions, bad mount) must not
+    raise — it must fall back exactly like a missing file."""
+    import os
+
+    from vts.services.system_prompt import _FALLBACK, vendor_text
+
+    path = tmp_path / "global_prompt.md"
+    path.write_text("vendor text", encoding="utf-8")
+    path.chmod(0o000)
+    try:
+        if os.access(path, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions (e.g. root)")
+        assert vendor_text(tmp_path) == _FALLBACK
+    finally:
+        path.chmod(0o644)
