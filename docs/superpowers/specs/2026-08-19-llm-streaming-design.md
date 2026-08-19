@@ -206,11 +206,15 @@ closes the Ollama request promptly (the manual measurement above, automated).
 
 ## Known backend gaps
 
-Both are silent losses between LiteLLM and Ollama, both out of scope here:
+Out of scope here:
 
 - **`max_tokens` is not forwarded** (evidence above). Tracked with vts-4jsi.
-- **`cache_prompt` is rejected** — Ollama logs
-  `invalid option provided option=cache_prompt`. vts-4jsi.
+- **`cache_prompt`** was rejected by Ollama 0.20 with
+  `invalid option provided option=cache_prompt`. Re-checked on 0.32.14: the
+  warning is gone and requests carrying it pass, both through the proxy and
+  direct. Whether the prefix is actually reused was not measured — absence of a
+  warning is not proof of caching. vts-4jsi should verify that before assuming
+  either way.
 
 Worth noting for whoever picks those up: LiteLLM's `/model/update` API returns
 `200` while silently not persisting `model_info` for models absent from its
