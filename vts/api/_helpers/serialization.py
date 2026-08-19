@@ -34,10 +34,13 @@ def can_restart_summary_task(task: Task) -> bool:
         return False
     if task.status == TaskStatus.completed:
         return True
-    # A task the worker still holds can be restarted too: the endpoint flags
-    # it and the worker performs the reset once it has released the task, so
-    # there is no race with the step still writing its window (vts-gouq).
-    if task.status in (TaskStatus.running, TaskStatus.paused):
+    # A task that is not finished can be restarted too. For `running` and
+    # `waiting` — `waiting` is a running task that lost its GPU slot, so it is
+    # just as live — the endpoint flags the task and the worker performs the
+    # reset once it has released it, so there is no race with the step still
+    # writing its window. A `paused` task is reset synchronously: nobody holds
+    # it (vts-gouq).
+    if task.status in (TaskStatus.running, TaskStatus.waiting, TaskStatus.paused):
         return True
     if task.status != TaskStatus.failed:
         return False

@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
-from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step, _reset_summary_artifacts, _reset_summary_steps
+from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
@@ -71,6 +71,8 @@ from vts.services import task_status as _ts
 from vts.services.auth import AuthenticatedUser
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import task_dir
+from vts.services.summary_restart import WORKER_HELD_STATUSES as _WORKER_HELD_STATUSES
+from vts.services.summary_restart import reset_task_for_summary_restart
 from vts.services.task_progress import summary_progress_for_task
 
 logger = logging.getLogger(__name__)
@@ -433,10 +435,7 @@ async def restart_summary_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     bus = RedisBus(redis, settings)
-    from vts.services.prompt_results import (
-        downgrade_all_result_entries,
-        downgrade_system_summary_entry,
-    )
+    from vts.services.prompt_results import downgrade_system_summary_entry
 
     artifact_resets: list[asyncio.Task[None]] = []
     if request.mode == "final_only":
@@ -468,19 +467,32 @@ async def restart_summary_task(
                 status_code=409,
                 detail=f"cannot_restart:{task.status.value}",
             )
-        if task.status in (TaskStatus.running, TaskStatus.paused):
+        if task.status in _WORKER_HELD_STATUSES:
             # A worker still holds this task, so resetting the artefacts here
             # would race the step writing to them. Flag the restart, cancel
             # the task, and return: the worker resets once it has reaped it
             # (WorkerPool._restart_if_requested). Returning "restarting"
             # rather than "queued" keeps the response honest — the task is
             # not queued yet, and will not be for a second or two.
+            #
+            # Only these statuses defer. `paused` looks like it belongs here
+            # and does not: the worker does NOT hold a paused task — it is
+            # absent from WorkerPool._active, which is the only thing `reap`
+            # iterates — so the deferred reset would never run and the task
+            # would sit paused forever behind a "restarting" reply. With no
+            # worker holding it there is no race to avoid either, so it takes
+            # the synchronous path below like any other idle task (vts-gouq).
             await bus.request_restart(task.id)
             await bus.request_cancel(task.id)
             return MessageOut(status="restarting")
-        _reset_summary_steps(task)
-        downgrade_all_result_entries(task)
-        artifact_resets.append(asyncio.to_thread(_reset_summary_artifacts, task))
+        # A paused task carries the pause flag, and a task canceled earlier may
+        # still carry the cancel flag; either would make `admit` divert the
+        # task we are about to queue. Clear both before queuing it.
+        await bus.clear_pause_request(task.id)
+        await bus.clear_cancel_request(task.id)
+        await reset_task_for_summary_restart(repo, task)
+        await bus.notify_queued()
+        return MessageOut(status="queued")
     task.summary_path = None
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
@@ -541,7 +553,17 @@ async def resume_tasks(
         if not can_resume_task(task.status):
             results[tid] = f"cannot_resume:{task.status.value}"
             continue
+        # Clearing the pause flag alone is not enough. `admit` checks the
+        # cancel flag first and diverts the task straight to `canceled`
+        # without ever starting it, logging only "skipping canceled task
+        # before start" — so a resume of a task that carries a stale cancel
+        # flag reads to the user as a silent delete. A stale restart flag is
+        # just as bad the other way: reap would reset the artefacts of a task
+        # the user asked to carry on with. Resume means "run this task as it
+        # is", so it withdraws every pending request against it (vts-gouq).
         await bus.clear_pause_request(task_id)
+        await bus.clear_cancel_request(task_id)
+        await bus.clear_restart_request(task_id)
         await repo.set_task_status(task, TaskStatus.queued)
         results[tid] = "queued"
     await session.commit()

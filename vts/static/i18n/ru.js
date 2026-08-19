@@ -344,6 +344,7 @@ window.__VTS_I18N.ru = {
 "status.queued_pos": "очередь #{position}",
 "status.waiting": "ждёт очереди",
 "status.waiting_pos": "ждёт: {queue} (№{position})",
+"status.restarting": "перезапуск…",
 "queue.network": "скачивание",
 "queue.ffmpeg": "конвертация",
 "queue.gpu": "GPU",

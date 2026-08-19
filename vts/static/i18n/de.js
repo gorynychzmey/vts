@@ -344,6 +344,7 @@ window.__VTS_I18N.de = {
 "status.queued_pos": "warteschlange #{position}",
 "status.waiting": "wartet",
 "status.waiting_pos": "wartet: {queue} (Nr. {position})",
+"status.restarting": "wird neu gestartet…",
 "queue.network": "Download",
 "queue.ffmpeg": "Konvertierung",
 "queue.gpu": "GPU",

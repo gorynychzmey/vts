@@ -21,6 +21,9 @@ class _FakeRedis:
             value = value.encode("utf-8")
         self.store[key] = value
 
+    async def delete(self, key) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
 
 def test_prompts_allowed_with_final_only():
     req = RestartSummaryRequest(mode="final_only",
