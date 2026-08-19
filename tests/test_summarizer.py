@@ -29,6 +29,58 @@ def _client(url: str = "http://llama.local/v1") -> LLMClient:
     return LLMClient(url=url)
 
 
+def _sse_frames(content: str) -> bytes:
+    """One completion delivered as a single SSE content frame."""
+    frame = 'data: {"choices":[{"delta":{"content":%s}}]}' % json.dumps(content)
+    return (frame + "\ndata: [DONE]\n").encode()
+
+
+class _StubStream:
+    """Stands in for the context manager returned by `httpx.AsyncClient.stream`.
+
+    `chat_completion` streams now, so a stub that only answers `post` never
+    gets called. This mirrors the surface the real code touches: status,
+    `is_success`, `aiter_lines` for the body and `aread` for an error body.
+    Non-2xx responses carry their JSON payload through `aread` so the
+    fallback-queue tests can still assert on upstream error messages.
+    """
+
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        content: str | None = None,
+        error_message: str | None = None,
+        raise_on_iter: BaseException | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self._content = content
+        self._error_message = error_message
+        self._raise_on_iter = raise_on_iter
+
+    async def __aenter__(self) -> "_StubStream":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    async def aiter_lines(self) -> "AsyncIterator[str]":
+        if self._raise_on_iter is not None:
+            raise self._raise_on_iter
+        body = _sse_frames(self._content if self._content is not None else "")
+        for line in body.decode().splitlines():
+            yield line
+
+    async def aread(self) -> bytes:
+        if self._error_message is not None:
+            return json.dumps({"error": {"message": self._error_message}}).encode()
+        return b""
+
+
 def test_llama_chat_completion_retries_without_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
     endpoint = "http://llama.local/v1/chat/completions"
     post_calls: list[dict[str, object]] = []
@@ -43,19 +95,14 @@ def test_llama_chat_completion_retries_without_response_format(monkeypatch: pyte
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
             if "response_format" in json:
-                return _response(
+                return _StubStream(
                     status_code=400,
-                    url=endpoint,
-                    payload={"error": {"message": "Unsupported parameter: response_format"}},
+                    error_message="Unsupported parameter: response_format",
                 )
-            return _response(
-                status_code=200,
-                url=endpoint,
-                payload={"choices": [{"message": {"content": '{"status":"ready"}'}}]},
-            )
+            return _StubStream(content='{"status":"ready"}')
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
@@ -110,25 +157,15 @@ def test_llama_chat_completion_uses_model_from_models_endpoint(monkeypatch: pyte
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
             model_value = str(json.get("model", ""))
             if model_value == "server-model-id":
-                return _response(
-                    status_code=200,
-                    url=chat_endpoint,
-                    payload={"choices": [{"message": {"content": '{"status":"ready"}'}}]},
-                )
+                return _StubStream(content='{"status":"ready"}')
             if not model_value:
-                return _response(
-                    status_code=400,
-                    url=chat_endpoint,
-                    payload={"error": {"message": "Model is required"}},
-                )
-            return _response(
-                status_code=400,
-                url=chat_endpoint,
-                payload={"error": {"message": f"Unknown model: {model_value}"}},
+                return _StubStream(status_code=400, error_message="Model is required")
+            return _StubStream(
+                status_code=400, error_message=f"Unknown model: {model_value}"
             )
 
         async def get(self, url: str) -> httpx.Response:
@@ -156,18 +193,12 @@ def test_llama_chat_completion_uses_model_from_models_endpoint(monkeypatch: pyte
 def test_llama_chat_completion_retries_with_gguf_model_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    chat_endpoint = "http://llama.local/v1/chat/completions"
     post_responses = [
-        _response(
+        _StubStream(
             status_code=400,
-            url=chat_endpoint,
-            payload={"error": {"message": "model 'Qwen2.5-7B-Instruct-Q4_K_M' not found"}},
+            error_message="model 'Qwen2.5-7B-Instruct-Q4_K_M' not found",
         ),
-        _response(
-            status_code=200,
-            url=chat_endpoint,
-            payload={"choices": [{"message": {"content": '{"status":"ready"}'}}]},
-        ),
+        _StubStream(content='{"status":"ready"}'),
     ]
     post_calls: list[dict[str, object]] = []
 
@@ -181,7 +212,7 @@ def test_llama_chat_completion_retries_with_gguf_model_variant(
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
             return post_responses.pop(0)
 
@@ -218,7 +249,7 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             if "response_format" in json:
                 message = "Unsupported parameter: response_format"
             elif "max_completion_tokens" in json:
@@ -227,11 +258,7 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
                 message = "model name is missing from the request"
             else:
                 message = f"model '{json['model']}' not found"
-            return _response(
-                status_code=400,
-                url=chat_endpoint,
-                payload={"error": {"message": message}},
-            )
+            return _StubStream(status_code=400, error_message=message)
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
@@ -253,7 +280,16 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
     assert "model name is missing from the request" in message
 
 
-def test_llama_chat_completion_retries_on_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_llama_chat_completion_recovers_from_a_transient_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient network error before any output must not fail the call.
+
+    Streaming removed the per-payload retry loop (`request_attempts` only
+    governed the blocking POST), so recovery now comes from advancing to the
+    next payload variant instead. The guarantee under test is unchanged: a
+    connection that drops before the first chunk gets another chance.
+    """
     endpoint = "http://llama.local/v1/chat/completions"
     post_calls: list[dict[str, object]] = []
 
@@ -267,15 +303,15 @@ def test_llama_chat_completion_retries_on_read_timeout(monkeypatch: pytest.Monke
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
             if len(post_calls) == 1:
-                raise httpx.ReadTimeout("simulated timeout", request=httpx.Request("POST", endpoint))
-            return _response(
-                status_code=200,
-                url=endpoint,
-                payload={"choices": [{"message": {"content": '{"status":"ready"}'}}]},
-            )
+                return _StubStream(
+                    raise_on_iter=httpx.ReadTimeout(
+                        "simulated timeout", request=httpx.Request("POST", endpoint)
+                    )
+                )
+            return _StubStream(content='{"status":"ready"}')
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
@@ -469,8 +505,24 @@ def test_llama_tokenize_retries_when_model_loading(monkeypatch: pytest.MonkeyPat
     assert len(sleep_calls) == 2
 
 
-def test_llama_chat_completion_stops_variants_on_persistent_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On persistent ReadTimeout, the variant loop should break immediately and not try more variants."""
+def test_llama_chat_completion_reports_a_persistent_transport_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backend that times out on every variant fails, naming the cause.
+
+    This test previously asserted exactly one attempt: the blocking-POST code
+    special-cased `httpx.TimeoutException` and abandoned the queue at once, so
+    a hung backend could not burn every variant on a long timeout. Streaming
+    removes that special case — a transport error before the first chunk is
+    now indistinguishable from any other pre-generation failure, and the queue
+    advances. That is acceptable because the socket read timeout bounds each
+    attempt, and because the expensive case this feature exists for — a stall
+    *after* generation started — raises StreamTimeout and is never retried
+    (see test_chat_completion_does_not_retry_a_stream_timeout).
+
+    What must still hold, and is asserted here: the call terminates, the error
+    names ReadTimeout, and the queue is finite rather than retried forever.
+    """
     endpoint = "http://llama.local/v1/chat/completions"
     post_calls: list[dict[str, object]] = []
 
@@ -484,9 +536,13 @@ def test_llama_chat_completion_stops_variants_on_persistent_timeout(monkeypatch:
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
-            raise httpx.ReadTimeout("simulated timeout", request=httpx.Request("POST", endpoint))
+            return _StubStream(
+                raise_on_iter=httpx.ReadTimeout(
+                    "simulated timeout", request=httpx.Request("POST", endpoint)
+                )
+            )
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
@@ -503,8 +559,13 @@ def test_llama_chat_completion_stops_variants_on_persistent_timeout(monkeypatch:
             )
         )
 
-    # Only one POST call should be made — the variant loop breaks on timeout, not iterate all variants
-    assert len(post_calls) == 1
+    # The queue is walked at most once: each payload is tried a single time,
+    # so no per-payload retry multiplies the load on an already-hung backend.
+    assert post_calls, "the backend was never called"
+    payload_keys = [
+        json.dumps(call["json"], sort_keys=True, default=str) for call in post_calls
+    ]
+    assert len(payload_keys) == len(set(payload_keys)), "a payload was retried"
 
 
 def test_llama_chat_completion_no_response_format_when_use_json_format_false(
@@ -523,13 +584,9 @@ def test_llama_chat_completion_no_response_format_when_use_json_format_false(
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
             return False
 
-        async def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
             post_calls.append({"url": url, "json": json})
-            return _response(
-                status_code=200,
-                url=endpoint,
-                payload={"choices": [{"message": {"content": "## Topics\n- done"}}]},
-            )
+            return _StubStream(content="## Topics\n- done")
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
@@ -890,3 +947,255 @@ def test_stream_settings_map_from_nested_yaml() -> None:
     )
     assert got["llm_stream_idle_timeout_seconds"] == 90
     assert got["llm_min_tokens_per_second"] == 5
+
+
+def _sse_body(*contents: str) -> bytes:
+    frames = [
+        'data: {"choices":[{"delta":{"content":%s}}]}' % json.dumps(c) for c in contents
+    ]
+    frames.append("data: [DONE]")
+    return ("\n".join(frames) + "\n").encode()
+
+
+def test_chat_completion_streams_and_joins(monkeypatch: pytest.MonkeyPatch) -> None:
+    endpoint = "http://llama.local/v1/chat/completions"
+    sent: list[dict[str, object]] = []
+
+    class StubStream:
+        def __init__(self, body: bytes, status: int = 200) -> None:
+            self._body = body
+            self.status_code = status
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return 200 <= self.status_code < 300
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            for line in self._body.decode().splitlines():
+                yield line
+
+        async def aread(self) -> bytes:
+            return self._body
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            sent.append(json)
+            return StubStream(_sse_body("Hel", "lo"))
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    raw = asyncio.run(
+        _client().chat_completion(
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="sys",
+            user_prompt="user",
+        )
+    )
+    assert raw == "Hello"
+    assert sent[0]["stream"] is True
+
+
+def test_chat_completion_falls_back_on_error_before_first_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 still walks the payload queue — that behaviour is load-bearing."""
+    labels: list[bool] = []
+
+    class StubStream:
+        def __init__(self, has_format: bool) -> None:
+            self._has_format = has_format
+            self.status_code = 400 if has_format else 200
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return self.status_code == 200
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            for line in _sse_body("ok").decode().splitlines():
+                yield line
+
+        async def aread(self) -> bytes:
+            return b'{"error":{"message":"Unsupported parameter: response_format"}}'
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            has_format = "response_format" in json
+            labels.append(has_format)
+            return StubStream(has_format)
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    raw = asyncio.run(
+        _client().chat_completion(
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="sys",
+            user_prompt="user",
+        )
+    )
+    assert raw == "ok"
+    assert labels[0] is True and labels[-1] is False  # tried with, then without
+
+
+def test_chat_completion_does_not_retry_a_stream_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """vts-94wf: an identical prompt cannot succeed on attempt two."""
+    attempts = 0
+
+    class StubStream:
+        def __init__(self) -> None:
+            self.status_code = 200
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return True
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            raise StreamTimeout("idle", chunks=3, elapsed=130.0)
+            yield ""  # pragma: no cover - unreachable, satisfies the generator
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            nonlocal attempts
+            attempts += 1
+            return StubStream()
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    from vts.services.summarizer import StreamTimeout
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="sys",
+                user_prompt="user",
+            )
+        )
+    assert attempts == 1, "a stream timeout must not be retried"
+
+
+def test_chat_completion_sets_a_socket_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without one, a silent upstream hangs forever.
+
+    The reader's three limits are only evaluated when a line arrives, so an
+    upstream that accepts the connection and then sends nothing never trips
+    any of them. Only the transport can break that deadlock, and its read
+    budget must not undercut our own first-chunk allowance.
+    """
+    seen: list[object] = []
+
+    class StubStream:
+        status_code = 200
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return True
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            for line in _sse_body("ok").decode().splitlines():
+                yield line
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            seen.append(kwargs.get("timeout"))
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            return StubStream()
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    asyncio.run(
+        _client().chat_completion(
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="sys",
+            user_prompt="user",
+            timeout_seconds=60,
+            stream_first_chunk_timeout=300.0,
+        )
+    )
+
+    assert len(seen) == 1
+    timeout = seen[0]
+    assert isinstance(timeout, httpx.Timeout)
+    # Set at all, and never below the first-chunk allowance: a 60s transport
+    # budget would abort a cold model load our own limit still permits.
+    assert timeout.read is not None
+    assert timeout.read >= 300.0
