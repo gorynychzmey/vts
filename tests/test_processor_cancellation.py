@@ -14,6 +14,7 @@ object — a fake processor asserting `active_count == 0` cannot see any of it.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 import pytest
@@ -24,6 +25,7 @@ from _db import make_test_engine
 from vts.db.base import Base
 from vts.db.models import Task, TaskStatus
 from vts.db.repo import Repo
+import vts.pipeline.processor as processor_mod
 from vts.pipeline.processor import TaskProcessor, _TaskGone
 
 
@@ -262,4 +264,65 @@ async def test_status_write_survives_a_second_cancel(factory, monkeypatch, tmp_p
 
     assert await _status(factory, task_id) == TaskStatus.paused, (
         "the second cancel must not cost the task its status"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hung_status_write_gives_up_on_time_not_on_a_cancel_count(
+    factory, monkeypatch, tmp_path
+):
+    """The absorb loop must be bounded by time, not by cancellations absorbed.
+
+    The loop that keeps the shielded status write alive used to stop after a
+    fixed number of absorbed cancels. But the counter only advances when a
+    cancel arrives, and the ordinary path delivers exactly ONE: watch_cancels
+    guards itself with `_cancel_sent`. So with a single cancel and an inner
+    write that never returns — the calls in there go to Postgres and Redis,
+    which is precisely what stops answering when a backend goes away — the
+    handler parked on `await shield(inner)` forever.
+
+    That hang does not stay local: `worker_loop`'s teardown calls
+    `cancel_all()`, which awaits every active task with no timeout of its own,
+    so one stuck handler holds up the whole shutdown until SIGKILL — the very
+    regression vts-9er was about.
+    """
+    task_id = await _seed_running(factory, tmp_path)
+
+    class _HungBus(_FakeBus):
+        async def is_pause_requested(self, task_id) -> bool:
+            # Stands in for a Redis/Postgres call that never comes back.
+            await asyncio.sleep(3600)
+            return self._paused
+
+    bus = _HungBus(paused=True)
+    proc = _processor(factory, bus)
+    monkeypatch.setattr(processor_mod, "_CANCEL_ABSORB_BUDGET_S", 0.3)
+
+    atask = await _run_until_cancelled(proc, task_id, monkeypatch)
+    # Exactly one cancellation, the way the normal path sends it.
+    atask.cancel()
+
+    t0 = time.monotonic()
+    # asyncio.wait rather than wait_for: it reports whether the task finished
+    # without ever raising into this coroutine, so the assertion below is about
+    # the handler and not about how the test itself was interrupted.
+    # Generous next to the 0.3s budget, tight next to "hangs forever".
+    done, pending = await asyncio.wait({atask}, timeout=5)
+    elapsed = time.monotonic() - t0
+
+    if pending:
+        # An unbounded handler absorbs cancels indefinitely, so it cannot be
+        # detached; hand it to the loop's own teardown and report the defect
+        # here instead of letting the whole session hang on it.
+        atask.cancel()
+        pytest.fail(
+            f"the handler was still running {elapsed:.1f}s after a single "
+            "cancel: a hung status write must be bounded by time"
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        await atask
+    assert elapsed >= 0.3, (
+        "the budget is a budget: the write still gets its window before "
+        "being abandoned"
     )

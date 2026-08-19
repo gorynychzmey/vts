@@ -5,6 +5,7 @@ from contextlib import suppress
 import json
 import logging
 import signal
+import time
 import uuid
 from typing import Any
 
@@ -22,6 +23,24 @@ from vts.services.redis_bus import RedisBus
 from vts.services.step_weights_recompute import recompute_all_users
 from vts.services.upload_session import delete_abandoned_sessions, find_abandoned_sessions
 from vts.worker.lanes import LaneManager
+
+
+# How long a pause request waits for the step to stop itself before the pool
+# interrupts it with atask.cancel().
+#
+# Only the step can free the hardware: yt-dlp and the diarization sidecar are
+# child processes, and atask.cancel() unwinds the awaiting coroutine without
+# touching them. Both steps poll the pause flag from their progress callback
+# and kill the child themselves, but download throttles that Redis lookup to
+# _CANCEL_POLL_INTERVAL_S = 1.0s and acts on the answer one tick later, so it
+# needs up to ~2s. Cancelling immediately therefore won all but a sliver of
+# the races and the child survived the pause. Three seconds covers the two
+# second worst case plus the kill and unwind, and is still far below the tick
+# budget of anything a user would notice.
+#
+# Cancel is deliberately NOT graced: a canceled task is discarded, so there is
+# no cooperative shutdown worth waiting for.
+_PAUSE_GRACE_S = 3.0
 
 
 async def recover_pending_tasks(log: logging.Logger) -> list[uuid.UUID]:
@@ -134,7 +153,8 @@ class WorkerPool:
       ``processor.process_task`` coroutines. Skips (and marks canceled) any
       task that already has a cancel request before it starts.
     * ``watch_cancels`` — cancel the asyncio Task of any active task whose id
-      has a cancel request, once.
+      has a cancel request, once. A pause request first gets a grace window
+      (``_PAUSE_GRACE_S``) in which the step may stop itself.
     * ``reap`` — collect finished coroutines, log the outcome, and clear the
       cancel flag and internal bookkeeping.
     """
@@ -153,6 +173,9 @@ class WorkerPool:
         self._max_active = max(int(max_active), 1)
         self._active: dict[uuid.UUID, asyncio.Task] = {}
         self._cancel_sent: set[uuid.UUID] = set()
+        # task_id -> monotonic deadline after which a pending pause stops
+        # being cooperative and is enforced with atask.cancel().
+        self._pause_deadline: dict[uuid.UUID, float] = {}
         self._log = logging.getLogger("vts.worker")
 
     @property
@@ -219,18 +242,51 @@ class WorkerPool:
         The difference is what survives: a cancel discards the task, while a
         pause keeps every step already finished (steps guard themselves with
         `already_done`), losing only the window in flight.
+
+        Interrupting is not the same as stopping, though. The long steps run
+        their real work in a child process (yt-dlp, the diarization sidecar),
+        and `atask.cancel()` unwinds only the coroutine awaiting it — the child
+        keeps running, and keeps the hardware. Only the step itself can kill
+        it, which it does by polling the pause flag from its progress callback.
+        So a pause gets a grace window first: the deadline is recorded on the
+        tick that notices the request, and the forced cancel fires on a later
+        tick only if the task has not finished on its own by then. The window
+        is a deadline rather than a sleep because this method runs inside the
+        worker loop; blocking here would stall every other task.
+
+        A cancel keeps interrupting immediately: the task is being discarded,
+        so there is no cooperative shutdown worth waiting for.
         """
+        now = time.monotonic()
         for task_id, atask in list(self._active.items()):
             if task_id in self._cancel_sent:
                 continue
-            reason = None
             if await self._bus.is_cancel_requested(task_id):
-                reason = "cancel"
-            elif await self._bus.is_pause_requested(task_id):
-                reason = "pause"
-            if reason is None:
+                self._log.info("cancel requested for running task %s", task_id)
+                atask.cancel()
+                self._cancel_sent.add(task_id)
                 continue
-            self._log.info("%s requested for running task %s", reason, task_id)
+            if not await self._bus.is_pause_requested(task_id):
+                # The flag is gone — the pause was withdrawn mid-window. Drop
+                # the deadline so a later pause gets a full window of its own
+                # rather than inheriting an already-expired one and being
+                # enforced on the tick that sees it.
+                self._pause_deadline.pop(task_id, None)
+                continue
+            deadline = self._pause_deadline.get(task_id)
+            if deadline is None:
+                self._log.info(
+                    "pause requested for running task %s; giving it %.1fs to stop itself",
+                    task_id,
+                    _PAUSE_GRACE_S,
+                )
+                self._pause_deadline[task_id] = now + _PAUSE_GRACE_S
+                continue
+            if now < deadline:
+                continue
+            self._log.info(
+                "pause grace expired for task %s; interrupting it", task_id
+            )
             atask.cancel()
             self._cancel_sent.add(task_id)
 
@@ -249,6 +305,7 @@ class WorkerPool:
                 await self._bus.clear_cancel_request(task_id)
                 self._active.pop(task_id, None)
                 self._cancel_sent.discard(task_id)
+                self._pause_deadline.pop(task_id, None)
 
     async def cancel_all(self) -> None:
         """Cancel every active task and await it (teardown)."""
@@ -260,6 +317,7 @@ class WorkerPool:
                 await atask
         self._active.clear()
         self._cancel_sent.clear()
+        self._pause_deadline.clear()
 
 
 async def worker_loop() -> None:

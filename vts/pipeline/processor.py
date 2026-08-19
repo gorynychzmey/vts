@@ -34,10 +34,18 @@ from vts.services.diarization import DiarizationBackend, create_diarization_back
 from vts.metrics import MetricsEmitter, aggregate_task_metrics
 
 
-# How many repeat cancellations the pause/cancel status write will absorb
-# before giving up. The write is two or three round trips, so this is generous;
-# the cap exists only so a cancel storm cannot make the handler unkillable.
-_CANCEL_ABSORB_LIMIT = 8
+# How long the pause/cancel status write may hold the cancellation handler
+# before it gives up. The write is two or three round trips to Postgres and
+# Redis, so this is generous under any healthy condition; the budget exists so
+# that a hung backend cannot make the handler unkillable.
+#
+# It is a wall-clock budget, not a count of absorbed cancels: the ordinary path
+# delivers exactly ONE cancellation (watch_cancels guards itself with
+# _cancel_sent), so a counter never ticks and a hung inner would park the
+# handler on `await shield(inner)` forever. worker_loop's teardown awaits every
+# active task without a timeout, so that hang becomes a shutdown that only
+# SIGKILL ends — the regression vts-9er already paid for once.
+_CANCEL_ABSORB_BUDGET_S = 5.0
 
 
 def utcnow() -> datetime:
@@ -358,17 +366,30 @@ class TaskProcessor:
         done. The caller re-raises the original cancellation regardless, so
         this changes durability, not control flow.
 
-        Bounded rather than `while True`: a pathological cancel storm must not
-        turn the handler into an unkillable loop. The write needs only a couple
-        of round trips, so a handful of absorbed cancels is generous.
+        Bounded by TIME rather than by a count of absorbed cancels. The number
+        of cancels is the wrong meter: the normal path sends exactly one, so a
+        counter would never advance while `await shield(inner)` waited on an
+        inner call that never returns — and the calls in there are network
+        calls to Postgres and Redis, which is exactly what hangs when a backend
+        goes away. A hang here propagates: `worker_loop` tears down through
+        `cancel_all()`, which awaits every active task with no timeout of its
+        own, so an unbounded handler turns SIGTERM into a wait for SIGKILL.
+        Both the wait and the retries therefore share one deadline, after which
+        the write is abandoned and the caller re-raises the cancellation.
         """
         inner = asyncio.ensure_future(
             self._record_cancellation(session, repo, task, task_id, logger)
         )
-        for _ in range(_CANCEL_ABSORB_LIMIT):
+        deadline = time.monotonic() + _CANCEL_ABSORB_BUDGET_S
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                await asyncio.shield(inner)
+                await asyncio.wait_for(asyncio.shield(inner), timeout=remaining)
                 return
+            except asyncio.TimeoutError:
+                break
             except asyncio.CancelledError:
                 if inner.done():
                     # The cancellation was aimed at us, not at the write, and

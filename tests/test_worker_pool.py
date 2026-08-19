@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 import pytest
@@ -11,6 +12,7 @@ from _db import make_test_engine
 from vts.db.base import Base
 from vts.db.models import Task, TaskStatus
 from vts.db.repo import Repo
+import vts.worker.main as main_mod
 from vts.worker.main import WorkerPool
 
 
@@ -46,6 +48,7 @@ class FakeProcessor:
 
     def __init__(self) -> None:
         self.entered: set[uuid.UUID] = set()
+        self.cancelled: set[uuid.UUID] = set()
         self._release: dict[uuid.UUID, asyncio.Event] = {}
 
     def _event(self, task_id: uuid.UUID) -> asyncio.Event:
@@ -60,7 +63,14 @@ class FakeProcessor:
 
     async def process_task(self, task_id: uuid.UUID) -> None:
         self.entered.add(task_id)
-        await self._event(task_id).wait()
+        try:
+            await self._event(task_id).wait()
+        except asyncio.CancelledError:
+            # Records that the pool forced the interruption, which is what the
+            # grace-window tests need to tell apart from a task that stopped
+            # itself.
+            self.cancelled.add(task_id)
+            raise
 
 
 @pytest_asyncio.fixture
@@ -156,7 +166,7 @@ async def test_two_admitted_run_concurrently(factory):
 
 
 @pytest.mark.asyncio
-async def test_watch_cancels_also_interrupts_a_paused_task(factory):
+async def test_watch_cancels_also_interrupts_a_paused_task(factory, monkeypatch):
     """A pause must free the GPU now, not at the next step boundary.
 
     Pausing was cooperative: `check_paused` is only consulted between windows,
@@ -164,7 +174,12 @@ async def test_watch_cancels_also_interrupts_a_paused_task(factory):
     window finished. Measured on production 2026-08-19, that meant a task sat
     "paused" while the model kept generating for over an hour. The window in
     flight is forfeited — that is the accepted cost of stopping immediately.
+
+    The interruption is now preceded by a grace window (see the two tests
+    below); a step that ignores the pause flag still gets interrupted once it
+    expires, which is what this asserts.
     """
+    monkeypatch.setattr(main_mod, "_PAUSE_GRACE_S", 0.05)
     ids = await _seed_queued(factory, 1)
     bus = FakeBus()
     proc = FakeProcessor()
@@ -177,15 +192,146 @@ async def test_watch_cancels_also_interrupts_a_paused_task(factory):
         await asyncio.sleep(0.01)
 
     await bus.request_pause(ids[0])
-    await pool.watch_cancels()
-
     for _ in range(50):
+        await pool.watch_cancels()
         await pool.reap()
         if pool.active_count == 0:
             break
         await asyncio.sleep(0.01)
 
     assert pool.active_count == 0, "a paused task must be interrupted, not left running"
+
+
+@pytest.mark.asyncio
+async def test_pause_grace_lets_a_step_stop_itself_without_a_forced_cancel(
+    factory, monkeypatch
+):
+    """A pause must not be enforced before the step had a chance to react.
+
+    Only the step can free the hardware: yt-dlp and the diarization sidecar are
+    child processes, and `atask.cancel()` unwinds the awaiting coroutine
+    without touching them. Both steps notice the pause flag from their progress
+    callback and kill the child themselves — but download throttles that Redis
+    lookup to one second and acts on the answer a tick later, so it needs a
+    couple of seconds. `watch_cancels` used to cancel on the very tick that saw
+    the flag, so the cancel essentially always won and the child survived the
+    pause.
+
+    Here the task finishes on its own inside the grace window; the pool must
+    never have cancelled it.
+    """
+    monkeypatch.setattr(main_mod, "_PAUSE_GRACE_S", 1.0)
+    ids = await _seed_queued(factory, 1)
+    task_id = ids[0]
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_pause(task_id)
+    # First tick only arms the grace window.
+    await pool.watch_cancels()
+    assert pool._active[task_id].cancelled() is False
+    assert not pool._active[task_id].cancelling(), (
+        "the pause must not be enforced on the tick that noticed it"
+    )
+
+    # The step reacts on its own, well inside the window.
+    await asyncio.sleep(0.05)
+    proc.release(task_id)
+    for _ in range(50):
+        await pool.watch_cancels()
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_count == 0
+    assert task_id not in pool._cancel_sent, (
+        "a task that stopped itself inside the grace window must never be "
+        "force-cancelled"
+    )
+    assert proc.cancelled == set(), "no forced cancellation should have reached the task"
+
+
+@pytest.mark.asyncio
+async def test_pause_grace_expires_and_the_task_is_cancelled(factory, monkeypatch):
+    """The grace window is a grace, not an amnesty.
+
+    A step that never looks at the pause flag (or is stuck somewhere with no
+    progress callback at all) must still be interrupted once the window runs
+    out — otherwise pausing such a task would silently do nothing.
+    """
+    monkeypatch.setattr(main_mod, "_PAUSE_GRACE_S", 0.2)
+    ids = await _seed_queued(factory, 1)
+    task_id = ids[0]
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_pause(task_id)
+    await pool.watch_cancels()
+    assert task_id not in pool._cancel_sent
+
+    # Never released: the step ignores the pause the way a stuck step would.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        await pool.watch_cancels()
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.02)
+
+    assert pool.active_count == 0, (
+        "a step that ignores the pause flag must be cancelled once the grace expires"
+    )
+    assert task_id in proc.cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_is_never_graced(factory, monkeypatch):
+    """A cancel discards the task, so there is nothing to wait for.
+
+    The grace window exists so a step can shut its child process down cleanly
+    and keep the work it already did. A cancel keeps neither, so gracing it
+    would only delay freeing the slot.
+    """
+    monkeypatch.setattr(main_mod, "_PAUSE_GRACE_S", 30.0)
+    ids = await _seed_queued(factory, 1)
+    task_id = ids[0]
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_cancel(task_id)
+    await pool.watch_cancels()
+
+    assert task_id in pool._cancel_sent, "a cancel must fire on the tick that sees it"
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+    assert pool.active_count == 0
+    assert task_id in proc.cancelled
 
 
 @pytest.mark.asyncio
