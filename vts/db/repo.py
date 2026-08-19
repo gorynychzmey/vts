@@ -634,8 +634,24 @@ class Repo:
     # Prompt CRUD
     # ------------------------------------------------------------------
 
-    async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> Prompt:
-        prompt = Prompt(user_id=user_id, name=name, system_prompt=system_prompt)
+    async def create_prompt(
+        self,
+        user_id: uuid.UUID,
+        name: str,
+        system_prompt: str,
+        *,
+        is_system: bool = False,
+    ) -> Prompt:
+        prompt = Prompt(
+            user_id=user_id,
+            name=name,
+            system_prompt=system_prompt,
+            is_system=is_system,
+            created_at=utcnow(),
+            # A prompt the user wrote is edited by definition; a vendor copy
+            # has not been touched yet, and NULL is what says so.
+            updated_at=None if is_system else utcnow(),
+        )
         self.session.add(prompt)
         await self.session.flush()
         return prompt
@@ -668,6 +684,7 @@ class Repo:
             prompt.name = name
         if system_prompt is not None:
             prompt.system_prompt = system_prompt
+        prompt.updated_at = utcnow()
         await self.session.flush()
         return prompt
 

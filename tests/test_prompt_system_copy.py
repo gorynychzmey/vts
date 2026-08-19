@@ -59,3 +59,47 @@ async def test_system_copy_is_created_without_an_updated_at(factory) -> None:
         ).one()
         assert row.is_system is True
         assert row.updated_at is None, "a fresh system copy must carry no edit timestamp"
+
+
+@pytest.mark.asyncio
+async def test_create_prompt_stamps_a_user_prompt_and_not_a_system_copy(factory) -> None:
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        user_id = uuid.uuid4()
+        session.add(User(id=user_id, username="prompt-create-stamps@example.invalid"))
+        await session.commit()
+
+        mine = await repo.create_prompt(user_id, "Mine", "body")
+        vendor = await repo.create_prompt(user_id, "Summary", "vendor", is_system=True)
+        await session.commit()
+
+    assert mine.updated_at is not None, "a prompt the user wrote is edited by definition"
+    assert mine.is_system is False
+    assert vendor.updated_at is None, "a vendor copy has not been touched by the user"
+    assert vendor.is_system is True
+
+
+@pytest.mark.asyncio
+async def test_update_prompt_stamps_updated_at(factory) -> None:
+    """Editing is what puts a timestamp on a system copy."""
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        user_id = uuid.uuid4()
+        session.add(User(id=user_id, username="prompt-update-stamps@example.invalid"))
+        await session.commit()
+
+        vendor = await repo.create_prompt(user_id, "Summary", "vendor", is_system=True)
+        await session.commit()
+        assert vendor.updated_at is None
+
+        await repo.update_prompt(
+            user_id, vendor.id, name=None, system_prompt="my own wording"
+        )
+        await session.commit()
+
+    assert vendor.updated_at is not None, "an edit must be recorded"
+    assert vendor.system_prompt == "my own wording"
