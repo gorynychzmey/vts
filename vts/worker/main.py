@@ -182,6 +182,21 @@ class WorkerPool:
                     await session.commit()
                 continue
 
+            if await self._bus.is_pause_requested(task_id):
+                # Symmetric with the cancel check above, for the same reason
+                # watch_cancels now honours pause: admitting a task whose pause
+                # is still pending starts a step that the very next
+                # watch_cancels tick interrupts. Nothing clears the flag on
+                # that path, so the task is re-queued and the whole cycle
+                # repeats on every restart until the flag's TTL expires.
+                await self._bus.clear_pause_request(task_id)
+                self._log.info("pausing task %s before start", task_id)
+                async with self._session_factory() as session:
+                    repo = Repo(session)
+                    await repo.set_task_status_by_id(task_id, TaskStatus.paused)
+                    await session.commit()
+                continue
+
             await self._bus.clear_cancel_request(task_id)
             self._active[task_id] = asyncio.create_task(
                 self._processor.process_task(task_id)

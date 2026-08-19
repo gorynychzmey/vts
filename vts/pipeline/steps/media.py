@@ -115,6 +115,10 @@ class DownloadStep(Step):
         # flag is enough: it only ever goes False->True, and a check that is one
         # progress tick late costs nothing.
         cancel_seen = threading.Event()
+        # Pause gets its own flag rather than reusing cancel_seen: the two lead
+        # to different outcomes for the task (discarded vs resumable), and only
+        # the flag tells them apart by the time the exception is caught.
+        pause_seen = threading.Event()
         # yt-dlp fires progress hooks many times a second and the publish
         # throttle does not cover this path, so the Redis lookup is rate-limited
         # here instead. A cancel noticed up to a second late is still orders of
@@ -124,6 +128,8 @@ class DownloadStep(Step):
         async def _poll_cancel() -> None:
             if await ctx.bus.is_cancel_requested(st.task_id):
                 cancel_seen.set()
+            elif await ctx.bus.is_pause_requested(st.task_id):
+                pause_seen.set()
 
         def sync_progress(phase: str, payload: dict[str, Any]) -> None:
             # Cancellation is checked here for the same reason diarization
@@ -135,6 +141,23 @@ class DownloadStep(Step):
             if cancel_seen.is_set():
                 kill_active_downloads(st.logger)
                 raise DownloadCancelled
+            # A pause must kill the child for the same reason a cancel does.
+            # The worker pool's atask.cancel() cannot: yt-dlp runs under
+            # asyncio.to_thread, which abandons only the await, so without this
+            # the download keeps running — and downloading — for a task nobody
+            # is waiting on. Killing it is what actually stops it.
+            #
+            # Deliberately NOT DownloadCancelled: that exception means the user
+            # discarded the task and the processor exits quietly without
+            # writing any status, which for a pause would leave the row stuck
+            # in `running`. TaskPaused carries the outcome the user asked for,
+            # and the partial download is discarded either way — the step has
+            # no resume point, so a resumed task re-downloads from scratch.
+            if pause_seen.is_set():
+                from vts.pipeline.processor import TaskPaused
+
+                kill_active_downloads(st.logger)
+                raise TaskPaused()
             # is_cancel_requested is async and this runs off-loop, so the check
             # is one tick behind: ask now, act on the answer next time round.
             nonlocal last_cancel_poll

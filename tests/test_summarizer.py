@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
@@ -326,7 +327,7 @@ def test_llama_chat_completion_stops_the_queue_on_a_transport_error(
 
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
-    with pytest.raises(httpx.ReadTimeout):
+    with pytest.raises(RuntimeError) as caught:
         asyncio.run(
             _client().chat_completion(
                 model="Qwen2.5-7B-Instruct-Q4",
@@ -336,6 +337,17 @@ def test_llama_chat_completion_stops_the_queue_on_a_transport_error(
         )
 
     assert len(post_calls) == 1, "a transport error must not advance the queue"
+
+    # The message has to survive, not just the stop. process_task copies
+    # str(exc) into error_message, the SSE event and the push, and the httpx
+    # transport exceptions carry no message of their own —
+    # str(httpx.ReadTimeout("")) is "". Raising one bare would show the user a
+    # blank error and hand classify_failure_code an empty string.
+    message = str(caught.value)
+    assert "ReadTimeout" in message, message
+    assert endpoint in message, message
+    assert message.strip(), "the error must not be empty"
+    assert isinstance(caught.value.__cause__, httpx.ReadTimeout)
 
 
 def test_llama_chat_completion_stops_the_queue_on_a_connect_error(
@@ -373,7 +385,7 @@ def test_llama_chat_completion_stops_the_queue_on_a_connect_error(
 
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(RuntimeError) as caught:
         asyncio.run(
             _client().chat_completion(
                 model="Qwen2.5-7B-Instruct-Q4",
@@ -383,6 +395,10 @@ def test_llama_chat_completion_stops_the_queue_on_a_connect_error(
         )
 
     assert len(post_calls) == 1, "a connect error must not advance the queue"
+    message = str(caught.value)
+    assert "ConnectError" in message, message
+    assert "simulated refusal" in message, message
+    assert isinstance(caught.value.__cause__, httpx.ConnectError)
 
 
 def test_llama_tokenize_retries_without_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1622,3 +1638,75 @@ def test_chat_completion_gives_up_on_a_model_that_never_loads(
 
     assert sum(slept) == pytest.approx(60.0), "the wait must respect its budget"
     assert attempts == len(slept) + 1
+
+
+def test_llama_chat_completion_still_walks_the_queue_on_a_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTP 400 is the queue's reason to exist and must still advance it."""
+    endpoint = "http://llama.local/v1/chat/completions"
+    post_calls: list[dict[str, object]] = []
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
+            post_calls.append({"url": url, "json": json})
+            if len(post_calls) == 1:
+                return _StubStream(
+                    status_code=400,
+                    error_message="unsupported response_format",
+                )
+            return _StubStream(content='{"status":"ready"}')
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    asyncio.run(
+        _client().chat_completion(
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="sys",
+            user_prompt="user",
+        )
+    )
+
+    assert len(post_calls) > 1, "a rejected payload shape must advance the queue"
+
+
+def test_stop_the_queue_clause_excludes_http_status_errors() -> None:
+    """The stop-the-queue clause must not be able to swallow an HTTP 400.
+
+    Pins the exception class the clause is written against, because behaviour
+    alone cannot express this today: the queue currently advances off
+    `response.is_success`, so nothing on this path raises HTTPStatusError and a
+    behavioural test passes with either `HTTPError` or `TransportError` in the
+    clause. The distinction is real all the same — `HTTPError` is a common,
+    natural-looking choice that also covers `HTTPStatusError`, so the first
+    `raise_for_status()` added here would silently kill the fallback for the
+    HTTP 400s the queue exists to walk.
+
+    Asserted on the hierarchy so the guard cannot rot: TransportError covers
+    every no-answer case and excludes every got-an-answer case.
+    """
+    assert issubclass(httpx.ReadTimeout, httpx.TransportError)
+    assert issubclass(httpx.ConnectError, httpx.TransportError)
+    assert issubclass(httpx.ProtocolError, httpx.TransportError)
+    # The whole point: a status error is NOT a transport error, so widening the
+    # clause to httpx.HTTPError would start catching it.
+    assert not issubclass(httpx.HTTPStatusError, httpx.TransportError)
+    assert issubclass(httpx.HTTPStatusError, httpx.HTTPError)
+
+    source = inspect.getsource(LLMClient.chat_completion)
+    assert "except httpx.TransportError" in source
+    assert "except httpx.HTTPError" not in source, (
+        "HTTPError also catches HTTPStatusError — the HTTP 400 the queue walks"
+    )

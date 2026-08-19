@@ -1114,7 +1114,7 @@ class LLMClient:
                         exc.elapsed,
                     )
                     raise
-                except httpx.HTTPError:
+                except httpx.TransportError as exc:
                     # The payload queue answers one question — which request
                     # shape does this backend accept — and a backend that
                     # dislikes the shape says so promptly with HTTP 400. A
@@ -1126,7 +1126,26 @@ class LLMClient:
                     # neither, and each variant costs a full generation:
                     # measured on production, a 73k-token window walked all
                     # eight variants, holding the GPU for the whole parade.
-                    raise
+                    #
+                    # TransportError, not HTTPError: the latter also covers
+                    # HTTPStatusError, which is exactly the HTTP 400 the queue
+                    # exists to walk. Nothing calls raise_for_status() on this
+                    # path today, so the wider clause is harmless right now —
+                    # and would silently kill the queue the first time someone
+                    # adds one.
+                    #
+                    # Wrapped rather than re-raised bare because the transport
+                    # exceptions carry no message: str(httpx.ReadTimeout(""))
+                    # is the EMPTY STRING, and process_task puts str(exc)
+                    # straight into error_message, the SSE event and the push.
+                    # A user would see a blank error and classify_failure_code
+                    # would get "" and return None. ReadTimeout is the very
+                    # case seen on production.
+                    detail = str(exc) or "no detail"
+                    raise RuntimeError(
+                        f"llama chat completion transport error for {endpoint}: "
+                        f"{type(exc).__name__}: {detail}"
+                    ) from exc
                 return text
             else:
                 attempts = "; ".join(failures) if failures else "no attempts executed"

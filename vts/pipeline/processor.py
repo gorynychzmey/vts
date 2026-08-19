@@ -34,6 +34,12 @@ from vts.services.diarization import DiarizationBackend, create_diarization_back
 from vts.metrics import MetricsEmitter, aggregate_task_metrics
 
 
+# How many repeat cancellations the pause/cancel status write will absorb
+# before giving up. The write is two or three round trips, so this is generous;
+# the cap exists only so a cancel storm cannot make the handler unkillable.
+_CANCEL_ABSORB_LIMIT = 8
+
+
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
@@ -263,21 +269,26 @@ class TaskProcessor:
                 # CancelledError derives from BaseException and reaches
                 # neither the TaskPaused handler above nor the catch-all
                 # below.
-                if await self.bus.is_pause_requested(task_id):
-                    logger.info("task interrupted for pause: %s", task_id)
-                    await self.bus.clear_pause_request(task_id)
-                    await self._ctx.refresh_task(session, task)
-                    if task.status != TaskStatus.paused:
-                        await repo.set_task_status(task, TaskStatus.paused)
-                        await session.commit()
-                    await self.bus.publish_event(
-                        user_id=str(task.user_id),
-                        task_id=str(task.id),
-                        event="task_status",
-                        data={"status": "paused"},
+                #
+                # Everything here is best-effort bookkeeping, and the re-raise
+                # is not: this handler runs while a CancelledError is already
+                # in flight, so letting any of it escape would REPLACE that
+                # cancellation with a different exception. The handlers above
+                # have already run, so nothing would catch the replacement and
+                # the row would keep `running` forever — a status that is in
+                # neither RESUMABLE_STATUSES nor SKIPPABLE_ON_START_STATUSES,
+                # i.e. dead until the worker restarts. The realistic trigger is
+                # a user who pauses a task and immediately deletes it:
+                # refresh_task then raises _TaskGone by contract. So the body
+                # is swallowed-and-logged, and `raise` runs unconditionally.
+                try:
+                    await self._handle_cancellation(
+                        session, repo, task, task_id, logger
                     )
-                else:
-                    logger.info("task canceled: %s", task_id)
+                except Exception:  # noqa: BLE001 - must not displace the cancellation
+                    logger.exception(
+                        "cancellation bookkeeping failed for task %s", task_id
+                    )
                 raise
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
@@ -318,6 +329,81 @@ class TaskProcessor:
                 # logging's manager, so the fd would leak for the life of the
                 # worker otherwise (vts-e5l).
                 self._close_task_logger(task_id)
+
+    async def _handle_cancellation(
+        self,
+        session,
+        repo: Repo,
+        task: Task,
+        task_id: uuid.UUID,
+        logger: logging.Logger,
+    ) -> None:
+        """Record the outcome of an interrupted task: paused, or plain canceled.
+
+        Split out of the `except asyncio.CancelledError` handler so the whole
+        body sits behind one `asyncio.shield`. Without the shield a SECOND
+        cancellation lands on the first `await` here and the status write is
+        lost, leaving the row `running` forever. That second cancel is not
+        theoretical: `WorkerPool.watch_cancels` guards itself with
+        `_cancel_sent`, but `cancel_all()` in the worker's teardown does not,
+        so any SIGTERM (i.e. every deploy) fires cancel at every active task
+        regardless of how many it has already had.
+
+        `asyncio.shield` alone is not enough. It protects the inner task, but
+        still raises CancelledError in the AWAITER — and since this handler is
+        the last thing process_task runs, returning there abandons the inner
+        task mid-write and the coroutine is garbage-collected before it
+        commits. So the shield is retried in a loop: each repeat cancellation
+        is absorbed and the same inner task re-awaited until it is genuinely
+        done. The caller re-raises the original cancellation regardless, so
+        this changes durability, not control flow.
+
+        Bounded rather than `while True`: a pathological cancel storm must not
+        turn the handler into an unkillable loop. The write needs only a couple
+        of round trips, so a handful of absorbed cancels is generous.
+        """
+        inner = asyncio.ensure_future(
+            self._record_cancellation(session, repo, task, task_id, logger)
+        )
+        for _ in range(_CANCEL_ABSORB_LIMIT):
+            try:
+                await asyncio.shield(inner)
+                return
+            except asyncio.CancelledError:
+                if inner.done():
+                    # The cancellation was aimed at us, not at the write, and
+                    # the write already landed. Let the caller re-raise.
+                    return
+                continue
+        # Out of patience: stop absorbing, but do not leave the task dangling.
+        inner.cancel()
+        logger.warning(
+            "gave up shielding the cancellation write for task %s", task_id
+        )
+
+    async def _record_cancellation(
+        self,
+        session,
+        repo: Repo,
+        task: Task,
+        task_id: uuid.UUID,
+        logger: logging.Logger,
+    ) -> None:
+        if not await self.bus.is_pause_requested(task_id):
+            logger.info("task canceled: %s", task_id)
+            return
+        logger.info("task interrupted for pause: %s", task_id)
+        await self.bus.clear_pause_request(task_id)
+        await self._ctx.refresh_task(session, task)
+        if task.status != TaskStatus.paused:
+            await repo.set_task_status(task, TaskStatus.paused)
+            await session.commit()
+        await self.bus.publish_event(
+            user_id=str(task.user_id),
+            task_id=str(task.id),
+            event="task_status",
+            data={"status": "paused"},
+        )
 
     async def _try_donor_clone(
         self, session, repo: Repo, task: Task, task_id: uuid.UUID
@@ -480,6 +566,29 @@ class TaskProcessor:
                 _em = self._ctx.get_emitter(task_id)
                 if _em:
                     _em.emit({"stage": step_name, "status": "ok", "t_wall_ms": _step_wall_ms})
+                raise
+            except TaskPaused:
+                # Pause raised from INSIDE a step (download and diarization
+                # poll for it, because both hold state in another process that
+                # the worker pool's atask.cancel() cannot reach). Unlike
+                # TaskAwaitingInput above, the step did NOT finish: it stopped
+                # mid-work and produced no output. So it goes back to
+                # `pending`, not `completed` and not `failed` — `failed` would
+                # both misreport a user action as an error and record a
+                # message the UI would show. `pending` is what a resumed task
+                # needs to re-run it from the top.
+                _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)
+                await repo.set_step_status(step, StepStatus.pending)
+                await session.commit()
+                await self.bus.publish_event(
+                    user_id=user_id,
+                    task_id=str(task_id),
+                    event="step",
+                    data={"name": step_name, "status": StepStatus.pending.value},
+                )
+                _em = self._ctx.get_emitter(task_id)
+                if _em:
+                    _em.emit({"stage": step_name, "status": "paused", "t_wall_ms": _step_wall_ms})
                 raise
             except Exception as exc:
                 _step_wall_ms = round((time.monotonic() - _step_t0) * 1000)

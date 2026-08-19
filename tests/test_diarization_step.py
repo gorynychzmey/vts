@@ -62,15 +62,19 @@ class _FakeBackend:
 class _FakeBus:
     """Records published events; cancellation off unless a test asks for it."""
 
-    def __init__(self, cancel: bool = False) -> None:
+    def __init__(self, cancel: bool = False, pause: bool = False) -> None:
         self.events: list[dict] = []
         self._cancel = cancel
+        self._pause = pause
 
     async def publish_event(self, **kwargs) -> None:
         self.events.append(kwargs)
 
     async def is_cancel_requested(self, task_id) -> bool:
         return self._cancel
+
+    async def is_pause_requested(self, task_id) -> bool:
+        return self._pause
 
 
 def _dirs(tmp_path: Path) -> dict[str, Path]:
@@ -273,4 +277,41 @@ async def test_step_cancels_sidecar_when_task_cancelled(tmp_path: Path) -> None:
         await DiarizeStep().run(_ctx(backend, bus), st)
 
     assert backend.cancelled == [str(st.task_id)]
+    assert not (dirs["outputs"] / "diarization.json").exists()
+
+
+async def test_step_cancels_sidecar_when_task_paused(tmp_path: Path) -> None:
+    """A pause mid-diarization must stop the sidecar too, and stay a pause.
+
+    The pause interrupt reaches the task through atask.cancel(), which unwinds
+    the coroutine — but the diarization job lives in another process, so
+    abandoning the await leaves it computing for the rest of its run. That is
+    the same "pause does not free the hardware" bug this release fixes for the
+    GPU, one step over.
+
+    The exception matters as much as the cancel call: reusing
+    DiarizationCancelled would make the processor exit quietly without writing
+    a status, stranding the row in `running`. TaskPaused is the one that
+    records `paused`.
+    """
+    from vts.pipeline.processor import TaskPaused
+
+    dirs = _dirs(tmp_path)
+    # A real wav, not a b"RIFF" stub: with the fix reverted the step runs past
+    # the pause into preview clipping, and a stub would make it die on ffmpeg —
+    # a failure that looks like proof but is about the fixture, not the pause.
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
+    backend = _FakeBackend()
+    bus = _FakeBus(pause=True)
+    st = _state(tmp_path, dirs, {"diarize": True})
+
+    # Asserted as "the run stopped at the pause", not merely "the run raised":
+    # without the fix the step sails past the pause and fails much later on
+    # unrelated post-processing, which pytest.raises(Exception) would happily
+    # accept. Only TaskPaused plus a cancelled sidecar job means the pause was
+    # actually honoured.
+    with pytest.raises(TaskPaused):
+        await DiarizeStep().run(_ctx(backend, bus), st)
+
+    assert backend.cancelled == [str(st.task_id)], "the sidecar job must be cancelled"
     assert not (dirs["outputs"] / "diarization.json").exists()

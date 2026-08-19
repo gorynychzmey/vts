@@ -241,3 +241,30 @@ async def test_pre_start_cancel_skip(factory):
     assert await _status(factory, task_id) == TaskStatus.canceled
     # Cancel flag cleared.
     assert await bus.is_cancel_requested(task_id) is False
+
+
+@pytest.mark.asyncio
+async def test_pre_start_pause_skip(factory):
+    """A queued task with a pending pause must not be started at all.
+
+    Symmetric with the cancel skip above. Without it the task is admitted,
+    begins a step, and the next watch_cancels tick interrupts it — and since
+    nothing on that path clears the flag, the task is re-queued and the same
+    cycle repeats on every restart until the flag's TTL runs out.
+    """
+    ids = await _seed_queued(factory, 1)
+    task_id = ids[0]
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=2)
+
+    await bus.request_pause(task_id)
+    admitted = await pool.admit()
+
+    assert admitted is False
+    assert pool.active_count == 0
+    assert task_id not in proc.entered, "the step must never start"
+    assert await _status(factory, task_id) == TaskStatus.paused
+    assert await bus.is_pause_requested(task_id) is False, (
+        "the flag must be cleared, or the task loops on the next restart"
+    )

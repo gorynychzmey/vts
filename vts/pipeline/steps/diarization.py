@@ -126,6 +126,28 @@ class DiarizeStep(Step):
             if await ctx.bus.is_cancel_requested(st.task_id):
                 await ctx.diarization.cancel(str(st.task_id))
                 raise DiarizationCancelled
+            # A pause has to stop the sidecar for exactly the same reason, and
+            # the worker pool's atask.cancel() cannot do it: the job runs in
+            # another process, so cancelling this coroutine abandons the await
+            # and leaves the job computing for the rest of its 25 minutes. That
+            # is the very bug this release fixes for the GPU, reproduced one
+            # step over.
+            #
+            # The distinction from the branch above is what happens to the
+            # task, so a pause must NOT reuse DiarizationCancelled: that path
+            # means "the user discarded this" and exits without writing any
+            # status, which for a pause would strand the row in `running`.
+            # TaskPaused is the exception that already carries the intended
+            # outcome, and the finished steps are protected by already_done, so
+            # resuming re-runs only this one.
+            if await ctx.bus.is_pause_requested(st.task_id):
+                # Imported here, not at module scope: processor imports this
+                # module, so the reverse edge is a cycle at import time. Same
+                # dodge as speaker_match.py uses for TaskAwaitingInput.
+                from vts.pipeline.processor import TaskPaused
+
+                await ctx.diarization.cancel(str(st.task_id))
+                raise TaskPaused()
             await ctx.bus.publish_event(
                 user_id=st.user_id,
                 task_id=str(st.task_id),

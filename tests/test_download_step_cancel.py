@@ -70,15 +70,19 @@ class YoutubeDL:
 class _FakeBus:
     """Cancellation flag is a plain bool; publish_event just records."""
 
-    def __init__(self, cancel: bool = False) -> None:
+    def __init__(self, cancel: bool = False, pause: bool = False) -> None:
         self.events: list[dict] = []
         self._cancel = cancel
+        self._pause = pause
 
     async def publish_event(self, **kwargs) -> None:
         self.events.append(kwargs)
 
     async def is_cancel_requested(self, task_id) -> bool:
         return self._cancel
+
+    async def is_pause_requested(self, task_id) -> bool:
+        return self._pause
 
 
 def _dirs(tmp_path: Path) -> dict[str, Path]:
@@ -239,3 +243,32 @@ async def test_download_runs_to_completion_when_not_cancelled(
 
     assert not _live_children(), "a completed download left a child behind"
     assert bus.events, "no progress was published during a normal download"
+
+
+@pytest.mark.asyncio
+async def test_pause_during_download_kills_the_child(tmp_path: Path, slow_ytdlp) -> None:
+    """A pause must stop the download too — and stay a pause.
+
+    Pause now interrupts via atask.cancel(), but yt-dlp runs under
+    asyncio.to_thread: cancelling abandons the await and leaves the child
+    downloading for a task nobody is waiting on. Only killing it actually
+    stops it, which is why the step has to notice the pause itself.
+
+    Asserted on the real child process for the same reason as the cancel case
+    above — that is the thing still using bandwidth. TaskPaused rather than
+    DownloadCancelled because the latter makes the processor exit without
+    writing a status, which would leave the row stuck in `running`.
+    """
+    from vts.pipeline.processor import TaskPaused
+
+    dirs = _dirs(tmp_path)
+    bus = _FakeBus(pause=True)
+    st = _state(tmp_path, dirs)
+
+    with pytest.raises(TaskPaused):
+        await DownloadStep().run(_ctx(bus), st)
+
+    deadline = time.monotonic() + 10
+    while _live_children() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not _live_children(), "the download child survived the pause"
