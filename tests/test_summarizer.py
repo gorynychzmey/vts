@@ -702,6 +702,141 @@ def test_parse_sse_content_extracts_only_content_deltas() -> None:
     assert parse_sse_content('data: {"choices":[{"delta":{"content":""}}]}') is None
 
 
+class _FakeClock:
+    """Monotonic clock the test advances by hand, so no test ever sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _lines(*items: str) -> "AsyncIterator[str]":
+    for item in items:
+        yield item
+
+
+def test_read_sse_stream_accumulates_content() -> None:
+    from vts.services.summarizer import read_sse_stream
+
+    clock = _FakeClock()
+    out = asyncio.run(
+        read_sse_stream(
+            _lines(
+                'data: {"choices":[{"delta":{"role":"assistant"}}]}',
+                'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+                'data: {"choices":[{"delta":{"content":"lo"}}]}',
+                "data: [DONE]",
+            ),
+            first_chunk_timeout=300,
+            idle_timeout=120,
+            ceiling=600,
+            clock=clock,
+        )
+    )
+    assert out == "Hello"
+
+
+def test_read_sse_stream_fails_on_idle_gap() -> None:
+    from vts.services.summarizer import StreamTimeout, read_sse_stream
+
+    clock = _FakeClock()
+
+    async def gappy() -> "AsyncIterator[str]":
+        yield 'data: {"choices":[{"delta":{"content":"a"}}]}'
+        clock.now += 200.0  # silence longer than idle_timeout
+        yield 'data: {"choices":[{"delta":{"content":"b"}}]}'
+
+    with pytest.raises(StreamTimeout) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                gappy(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "idle"
+    assert excinfo.value.chunks == 1
+
+
+def test_read_sse_stream_fails_when_first_chunk_never_arrives() -> None:
+    from vts.services.summarizer import StreamTimeout, read_sse_stream
+
+    clock = _FakeClock()
+
+    async def slow_start() -> "AsyncIterator[str]":
+        yield ": keep-alive"
+        clock.now += 400.0  # longer than first_chunk_timeout
+        yield ": keep-alive"
+
+    with pytest.raises(StreamTimeout) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                slow_start(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "first_chunk"
+    assert excinfo.value.chunks == 0
+
+
+def test_read_sse_stream_fails_when_ceiling_exceeded() -> None:
+    from vts.services.summarizer import StreamTimeout, read_sse_stream
+
+    clock = _FakeClock()
+
+    async def steady() -> "AsyncIterator[str]":
+        for _ in range(100):
+            clock.now += 10.0  # each gap is under idle_timeout
+            yield 'data: {"choices":[{"delta":{"content":"x"}}]}'
+
+    with pytest.raises(StreamTimeout) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                steady(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=200,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "ceiling"
+
+
+def test_read_sse_stream_allows_slow_but_steady_generation() -> None:
+    """The regression this whole feature exists for.
+
+    Under the old total-duration timeout a 14-minute window was discarded
+    seconds before it landed. Steady chunks must succeed no matter how long
+    the whole thing takes, as long as each gap is short.
+    """
+    from vts.services.summarizer import read_sse_stream
+
+    clock = _FakeClock()
+
+    async def slow() -> "AsyncIterator[str]":
+        for _ in range(60):
+            clock.now += 30.0  # 30 min total, every gap well under idle_timeout
+            yield 'data: {"choices":[{"delta":{"content":"y"}}]}'
+
+    out = asyncio.run(
+        read_sse_stream(
+            slow(),
+            first_chunk_timeout=300,
+            idle_timeout=120,
+            ceiling=100_000,
+            clock=clock,
+        )
+    )
+    assert out == "y" * 60
+
+
 def test_stream_settings_map_from_nested_yaml() -> None:
     from vts.core.config import _normalize_yaml_overrides
 

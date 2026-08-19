@@ -222,6 +222,69 @@ def parse_sse_content(line: str) -> str | None:
     return content
 
 
+class StreamTimeout(RuntimeError):
+    """A streamed completion hit one of its three limits.
+
+    Carries what was seen so the caller can log it: the whole point of this
+    feature is that a stalled request reports how far it got instead of going
+    silent for 17 minutes.
+    """
+
+    def __init__(self, reason: str, *, chunks: int, elapsed: float) -> None:
+        super().__init__(
+            f"llm stream {reason} timeout after {elapsed:.1f}s and {chunks} chunks"
+        )
+        self.reason = reason
+        self.chunks = chunks
+        self.elapsed = elapsed
+
+
+async def read_sse_stream(
+    lines: AsyncIterator[str],
+    *,
+    first_chunk_timeout: float,
+    idle_timeout: float,
+    ceiling: float,
+    clock: Callable[[], float] = time.monotonic,
+    on_progress: Callable[[int, float], None] | None = None,
+) -> str:
+    """Accumulate an SSE completion, enforcing three independent limits.
+
+    The limits answer different questions. `first_chunk_timeout` covers model
+    load, which is slow and says nothing about health. `idle_timeout` is the
+    real stall detector once text is flowing. `ceiling` is a backstop against
+    generation that never ends.
+
+    `clock` is injectable so tests drive time without sleeping.
+    """
+    started = clock()
+    last_seen = started
+    chunks = 0
+    buffer: list[str] = []
+
+    async for line in lines:
+        now = clock()
+        if now - started > ceiling:
+            raise StreamTimeout("ceiling", chunks=chunks, elapsed=now - started)
+        limit = idle_timeout if chunks else first_chunk_timeout
+        if now - last_seen > limit:
+            reason = "idle" if chunks else "first_chunk"
+            raise StreamTimeout(reason, chunks=chunks, elapsed=now - started)
+        content = parse_sse_content(line)
+        if content is None:
+            continue
+        buffer.append(content)
+        chunks += 1
+        last_seen = now
+        if on_progress is not None and chunks % 100 == 0:
+            on_progress(chunks, now - started)
+
+    now = clock()
+    if not chunks and now - last_seen > first_chunk_timeout:
+        raise StreamTimeout("first_chunk", chunks=0, elapsed=now - started)
+    return "".join(buffer)
+
+
 def _is_transient_http_error(exc: Exception) -> bool:
     return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError))
 
