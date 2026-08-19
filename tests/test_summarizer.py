@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from vts.services.summarizer import (
+    split_sentences_for_chunking,
     LLMClient,
     _load_tokenizer,
     _tokenize_local,
@@ -732,6 +733,55 @@ def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     # No overlap: token 30 belongs to the first chunk only.
     assert chunks == ["chunk one", "chunk two"]
+
+
+def test_chunk_text_uses_the_chunking_splitter_not_the_metrics_one() -> None:
+    """`chunk_text` must route through the abbreviation-aware splitter.
+
+    The six unit tests for `split_sentences_for_chunking` verify the splitter
+    itself, not that anything calls it — point `chunk_text` back at
+    `vts.metrics.quality.split_sentences` and they all still pass. The only
+    guard on the wiring was an end-to-end test that catches at just two window
+    sizes out of seventeen, because a false boundary only becomes visible when
+    it happens to land on a window edge.
+
+    This asserts the wiring directly: with a window large enough to hold the
+    whole text, the metrics splitter's false break inside "т.е." would be
+    invisible in the output either way — so instead we check that the text
+    arrives as ONE unit, which is only true of the chunking splitter.
+    """
+    text = "Мы обсудили т.е. договорились. Всё ок."
+
+    calls: list[str] = []
+
+    def _spy(value: str) -> list[str]:
+        calls.append(value)
+        return split_sentences_for_chunking(value)
+
+    tok = MagicMock()
+    tok.encode.side_effect = lambda s: MagicMock(ids=list(range(len(s))))
+    tok.decode.side_effect = lambda ids: "x" * len(ids)
+
+    with (
+        patch("vts.services.summarizer._load_tokenizer", lambda path: tok),
+        patch("vts.services.summarizer.split_sentences_for_chunking", _spy),
+    ):
+        asyncio.run(
+            _client().chunk_text(
+                text=text,
+                model="any-model",
+                window_tokens=10_000,
+                tokenizer_path="/fake/tokenizer.json",
+            )
+        )
+
+    assert calls == [text], "chunk_text must split via split_sentences_for_chunking"
+    # And the splitter it routes to keeps the abbreviation whole, which the
+    # metrics splitter does not.
+    assert split_sentences_for_chunking(text) == [
+        "Мы обсудили т.е. договорились.",
+        "Всё ок.",
+    ]
 
 
 def test_chunk_text_packs_whole_sentences_without_overlap() -> None:
