@@ -103,3 +103,69 @@ async def test_update_prompt_stamps_updated_at(factory) -> None:
 
     assert vendor.updated_at is not None, "an edit must be recorded"
     assert vendor.system_prompt == "my own wording"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_reads_the_file_once_then_reuses_the_row(
+    factory, tmp_path
+) -> None:
+    """The copy is made on first use, not at signup.
+
+    A task runs in the worker, so a user who has never opened the UI still has
+    no row when their first summary starts. Creating on demand also means a row
+    lost for any reason simply comes back.
+    """
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=user_id, username="prompt-lazy-copy@example.invalid"))
+        await session.commit()
+
+        first = await get_or_create_system_prompt(session, user_id, tmp_path)
+        await session.commit()
+        first_id = first.id
+
+    assert first.system_prompt == "vendor text"
+    assert first.is_system is True
+    assert first.updated_at is None
+
+    # A second call must not make a second copy.
+    async with factory() as session:
+        again = await get_or_create_system_prompt(session, user_id, tmp_path)
+        await session.commit()
+    assert again.id == first_id
+
+    async with factory() as session:
+        rows = (
+            await session.scalars(sa.select(Prompt).where(Prompt.user_id == user_id))
+        ).all()
+    assert len(rows) == 1, "the vendor copy must exist exactly once per user"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_returns_an_edited_copy_unchanged(factory, tmp_path) -> None:
+    """Once the user has edited it, the file is no longer consulted."""
+    from vts.db.repo import Repo
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=user_id, username="prompt-lazy-copy-edited@example.invalid"))
+        await session.commit()
+
+        row = await get_or_create_system_prompt(session, user_id, tmp_path)
+        await Repo(session).update_prompt(
+            user_id, row.id, name=None, system_prompt="my own wording"
+        )
+        await session.commit()
+
+    (tmp_path / "global_prompt.md").write_text("a newer vendor text", encoding="utf-8")
+
+    async with factory() as session:
+        again = await get_or_create_system_prompt(session, user_id, tmp_path)
+    assert again.system_prompt == "my own wording"
