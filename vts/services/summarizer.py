@@ -93,6 +93,45 @@ def _llama_server_base(url: str) -> str:
     return url
 
 
+def _error_detail_from_body(body: bytes, *, max_len: int = 800) -> str:
+    """Same extraction as `_response_error_detail`, from already-read bytes.
+
+    A streamed response cannot be re-read with `.json()`, so an error body
+    arrives as bytes from `aread()`. Reusing the extraction keeps failures
+    readable ("Unsupported parameter: response_format") instead of degrading
+    to a raw byte repr the moment the transport changed.
+    """
+    text = body.decode("utf-8", errors="replace")
+    detail: str | None = None
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        detail = _detail_from_payload(payload)
+    if not detail:
+        detail = text.strip() or "<empty response body>"
+    compact = " ".join(detail.split())
+    if len(compact) > max_len:
+        return compact[: max_len - 3] + "..."
+    return compact
+
+
+def _detail_from_payload(payload: dict[str, Any]) -> str | None:
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        if isinstance(error.get("type"), str):
+            return str(error["type"]).strip()
+    elif isinstance(error, str) and error.strip():
+        return error.strip()
+    elif isinstance(payload.get("message"), str):
+        return str(payload["message"]).strip()
+    return None
+
+
 def _response_error_detail(response: httpx.Response, *, max_len: int = 800) -> str:
     detail: str | None = None
     try:
@@ -346,6 +385,12 @@ def _build_chat_payload(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": temperature,
+        # Every chat completion is streamed. This is not a performance
+        # tweak: with a blocking POST, a client that walks away leaves the
+        # backend generating into a socket nobody reads (measured: 17m38s of
+        # GPU after a 20s client timeout). Streaming makes the disconnect
+        # propagate, so closing the response stops generation upstream.
+        "stream": True,
     }
     if thinking is not None:
         payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
@@ -402,6 +447,31 @@ class LLMClient:
 
     def _client(self, timeout_seconds: int) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout_seconds, headers=self._headers)
+
+    def _stream_client(
+        self, timeout_seconds: int, *, read_timeout: float
+    ) -> httpx.AsyncClient:
+        """Client for streamed completions, with an explicit socket read timeout.
+
+        The reader's three limits (first chunk, idle, ceiling) are all checked
+        when a line arrives, so they can only fire while the stream is
+        producing. If the upstream accepts the connection and then says
+        nothing at all, `async for` never yields and no limit is ever
+        evaluated — the read would hang for as long as the transport allows.
+        The socket-level read timeout is the only thing that can break that
+        deadlock, so it must always be set.
+
+        It is floored at the first-chunk timeout because it also covers model
+        load: a read timeout below that would abort a cold start that our own
+        limit was still willing to wait for, turning a slow load into a hard
+        failure. Connect/write/pool stay on the caller's budget.
+        """
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                float(timeout_seconds), read=max(float(timeout_seconds), read_timeout)
+            ),
+            headers=self._headers,
+        )
 
     async def _list_models(self, *, client: httpx.AsyncClient) -> list[str]:
         endpoint = self.url.rstrip("/") + "/models"
@@ -728,13 +798,22 @@ class LLMClient:
         top_p: float | None = None,
         min_p: float | None = None,
         repeat_penalty: float | None = None,
+        # Accepted for call compatibility but no longer consulted: it governed
+        # the blocking POST's retry loop, and a streamed request must not be
+        # replayed. Recovery before the first chunk comes from the payload
+        # queue; after it, nothing is retried at all (vts-94wf).
         request_attempts: int = 3,
         use_json_format: bool = True,
         thinking: bool | None = None,
         num_ctx: int | None = None,
+        stream_idle_timeout: float = 120.0,
+        stream_first_chunk_timeout: float = 300.0,
+        min_tokens_per_second: float = 3.0,
+        ceiling_slack: float = 1.5,
+        ceiling_floor_seconds: int = 300,
+        ceiling_cap_seconds: int = 3600,
     ) -> str:
         endpoint = self.url.rstrip("/") + "/chat/completions"
-        loading_wait_seconds = _loading_wait_seconds(timeout_seconds, cap_seconds=120.0)
         queue: list[tuple[str, dict[str, Any]]] = []
         seen_payloads: set[str] = set()
 
@@ -773,54 +852,98 @@ class LLMClient:
 
         failures: list[str] = []
         discovered_model_fallback = False
-        async with self._client(timeout_seconds) as client:
+        async with self._stream_client(
+            timeout_seconds, read_timeout=stream_first_chunk_timeout
+        ) as client:
             while queue:
                 label, payload = queue.pop(0)
-                try:
-                    response = await _post_with_transient_retry(
-                        client=client,
-                        endpoint=endpoint,
-                        payload=payload,
-                        loading_wait_seconds=loading_wait_seconds,
-                        max_attempts=request_attempts,
+                ceiling = derive_stream_ceiling(
+                    max_tokens,
+                    min_tokens_per_second=min_tokens_per_second,
+                    slack=ceiling_slack,
+                    floor_seconds=ceiling_floor_seconds,
+                    cap_seconds=ceiling_cap_seconds,
+                )
+
+                def _log_progress(chunks: int, elapsed: float) -> None:
+                    rate = chunks / elapsed if elapsed > 0 else 0.0
+                    logger.info(
+                        "llm stream progress: %s chunks in %.0fs (%.1f chunks/s)",
+                        chunks,
+                        elapsed,
+                        rate,
                     )
+
+                try:
+                    async with client.stream("POST", endpoint, json=payload) as response:
+                        if not response.is_success:
+                            body = await response.aread()
+                            failures.append(
+                                f"{label}: HTTP {response.status_code} "
+                                f"({_error_detail_from_body(body)})"
+                            )
+                            if response.status_code != 400:
+                                raise RuntimeError(
+                                    f"llama chat completion failed for {endpoint}: {failures[-1]}"
+                                )
+                            if not discovered_model_fallback and model.strip():
+                                discovered_model_fallback = True
+                                available_models = await self._list_models(client=client)
+                                if available_models and model not in available_models:
+                                    server_model = available_models[0]
+                                    enqueue(
+                                        f"server_model:{server_model}",
+                                        _build_chat_payload(
+                                            **common,
+                                            model_override=server_model,
+                                            include_response_format=False,
+                                        ),
+                                    )
+                                    if max_tokens is not None:
+                                        enqueue(
+                                            f"server_model:{server_model}:max_completion_tokens",
+                                            _build_chat_payload(
+                                                **common,
+                                                model_override=server_model,
+                                                include_response_format=False,
+                                                max_tokens_key="max_completion_tokens",
+                                            ),
+                                        )
+                            continue
+                        text = await read_sse_stream(
+                            response.aiter_lines(),
+                            first_chunk_timeout=stream_first_chunk_timeout,
+                            idle_timeout=stream_idle_timeout,
+                            ceiling=ceiling,
+                            on_progress=_log_progress,
+                        )
+                except StreamTimeout as exc:
+                    # Deliberately no retry and no fallback: the prompt is
+                    # byte-identical, so a second attempt cannot do better —
+                    # it only burns the GPU (vts-94wf).
+                    logger.warning(
+                        "llm stream %s timeout: %s chunks in %.0fs",
+                        exc.reason,
+                        exc.chunks,
+                        exc.elapsed,
+                    )
+                    raise
                 except Exception as exc:
                     if _is_transient_http_error(exc):
-                        failures.append(f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})")
-                        if isinstance(exc, httpx.TimeoutException):
-                            attempts = "; ".join(failures)
-                            raise RuntimeError(
-                                f"llama chat completion failed after retries for {endpoint}: {attempts}"
-                            ) from exc
+                        failures.append(
+                            f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})"
+                        )
                         continue
                     raise
-                if response.is_success:
-                    data = response.json()
-                    break
-                failures.append(
-                    f"{label}: HTTP {response.status_code} ({_response_error_detail(response)})"
-                )
-                if response.status_code != 400:
-                    _raise_with_response_details(response, context="llama chat completion")
-                if not discovered_model_fallback and model.strip():
-                    discovered_model_fallback = True
-                    available_models = await self._list_models(client=client)
-                    if available_models and model not in available_models:
-                        server_model = available_models[0]
-                        enqueue(f"server_model:{server_model}", _build_chat_payload(**common, model_override=server_model, include_response_format=False))
-                        if max_tokens is not None:
-                            enqueue(f"server_model:{server_model}:max_completion_tokens", _build_chat_payload(**common, model_override=server_model, include_response_format=False, max_tokens_key="max_completion_tokens"))
+                return text
             else:
                 attempts = "; ".join(failures) if failures else "no attempts executed"
                 raise RuntimeError(
                     f"llama chat completion failed after retries for {endpoint}: {attempts}"
                 )
-
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("Invalid llama.cpp response format") from exc
-        return str(content)
+        raise RuntimeError(
+            f"llama chat completion produced no result for {endpoint}"
+        )
 
     async def count_tokens(
         self,
