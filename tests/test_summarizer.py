@@ -727,7 +727,6 @@ def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
             text="one long sentence with no break",
             model="any-model",
             window_tokens=3,
-            overlap_ratio=0.0,
             tokenizer_path="/fake/tokenizer.json",
         )
     )
@@ -763,7 +762,6 @@ def test_chunk_text_packs_whole_sentences_without_overlap() -> None:
                 text=text,
                 model="any-model",
                 window_tokens=25,
-                overlap_ratio=0.15,
                 tokenizer_path="/fake/tokenizer.json",
             )
         )

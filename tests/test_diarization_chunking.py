@@ -115,7 +115,6 @@ async def test_chunk_text_utterance_mode_never_splits_an_utterance() -> None:
         text=text,
         model="m",
         window_tokens=12,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
 
@@ -142,7 +141,6 @@ async def test_chunk_text_utterance_longer_than_window_repeats_label() -> None:
         text=long_utterance,
         model="m",
         window_tokens=10,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
 
@@ -174,7 +172,6 @@ async def test_chunk_text_utterance_longer_than_window_stays_within_budget() -> 
         text=long_utterance,
         model="m",
         window_tokens=window_tokens,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
 
@@ -199,7 +196,6 @@ async def test_chunk_text_packed_window_stays_within_budget() -> None:
         text=text,
         model="m",
         window_tokens=window_tokens,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
     for chunk in chunks:
@@ -231,7 +227,6 @@ async def test_chunk_text_label_at_or_over_window_budget_does_not_hang() -> None
         text=long_utterance,
         model="m",
         window_tokens=window_tokens,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
     assert chunks  # terminates, and produces something
@@ -283,7 +278,6 @@ async def test_chunk_text_utterance_mode_budget_property_fuzz(trial: int) -> Non
         text=text,
         model="m",
         window_tokens=window_tokens,
-        overlap_ratio=0.15,
         split_on_utterances=True,
     )
     for chunk in chunks:
@@ -327,3 +321,217 @@ def test_split_utterances_conserves_text_from_the_real_renderer() -> None:
         cleaned = drop_marginal_speakers(entries, 0.0)
         rendered = render_cleaned_transcript(cleaned, label_map(cleaned))
         assert "\n\n".join(split_utterances(rendered)) == rendered, rendered
+
+
+# ---------------------------------------------------------------------------
+# Regression: a sentence must never be given a fabricated speaker label.
+# ---------------------------------------------------------------------------
+
+
+async def test_long_sentence_does_not_get_a_fabricated_speaker_label() -> None:
+    """_pack_units serves both granularities, so label detection must not be
+    left to _split_long_utterance.
+
+    _UTTERANCE_RE deliberately matches a <=3-word prose opening ("Итак: ",
+    "Вывод: ", "Например: ") because that is indistinguishable from a
+    one-word speaker name. On the diarized path that is a fair trade. On the
+    undiarized path there is no speaker at all, so detecting a label locally
+    turns the first words of a long sentence into a speaker name repeated
+    across EVERY continuation chunk — reintroducing, synthetically, the exact
+    duplication that packing whole sentences exists to remove, and telling
+    the model this monologue is a dialogue with someone called "Итак".
+    """
+    from vts.services.summarizer import LLMClient
+
+    client = LLMClient(url="http://llama.local/v1")
+    fake = _FakeTokenizer()
+    client.tokenize = fake.tokenize
+    client.detokenize = fake.detokenize
+
+    # One sentence (no ".!?" inside) far longer than the window, opening with
+    # a prose word + colon that _UTTERANCE_RE matches.
+    text = "Итак: " + " ".join(["слово"] * 200)
+    chunks = await client.chunk_text(
+        text=text,
+        model="m",
+        window_tokens=10,
+        split_on_utterances=False,
+    )
+
+    assert len(chunks) > 1, "the window was too small to hold the sentence in one chunk"
+    injected = [c for c in chunks if c.startswith("Итак:")]
+    # "Итак:" occurs once in the source, so at most the chunk that genuinely
+    # contains the opening may start with it — never every chunk.
+    assert len(injected) <= 1, (
+        f"{len(injected)} of {len(chunks)} chunks were given a fabricated 'Итак:' label"
+    )
+
+
+async def test_diarized_long_utterance_still_repeats_its_real_label() -> None:
+    """The other half of the same contract: moving label detection out of
+    _split_long_utterance must not stop a real speaker label from being
+    carried into every continuation, or a monologue's tail is attributed to
+    whoever spoke before it."""
+    from vts.services.summarizer import LLMClient
+
+    client = LLMClient(url="http://llama.local/v1")
+    fake = _FakeTokenizer()
+    client.tokenize = fake.tokenize
+    client.detokenize = fake.detokenize
+
+    text = "Голос 1: " + " ".join(["слово"] * 60)
+    chunks = await client.chunk_text(
+        text=text,
+        model="m",
+        window_tokens=10,
+        split_on_utterances=True,
+    )
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk.startswith("Голос 1:"), f"lost speaker attribution: {chunk!r}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: the chunking splitter must not break on abbreviations.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Мы обсудили т.е. договорились.",
+        "Пришли А. Б. Иванов и т.д.",
+        "Смотри стр. 15 в документе.",
+        "Это стоит 1. 5 млн",
+        "См. рис. 4 на следующей странице.",
+        "We asked Dr. Smith about it.",
+    ],
+)
+def test_chunking_splitter_keeps_abbreviations_in_one_unit(text: str) -> None:
+    """A packing unit is what a window boundary may fall between, so a false
+    boundary inside an abbreviation can hand the model "Мы обсудили т.е." at
+    the end of one window and "договорились." at the start of the next. The
+    metrics splitter (vts.metrics.quality.split_sentences) breaks on all of
+    these; the chunking splitter must not."""
+    from vts.services.summarizer import split_sentences_for_chunking
+
+    assert split_sentences_for_chunking(text) == [text]
+
+
+def test_chunking_splitter_still_splits_real_sentences() -> None:
+    """Suppressing false boundaries must not suppress real ones, or packing
+    degenerates to one giant unit that is then cut by tokens."""
+    from vts.services.summarizer import split_sentences_for_chunking
+
+    assert split_sentences_for_chunking("Первое. Второе! Третье?") == [
+        "Первое.",
+        "Второе!",
+        "Третье?",
+    ]
+    assert split_sentences_for_chunking("Абзац один.\n\nАбзац два.") == [
+        "Абзац один.",
+        "Абзац два.",
+    ]
+
+
+async def test_abbreviation_is_not_torn_across_a_window_boundary() -> None:
+    """End-to-end form of the same defect: with the metrics splitter,
+    "т.е." and "договорились." are separate units, so a window boundary can
+    fall between them."""
+    from vts.services.summarizer import LLMClient
+
+    client = LLMClient(url="http://llama.local/v1")
+    fake = _FakeTokenizer()
+    client.tokenize = fake.tokenize
+    client.detokenize = fake.detokenize
+
+    text = "Раз два три четыре пять. Мы обсудили т.е. договорились. Шесть семь восемь."
+    # window_tokens=8 is exactly the size at which a false boundary after
+    # "т.е." gives the packer somewhere to cut: with the naive splitter the
+    # windows come back as ["Раз ... пять. Мы обсудили т.е.",
+    # "договорились. Шесть семь восемь."] — a truncated clause handed to the
+    # model, and its continuation in the next window.
+    chunks = await client.chunk_text(
+        text=text,
+        model="m",
+        window_tokens=8,
+        split_on_utterances=False,
+    )
+
+    assert any("т.е. договорились." in chunk for chunk in chunks), (
+        f"the clause was torn across windows: {chunks!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: remote tokenization must not be one sequential round-trip per unit.
+# ---------------------------------------------------------------------------
+
+
+async def test_remote_tokenization_runs_concurrently_not_one_at_a_time() -> None:
+    """Packing needs a count per unit, so the call count is inherently n.
+    What must not happen is n SEQUENTIAL HTTP round-trips: llm_tokenizer_path
+    defaults to None, so the shipped configuration tokenizes over HTTP, and a
+    388k-character transcript is ~3000 calls — minutes of pure latency if
+    they are serialized.
+    """
+    import asyncio as _asyncio
+
+    from vts.services.summarizer import LLMClient
+
+    client = LLMClient(url="http://llama.local/v1")
+    in_flight = 0
+    peak = 0
+
+    async def slow_tokenize(*, model: str, text: str, tokenizer_path: str | None = None) -> list[int]:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await _asyncio.sleep(0)
+            await _asyncio.sleep(0)
+            return list(range(len(text.split())))
+        finally:
+            in_flight -= 1
+
+    client.tokenize = slow_tokenize
+    client.detokenize = _FakeTokenizer().detokenize
+
+    text = " ".join(f"Предложение номер {i} тут." for i in range(64))
+    await client.chunk_text(
+        text=text,
+        model="m",
+        window_tokens=50,
+        tokenizer_path=None,
+        split_on_utterances=False,
+    )
+
+    assert peak > 1, "remote tokenize calls were issued strictly one at a time"
+
+
+async def test_local_tokenizer_path_is_still_used_for_every_unit() -> None:
+    """The concurrency change must not skip or reuse counts: with a local
+    tokenizer each unit is still measured exactly once, in order."""
+    from vts.services.summarizer import LLMClient
+
+    client = LLMClient(url="http://llama.local/v1")
+    seen: list[str] = []
+
+    async def recording_tokenize(*, model: str, text: str, tokenizer_path: str | None = None) -> list[int]:
+        assert tokenizer_path == "/fake/tok.json"
+        seen.append(text)
+        return list(range(len(text.split())))
+
+    client.tokenize = recording_tokenize
+    client.detokenize = _FakeTokenizer().detokenize
+
+    await client.chunk_text(
+        text="Первое. Второе. Третье.",
+        model="m",
+        window_tokens=50,
+        tokenizer_path="/fake/tok.json",
+        split_on_utterances=False,
+    )
+
+    assert seen == ["Первое.", "Второе.", "Третье."]

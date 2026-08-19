@@ -12,10 +12,14 @@ from typing import Any
 
 import httpx
 
-from vts.metrics.quality import split_sentences
 from vts.services.diarization.merge import LABEL_WORDS
 
 logger = logging.getLogger(__name__)
+
+# How many tokenize round-trips may be in flight at once when the tokenizer
+# is remote. Bounded so a long transcript cannot open thousands of sockets
+# against llama.cpp at once; see `_tokenize_all`.
+_TOKENIZE_CONCURRENCY = 16
 
 # Utterances rendered by the diarization merge (render_cleaned_transcript in
 # vts.services.diarization.merge) start with "<label> N: " only at the very
@@ -69,6 +73,107 @@ def split_utterances(text: str) -> list[str]:
     # crosstalk would silently never reach the summary.
     bounds = ([0] if starts[0] else []) + starts + [len(text)]
     return [text[bounds[i] : bounds[i + 1]].strip() for i in range(len(bounds) - 1)]
+
+
+# Sentence splitting for chunking (deliberately NOT vts.metrics.quality.
+# split_sentences). The metrics splitter breaks on every ".!?…" + whitespace,
+# which is fine for redundancy statistics — a few extra fragments barely move a
+# ratio — but wrong for chunking, where every fragment is a packing unit and a
+# false boundary that lands on a window edge hands the model a truncated clause
+# at the end of one window and its continuation at the start of the next.
+#
+# Measured false splits from the metrics splitter:
+#   "Мы обсудили т.е. договорились."  -> ["Мы обсудили т.е.", "договорились."]
+#   "Пришли А. Б. Иванов и т.д."      -> ["Пришли А.", "Б.", "Иванов и т.д."]
+#   "Смотри стр. 15 в документе."     -> ["Смотри стр.", "15 в документе."]
+#   "Это стоит 1. 5 млн"              -> ["Это стоит 1.", "5 млн"]
+#
+# The metrics splitter is left untouched: it is used for quality metrics, where
+# its behaviour is established and changing it would silently shift recorded
+# numbers.
+#
+# Common Russian/English abbreviations that end in a period without ending a
+# sentence. Compared case-insensitively against the whitespace-delimited word
+# immediately before the candidate boundary.
+_ABBREVIATIONS = frozenset(
+    {
+        # Russian
+        "т.е.", "т.д.", "т.п.", "т.к.", "т.н.", "и.о.", "др.", "пр.",
+        "см.", "ср.", "стр.", "рис.", "табл.", "гл.", "п.", "пп.", "ст.",
+        "рус.", "англ.", "г.", "гг.", "в.", "вв.", "руб.", "коп.", "тыс.",
+        "млн.", "млрд.", "проф.", "доц.", "акад.", "им.", "ул.", "д.", "кв.",
+        "обл.", "респ.", "тел.", "напр.", "прим.", "изд.", "ок.", "мин.",
+        "сек.", "ч.", "мес.",
+        # English
+        "e.g.", "i.e.", "etc.", "vs.", "mr.", "mrs.", "ms.", "dr.", "prof.",
+        "st.", "fig.", "no.", "vol.", "pp.", "approx.", "inc.", "ltd.", "co.",
+        "jr.", "sr.", "cf.", "al.",
+    }
+)
+
+# A candidate boundary: sentence-ending punctuation followed by whitespace, or
+# a blank line. The trailing whitespace is consumed so the pieces come back
+# stripped, exactly as the metrics splitter returns them.
+_CHUNK_SENT_SEP = re.compile(r"(?<=[.!?…])\s+|\n{2,}")
+
+# A single capital letter plus a period is an initial ("А.", "Б.", "J."), not a
+# sentence end. Written against the last whitespace-delimited word so
+# "Иванов А." matches on "А." alone.
+_INITIAL_RE = re.compile(r"^[^\W\d_]\.$", re.UNICODE)
+
+# A bare number plus a period is a list marker or a split decimal ("1. 5 млн"),
+# not a sentence end.
+_NUMBER_DOT_RE = re.compile(r"^\d+\.$")
+
+
+def _is_false_boundary(preceding: str) -> bool:
+    """True when the text before a candidate boundary does not end a sentence.
+
+    `preceding` is the text up to and including the boundary punctuation.
+    Only "." can be an abbreviation or an initial; "!", "?" and "…" always
+    end a sentence, so they are never suppressed.
+    """
+    if not preceding.endswith("."):
+        return False
+    word = preceding.rsplit(None, 1)[-1] if preceding.split() else ""
+    if not word:
+        return False
+    lowered = word.lower()
+    if lowered in _ABBREVIATIONS:
+        return True
+    # A single letter plus a period is an initial ("Иванов А. Б.") or the tail
+    # of a spaced-out abbreviation: "и т.д." is one word only when written
+    # without spaces, and a speaker who writes "и т. д." leaves a bare "д." as
+    # the last word. Neither ends a sentence.
+    if _INITIAL_RE.match(word):
+        return True
+    if _NUMBER_DOT_RE.match(word):
+        return True
+    return False
+
+
+def split_sentences_for_chunking(text: str) -> list[str]:
+    """Split text into packing units, keeping abbreviations intact.
+
+    Unlike the metrics splitter this suppresses boundaries after known
+    abbreviations, initials and numeric list markers, because here a false
+    boundary can land on a window edge and truncate a clause.
+    """
+    if not text.strip():
+        return []
+    pieces: list[str] = []
+    start = 0
+    for match in _CHUNK_SENT_SEP.finditer(text):
+        if _is_false_boundary(text[start : match.start()]):
+            continue
+        piece = text[start : match.start()].strip()
+        if piece:
+            pieces.append(piece)
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        pieces.append(tail)
+    return pieces
 
 
 @lru_cache(maxsize=4)
@@ -792,10 +897,17 @@ class LLMClient:
         text: str,
         model: str,
         window_tokens: int = 2000,
-        overlap_ratio: float = 0.15,
         tokenizer_path: str | None = None,
         split_on_utterances: bool = False,
     ) -> list[str]:
+        # There is no `overlap_ratio`: chunking packs whole units and never
+        # overlaps them. An overlap existed to stitch context torn mid-sentence
+        # by a sliding token window; packing whole sentences tears nothing, so
+        # an overlap would only duplicate text. On the segment stage that
+        # duplication is visible in the output — the stage cleans sentence by
+        # sentence rather than summarizing, so a passage processed twice
+        # appears twice. Measured on production 2026-08-19: 585 characters,
+        # 14.7% of one window, repeated verbatim from the previous one.
         if not text.strip():
             return []
         if split_on_utterances:
@@ -805,20 +917,13 @@ class LLMClient:
                 window_tokens=window_tokens,
                 tokenizer_path=tokenizer_path,
             )
-        # `overlap_ratio` is accepted for call compatibility but no longer
-        # used. It existed to stitch context torn mid-sentence by a token
-        # window; packing whole sentences tears nothing, so the overlap would
-        # only duplicate text. On the segment stage that duplication is
-        # visible in the output — the stage cleans sentence by sentence rather
-        # than summarizing, so a passage processed twice appears twice.
-        # Measured on production 2026-08-19: 585 characters, 14.7% of one
-        # window, repeated verbatim from the previous one.
         return await self._pack_units(
-            units=split_sentences(text),
+            units=split_sentences_for_chunking(text),
             model=model,
             window_tokens=window_tokens,
             tokenizer_path=tokenizer_path,
             joiner=" ",
+            labeled=False,
         )
 
     async def _pack_units(
@@ -829,6 +934,7 @@ class LLMClient:
         window_tokens: int,
         tokenizer_path: str | None,
         joiner: str,
+        labeled: bool,
     ) -> list[str]:
         """Pack whole units into windows without overlap.
 
@@ -840,22 +946,36 @@ class LLMClient:
         difference is what counts as indivisible, and how the pieces are
         joined back together.
 
+        `labeled` says whether a unit may carry a speaker label. Only the
+        diarized path sets it. A sentence never carries one, and the label
+        regex deliberately matches short prose openings ("Итак: ", "Вывод: ")
+        — see the `_NAME_LABEL` comment — so letting the sentence path detect
+        labels for itself would prepend a fabricated speaker name to every
+        continuation of a long sentence.
+
         A unit longer than the whole window is cut by tokens as a last resort
         (`_split_long_utterance`), which is the one place a tear is
         unavoidable.
         """
+        sizes = await self._tokenize_all(
+            texts=units, model=model, tokenizer_path=tokenizer_path
+        )
+
         chunks: list[str] = []
         current: list[str] = []
         current_tokens = 0
 
-        for unit in units:
-            tokens = await self.tokenize(model=model, text=unit, tokenizer_path=tokenizer_path)
+        for unit, tokens in zip(units, sizes, strict=True):
             size = len(tokens)
 
             if size > window_tokens:
                 if current:
                     chunks.append(joiner.join(current))
                     current, current_tokens = [], 0
+                label = ""
+                if labeled:
+                    match = _UTTERANCE_RE.match(unit)
+                    label = match.group(0) if match else ""
                 chunks.extend(
                     await self._split_long_utterance(
                         utterance=unit,
@@ -863,6 +983,7 @@ class LLMClient:
                         model=model,
                         window_tokens=window_tokens,
                         tokenizer_path=tokenizer_path,
+                        label=label,
                     )
                 )
                 continue
@@ -892,7 +1013,50 @@ class LLMClient:
             window_tokens=window_tokens,
             tokenizer_path=tokenizer_path,
             joiner="\n\n",
+            labeled=True,
         )
+
+    async def _tokenize_all(
+        self,
+        *,
+        texts: list[str],
+        model: str,
+        tokenizer_path: str | None,
+    ) -> list[list[int]]:
+        """Tokenize every unit, in bounded-concurrency waves when remote.
+
+        Packing needs a token count per unit, and counts are not additive
+        across a boundary, so there is no way to derive them from one call over
+        the joined text. With `tokenizer_path` set the tokenizer is a local BPE
+        and the calls are cheap function calls, so they run in order.
+
+        Without it, `tokenize` is an HTTP round-trip to llama.cpp — and
+        `llm_tokenizer_path` defaults to None, so this is the shipped
+        configuration, not an edge case. One call per sentence is thousands of
+        SEQUENTIAL round-trips (measured: 3000 for a 388k-character
+        transcript), which is minutes of pure latency. Issuing them in waves
+        turns that into (n / _TOKENIZE_CONCURRENCY) round-trip times while
+        keeping each unit's count exact. The wave is bounded rather than
+        unbounded so a long transcript cannot open thousands of sockets at
+        once and be throttled or refused by the server.
+        """
+        if tokenizer_path:
+            return [
+                await self.tokenize(model=model, text=text, tokenizer_path=tokenizer_path)
+                for text in texts
+            ]
+        results: list[list[int]] = []
+        for start in range(0, len(texts), _TOKENIZE_CONCURRENCY):
+            wave = texts[start : start + _TOKENIZE_CONCURRENCY]
+            results.extend(
+                await asyncio.gather(
+                    *(
+                        self.tokenize(model=model, text=text, tokenizer_path=tokenizer_path)
+                        for text in wave
+                    )
+                )
+            )
+        return results
 
     async def _split_long_utterance(
         self,
@@ -902,12 +1066,21 @@ class LLMClient:
         model: str,
         window_tokens: int,
         tokenizer_path: str | None,
+        label: str,
     ) -> list[str]:
-        """Cut an over-long utterance by tokens, repeating its label.
+        """Cut an over-long unit by tokens, repeating the caller's label.
 
         A ten-minute monologue inside a meeting cannot fit a window, so the
         budget wins — but every continuation carries the label, or the tail
         would be attributed to whoever spoke before.
+
+        The label is supplied by the caller, never detected here: this
+        function serves both an utterance (which has a speaker label) and a
+        sentence (which does not). `_UTTERANCE_RE` matches short prose
+        openings such as "Итак: " or "Вывод: " by design, so detecting the
+        label locally would turn the first words of a long sentence into a
+        fabricated speaker name repeated across every continuation — the
+        undiarized path passes "".
 
         The label is prepended as extra text after detokenizing the body, so
         its tokens must be charged against window_tokens BEFORE slicing —
@@ -926,8 +1099,6 @@ class LLMClient:
         (label >= window) since there is no way to satisfy the budget and
         keep the label whole at the same time.
         """
-        match = _UTTERANCE_RE.match(utterance)
-        label = match.group(0) if match else ""
         label_tokens = (
             len(await self.tokenize(model=model, text=label, tokenizer_path=tokenizer_path))
             if label

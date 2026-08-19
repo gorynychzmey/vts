@@ -679,7 +679,6 @@ class PrepareSummaryChunksStep(Step):
                 text=transcript,
                 model=ctx.settings.llm_model,
                 window_tokens=window_tokens,
-                overlap_ratio=0.15,
                 tokenizer_path=tokenizer_path(ctx.settings),
                 split_on_utterances=diarized,
             )
@@ -950,7 +949,6 @@ class SummarizeWindowsStep(Step):
                     text=chunks[0],
                     model=ctx.settings.llm_model,
                     window_tokens=window_tokens,
-                    overlap_ratio=0.15,
                     tokenizer_path=tokenizer_path(ctx.settings),
                     split_on_utterances=diarized,
                 )
