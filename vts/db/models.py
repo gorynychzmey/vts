@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -187,13 +188,30 @@ class Prompt(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # True for a user's copy of a vendor prompt, False for one they wrote.
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    # Answers one question: when did the *user* change this? NULL means never,
+    # which is how the startup refresh tells an untouched vendor copy from an
+    # edited one. Deliberately carries no default and no onupdate — a default
+    # would override the NULL a fresh system copy needs, and the workaround
+    # (a Core insert) breaks silently the moment someone writes session.add()
+    # instead. Every write site sets it explicitly.
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     __table_args__ = (
         Index("ix_prompts_user_created", "user_id", "created_at"),
+        # One vendor copy per user. Without this, the API and the worker
+        # creating the copy at the same moment both succeed and the user sees
+        # a duplicate.
+        Index(
+            "ix_prompts_one_system_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=sa.text("is_system"),
+        ),
     )
 
 
