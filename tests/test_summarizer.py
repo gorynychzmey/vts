@@ -1229,3 +1229,24 @@ def test_chat_completion_read_timeout_does_not_inherit_the_request_budget(
     assert timeout.read == 300.0
     # The whole-request budget still governs connect/write/pool.
     assert timeout.connect == 1200.0
+
+
+def test_stream_kwargs_helper_reads_settings() -> None:
+    from vts.pipeline.steps.summarization import stream_kwargs
+
+    class _S:
+        llm_stream_idle_timeout_seconds = 90
+        llm_stream_first_chunk_timeout_seconds = 200
+        llm_min_tokens_per_second = 5.0
+        llm_ceiling_slack_multiplier = 2.0
+        llm_ceiling_floor_seconds = 100
+        llm_ceiling_cap_seconds = 900
+
+    assert stream_kwargs(_S()) == {
+        "stream_idle_timeout": 90.0,
+        "stream_first_chunk_timeout": 200.0,
+        "min_tokens_per_second": 5.0,
+        "ceiling_slack": 2.0,
+        "ceiling_floor_seconds": 100,
+        "ceiling_cap_seconds": 900,
+    }

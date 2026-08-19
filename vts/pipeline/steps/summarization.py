@@ -128,6 +128,24 @@ def tokenizer_path(settings: Settings) -> str | None:
     return str(p) if p is not None else None
 
 
+def stream_kwargs(settings: Settings) -> dict[str, float | int]:
+    """Streaming limits for one `chat_completion` call.
+
+    Collected in one place because all four call sites pass the same six
+    values; threading them individually would be six chances to diverge.
+    """
+    return {
+        "stream_idle_timeout": float(settings.llm_stream_idle_timeout_seconds),
+        "stream_first_chunk_timeout": float(
+            settings.llm_stream_first_chunk_timeout_seconds
+        ),
+        "min_tokens_per_second": float(settings.llm_min_tokens_per_second),
+        "ceiling_slack": float(settings.llm_ceiling_slack_multiplier),
+        "ceiling_floor_seconds": int(settings.llm_ceiling_floor_seconds),
+        "ceiling_cap_seconds": int(settings.llm_ceiling_cap_seconds),
+    }
+
+
 async def count_tokens(
     ctx: "PipelineContext", text: str, *, timeout_seconds: int
 ) -> int:
@@ -530,6 +548,7 @@ class PrepareLlamaModelStep(Step):
                     min_p=ctx.settings.llm_min_p,
                     repeat_penalty=ctx.settings.llm_repeat_penalty,
                     thinking=ctx.settings.llm_thinking,
+                    **stream_kwargs(ctx.settings),
                 )
             log_payload(st.logger, "llama warmup response", raw)
         except Exception as exc:
@@ -846,6 +865,7 @@ class SummarizeWindowsStep(Step):
                                 use_json_format=False,
                                 thinking=ctx.settings.llm_thinking,
                                 num_ctx=budget_cfg.n_ctx,
+                                **stream_kwargs(ctx.settings),
                             )
                         except RuntimeError as exc:
                             if whole_mode and is_context_overflow_error(str(exc)):
@@ -1113,6 +1133,7 @@ class PackWindowNotesStep(Step):
                             use_json_format=False,
                             thinking=ctx.settings.llm_thinking,
                             num_ctx=budget_cfg.n_ctx,
+                            **stream_kwargs(ctx.settings),
                         )
                     packed_tc = await count_tokens(ctx, packed_text, timeout_seconds=timeout_seconds)
                     log_metrics(st.logger, SummarizationMetrics(
@@ -1343,6 +1364,7 @@ class FinalizePromptStep(Step):
                 use_json_format=False,
                 thinking=ctx.settings.llm_thinking,
                 num_ctx=budget_cfg.n_ctx,
+                **stream_kwargs(ctx.settings),
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 

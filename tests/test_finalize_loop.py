@@ -135,6 +135,12 @@ def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None
         llm_api_key=None,
         llm_tokenizer_path=None,
         llm_final_timeout_seconds=120,
+        llm_stream_idle_timeout_seconds=120,
+        llm_stream_first_chunk_timeout_seconds=300,
+        llm_min_tokens_per_second=3.0,
+        llm_ceiling_slack_multiplier=1.5,
+        llm_ceiling_floor_seconds=300,
+        llm_ceiling_cap_seconds=3600,
     )
 
     session_factory = lambda: _StubSession()
