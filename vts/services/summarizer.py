@@ -280,7 +280,11 @@ async def read_sse_stream(
             on_progress(chunks, now - started)
 
     now = clock()
-    if not chunks and now - last_seen > first_chunk_timeout:
+    if not chunks:
+        # The stream ended without a single content chunk — whether that took
+        # 0s (empty body, upstream cut the connection immediately) or the full
+        # timeout, it is never a valid empty completion. Silently returning ""
+        # here would let a stalled or broken upstream look like success.
         raise StreamTimeout("first_chunk", chunks=0, elapsed=now - started)
     return "".join(buffer)
 

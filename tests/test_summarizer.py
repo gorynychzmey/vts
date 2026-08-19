@@ -763,19 +763,64 @@ def test_read_sse_stream_fails_on_idle_gap() -> None:
 
 
 def test_read_sse_stream_fails_when_first_chunk_never_arrives() -> None:
+    """Keep-alive comments must not look like progress.
+
+    A backend stuck loading the model but still emitting SSE comments (or a
+    reverse proxy sending its own keep-alives) is indistinguishable from a
+    dead connection unless non-content lines are barred from resetting the
+    idle clock. The three-yield shape and the `elapsed` assertion below both
+    exist to catch a regression where a non-content line resets `last_seen`:
+    under that bug the per-line check at the third yield (200s since the
+    second) would no longer see the full 400s gap and would not fire there,
+    so the raise would only happen once the generator is exhausted — later,
+    and for a different elapsed value than asserted here.
+    """
     from vts.services.summarizer import StreamTimeout, read_sse_stream
 
     clock = _FakeClock()
 
     async def slow_start() -> "AsyncIterator[str]":
         yield ": keep-alive"
-        clock.now += 400.0  # longer than first_chunk_timeout
+        clock.now += 200.0  # under first_chunk_timeout
+        yield ": keep-alive"  # a last_seen reset here would mask the stall
+        clock.now += 200.0  # 400 total > 300, but only 200 since the reset
         yield ": keep-alive"
+        # Only reached if the bug above swallows the timeout at the previous
+        # line: proves the raise fires there, not later during exhaustion.
+        raise AssertionError("must have raised StreamTimeout before this line")
 
     with pytest.raises(StreamTimeout) as excinfo:
         asyncio.run(
             read_sse_stream(
                 slow_start(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "first_chunk"
+    assert excinfo.value.chunks == 0
+    assert excinfo.value.elapsed == 400.0
+
+
+def test_read_sse_stream_fails_when_stream_ends_without_any_chunk() -> None:
+    """An immediately-empty stream must never be reported as success.
+
+    HTTP 200 with an empty body, an upstream that cuts the connection right
+    away, or a proxy returning nothing all look the same here: the generator
+    ends having yielded no content. That must raise, not return "" — an empty
+    summarization silently stored as a successful result is worse than a
+    loud failure.
+    """
+    from vts.services.summarizer import StreamTimeout, read_sse_stream
+
+    clock = _FakeClock()
+
+    with pytest.raises(StreamTimeout) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                _lines("data: [DONE]"),
                 first_chunk_timeout=300,
                 idle_timeout=120,
                 ceiling=6000,
