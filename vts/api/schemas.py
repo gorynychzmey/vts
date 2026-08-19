@@ -24,6 +24,9 @@ class PromptOut(BaseModel):
     id: str
     name: str
     editable: bool
+    # True for the user's copy of a vendor prompt: the editor offers "Restore"
+    # instead of "Delete" for it.
+    is_system: bool = False
 
 
 class PromptDetailOut(BaseModel):

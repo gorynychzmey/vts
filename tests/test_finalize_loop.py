@@ -77,6 +77,17 @@ class _StubPrompt:
 
 
 class _StubSession:
+    """Stand-in session that already holds the user's system-prompt copy.
+
+    `SystemPromptSource.load_text` reads the user's DB row now, not the file
+    (vts-kujy), so the stub has to answer that SELECT. It returns a row whose
+    text differs from the stubbed `load_prompt` output, which is what makes
+    "the prompt came from the copy" an observable claim rather than a
+    coincidence.
+    """
+
+    system_prompt_text = "SYSTEM PROMPT"
+
     async def __aenter__(self) -> "_StubSession":
         return self
 
@@ -88,6 +99,12 @@ class _StubSession:
 
     async def flush(self) -> None:
         return None
+
+    async def scalars(self, *args: object, **kwargs: object) -> object:
+        row = _StubPrompt(
+            uuid.uuid4(), uuid.uuid4(), "Summary", self.system_prompt_text
+        )
+        return SimpleNamespace(first=lambda: row, one=lambda: row)
 
 
 def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None):
@@ -246,13 +263,36 @@ def test_prompt_source_for_returns_expected_impl() -> None:
     assert isinstance(prompt_source_for("user"), UserPromptSource)
 
 
-def test_system_prompt_source_load_text_uses_registry(tmp_path: Path, monkeypatch) -> None:
+def test_system_prompt_source_load_text_uses_the_users_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The registry still resolves the key, but the text comes from the DB copy.
+
+    `load_prompt` is stubbed to "FILE TEXT" here: if the call site regressed to
+    reading the file, that is what would come back.
+    """
     task = _StubTask({})
     ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task)
+    # After `_make_ctx`, which stubs `load_prompt` to "SYSTEM PROMPT" itself.
+    monkeypatch.setattr(
+        "vts.pipeline.steps.summarization.load_prompt", lambda *a, **k: "FILE TEXT"
+    )
     text = asyncio.run(
         SystemPromptSource().load_text(ctx, "summary", "en", str(uuid.uuid4()))
     )
-    assert text == "SYSTEM PROMPT"
+    assert text == _StubSession.system_prompt_text
+    assert text != "FILE TEXT"
+
+
+def test_system_prompt_source_rejects_an_unknown_key(tmp_path: Path, monkeypatch) -> None:
+    """The registry lookup still gates the call: an unknown key is an error,
+    not a silent fall-through to whatever copy the user happens to have."""
+    task = _StubTask({})
+    ctx = _make_ctx(tmp_path, monkeypatch, llm_output="x", task=task)
+    with pytest.raises(RuntimeError, match="unknown system prompt"):
+        asyncio.run(
+            SystemPromptSource().load_text(ctx, "nope", "en", str(uuid.uuid4()))
+        )
 
 
 def test_user_prompt_source_load_text_loads_from_db(tmp_path: Path, monkeypatch) -> None:

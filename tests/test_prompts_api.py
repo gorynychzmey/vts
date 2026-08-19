@@ -36,14 +36,45 @@ def test_prompt_create_request_validates():
 
 
 @pytest.mark.asyncio
-async def test_prompts_list_includes_system_summary(client):
+async def test_prompts_list_returns_the_system_copy_as_an_editable_user_row(client):
+    """The vendor prompt is the user's own row now, not a separate entry.
+
+    It used to be listed as `source="system", editable=False`, unreachable by
+    the edit endpoints. Since vts-kujy it is a normal user row the editor can
+    write to, told apart only by `is_system` — which is what lets the UI offer
+    "Restore" instead of "Delete" for it.
+    """
+    # Reading the text is what materialises the copy for a user who has never
+    # had one; the list endpoint only reports rows that already exist.
+    assert (await client.get("/api/prompts/system/summary/text")).status_code == 200
+
     resp = await client.get("/api/prompts")
     assert resp.status_code == 200
     body = resp.json()
-    assert any(p["source"] == "system" and p["id"] == "summary" for p in body)
-    summary = next(p for p in body if p["id"] == "summary")
-    assert summary["editable"] is False
+
+    assert not any(p["source"] == "system" for p in body), (
+        "the system prompt must no longer be served as a separate non-user entry"
+    )
+    system_rows = [p for p in body if p["is_system"]]
+    assert len(system_rows) == 1
+    summary = system_rows[0]
+    assert summary["source"] == "user"
+    assert summary["editable"] is True
     assert summary["name"] == "Summary"
+    uuid.UUID(summary["id"])  # a real row id, not the "summary" registry key
+
+
+@pytest.mark.asyncio
+async def test_prompts_list_marks_an_ordinary_prompt_as_not_system(client):
+    """`is_system` is the frontend's only way to tell the two cases apart, so a
+    prompt the user wrote must not carry it."""
+    created = (await client.post("/api/prompts",
+               json={"name": "Mine", "system_prompt": "Do X"})).json()
+    assert created["is_system"] is False
+
+    listed = (await client.get("/api/prompts")).json()
+    mine = next(p for p in listed if p["id"] == created["id"])
+    assert mine["is_system"] is False
 
 
 @pytest.mark.asyncio

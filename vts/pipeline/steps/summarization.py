@@ -451,14 +451,17 @@ class SystemPromptSource:
         sysdef = next((p for p in list_system_prompts() if p.key == id), None)
         if sysdef is None:
             raise RuntimeError(f"unknown system prompt: {id}")
-        return render_prompt_with_language(
-            load_prompt(
-                ctx.settings.prompts_dir,
-                sysdef.file,
-                "Produce a structured knowledge document from the notes.\n\nOutput language: ${LANG}.",
-            ),
-            output_language,
-        )
+        # The user's copy, not the file: they may have edited it, and the copy
+        # is created here if this is their first summary (vts-kujy).
+        from vts.services.system_prompt import get_or_create_system_prompt
+
+        async with ctx.session_factory() as session:
+            prompt = await get_or_create_system_prompt(
+                session, uuid.UUID(str(user_id)), ctx.settings.prompts_dir
+            )
+            text = prompt.system_prompt
+            await session.commit()
+        return render_prompt_with_language(text, output_language)
 
     async def display_name(self, ctx, id, user_id) -> str:
         sysdef = next((p for p in list_system_prompts() if p.key == id), None)
@@ -1024,16 +1027,19 @@ class PackWindowNotesStep(Step):
         timeout_seconds = int(getattr(ctx.settings, "llm_final_timeout_seconds", 1800))
         budget_cfg = token_budget_config(ctx.settings, await ctx.get_n_ctx(st.task_id, st.logger))
 
-        # Load final prompt to measure its token cost
+        # Load final prompt to measure its token cost. It has to be the user's
+        # own copy: an edited prompt of a different length changes the budget
+        # left for the notes, so measuring the file would misbudget the pack.
+        from vts.services.system_prompt import get_or_create_system_prompt
+
+        async with ctx.session_factory() as session:
+            _sys_prompt = await get_or_create_system_prompt(
+                session, uuid.UUID(str(st.user_id)), ctx.settings.prompts_dir
+            )
+            _sys_text = _sys_prompt.system_prompt
+            await session.commit()
         final_prompt_text = render_prompt_vars(
-            render_prompt_with_language(
-                load_prompt(
-                    ctx.settings.prompts_dir,
-                    "global_prompt.md",
-                    "Produce a structured knowledge document from the notes.",
-                ),
-                output_language,
-            ),
+            render_prompt_with_language(_sys_text, output_language),
         )
         final_prompt_tokens = await count_tokens(ctx, final_prompt_text, timeout_seconds=timeout_seconds)
         st.logger.info(

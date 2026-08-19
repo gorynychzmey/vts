@@ -166,14 +166,20 @@ async def list_prompts_endpoint(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> list[PromptOut]:
-    from vts.services.prompt_registry import list_system_prompts
-    out: list[PromptOut] = [
-        PromptOut(source="system", id=p.key, name=p.display_name, editable=False)
-        for p in list_system_prompts()
-    ]
+    # The vendor prompt is no longer listed separately: it is one of the user's
+    # own rows now, flagged `is_system` (vts-kujy).
     repo = Repo(session)
+    out: list[PromptOut] = []
     for row in await repo.list_prompts(uuid.UUID(user.id)):
-        out.append(PromptOut(source="user", id=str(row.id), name=row.name, editable=True))
+        out.append(
+            PromptOut(
+                source="user",
+                id=str(row.id),
+                name=row.name,
+                editable=True,
+                is_system=row.is_system,
+            )
+        )
     return out
 
 
@@ -194,15 +200,18 @@ async def get_system_prompt_text_endpoint(
     key: str,
     user: AuthenticatedUser = Depends(get_current_user),
     settings: Settings = Depends(get_settings_dep),
+    session: AsyncSession = Depends(get_session_dep),
 ) -> SystemPromptTextOut:
-    from vts.services.prompt_registry import list_system_prompts
-    from vts.services.summarizer import load_prompt
+    # Serves the user's own copy, creating it on first read (vts-kujy).
+    from vts.services.system_prompt import get_or_create_system_prompt
 
-    spec = next((p for p in list_system_prompts() if p.key == key), None)
-    if spec is None:
+    if key != "summary":
         raise HTTPException(status_code=404, detail="System prompt not found")
-    text = load_prompt(settings.prompts_dir, spec.file, "")
-    return SystemPromptTextOut(system_prompt=text)
+    prompt = await get_or_create_system_prompt(
+        session, uuid.UUID(user.id), settings.prompts_dir
+    )
+    await session.commit()
+    return SystemPromptTextOut(system_prompt=prompt.system_prompt)
 
 
 @router.get("/api/prompts/{prompt_id}", response_model=PromptDetailOut)

@@ -320,3 +320,74 @@ def test_vendor_text_falls_back_on_an_unreadable_file(tmp_path) -> None:
         assert vendor_text(tmp_path) == _FALLBACK
     finally:
         path.chmod(0o644)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_the_users_edited_copy(factory, tmp_path) -> None:
+    """The summary must run on what the user wrote, not on the file.
+
+    This drives `SystemPromptSource.load_text` — the pipeline's own call site —
+    rather than the service underneath it, so that reverting the call site to
+    `load_prompt` fails here. A service-level assertion would keep passing
+    with the pipeline still reading the file.
+    """
+    from types import SimpleNamespace
+
+    from vts.db.repo import Repo
+    from vts.pipeline.steps.summarization import SystemPromptSource
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=user_id, username="prompt-pipeline-edited@example.invalid"))
+        await session.commit()
+
+        row = await get_or_create_system_prompt(session, user_id, tmp_path)
+        await Repo(session).update_prompt(
+            user_id, row.id, name=None, system_prompt="my own wording"
+        )
+        await session.commit()
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(prompts_dir=tmp_path),
+        session_factory=factory,
+    )
+    text = await SystemPromptSource().load_text(ctx, "summary", "en", str(user_id))
+    assert "my own wording" in text
+    assert "vendor text" not in text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_creates_the_copy_on_a_first_summary(factory, tmp_path) -> None:
+    """A user whose first summary runs before they ever open the UI.
+
+    The worker is then the first caller, so the copy has to be made there —
+    and the run must use the vendor text, not fail for the missing row.
+    """
+    from types import SimpleNamespace
+
+    from vts.pipeline.steps.summarization import SystemPromptSource
+
+    (tmp_path / "global_prompt.md").write_text("vendor text", encoding="utf-8")
+    user_id = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=user_id, username="prompt-pipeline-first@example.invalid"))
+        await session.commit()
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(prompts_dir=tmp_path),
+        session_factory=factory,
+    )
+    text = await SystemPromptSource().load_text(ctx, "summary", "en", str(user_id))
+    assert "vendor text" in text
+
+    async with factory() as session:
+        rows = (
+            await session.scalars(
+                sa.select(Prompt).where(Prompt.user_id == user_id, Prompt.is_system)
+            )
+        ).all()
+    assert len(rows) == 1, "the worker must persist the copy it just made"
