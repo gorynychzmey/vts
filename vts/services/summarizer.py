@@ -449,7 +449,11 @@ class LLMClient:
         return httpx.AsyncClient(timeout=timeout_seconds, headers=self._headers)
 
     def _stream_client(
-        self, timeout_seconds: int, *, read_timeout: float
+        self,
+        timeout_seconds: int,
+        *,
+        first_chunk_timeout: float,
+        idle_timeout: float,
     ) -> httpx.AsyncClient:
         """Client for streamed completions, with an explicit socket read timeout.
 
@@ -461,14 +465,25 @@ class LLMClient:
         The socket-level read timeout is the only thing that can break that
         deadlock, so it must always be set.
 
-        It is floored at the first-chunk timeout because it also covers model
-        load: a read timeout below that would abort a cold start that our own
-        limit was still willing to wait for, turning a slow load into a hard
-        failure. Connect/write/pool stay on the caller's budget.
+        A socket read here spans exactly one gap between bytes, so the read
+        timeout only has to outlast the longest gap our own limits tolerate:
+        model load before the first chunk, and a pause between chunks after
+        it. Hence `max(first_chunk_timeout, idle_timeout)` — dropping below
+        either would let the transport fire first, turning a clean
+        StreamTimeout (which reports how many chunks arrived) into a bare
+        ReadTimeout that also walks the whole fallback queue. Both limits are
+        operator-tunable, so both must be in the floor.
+
+        `timeout_seconds` is deliberately NOT inherited. It is a whole-request
+        budget, and using it per read multiplies it by the number of payload
+        variants on a hung backend (a 1200s warmup across 8 variants would
+        allow 160 minutes). The ceiling is what bounds total generation time.
+        Connect/write/pool stay on the caller's budget.
         """
         return httpx.AsyncClient(
             timeout=httpx.Timeout(
-                float(timeout_seconds), read=max(float(timeout_seconds), read_timeout)
+                float(timeout_seconds),
+                read=max(first_chunk_timeout, idle_timeout),
             ),
             headers=self._headers,
         )
@@ -853,7 +868,9 @@ class LLMClient:
         failures: list[str] = []
         discovered_model_fallback = False
         async with self._stream_client(
-            timeout_seconds, read_timeout=stream_first_chunk_timeout
+            timeout_seconds,
+            first_chunk_timeout=stream_first_chunk_timeout,
+            idle_timeout=stream_idle_timeout,
         ) as client:
             while queue:
                 label, payload = queue.pop(0)

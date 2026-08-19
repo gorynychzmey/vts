@@ -1132,41 +1132,15 @@ def test_chat_completion_does_not_retry_a_stream_timeout(
     assert attempts == 1, "a stream timeout must not be retried"
 
 
-def test_chat_completion_sets_a_socket_read_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without one, a silent upstream hangs forever.
-
-    The reader's three limits are only evaluated when a line arrives, so an
-    upstream that accepts the connection and then sends nothing never trips
-    any of them. Only the transport can break that deadlock, and its read
-    budget must not undercut our own first-chunk allowance.
-    """
+def _captured_stream_timeout(
+    monkeypatch: pytest.MonkeyPatch, **kwargs: object
+) -> httpx.Timeout:
+    """Run one streamed completion and return the client's configured timeout."""
     seen: list[object] = []
 
-    class StubStream:
-        status_code = 200
-
-        async def __aenter__(self) -> "StubStream":
-            return self
-
-        async def __aexit__(self, *exc: object) -> bool:
-            return False
-
-        @property
-        def is_success(self) -> bool:
-            return True
-
-        async def aiter_lines(self) -> "AsyncIterator[str]":
-            for line in _sse_body("ok").decode().splitlines():
-                yield line
-
-        async def aread(self) -> bytes:
-            return b""
-
     class StubAsyncClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            seen.append(kwargs.get("timeout"))
+        def __init__(self, *args: object, **client_kwargs: object) -> None:
+            seen.append(client_kwargs.get("timeout"))
 
         async def __aenter__(self) -> "StubAsyncClient":
             return self
@@ -1174,8 +1148,8 @@ def test_chat_completion_sets_a_socket_read_timeout(
         async def __aexit__(self, *exc: object) -> bool:
             return False
 
-        def stream(self, method: str, url: str, json: dict[str, object]):
-            return StubStream()
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
+            return _StubStream(content="ok")
 
         async def get(self, url: str) -> httpx.Response:
             return _response(status_code=404, url=url, payload={}, method="GET")
@@ -1187,15 +1161,71 @@ def test_chat_completion_sets_a_socket_read_timeout(
             model="Qwen2.5-7B-Instruct-Q4",
             system_prompt="sys",
             user_prompt="user",
-            timeout_seconds=60,
-            stream_first_chunk_timeout=300.0,
+            **kwargs,
         )
     )
 
     assert len(seen) == 1
     timeout = seen[0]
     assert isinstance(timeout, httpx.Timeout)
-    # Set at all, and never below the first-chunk allowance: a 60s transport
-    # budget would abort a cold model load our own limit still permits.
+    return timeout
+
+
+def test_chat_completion_sets_a_socket_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without one, a silent upstream hangs forever.
+
+    The reader's three limits are only evaluated when a line arrives, so an
+    upstream that accepts the connection and then sends nothing never trips
+    any of them. Only the transport can break that deadlock.
+    """
+    timeout = _captured_stream_timeout(
+        monkeypatch, timeout_seconds=60, stream_first_chunk_timeout=300.0
+    )
     assert timeout.read is not None
+    # Never below the first-chunk allowance: a 60s transport budget would
+    # abort a cold model load our own limit still permits (prod load ~75s).
     assert timeout.read >= 300.0
+
+
+def test_chat_completion_read_timeout_covers_a_raised_idle_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The idle limit is operator-tunable, so it must be in the floor too.
+
+    Raising `llm_stream_idle_timeout_seconds` above the first-chunk timeout is
+    reasonable for a slow CPU model. If the read timeout ignored it, the
+    transport would cut the connection before our own limit fired — a bare
+    ReadTimeout that also walks the whole fallback queue, instead of a clean
+    StreamTimeout("idle") reporting how many chunks had arrived.
+    """
+    timeout = _captured_stream_timeout(
+        monkeypatch,
+        timeout_seconds=60,
+        stream_first_chunk_timeout=300.0,
+        stream_idle_timeout=600.0,
+    )
+    assert timeout.read is not None
+    assert timeout.read >= 600.0
+
+
+def test_chat_completion_read_timeout_does_not_inherit_the_request_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read spans one gap between bytes, not the whole request.
+
+    Inheriting `timeout_seconds` multiplies it by the number of payload
+    variants on a hung backend: a 1200s warmup across 8 variants would allow
+    160 minutes of hanging. The read timeout covers only what it exists for —
+    model load and inter-chunk pauses.
+    """
+    timeout = _captured_stream_timeout(
+        monkeypatch,
+        timeout_seconds=1200,
+        stream_first_chunk_timeout=300.0,
+        stream_idle_timeout=120.0,
+    )
+    assert timeout.read == 300.0
+    # The whole-request budget still governs connect/write/pool.
+    assert timeout.connect == 1200.0
