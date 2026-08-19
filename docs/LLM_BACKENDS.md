@@ -134,3 +134,51 @@ When these are unavailable (Ollama / OpenAI / vLLM without a side-channel),
 vts falls back to a local HuggingFace tokenizer and a configured `n_ctx`. The
 output quality is the same; the difference is operational — you have to keep
 those two settings in sync with the actual deployed model yourself.
+
+## Streaming timeouts
+
+Completions are streamed, so closing the connection stops generation on the
+backend rather than leaving it to finish into a dead socket.
+
+Three limits guard a request, each answering a different question:
+
+| YAML key (under `services.llm`) | default | meaning |
+|---|---|---|
+| `stream_first_chunk_timeout_seconds` | 300 | how long to wait for the first token — this covers model load, which is slow but healthy |
+| `stream_idle_timeout_seconds` | 120 | the real stall detector: silence between tokens once text is flowing |
+| `min_tokens_per_second` | 3 | slowest rate still considered progress |
+| `ceiling_slack_multiplier` | 1.5 | headroom in the overall ceiling |
+| `ceiling_floor_seconds` | 300 | lower bound on the ceiling |
+| `ceiling_cap_seconds` | 3600 | upper bound on the ceiling |
+
+The overall ceiling is `clamp(max_tokens / min_tokens_per_second * slack,
+floor, cap)`. It scales with the work requested because a segment window
+(~1255 tokens) and a final summary (~15000) differ by an order of magnitude;
+one constant cannot serve both.
+
+Neither timeout is retried. The prompt is byte-identical on every attempt, so
+a request that could not finish once will not finish on the second try — it
+only occupies the GPU.
+
+### Socket-level read timeout
+
+The three limits above are all application-level: they are only evaluated
+when a line arrives from the stream. If a backend accepts the connection and
+then sends nothing at all, none of them ever fires — `async for` on the
+response body simply never yields. The HTTP client's own socket read timeout
+is what breaks that deadlock, and it is set independently of the limits
+above:
+
+```
+read_timeout = max(stream_first_chunk_timeout_seconds, stream_idle_timeout_seconds)
+```
+
+This is deliberately **not** `llm_chat_timeout_seconds` — that setting stays
+on connect/write/pool only and is never inherited by the streaming read. A
+per-read timeout equal to the whole-request budget would multiply across
+every payload-variant retry in the fallback queue (an 1800s budget across
+several variants could stall for hours). If you raise
+`stream_first_chunk_timeout_seconds` or `stream_idle_timeout_seconds` to
+tolerate a slower backend, the socket read timeout grows with them
+automatically — there is nothing extra to configure — but a stuck-but-silent
+connection will still only be caught after `max()` of the two, not sooner.
