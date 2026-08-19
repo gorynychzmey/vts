@@ -316,11 +316,39 @@ body {
 /* Compact header bar (redesign v2). The title/subtitle block used to be
    full-width and ~3 lines tall, which pushed the New Task form below the fold
    on a phone. Brand on the left, controls on the right, one row. */
-header {
+/* Sticky app bar (redesign v2 — .topbar in docs/design-v2/vts-theme.css).
+   The bar spans the viewport and the page scrolls UNDER it, so the brand, the
+   theme toggle and the menu stay reachable in a long task list. It is
+   translucent with a blur rather than opaque so the content moving beneath it
+   stays legible as motion — the token --bar-topbar already existed for this in
+   both themes and was simply never used. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bar-topbar);
+  /* -webkit- first: Safari still needs the prefix, and without it the bar is
+     merely translucent, which leaves text underneath showing through. */
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The bar is full-width, but its CONTENTS keep the page column so the brand
+   lines up with the cards below. Same expression as .layout. */
+.topbar-inner {
+  width: min(1100px, 100% - 2rem);
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 0.9rem;
-  margin-bottom: 1.3rem;
+  padding: 0.6rem 0;
+}
+
+/* The page used to start below a static header inside .layout; with the header
+   lifted out, .layout's own top margin is the only gap left. */
+.layout {
+  margin-top: 1.25rem;
 }
 
 .brand {
@@ -2126,6 +2154,12 @@ input[type="file"] {
   .layout {
     width: calc(100% - 1rem);
     margin-top: 1rem;
+  }
+
+  /* Mirror the narrower phone gutter, or the bar's contents sit 8px right of
+     the cards they are supposed to line up with (caught by sticky-topbar). */
+  .topbar-inner {
+    width: calc(100% - 1rem);
   }
 
   .admin-controls select {
