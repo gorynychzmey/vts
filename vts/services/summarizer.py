@@ -1114,12 +1114,18 @@ class LLMClient:
                         exc.elapsed,
                     )
                     raise
-                except Exception as exc:
-                    if _is_transient_http_error(exc):
-                        failures.append(
-                            f"{label}: {exc.__class__.__name__} ({str(exc).strip() or 'no details'})"
-                        )
-                        continue
+                except httpx.HTTPError:
+                    # The payload queue answers one question — which request
+                    # shape does this backend accept — and a backend that
+                    # dislikes the shape says so promptly with HTTP 400. A
+                    # transport error answers a different question: the
+                    # request either never arrived (ConnectError, which is
+                    # indistinguishable from a firewall or a downed network)
+                    # or arrived and went unanswered (ReadTimeout, meaning
+                    # busy or wedged). Rewording the payload addresses
+                    # neither, and each variant costs a full generation:
+                    # measured on production, a 73k-token window walked all
+                    # eight variants, holding the GPU for the whole parade.
                     raise
                 return text
             else:

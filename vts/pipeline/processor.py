@@ -255,6 +255,30 @@ class TaskProcessor:
                 # already been killed by the progress callback that raised this.
                 logger.info("task %s cancelled during download; exiting quietly", task_id)
                 await self.bus.clear_pause_request(task_id)
+            except asyncio.CancelledError:
+                # The worker pool interrupted us (WorkerPool.watch_cancels).
+                # A pause interrupts the same way a cancel does, so the flag
+                # is what distinguishes them: without this branch the task
+                # would keep its `running` status forever, since
+                # CancelledError derives from BaseException and reaches
+                # neither the TaskPaused handler above nor the catch-all
+                # below.
+                if await self.bus.is_pause_requested(task_id):
+                    logger.info("task interrupted for pause: %s", task_id)
+                    await self.bus.clear_pause_request(task_id)
+                    await self._ctx.refresh_task(session, task)
+                    if task.status != TaskStatus.paused:
+                        await repo.set_task_status(task, TaskStatus.paused)
+                        await session.commit()
+                    await self.bus.publish_event(
+                        user_id=str(task.user_id),
+                        task_id=str(task.id),
+                        event="task_status",
+                        data={"status": "paused"},
+                    )
+                else:
+                    logger.info("task canceled: %s", task_id)
+                raise
             except Exception as exc:
                 logger.exception("pipeline failed: %s", exc)
                 raw_error = str(exc)

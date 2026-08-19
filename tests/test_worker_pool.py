@@ -15,10 +15,11 @@ from vts.worker.main import WorkerPool
 
 
 class FakeBus:
-    """In-memory stand-in for RedisBus with just the cancel surface."""
+    """In-memory stand-in for RedisBus with the cancel and pause surface."""
 
     def __init__(self) -> None:
         self._cancels: set[uuid.UUID] = set()
+        self._pauses: set[uuid.UUID] = set()
 
     async def request_cancel(self, task_id: uuid.UUID) -> None:
         self._cancels.add(task_id)
@@ -28,6 +29,15 @@ class FakeBus:
 
     async def is_cancel_requested(self, task_id: uuid.UUID) -> bool:
         return task_id in self._cancels
+
+    async def request_pause(self, task_id: uuid.UUID) -> None:
+        self._pauses.add(task_id)
+
+    async def clear_pause_request(self, task_id: uuid.UUID) -> None:
+        self._pauses.discard(task_id)
+
+    async def is_pause_requested(self, task_id: uuid.UUID) -> bool:
+        return task_id in self._pauses
 
 
 class FakeProcessor:
@@ -143,6 +153,39 @@ async def test_two_admitted_run_concurrently(factory):
             break
         await asyncio.sleep(0.01)
     assert pool.active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_watch_cancels_also_interrupts_a_paused_task(factory):
+    """A pause must free the GPU now, not at the next step boundary.
+
+    Pausing was cooperative: `check_paused` is only consulted between windows,
+    so a task summarizing a single large window ignored the request until the
+    window finished. Measured on production 2026-08-19, that meant a task sat
+    "paused" while the model kept generating for over an hour. The window in
+    flight is forfeited — that is the accepted cost of stopping immediately.
+    """
+    ids = await _seed_queued(factory, 1)
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_pause(ids[0])
+    await pool.watch_cancels()
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_count == 0, "a paused task must be interrupted, not left running"
 
 
 @pytest.mark.asyncio

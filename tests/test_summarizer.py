@@ -280,15 +280,23 @@ def test_llama_chat_completion_failure_contains_body_message(monkeypatch: pytest
     assert "model name is missing from the request" in message
 
 
-def test_llama_chat_completion_recovers_from_a_transient_read_timeout(
+def test_llama_chat_completion_stops_the_queue_on_a_transport_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A transient network error before any output must not fail the call.
+    """A transport error must fail the call instead of walking the queue.
 
-    Streaming removed the per-payload retry loop (`request_attempts` only
-    governed the blocking POST), so recovery now comes from advancing to the
-    next payload variant instead. The guarantee under test is unchanged: a
-    connection that drops before the first chunk gets another chance.
+    The payload queue exists to discover a request shape the backend accepts,
+    and a backend that dislikes the shape says so promptly with HTTP 400. A
+    transport error says something else entirely: either the request never
+    arrived (`ConnectError`) or it arrived and the backend went quiet
+    (`ReadTimeout`). Neither is answered by rewording the payload.
+
+    Measured on production 2026-08-19: a 73k-token window that could not
+    produce its first chunk within the read timeout walked all eight variants,
+    spawning a fresh generation each time and holding the GPU for the whole
+    parade. Recovery from a genuine network blip belongs at the task level,
+    where the work can be resumed, not inside one call where it hides as
+    format discovery.
     """
     endpoint = "http://llama.local/v1/chat/completions"
     post_calls: list[dict[str, object]] = []
@@ -318,17 +326,63 @@ def test_llama_chat_completion_recovers_from_a_transient_read_timeout(
 
     monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
 
-    raw = asyncio.run(
-        _client().chat_completion(
-            model="Qwen2.5-7B-Instruct-Q4",
-            system_prompt='Return compact JSON: {"status":"ready"}.',
-            user_prompt="Warm up model for upcoming summarization.",
-            request_attempts=2,
+    with pytest.raises(httpx.ReadTimeout):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt='Return compact JSON: {"status":"ready"}.',
+                user_prompt="Warm up model for upcoming summarization.",
+            )
         )
-    )
 
-    assert raw == '{"status":"ready"}'
-    assert len(post_calls) == 2
+    assert len(post_calls) == 1, "a transport error must not advance the queue"
+
+
+def test_llama_chat_completion_stops_the_queue_on_a_connect_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ConnectError` means the backend never saw the payload.
+
+    Rewording a request that failed to leave the machine cannot help, and a
+    closed connection is indistinguishable from a firewall or a downed
+    network — so the queue stops here too.
+    """
+    endpoint = "http://llama.local/v1/chat/completions"
+    post_calls: list[dict[str, object]] = []
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
+            post_calls.append({"url": url, "json": json})
+            return _StubStream(
+                raise_on_iter=httpx.ConnectError(
+                    "simulated refusal", request=httpx.Request("POST", endpoint)
+                )
+            )
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="sys",
+                user_prompt="user",
+            )
+        )
+
+    assert len(post_calls) == 1, "a connect error must not advance the queue"
 
 
 def test_llama_tokenize_retries_without_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -503,69 +557,6 @@ def test_llama_tokenize_retries_when_model_loading(monkeypatch: pytest.MonkeyPat
     assert tokens == [7, 8, 9]
     assert len(post_calls) == 3
     assert len(sleep_calls) == 2
-
-
-def test_llama_chat_completion_reports_a_persistent_transport_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A backend that times out on every variant fails, naming the cause.
-
-    This test previously asserted exactly one attempt: the blocking-POST code
-    special-cased `httpx.TimeoutException` and abandoned the queue at once, so
-    a hung backend could not burn every variant on a long timeout. Streaming
-    removes that special case — a transport error before the first chunk is
-    now indistinguishable from any other pre-generation failure, and the queue
-    advances. That is acceptable because the socket read timeout bounds each
-    attempt, and because the expensive case this feature exists for — a stall
-    *after* generation started — raises StreamTimeout and is never retried
-    (see test_chat_completion_does_not_retry_a_stream_timeout).
-
-    What must still hold, and is asserted here: the call terminates, the error
-    names ReadTimeout, and the queue is finite rather than retried forever.
-    """
-    endpoint = "http://llama.local/v1/chat/completions"
-    post_calls: list[dict[str, object]] = []
-
-    class StubAsyncClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> "StubAsyncClient":
-            return self
-
-        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        def stream(self, method: str, url: str, json: dict[str, object]) -> _StubStream:
-            post_calls.append({"url": url, "json": json})
-            return _StubStream(
-                raise_on_iter=httpx.ReadTimeout(
-                    "simulated timeout", request=httpx.Request("POST", endpoint)
-                )
-            )
-
-        async def get(self, url: str) -> httpx.Response:
-            return _response(status_code=404, url=url, payload={"error": "not found"}, method="GET")
-
-    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
-
-    with pytest.raises(RuntimeError, match="ReadTimeout"):
-        asyncio.run(
-            _client().chat_completion(
-                model="Qwen2.5-7B-Instruct-Q4",
-                system_prompt="Summarize.",
-                user_prompt="Very long text.",
-                request_attempts=1,
-            )
-        )
-
-    # The queue is walked at most once: each payload is tried a single time,
-    # so no per-payload retry multiplies the load on an already-hung backend.
-    assert post_calls, "the backend was never called"
-    payload_keys = [
-        json.dumps(call["json"], sort_keys=True, default=str) for call in post_calls
-    ]
-    assert len(payload_keys) == len(set(payload_keys)), "a payload was retried"
 
 
 def test_llama_chat_completion_no_response_format_when_use_json_format_false(

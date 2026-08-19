@@ -192,14 +192,32 @@ class WorkerPool:
         return admitted
 
     async def watch_cancels(self) -> None:
-        """Cancel the asyncio task of any active task with a cancel request."""
+        """Interrupt any active task whose cancel or pause was requested.
+
+        Pause used to be cooperative — the pipeline consulted `check_paused`
+        between steps — which left a task generating a single large window
+        deaf to the request for as long as that window took. Measured on
+        production 2026-08-19: a task reported `paused` while the model kept
+        the GPU for over an hour. A pause that does not free the GPU is not a
+        pause, so it interrupts the same way a cancel does.
+
+        The difference is what survives: a cancel discards the task, while a
+        pause keeps every step already finished (steps guard themselves with
+        `already_done`), losing only the window in flight.
+        """
         for task_id, atask in list(self._active.items()):
             if task_id in self._cancel_sent:
                 continue
+            reason = None
             if await self._bus.is_cancel_requested(task_id):
-                self._log.info("cancel requested for running task %s", task_id)
-                atask.cancel()
-                self._cancel_sent.add(task_id)
+                reason = "cancel"
+            elif await self._bus.is_pause_requested(task_id):
+                reason = "pause"
+            if reason is None:
+                continue
+            self._log.info("%s requested for running task %s", reason, task_id)
+            atask.cancel()
+            self._cancel_sent.add(task_id)
 
     async def reap(self) -> None:
         """Collect finished coroutines, log outcomes, clear bookkeeping."""
