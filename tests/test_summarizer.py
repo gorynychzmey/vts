@@ -926,6 +926,7 @@ def test_read_sse_stream_allows_slow_but_steady_generation() -> None:
         for _ in range(60):
             clock.now += 30.0  # 30 min total, every gap well under idle_timeout
             yield 'data: {"choices":[{"delta":{"content":"y"}}]}'
+        yield "data: [DONE]"  # a complete response, just a slow one
 
     out = asyncio.run(
         read_sse_stream(
@@ -1250,3 +1251,383 @@ def test_stream_kwargs_helper_reads_settings() -> None:
         "ceiling_floor_seconds": 100,
         "ceiling_cap_seconds": 900,
     }
+
+
+# --- Final-review regressions (C1, C2, I1) ---------------------------------
+
+
+def test_read_sse_stream_rejects_a_body_that_stops_mid_generation() -> None:
+    """C2: a truncated stream must not pass as a complete summary.
+
+    A proxy that cuts the connection, or an upstream that closes without
+    `[DONE]`, leaves a body that simply stops. The text collected so far is a
+    half-written summary, and downstream nothing can tell it from a whole one:
+    it would be stored and shown to the user as the finished result, with no
+    error and no trace in the log. Requiring an explicit end marker is the
+    only thing that separates the two cases.
+    """
+    from vts.services.summarizer import StreamInterrupted, read_sse_stream
+
+    clock = _FakeClock()
+
+    with pytest.raises(StreamInterrupted) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                _lines(
+                    'data: {"choices":[{"delta":{"content":"Half a "}}]}',
+                    'data: {"choices":[{"delta":{"content":"sum"}}]}',
+                    # no [DONE], no finish_reason — the body just ends
+                ),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "truncated"
+    assert excinfo.value.chunks == 2
+
+
+def test_read_sse_stream_accepts_finish_reason_without_done() -> None:
+    """LiteLLM need not reproduce OpenAI's framing, so either marker ends it.
+
+    Demanding `[DONE]` specifically would fail legitimate responses from a
+    proxy that forwards the final `finish_reason` chunk but drops the
+    sentinel. Accepting either keeps the truncation check from becoming a
+    source of false failures.
+    """
+    from vts.services.summarizer import read_sse_stream
+
+    clock = _FakeClock()
+    out = asyncio.run(
+        read_sse_stream(
+            _lines(
+                'data: {"choices":[{"delta":{"content":"Whole"}}]}',
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            ),
+            first_chunk_timeout=300,
+            idle_timeout=120,
+            ceiling=6000,
+            clock=clock,
+        )
+    )
+    assert out == "Whole"
+
+
+def test_read_sse_stream_wraps_a_break_after_the_first_chunk() -> None:
+    """C1: a transport error after content started is not a transient retry.
+
+    Before the first chunk a `ReadError` means the request shape was never
+    accepted and the payload queue should keep looking. After it, the shape
+    was accepted and the model is generating — so the error has to arrive at
+    the caller as something the fallback queue will not swallow.
+    """
+    from vts.services.summarizer import StreamInterrupted, read_sse_stream
+
+    clock = _FakeClock()
+
+    async def breaks_midway() -> "AsyncIterator[str]":
+        yield 'data: {"choices":[{"delta":{"content":"Half a "}}]}'
+        raise httpx.ReadError("connection reset")
+
+    with pytest.raises(StreamInterrupted) as excinfo:
+        asyncio.run(
+            read_sse_stream(
+                breaks_midway(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+    assert excinfo.value.reason == "transport"
+    assert excinfo.value.chunks == 1
+    assert isinstance(excinfo.value.cause, httpx.ReadError)
+
+
+def test_read_sse_stream_leaves_a_break_before_the_first_chunk_alone() -> None:
+    """The other half of C1: pre-generation errors keep their own type.
+
+    `recovers_from_a_transient_read_timeout` depends on this — the payload
+    queue only advances because the raw httpx error reaches the caller.
+    """
+    from vts.services.summarizer import read_sse_stream
+
+    clock = _FakeClock()
+
+    async def breaks_immediately() -> "AsyncIterator[str]":
+        raise httpx.ReadTimeout("no answer")
+        yield ""  # pragma: no cover - unreachable, satisfies the generator
+
+    with pytest.raises(httpx.ReadTimeout):
+        asyncio.run(
+            read_sse_stream(
+                breaks_immediately(),
+                first_chunk_timeout=300,
+                idle_timeout=120,
+                ceiling=6000,
+                clock=clock,
+            )
+        )
+
+
+def test_chat_completion_does_not_walk_the_queue_after_the_first_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 at the call site: one break mid-generation, one attempt.
+
+    Measured before the fix: a `ReadError` after content had started was
+    classified as transient, so the loop advanced through all eight payload
+    variants. Each is a fresh full generation bounded only by the ceiling —
+    up to 480 GPU-minutes for a final summary. The spec is unambiguous:
+    "stream breaks mid-generation → fail, no retry".
+    """
+    from vts.services.summarizer import StreamInterrupted
+
+    attempts = 0
+
+    class StubStream:
+        def __init__(self) -> None:
+            self.status_code = 200
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return True
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            yield 'data: {"choices":[{"delta":{"content":"Half a "}}]}'
+            raise httpx.ReadError("connection reset")
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            nonlocal attempts
+            attempts += 1
+            return StubStream()
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    with pytest.raises(StreamInterrupted):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="sys",
+                user_prompt="user",
+            )
+        )
+    assert attempts == 1, "a break after the first chunk must not walk the queue"
+
+
+def test_chat_completion_does_not_return_a_truncated_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C2 at the call site: half a summary must not surface as the result."""
+    from vts.services.summarizer import StreamInterrupted
+
+    class StubStream:
+        def __init__(self) -> None:
+            self.status_code = 200
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return True
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            yield 'data: {"choices":[{"delta":{"content":"Half a sum"}}]}'
+            # the proxy cut the connection here: no [DONE], no finish_reason
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            return StubStream()
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+
+    with pytest.raises(StreamInterrupted):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="sys",
+                user_prompt="user",
+            )
+        )
+
+
+def test_chat_completion_waits_for_a_loading_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I1: a cold model answers 503 before the stream opens.
+
+    `stream_first_chunk_timeout` cannot cover this — there is no stream yet.
+    The blocking path waited via `_post_with_loading_retry`, and
+    PrepareLlamaModelStep exists to sit through exactly this load (~75s
+    measured in production). Without the wait the warmup step fails
+    immediately on a cold backend.
+    """
+    slept: list[float] = []
+    attempts = 0
+
+    class StubStream:
+        def __init__(self, status: int) -> None:
+            self.status_code = status
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return self.status_code == 200
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            for line in _sse_body("ready").decode().splitlines():
+                yield line
+
+        async def aread(self) -> bytes:
+            return json.dumps({"error": {"message": "loading model"}}).encode()
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            nonlocal attempts
+            attempts += 1
+            # Cold for the first two opens, then the model is up.
+            return StubStream(503 if attempts <= 2 else 200)
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    async def fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+    monkeypatch.setattr("vts.services.summarizer.asyncio.sleep", fake_sleep)
+
+    raw = asyncio.run(
+        _client().chat_completion(
+            model="Qwen2.5-7B-Instruct-Q4",
+            system_prompt="sys",
+            user_prompt="user",
+        )
+    )
+
+    assert raw == "ready"
+    assert attempts == 3, "the loading model must be polled, not abandoned"
+    assert len(slept) == 2, "each retry must back off before re-opening"
+    # The same payload is retried: a 503 says nothing about the request shape,
+    # so the fallback queue must not be consumed by a cold start.
+    assert slept == [0.5, 1.0]
+
+
+def test_chat_completion_gives_up_on_a_model_that_never_loads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loading wait is bounded — a permanently-503 backend must not hang."""
+    slept: list[float] = []
+    attempts = 0
+
+    class StubStream:
+        status_code = 503
+
+        async def __aenter__(self) -> "StubStream":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        @property
+        def is_success(self) -> bool:
+            return False
+
+        async def aiter_lines(self) -> "AsyncIterator[str]":
+            yield ""  # pragma: no cover - never reached on a 503
+
+        async def aread(self) -> bytes:
+            return json.dumps({"error": {"message": "loading model"}}).encode()
+
+    class StubAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            nonlocal attempts
+            attempts += 1
+            return StubStream()
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    async def fake_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+    monkeypatch.setattr("vts.services.summarizer.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="loading model"):
+        asyncio.run(
+            _client().chat_completion(
+                model="Qwen2.5-7B-Instruct-Q4",
+                system_prompt="sys",
+                user_prompt="user",
+                timeout_seconds=100,  # budget = 0.6 * 100 = 60s of waiting
+            )
+        )
+
+    assert sum(slept) == pytest.approx(60.0), "the wait must respect its budget"
+    assert attempts == len(slept) + 1

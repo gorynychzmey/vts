@@ -174,6 +174,20 @@ def _raise_with_response_details(response: httpx.Response, *, context: str) -> N
     )
 
 
+def _is_loading_model_body(status_code: int, body: bytes) -> bool:
+    """Same "model is loading" test as `_is_loading_model_response`, on bytes.
+
+    A streamed response cannot be re-read with `.json()`, so the error body
+    arrives from `aread()`. Sharing the predicate keeps the streaming path
+    from silently disagreeing with the tokenize/detokenize path about what a
+    cold model looks like.
+    """
+    if status_code not in (503, 529):
+        return False
+    detail = _error_detail_from_body(body).lower()
+    return "loading model" in detail or "model is loading" in detail
+
+
 def _is_loading_model_response(response: httpx.Response) -> bool:
     if response.status_code not in (503, 529):
         return False
@@ -261,6 +275,78 @@ def parse_sse_content(line: str) -> str | None:
     return content
 
 
+def is_stream_finished(line: str) -> bool:
+    """True when this SSE line says the completion ended on its own terms.
+
+    Two markers count, because LiteLLM sits between us and the model and is
+    not obliged to reproduce OpenAI's framing byte for byte: the `[DONE]`
+    sentinel, and any chunk carrying a non-empty `finish_reason`. Accepting
+    either keeps a legitimate response from failing just because the proxy
+    dropped one of the two.
+
+    Everything else — content deltas, keep-alives, malformed frames — is not
+    an ending, so a body that simply stops mid-generation is distinguishable
+    from one that finished.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return False
+    payload = stripped[len("data:") :].strip()
+    if payload == "[DONE]":
+        return True
+    if not payload:
+        return False
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    try:
+        choices = parsed["choices"]
+    except (KeyError, TypeError):
+        return False
+    if not isinstance(choices, list):
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        reason = choice.get("finish_reason")
+        if isinstance(reason, str) and reason.strip():
+            return True
+    return False
+
+
+class StreamInterrupted(RuntimeError):
+    """A streamed completion started producing text and then broke.
+
+    Distinct from `StreamTimeout` (our own limits fired) and from a plain
+    transport error before the first chunk (the payload queue's business).
+    Once content has arrived the backend has accepted the request shape, so
+    there is nothing left for the fallback queue to discover: replaying the
+    identical prompt through seven more variants only burns GPU minutes on a
+    result nobody is waiting for. Raising a dedicated type lets the caller
+    tell "never started" from "broke halfway" without inspecting httpx
+    internals.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        chunks: int,
+        elapsed: float,
+        cause: BaseException | None = None,
+    ) -> None:
+        detail = f": {cause.__class__.__name__}" if cause is not None else ""
+        super().__init__(
+            f"llm stream interrupted ({reason}) after {elapsed:.1f}s "
+            f"and {chunks} chunks{detail}"
+        )
+        self.reason = reason
+        self.chunks = chunks
+        self.elapsed = elapsed
+        self.cause = cause
+
+
 class StreamTimeout(RuntimeError):
     """A streamed completion hit one of its three limits.
 
@@ -299,9 +385,36 @@ async def read_sse_stream(
     started = clock()
     last_seen = started
     chunks = 0
+    finished = False
     buffer: list[str] = []
 
-    async for line in lines:
+    iterator = lines.__aiter__()
+    while True:
+        try:
+            line = await iterator.__anext__()
+        except StopAsyncIteration:
+            break
+        except (StreamTimeout, StreamInterrupted):
+            raise
+        except asyncio.CancelledError:
+            # Cancellation is the feature working as designed (the task was
+            # cancelled and the socket closes, stopping the GPU) — it must
+            # propagate untouched, not be reclassified as a broken stream.
+            raise
+        except Exception as exc:
+            # Transport died while reading the body. Before the first chunk
+            # this is the payload queue's business and is re-raised as-is;
+            # after it, the request shape was already accepted, so retrying
+            # or walking the queue would only replay a full generation.
+            if not chunks:
+                raise
+            raise StreamInterrupted(
+                "transport",
+                chunks=chunks,
+                elapsed=clock() - started,
+                cause=exc,
+            ) from exc
+
         now = clock()
         if now - started > ceiling:
             raise StreamTimeout("ceiling", chunks=chunks, elapsed=now - started)
@@ -309,6 +422,8 @@ async def read_sse_stream(
         if now - last_seen > limit:
             reason = "idle" if chunks else "first_chunk"
             raise StreamTimeout(reason, chunks=chunks, elapsed=now - started)
+        if is_stream_finished(line):
+            finished = True
         content = parse_sse_content(line)
         if content is None:
             continue
@@ -325,6 +440,14 @@ async def read_sse_stream(
         # timeout, it is never a valid empty completion. Silently returning ""
         # here would let a stalled or broken upstream look like success.
         raise StreamTimeout("first_chunk", chunks=0, elapsed=now - started)
+    if not finished:
+        # Content arrived, then the body ended with neither `[DONE]` nor a
+        # `finish_reason`. That is a truncated response — a proxy cut the
+        # connection, upstream closed early, a hop lost the tail — and the
+        # half-written summary it produced is indistinguishable from a
+        # complete one downstream. Half a summary stored as a success is
+        # worse than a loud failure.
+        raise StreamInterrupted("truncated", chunks=chunks, elapsed=now - started)
     return "".join(buffer)
 
 
@@ -867,6 +990,9 @@ class LLMClient:
 
         failures: list[str] = []
         discovered_model_fallback = False
+        loading_wait_seconds = _loading_wait_seconds(timeout_seconds)
+        loading_waited = 0.0
+        loading_attempts = 0
         async with self._stream_client(
             timeout_seconds,
             first_chunk_timeout=stream_first_chunk_timeout,
@@ -895,6 +1021,36 @@ class LLMClient:
                     async with client.stream("POST", endpoint, json=payload) as response:
                         if not response.is_success:
                             body = await response.aread()
+                            if _is_loading_model_body(response.status_code, body):
+                                # A cold model answers 503 "loading model"
+                                # *before* the stream opens, so no streaming
+                                # limit can cover it — `stream_first_chunk_
+                                # timeout` only starts once there is a body to
+                                # read. Waiting here is what the blocking path
+                                # did via `_post_with_loading_retry`, and
+                                # PrepareLlamaModelStep exists precisely to
+                                # sit through this load (~75s in production).
+                                if loading_waited < loading_wait_seconds:
+                                    delay = min(
+                                        0.5 * (2**loading_attempts),
+                                        5.0,
+                                        loading_wait_seconds - loading_waited,
+                                    )
+                                    if delay > 0:
+                                        logger.info(
+                                            "llm backend is loading the model; "
+                                            "waited %.0fs of %.0fs",
+                                            loading_waited,
+                                            loading_wait_seconds,
+                                        )
+                                        await asyncio.sleep(delay)
+                                        loading_waited += delay
+                                        loading_attempts += 1
+                                        # Same payload, same position: the
+                                        # shape was never rejected, the model
+                                        # simply was not up yet.
+                                        queue.insert(0, (label, payload))
+                                        continue
                             failures.append(
                                 f"{label}: HTTP {response.status_code} "
                                 f"({_error_detail_from_body(body)})"
@@ -934,6 +1090,19 @@ class LLMClient:
                             ceiling=ceiling,
                             on_progress=_log_progress,
                         )
+                except StreamInterrupted as exc:
+                    # The backend already accepted this payload and started
+                    # generating, so the fallback queue has nothing left to
+                    # discover and a retry would replay the whole generation.
+                    # The spec is explicit: "stream breaks mid-generation →
+                    # fail, no retry".
+                    logger.warning(
+                        "llm stream interrupted (%s): %s chunks in %.0fs",
+                        exc.reason,
+                        exc.chunks,
+                        exc.elapsed,
+                    )
+                    raise
                 except StreamTimeout as exc:
                     # Deliberately no retry and no fallback: the prompt is
                     # byte-identical, so a second attempt cannot do better —
