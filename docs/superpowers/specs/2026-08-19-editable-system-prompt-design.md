@@ -16,13 +16,15 @@ let them put the vendor's version back.
   recreates it from the file.
 - A confirmation dialog before `DELETE`, worded for what the button actually
   does in each case.
+- A startup refresh that rewrites every copy the user has not edited, so a
+  newly shipped prompt reaches them.
 
 **Out of scope, deliberately:**
 - `segment_prompt.md` and `pack_prompt.md`. They stay file-only; see
   *One prompt, not three*.
-- Telling the user that the vendor's text has changed since their copy was
-  made. That needs the vendor version stored alongside the user's, which this
-  design deliberately avoids — see *Where the vendor text lives*.
+- Telling the user their copy is out of date, or asking before refreshing it.
+  An untouched copy is refreshed silently, because it carries nothing of
+  theirs to lose.
 - Sharing one edited prompt across users, or an admin-level override.
 
 ## Background — what "system prompt" means today
@@ -52,10 +54,8 @@ and costs a second copy that has to be refreshed on every deploy, plus a
 decision about what to do when the user never edited theirs. Deleting a row
 and reading the file again achieves the restore without any of that.
 
-The consequence is worth stating plainly: once a user's copy exists, later
-edits to `global_prompt.md` do not reach them. Shipping a better prompt
-reaches only users who have not made a copy — that is, who have never run a
-summary — plus anyone who restores. That is the accepted cost.
+Once a user's copy exists, later edits to `global_prompt.md` do not reach it
+on their own. *Refreshing untouched copies* below is what closes that gap.
 
 ## Model
 
@@ -102,6 +102,45 @@ instead of reading the file.
 
 Creating on demand rather than at registration means no hook in the signup
 path, and a row lost for any reason simply comes back.
+
+## Refreshing untouched copies
+
+A user's copy is frozen at the moment it was made, so a better prompt shipped
+later would never reach anyone who had already run a summary. On startup,
+every copy that still matches the vendor file is rewritten from it; every copy
+the user has edited is left alone.
+
+**"Edited" is decided by comparing the text, not by a flag or a timestamp.**
+The alternative — storing the file's mtime at creation and comparing later —
+looked appealing but does not survive contact with the build: measured on the
+production host, `global_prompt.md` has mtime `19:45:23` inside the container
+against `19:29:32` in the checkout, because the timestamp is set when the file
+is copied into the image. Every rebuild would therefore mark every untouched
+copy as stale. Comparing the text answers the actual question — did the user
+change this? — and needs no new column, since both strings are already there.
+
+Both sides are normalised before comparison (strip, and `\r\n` → `\n`): a copy
+saved through the web form can differ from the file by a line ending alone,
+and that must not read as an edit.
+
+The prompts are small — 1.4 KB for `global_prompt.md`, 3.7 KB for the largest
+of the three — so comparing them costs nothing worth measuring. `system_prompt`
+is a `Text` column with no length limit, and the API validates only
+`min_length=1`.
+
+**Where it runs.** In the `migrate` initContainer, alongside `alembic upgrade
+head` (`docker/vts-entrypoint.sh`). That is the one place that executes once
+per deploy, before either `webapi` or `worker` starts serving — so there is no
+race between two processes doing a mass UPDATE, and no window where the worker
+creates a copy from the old file after the refresh has run.
+
+The refresh logs how many copies it rewrote and how many it skipped as edited.
+An operation that silently rewrites user data leaves nothing to reason from
+when someone asks why their prompt changed.
+
+Edge case, accepted: a user who edited the prompt and then typed the original
+text back has a copy indistinguishable from an untouched one, and it will be
+refreshed. The text is identical either way, so nothing is lost.
 
 ## Restore is `DELETE`
 
@@ -184,6 +223,9 @@ per-user copy of it right now would work against the experiments in progress.
 - an edit survives and is what the pipeline uses
 - `DELETE` followed by a resolution returns the vendor text
 - the migration sets `is_system=false` on existing rows
+- the startup refresh rewrites an untouched copy and leaves an edited one
+- a copy differing only by a trailing newline counts as untouched
+- the refresh reports the counts it acted on
 - `PromptOut` carries `is_system`
 - UI: the button reads "Restore" for the system prompt and "Delete"
   otherwise; both paths confirm first; a cancelled confirmation sends no
