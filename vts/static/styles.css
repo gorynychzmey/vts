@@ -4166,6 +4166,15 @@ dialog:not([open]) {
   stroke-linejoin: round;
 }
 
+/* Positioned so it can host the tooltip bubble its <input> cannot: a replaced
+   element renders no ::after, so without this wrapper the date fields fell back
+   to the browser's native tooltip and looked unlike every other tooltip. */
+.filter-date-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
 /* Bare inside the shell — the shell owns the frame now. */
 .task-filters .filter-date {
   border: 0;

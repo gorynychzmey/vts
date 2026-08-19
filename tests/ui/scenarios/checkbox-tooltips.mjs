@@ -284,6 +284,32 @@ export async function run() {
       failures.push(`tooltip styles diverge between controls: ${JSON.stringify(styles)}`);
     }
 
+    // --- no tooltip on an element that cannot RENDER one -------------------
+    // A replaced element (input, select, textarea, img, video) has no
+    // ::before/::after, so a data-tooltip on one silently produces nothing and
+    // the browser falls back to its own native tooltip — a visibly different
+    // background, which is what "the tooltips still have two backgrounds" was.
+    // Two date filters were built that way. The fix is a wrapper that can host
+    // the bubble; sr-only elements are exempt because they never show one.
+    const unrenderable = await page.evaluate(() => {
+      const replaced = new Set(["INPUT", "SELECT", "TEXTAREA", "IMG", "VIDEO", "CANVAS", "IFRAME"]);
+      const out = [];
+      for (const el of document.querySelectorAll("[data-tooltip]")) {
+        if (!replaced.has(el.tagName)) continue;
+        // Visually hidden controls never paint a tooltip either way.
+        if (el.classList.contains("sr-only")) continue;
+        if (el.getBoundingClientRect().height === 0) continue;
+        out.push(`${el.tagName}${el.id ? "#" + el.id : ""}.${String(el.className).slice(0, 24)}`);
+      }
+      return out;
+    });
+    if (unrenderable.length) {
+      failures.push(
+        `data-tooltip on replaced elements, which render no ::after — the browser ` +
+        `draws its own native tooltip instead: ${JSON.stringify(unrenderable)}`
+      );
+    }
+
     // The bubble must read as RAISED, not as part of the surface it covers.
     // Its background is --bg-card by design, identical to the card underneath
     // (measured delta 0) and within 7 of a white input, so a faint shadow made

@@ -523,13 +523,21 @@
               <path d="M4 6h16v14H4z" />
               <path d="M4 10h16M9 3v4M15 3v4" />
             </svg>
-            <input type="date" id="filter-from" class="filter-date"
-                   title="Created from" aria-label="Created from"
-                   data-i18n-title="filters.from" data-i18n-aria-label="filters.from" />
+            <!-- The tooltip hangs off a WRAPPER, not off the <input>. An input is
+                 a replaced element, so browsers render no ::before/::after on it
+                 at all — the styled bubble simply never painted here and the
+                 browser fell back to its own native tooltip, which is why these
+                 two fields looked different from every other tooltip in the UI.
+                 The input keeps aria-label; the wrapper carries the bubble. -->
+            <span class="filter-date-wrap" data-i18n-title="filters.from">
+              <input type="date" id="filter-from" class="filter-date"
+                     aria-label="Created from" data-i18n-aria-label="filters.from" />
+            </span>
             <span class="filter-range-dash" aria-hidden="true">—</span>
-            <input type="date" id="filter-to" class="filter-date"
-                   title="Created to" aria-label="Created to"
-                   data-i18n-title="filters.to" data-i18n-aria-label="filters.to" />
+            <span class="filter-date-wrap" data-i18n-title="filters.to">
+              <input type="date" id="filter-to" class="filter-date"
+                     aria-label="Created to" data-i18n-aria-label="filters.to" />
+            </span>
           </span>
           <button type="button" id="filter-clear" class="icon-btn ghost hidden"
                   title="Clear filters" aria-label="Clear filters"
