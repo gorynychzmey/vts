@@ -1,4 +1,6 @@
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -660,3 +662,32 @@ def test_chunk_text_local(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert chunks == ["chunk one", "chunk two"]
+
+
+def test_derive_stream_ceiling_clamps_to_floor_and_cap() -> None:
+    from vts.services.summarizer import derive_stream_ceiling
+
+    kw = dict(
+        min_tokens_per_second=3.0,
+        slack=1.5,
+        floor_seconds=300,
+        cap_seconds=3600,
+    )
+    # Segment window: the middle of the range, neither bound binds.
+    assert derive_stream_ceiling(1255, **kw) == pytest.approx(627.5)
+    # Short user prompt: raised to the floor, so a cold start is not cut short.
+    assert derive_stream_ceiling(300, **kw) == 300
+    # Final summary: clamped down to the cap.
+    assert derive_stream_ceiling(15000, **kw) == 3600
+    # No budget given (max_tokens=None) -> the cap is the only sane answer.
+    assert derive_stream_ceiling(None, **kw) == 3600
+
+
+def test_stream_settings_map_from_nested_yaml() -> None:
+    from vts.core.config import _normalize_yaml_overrides
+
+    got = _normalize_yaml_overrides(
+        {"services": {"llm": {"stream_idle_timeout_seconds": 90, "min_tokens_per_second": 5}}}
+    )
+    assert got["llm_stream_idle_timeout_seconds"] == 90
+    assert got["llm_min_tokens_per_second"] == 5

@@ -139,6 +139,18 @@ class Settings(BaseSettings):
     llm_thinking: bool | None = None
     llm_chat_timeout_seconds: int = 600
     llm_final_timeout_seconds: int = 1800
+    # Streaming timeouts (vts-gouq). The segment stage generates for 10-17
+    # minutes at 9-13 tokens/s, so a total-duration timeout cannot separate
+    # "slow but working" from "wedged" — silence between chunks can.
+    llm_stream_idle_timeout_seconds: int = 120
+    # Separate and much larger: it covers model load, measured at 75 s cold,
+    # with time-to-first-token of 14-16 s once warm.
+    llm_stream_first_chunk_timeout_seconds: int = 300
+    # Overall ceiling = clamp(max_tokens / min_tps * slack, floor, cap).
+    llm_min_tokens_per_second: float = 3.0
+    llm_ceiling_slack_multiplier: float = 1.5
+    llm_ceiling_floor_seconds: int = 300
+    llm_ceiling_cap_seconds: int = 3600
     ytdlp_cookies_file: Path | None = None
     ytdlp_cookies_from_browser: list[str] = Field(default_factory=list)
     ytdlp_youtube_player_client: str | None = None
@@ -509,6 +521,12 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llm_repeat_penalty": "llm_repeat_penalty",
         "services_llm_chat_timeout_seconds": "llm_chat_timeout_seconds",
         "services_llm_final_timeout_seconds": "llm_final_timeout_seconds",
+        "services_llm_stream_idle_timeout_seconds": "llm_stream_idle_timeout_seconds",
+        "services_llm_stream_first_chunk_timeout_seconds": "llm_stream_first_chunk_timeout_seconds",
+        "services_llm_min_tokens_per_second": "llm_min_tokens_per_second",
+        "services_llm_ceiling_slack_multiplier": "llm_ceiling_slack_multiplier",
+        "services_llm_ceiling_floor_seconds": "llm_ceiling_floor_seconds",
+        "services_llm_ceiling_cap_seconds": "llm_ceiling_cap_seconds",
         "services_llm_tokenizer_path": "llm_tokenizer_path",
         "services_llm_thinking": "llm_thinking",
         # Legacy aliases kept for backwards compatibility

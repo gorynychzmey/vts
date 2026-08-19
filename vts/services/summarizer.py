@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
+from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -10,6 +13,8 @@ from typing import Any
 import httpx
 
 from vts.services.diarization.merge import LABEL_WORDS
+
+logger = logging.getLogger(__name__)
 
 # Utterances rendered by the diarization merge (render_cleaned_transcript in
 # vts.services.diarization.merge) start with "<label> N: " only at the very
@@ -161,6 +166,30 @@ async def _post_with_loading_retry(
 
 def _loading_wait_seconds(timeout_seconds: int, *, cap_seconds: float = 120.0) -> float:
     return max(5.0, min(float(timeout_seconds) * 0.6, cap_seconds))
+
+
+def derive_stream_ceiling(
+    max_tokens: int | None,
+    *,
+    min_tokens_per_second: float,
+    slack: float,
+    floor_seconds: int,
+    cap_seconds: int,
+) -> float:
+    """Overall wall-clock ceiling for one streamed completion.
+
+    Scaled to the work requested rather than fixed: a segment window and a
+    final summary differ by an order of magnitude in output size, and one
+    constant cannot serve both without being far too loose for the small case.
+
+    A missing budget means "we do not know how much this will produce", so the
+    cap is the only defensible answer — never the floor, which would cut off
+    legitimate long work.
+    """
+    if max_tokens is None or max_tokens <= 0:
+        return float(cap_seconds)
+    raw = max_tokens / max(min_tokens_per_second, 0.1) * slack
+    return float(max(floor_seconds, min(raw, cap_seconds)))
 
 
 def _is_transient_http_error(exc: Exception) -> bool:
