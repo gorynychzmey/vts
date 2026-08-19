@@ -233,6 +233,8 @@ __marimo__/
 metrics.jsonl
 TODO.md
 gh-cli-cache/
+# Review/fix write-ups handed back to the requester, not repo documentation.
+fix-report.md
 
 # UI verifier (Playwright)
 tests/ui/node_modules/

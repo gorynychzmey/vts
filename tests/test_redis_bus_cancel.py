@@ -48,3 +48,31 @@ def test_request_cancel_and_clear_flag() -> None:
     assert asyncio.run(bus.is_cancel_requested(task_id)) is False
 
 
+
+
+def test_request_restart_and_clear_flag() -> None:
+    """Restarting a task the worker still holds is a deferred action.
+
+    The endpoint cannot reset the artefacts itself while a worker is writing
+    to them, so it marks the task and returns; the worker performs the reset
+    once it has actually let go. That marker is the same ephemeral Redis flag
+    the pause and cancel paths already use — including its TTL, so a marker
+    orphaned by a crash expires instead of pinning the task forever.
+    """
+    import asyncio
+
+    fake = _FakeRedis()
+    bus = RedisBus(fake, _settings())  # type: ignore[arg-type]
+    task_id = uuid.uuid4()
+
+    assert asyncio.run(bus.is_restart_requested(task_id)) is False
+    asyncio.run(bus.request_restart(task_id))
+    assert asyncio.run(bus.is_restart_requested(task_id)) is True
+
+    # Independent of the other two flags: clearing one must not clear it.
+    asyncio.run(bus.clear_cancel_request(task_id))
+    asyncio.run(bus.clear_pause_request(task_id))
+    assert asyncio.run(bus.is_restart_requested(task_id)) is True
+
+    asyncio.run(bus.clear_restart_request(task_id))
+    assert asyncio.run(bus.is_restart_requested(task_id)) is False

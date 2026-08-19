@@ -22,6 +22,8 @@ class FakeBus:
     def __init__(self) -> None:
         self._cancels: set[uuid.UUID] = set()
         self._pauses: set[uuid.UUID] = set()
+        self._restarts: set[uuid.UUID] = set()
+        self.queued_notifications = 0
 
     async def request_cancel(self, task_id: uuid.UUID) -> None:
         self._cancels.add(task_id)
@@ -40,6 +42,18 @@ class FakeBus:
 
     async def is_pause_requested(self, task_id: uuid.UUID) -> bool:
         return task_id in self._pauses
+
+    async def request_restart(self, task_id: uuid.UUID) -> None:
+        self._restarts.add(task_id)
+
+    async def clear_restart_request(self, task_id: uuid.UUID) -> None:
+        self._restarts.discard(task_id)
+
+    async def is_restart_requested(self, task_id: uuid.UUID) -> bool:
+        return task_id in self._restarts
+
+    async def notify_queued(self) -> None:
+        self.queued_notifications += 1
 
 
 class FakeProcessor:
@@ -414,3 +428,126 @@ async def test_pre_start_pause_skip(factory):
     assert await bus.is_pause_requested(task_id) is False, (
         "the flag must be cleared, or the task loops on the next restart"
     )
+
+
+@pytest.mark.asyncio
+async def test_reap_performs_a_requested_restart(factory):
+    """A restart asked for while the worker held the task is done on release.
+
+    The endpoint cannot reset the artefacts under a running worker — it would
+    race the very step it is trying to discard — so it flags the task and
+    returns. The reset belongs here, at the one moment the task is provably
+    nobody's: after `reap` has collected it.
+    """
+    ids = await _seed_queued(factory, 1)
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_restart(ids[0])
+    await bus.request_cancel(ids[0])
+    await pool.watch_cancels()
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_count == 0
+    assert await bus.is_restart_requested(ids[0]) is False, "the flag must be cleared"
+
+    async with factory() as session:
+        row = await session.get(Task, ids[0])
+        assert row is not None
+        assert row.status == TaskStatus.queued, "a restarted task must be re-queued"
+    assert bus.queued_notifications >= 1, "the worker must be woken for the re-queued task"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_restart_keeps_the_flag_so_the_next_reap_retries(
+    factory, monkeypatch, caplog
+):
+    """I4: swallowing the error must not also swallow the request.
+
+    `_restart_if_requested` deliberately does not let its failures escape —
+    that would abort the reap loop and strand every other finished task. But
+    the docstring promises the task "can be restarted again", and clearing the
+    flag in a `finally` made that false: nothing would be left to trigger the
+    retry, so the user's request would disappear with only a log line. The flag
+    has a TTL, so leaving it set is bounded, not a leak.
+
+    Reverting the fix (clearing the flag in `finally`) makes this fail on the
+    flag assertion.
+    """
+    ids = await _seed_queued(factory, 1)
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    async def _boom(repo, task):
+        raise RuntimeError("postgres went away mid-reset")
+
+    monkeypatch.setattr(main_mod, "reset_task_for_summary_restart", _boom)
+
+    await bus.request_restart(ids[0])
+    await bus.request_cancel(ids[0])
+    await pool.watch_cancels()
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_count == 0, "the reap loop must survive the failure"
+    assert await bus.is_restart_requested(ids[0]) is True, (
+        "the flag must survive a failed reset, or the request is lost silently "
+        "and the promised retry can never happen"
+    )
+    # The task keeps its current status; it was not half-reset.
+    assert await _status(factory, ids[0]) != TaskStatus.queued
+
+
+@pytest.mark.asyncio
+async def test_restart_flag_is_cleared_once_the_reset_succeeds(factory):
+    """The flag is not sticky: a reset that worked withdraws its own request.
+
+    The complement to the test above — leaving it set on success would make
+    every later reap of the same task re-reset it.
+    """
+    ids = await _seed_queued(factory, 1)
+    bus = FakeBus()
+    proc = FakeProcessor()
+    pool = WorkerPool(session_factory=factory, bus=bus, processor=proc, max_active=1)
+
+    await pool.admit()
+    for _ in range(50):
+        if proc.entered == set(ids):
+            break
+        await asyncio.sleep(0.01)
+
+    await bus.request_restart(ids[0])
+    await bus.request_cancel(ids[0])
+    await pool.watch_cancels()
+
+    for _ in range(50):
+        await pool.reap()
+        if pool.active_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert await bus.is_restart_requested(ids[0]) is False
+    assert await _status(factory, ids[0]) == TaskStatus.queued

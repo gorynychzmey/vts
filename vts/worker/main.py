@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import get_settings
 from vts.core.logging import configure_logging
-from vts.db.models import TaskStatus
+from sqlalchemy.orm import selectinload
+
+from vts.db.models import Task, TaskStatus
+from vts.services.summary_restart import reset_task_for_summary_restart
 from vts.db.repo import Repo
 from vts.db.session import SessionLocal
 from vts.delivery.consumer import delivery_loop
@@ -306,6 +309,53 @@ class WorkerPool:
                 self._active.pop(task_id, None)
                 self._cancel_sent.discard(task_id)
                 self._pause_deadline.pop(task_id, None)
+                await self._restart_if_requested(task_id)
+
+    async def _restart_if_requested(self, task_id: uuid.UUID) -> None:
+        """Reset a task's summary stages if a restart was asked for.
+
+        The API cannot do this itself while a worker holds the task: it would
+        reset the artefacts under the very step still writing to them, and the
+        step would then finish and write its window back over the cleared
+        state. Here the task is provably nobody's — it has just been reaped —
+        so the reset is safe.
+
+        Failures are logged and swallowed rather than raised: letting the error
+        escape would abort the reap loop and strand every other finished task.
+        The flag is deliberately left set on that path, so the next reap tick
+        retries — clearing it in a `finally` would have made the docstring's
+        promise ("can be restarted again") false, since nothing would be left
+        to trigger the retry and the user's request would vanish silently. The
+        flag's TTL still bounds the retrying.
+        """
+        if not await self._bus.is_restart_requested(task_id):
+            return
+        try:
+            async with self._session_factory() as session:
+                repo = Repo(session)
+                # Eager-load `steps`: _reset_summary_steps walks the relation,
+                # and lazy-loading it later — after the greenlet context this
+                # `get` runs in is gone — raises MissingGreenlet under the
+                # async session. _reset_summary_artifacts does NOT touch it (it
+                # reads task.artifact_dir, a plain column) and runs in a thread,
+                # where a lazy load would raise inside the worker thread and be
+                # swallowed; eager-loading here covers that too if it ever
+                # grows a relation access.
+                task = await session.get(
+                    Task, task_id, options=[selectinload(Task.steps)]
+                )
+                if task is None:
+                    self._log.info("restart requested for a task that is gone: %s", task_id)
+                    await self._bus.clear_restart_request(task_id)
+                    return
+                await reset_task_for_summary_restart(repo, task)
+            await self._bus.clear_restart_request(task_id)
+            await self._bus.notify_queued()
+            self._log.info("summary restarted for task %s", task_id)
+        except Exception:
+            self._log.exception(
+                "restart failed for task %s; leaving the flag set to retry", task_id
+            )
 
     async def cancel_all(self) -> None:
         """Cancel every active task and await it (teardown)."""

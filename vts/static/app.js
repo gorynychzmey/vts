@@ -4013,7 +4013,21 @@ async function restartSummary(taskId, mode = "full") {
   if (!confirmed) {
     return;
   }
-  await apiBatchPost("/api/tasks/" + encodeURIComponent(taskId) + "/restart_summary", { mode });
+  const result = await apiBatchPost(
+    "/api/tasks/" + encodeURIComponent(taskId) + "/restart_summary", { mode });
+  // A task the worker still holds answers "restarting", not "queued": the
+  // reset is deferred until the worker lets go, which takes a second or two.
+  // loadTasks() would re-render the card with the status it still has
+  // (running / waiting), so the click would look like it did nothing. Paint
+  // the pending state on the status line instead; the SSE task_status event
+  // overwrites it with `queued` as soon as the worker gets there (vts-gouq).
+  if (result && result.status === "restarting") {
+    const statusEl = findTaskEl(taskId)?.querySelector(".task-status");
+    if (statusEl) {
+      statusEl.textContent = t("status.restarting");
+    }
+    return;
+  }
   await loadTasks();
 }
 
