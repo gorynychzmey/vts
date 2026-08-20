@@ -17,11 +17,16 @@ logger = logging.getLogger(__name__)
 async def _main() -> None:
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        await refresh_untouched_system_prompts(session, settings.prompts_dir)
-        await session.commit()
-    await engine.dispose()
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await refresh_untouched_system_prompts(session, settings.prompts_dir)
+            await session.commit()
+    finally:
+        # `main` swallows the exception below, so without this the pool would
+        # be dropped rather than closed — an unclean disconnect in the server
+        # log on every failed refresh. Same shape as vts.db.preflight.
+        await engine.dispose()
 
 
 def main() -> int:
@@ -35,7 +40,11 @@ def main() -> int:
     leaves users on the previous prompt text, which the next deploy fixes on
     its own, while a deploy that does not happen is an outage.
 
-    Same ruling, and the same reason, as the delivery plugin loader (vts-j8gz).
+    The delivery plugin loader reasons the same way about the same tradeoff
+    (vts-j8gz), but keeps a second tier: it exits 1 for an operator-fixable
+    misconfiguration. There is no equivalent tier here — `vendor_text` already
+    falls back when the file is missing, empty, or unreadable, so no failure
+    left in this path is one an operator could act on mid-deploy.
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     try:
