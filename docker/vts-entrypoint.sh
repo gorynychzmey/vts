@@ -13,6 +13,11 @@ migrate() {
   # productive; the guard exists to stop a stray `alembic upgrade head` in a
   # checkout on the prod host, not this one (vts-66i).
   VTS_ALLOW_PROD_MIGRATIONS=1 alembic upgrade head
+  # Untouched copies of the vendor system prompt pick up a newly shipped
+  # version here: this runs once per deploy, before webapi or worker starts
+  # serving, so there is no race on the mass UPDATE and no window where the
+  # worker creates a copy from the old file afterwards (vts-kujy).
+  python -m vts.cli.refresh_system_prompts
 }
 
 start_webapi() {

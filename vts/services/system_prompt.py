@@ -9,6 +9,7 @@ the file on its own. `refresh_untouched_system_prompts` closes that gap.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from vts.db.models import Prompt
 from vts.db.repo import Repo
 from vts.services.prompt_registry import list_system_prompts
 from vts.services.summarizer import load_prompt
+
+logger = logging.getLogger(__name__)
 
 _SUMMARY_KEY = "summary"
 _FALLBACK = "Produce a structured knowledge document from the notes."
@@ -80,3 +83,36 @@ async def get_or_create_system_prompt(
         # between our SELECT and INSERT. That is the race resolving correctly —
         # re-read and use theirs.
         return (await session.scalars(stmt)).one()
+
+
+async def refresh_untouched_system_prompts(
+    session: AsyncSession, prompts_dir: Path
+) -> tuple[int, int]:
+    """Rewrite every vendor copy the user has not edited. Returns (refreshed, skipped).
+
+    `updated_at IS NULL` is the whole test: it records that the user has never
+    edited this copy, and it keeps meaning that across any number of releases.
+    The refresh does **not** stamp `updated_at` — rewriting a copy is not a
+    user edit, and stamping it would make the copy immune to the next release.
+    """
+    text = vendor_text(prompts_dir)
+
+    skipped = len(
+        (
+            await session.scalars(
+                sa.select(Prompt.id).where(Prompt.is_system, Prompt.updated_at.is_not(None))
+            )
+        ).all()
+    )
+    result = await session.execute(
+        sa.update(Prompt)
+        .where(Prompt.is_system, Prompt.updated_at.is_(None))
+        .values(system_prompt=text)
+    )
+    refreshed = int(result.rowcount or 0)
+    logger.info(
+        "system prompt refresh: %d untouched copies rewritten, %d left as edited",
+        refreshed,
+        skipped,
+    )
+    return refreshed, skipped

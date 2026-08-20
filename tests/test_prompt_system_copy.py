@@ -391,3 +391,60 @@ async def test_pipeline_creates_the_copy_on_a_first_summary(factory, tmp_path) -
             )
         ).all()
     assert len(rows) == 1, "the worker must persist the copy it just made"
+
+
+@pytest.mark.asyncio
+async def test_refresh_rewrites_untouched_copies_and_spares_edited_ones(
+    factory, tmp_path
+) -> None:
+    """A newly shipped prompt has to reach users who already have a copy.
+
+    Inferring "untouched" by comparing the copy to the current file does not
+    work: a copy made from v1 and never touched does not match v2 either, so
+    every untouched copy would read as edited exactly when the refresh is
+    needed. The record — `updated_at IS NULL` — survives any number of
+    releases, which this test pins by shipping *two* new versions.
+    """
+    from vts.db.repo import Repo
+    from vts.services.system_prompt import (
+        get_or_create_system_prompt,
+        refresh_untouched_system_prompts,
+    )
+
+    (tmp_path / "global_prompt.md").write_text("v1", encoding="utf-8")
+    untouched_user = uuid.uuid4()
+    editing_user = uuid.uuid4()
+
+    async with factory() as session:
+        session.add(User(id=untouched_user, username="prompt-refresh-untouched@example.invalid"))
+        session.add(User(id=editing_user, username="prompt-refresh-edited@example.invalid"))
+        await session.flush()
+        await get_or_create_system_prompt(session, untouched_user, tmp_path)
+        edited = await get_or_create_system_prompt(session, editing_user, tmp_path)
+        await Repo(session).update_prompt(
+            editing_user, edited.id, name=None, system_prompt="mine"
+        )
+        await session.commit()
+
+    (tmp_path / "global_prompt.md").write_text("v2", encoding="utf-8")
+    async with factory() as session:
+        refreshed, skipped = await refresh_untouched_system_prompts(session, tmp_path)
+        await session.commit()
+    assert (refreshed, skipped) == (1, 1)
+
+    # Second release: the untouched copy now holds v2, which matches neither
+    # v1 nor v3 — comparing text would call it edited from here on.
+    (tmp_path / "global_prompt.md").write_text("v3", encoding="utf-8")
+    async with factory() as session:
+        refreshed, skipped = await refresh_untouched_system_prompts(session, tmp_path)
+        await session.commit()
+    assert (refreshed, skipped) == (1, 1)
+
+    async with factory() as session:
+        rows = {
+            r.user_id: r
+            for r in (await session.scalars(sa.select(Prompt).where(Prompt.is_system))).all()
+        }
+    assert rows[untouched_user].system_prompt == "v3"
+    assert rows[untouched_user].updated_at is None, "a refresh is not a user edit"
+    assert rows[editing_user].system_prompt == "mine"
