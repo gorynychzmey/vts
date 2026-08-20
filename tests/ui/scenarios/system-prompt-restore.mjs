@@ -30,6 +30,19 @@ const PROMPTS = [
 
 const label = (page) => page.textContent("#prompt-delete-btn").then((s) => (s || "").trim());
 
+// Selecting a row loads it through `await api(...)`, so the editor is filled a
+// tick AFTER the click. settled() cannot see that: it fingerprints geometry,
+// and relabelling a button barely moves it — two frames match while the fetch
+// is still in flight. Wait for the id the editor actually holds instead.
+async function openRow(page, id) {
+  await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${id}"]`);
+  await page.waitForFunction(
+    (want) => document.getElementById("prompt-edit-id")?.value === want,
+    id
+  );
+  await settled(page);
+}
+
 // The locale entry keeps the menu open by design, so a blind click on the burger
 // would CLOSE it and the next locale click would miss.
 async function openHeaderMenu(page) {
@@ -91,16 +104,14 @@ export async function run() {
     if (rows.length !== 2) failures.push(`expected 2 prompt rows, got ${rows.length}`);
 
     // --- (0) An ordinary user prompt still reads "Delete" ---
-    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${USER_ID}"]`);
-    await settled(page);
+    await openRow(page, USER_ID);
     const userLabel = await label(page);
     if (userLabel !== "Delete prompt") {
       failures.push(`user prompt: button reads ${JSON.stringify(userLabel)}, expected "Delete prompt"`);
     }
 
     // --- (1) The system prompt reads the RESTORE label, not the delete one ---
-    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${SYSTEM_ID}"]`);
-    await settled(page);
+    await openRow(page, SYSTEM_ID);
     const sysLabel = await label(page);
     if (sysLabel !== "Restore") {
       failures.push(`system prompt: button reads ${JSON.stringify(sysLabel)}, expected "Restore"`);
@@ -212,8 +223,7 @@ export async function run() {
     }
 
     // --- A user prompt confirms too, and its confirmation is the delete one ---
-    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${USER_ID}"]`);
-    await settled(page);
+    await openRow(page, USER_ID);
     let userConfirm = "";
     page.once("dialog", async (d) => {
       userConfirm = d.message();
@@ -237,8 +247,7 @@ export async function run() {
     // Cancel clears the form and the id it acts on, so the label has to go with
     // it. Otherwise a red button still reading "Restore" sits above an empty
     // form and silently does nothing when clicked — it no-ops on the empty id.
-    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${RESTORED_ID}"]`);
-    await settled(page);
+    await openRow(page, RESTORED_ID);
     if ((await label(page)) !== "Restore") {
       failures.push("re-opening the restored system prompt did not read Restore");
     }
@@ -254,9 +263,16 @@ export async function run() {
     // --- (7) Duplicate must not keep the Restore label over an unsaved copy ---
     // Duplicate opens an unsaved NEW prompt. Carrying the system flag over would
     // put "Restore" above a copy that has never been saved.
-    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${RESTORED_ID}"]`);
-    await settled(page);
+    await openRow(page, RESTORED_ID);
+    // duplicatePrompt() also awaits an api() call before filling the form, so
+    // wait for the copy to actually land rather than for the layout to settle:
+    // it clears the edit-id and puts the "(copy)" name in the field.
     await clickReal(page, "#prompt-duplicate-btn");
+    await page.waitForFunction(
+      () =>
+        document.getElementById("prompt-edit-id")?.value === "" &&
+        (document.getElementById("prompt-name-input")?.value || "").includes("copy")
+    );
     await settled(page);
     const dupHidden = await page.$eval("#prompt-delete-btn", (el) => el.classList.contains("hidden"));
     if (!dupHidden) {
