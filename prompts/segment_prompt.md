@@ -25,10 +25,10 @@ Forbidden:
 - Do not add interpretations, transitions, conclusions, or any text not present in the source.
 - No headings, no bullet lists, no meta commentary.
 
-Length contract (hard requirement):
-- Input is ~${INPUT_WORDS} words. Your output must be approximately ${TARGET_WORDS} words (~${TARGET_RATIO}% of the input) — what remains after deleting fillers and repetitions.
-- Nearly IDENTICAL wording to the input = you have NOT edited; edit every sentence.
-- Substantially fewer than ${TARGET_WORDS} words = you dropped sentences or retold instead of editing; restore the lost content sentence by sentence.
+Length (expectation, not a quota):
+- Input is ~${INPUT_WORDS} words. After deleting fillers and repetitions the output typically lands near ${TARGET_WORDS} words (~${TARGET_RATIO}% of the input).
+- That figure is an estimate, not a target to hit. Filler density varies: a dense passage legitimately shrinks by only a few percent, a rambling one shrinks a lot. Never pad, and never drop a sentence, to reach it.
+- If your output is far below it, check that you edited sentence by sentence rather than retelling a shortened version; restore anything you dropped.
 
 Output:
 Continuous prose paragraphs following the flow of the original speech. Split into paragraphs at natural topic shifts.
