@@ -324,3 +324,38 @@ async def test_get_prompt_result_missing_is_404(authed_app, client, tmp_path):
 async def test_get_prompt_result_unknown_task_is_404(client):
     resp = await client.get(f"/api/tasks/{uuid.uuid4()}/results/system/summary")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_prompts_list_materialises_the_system_copy_for_a_new_user(client):
+    """Opening the prompt list is enough to get an editable system prompt.
+
+    A user who has never run a summary has no copy yet. If the list only
+    reported existing rows, that user would see no system prompt at all and
+    could not open it for editing — which is the whole point of the feature.
+    """
+    body = (await client.get("/api/prompts")).json()
+
+    system_rows = [p for p in body if p["is_system"]]
+    assert len(system_rows) == 1, "the list itself must materialise the copy"
+    assert system_rows[0]["editable"] is True
+    uuid.UUID(system_rows[0]["id"])
+
+
+@pytest.mark.asyncio
+async def test_prompts_list_does_not_make_a_second_copy(client):
+    """The creation must be committed, and it must happen only once.
+
+    Without a commit the row would be rolled back at the end of the request
+    and silently recreated on every list call, so counting rows across two
+    calls is what proves the copy was actually persisted.
+    """
+    first = (await client.get("/api/prompts")).json()
+    second = (await client.get("/api/prompts")).json()
+
+    first_system = [p for p in first if p["is_system"]]
+    second_system = [p for p in second if p["is_system"]]
+    assert len(second_system) == 1, "a second call must not create a second copy"
+    assert second_system[0]["id"] == first_system[0]["id"], (
+        "the copy must be committed, not recreated per request"
+    )

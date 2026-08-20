@@ -165,9 +165,21 @@ async def revoke_token(
 async def list_prompts_endpoint(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
+    settings: Settings = Depends(get_settings_dep),
 ) -> list[PromptOut]:
     # The vendor prompt is no longer listed separately: it is one of the user's
-    # own rows now, flagged `is_system` (vts-kujy).
+    # own rows now, flagged `is_system` (vts-kujy). Materialise it here, because
+    # a user who has never run a summary has no copy yet and would otherwise see
+    # no system prompt at all — with nothing to open for editing. The call is
+    # idempotent (it selects before inserting), so the common path costs one
+    # extra SELECT and no write.
+    from vts.services.system_prompt import get_or_create_system_prompt
+
+    await get_or_create_system_prompt(session, uuid.UUID(user.id), settings.prompts_dir)
+    # Committed, or the new row would be rolled back at the end of the request
+    # and recreated on every list call.
+    await session.commit()
+
     repo = Repo(session)
     out: list[PromptOut] = []
     for row in await repo.list_prompts(uuid.UUID(user.id)):
