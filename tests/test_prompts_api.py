@@ -78,6 +78,29 @@ async def test_prompts_list_marks_an_ordinary_prompt_as_not_system(client):
 
 
 @pytest.mark.asyncio
+async def test_prompt_update_of_the_system_copy_keeps_is_system_true(client):
+    """PATCH must echo the row's real `is_system`, not the schema default.
+
+    `is_system` is the only signal the frontend has to offer "Restore" instead
+    of "Delete" for the vendor copy. If the PATCH response reported `False`
+    for a system row, and the frontend updates its cache from that response
+    (as it does), the button would flip to "Delete" right after the first
+    edit — even though the row is still flagged `is_system=True` in the DB.
+    """
+    await client.get("/api/prompts/system/summary/text")  # materialise the copy
+    listed = (await client.get("/api/prompts")).json()
+    system_row = next(p for p in listed if p["is_system"])
+
+    patched = (await client.patch(f"/api/prompts/{system_row['id']}",
+               json={"system_prompt": "my own wording"})).json()
+    assert patched["is_system"] is True
+
+    # And a later list still shows it as the same system row, unaffected.
+    relisted = (await client.get("/api/prompts")).json()
+    assert next(p for p in relisted if p["id"] == system_row["id"])["is_system"] is True
+
+
+@pytest.mark.asyncio
 async def test_prompt_create_list_update_delete(client):
     created = (await client.post("/api/prompts",
                json={"name": "Mine", "system_prompt": "Do X"})).json()

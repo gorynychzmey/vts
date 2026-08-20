@@ -261,7 +261,9 @@ async def update_prompt_endpoint(
     if row is None:
         raise HTTPException(status_code=404, detail="Prompt not found")
     await session.commit()
-    return PromptOut(source="user", id=str(row.id), name=row.name, editable=True)
+    return PromptOut(
+        source="user", id=str(row.id), name=row.name, editable=True, is_system=row.is_system
+    )
 
 
 @router.delete("/api/prompts/{prompt_id}", status_code=204)
