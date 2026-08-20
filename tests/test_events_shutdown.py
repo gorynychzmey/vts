@@ -8,6 +8,7 @@ the full 15s, with uvicorn logging "Waiting for connections to close."
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -258,3 +259,73 @@ async def test_sigterm_sets_the_shutdown_flag_before_the_lifespan(authed_app):
     assert signal.getsignal(signal.SIGTERM) is before, (
         "the previous SIGTERM handler was not restored"
     )
+
+
+class _MessagePubSub(_FakePubSub):
+    """A channel that delivers one message, then blocks like an idle one.
+
+    The message is what gets the generator to a `yield`; the block afterwards
+    is what leaves a pending `get_message` future behind when the consumer
+    walks away mid-stream.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._delivered = False
+
+    async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float = 0.0):
+        if not self._delivered:
+            self._delivered = True
+            import json as _json
+
+            payload = {"user_id": "00000000-0000-0000-0000-0000000000a1", "event": "task_updated"}
+            return {"data": _json.dumps(payload).encode("utf-8")}
+        await asyncio.sleep(timeout)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_stream_cancels_the_in_flight_pubsub_read(authed_app):
+    """A client that hangs up must not strand the in-flight pubsub read.
+
+    The loop parks in `asyncio.wait` with a fresh `get_message` future
+    pending. When the client disconnects, Starlette cancels the task running
+    the generator, and the CancelledError lands inside that wait. The existing
+    `finally` cancels `stop` and `gone` — but not `read`, which is left owned
+    by nobody. It later fails with a redis ConnectionError that asyncio reports
+    as "Task exception was never retrieved": recurring log noise on prod, and
+    one leaked future per disconnect (vts-9tr3).
+
+    Note the read must be cancelled from inside the generator. Cancelling the
+    consuming task does not reach it: `ensure_future` makes an independent
+    task, not a child of whoever awaited it.
+    """
+    app, _factory = authed_app
+    _pubsub = _FakePubSub()
+    app.state.redis = _FakeRedis()
+    app.state.redis.pubsub = lambda: _pubsub  # type: ignore[method-assign]
+    app.state.shutting_down = asyncio.Event()
+
+    response = await _call_events_endpoint(app)
+    agen = response.body_iterator
+
+    await agen.__anext__()  # server_version, then the loop starts a read
+
+    # Park the generator inside asyncio.wait, then hang up on it.
+    pump = asyncio.ensure_future(agen.__anext__())
+    await asyncio.sleep(0.05)
+    pump.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await pump
+    with contextlib.suppress(RuntimeError):
+        await agen.aclose()
+    await asyncio.sleep(0.05)
+
+    leaked = [
+        t
+        for t in asyncio.all_tasks()
+        if t is not asyncio.current_task()
+        and not t.done()
+        and "get_message" in repr(t.get_coro())
+    ]
+    assert not leaked, f"leaked pubsub read(s): {leaked}"

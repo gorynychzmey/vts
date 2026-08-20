@@ -698,6 +698,17 @@ async def get_events(
                 # ~30s cadence, but a shutdown is noticed immediately.
                 try:
                     await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                except BaseException:
+                    # The client hung up while we were parked here, so the
+                    # cancellation lands inside the wait. `read` is an
+                    # independent task, not a child of this one: nothing
+                    # cancels it on our way out, and it later fails with a
+                    # redis ConnectionError that no one retrieves — recurring
+                    # log noise plus a leaked future per disconnect
+                    # (vts-9tr3). The two below are handled in `finally`
+                    # because they are cancelled on every normal pass too.
+                    read.cancel()
+                    raise
                 finally:
                     if stop is not None and not stop.done():
                         stop.cancel()
