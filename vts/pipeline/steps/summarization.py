@@ -128,13 +128,22 @@ def tokenizer_path(settings: Settings) -> str | None:
     return str(p) if p is not None else None
 
 
-def stream_kwargs(settings: Settings) -> dict[str, float | int]:
+def stream_kwargs(
+    settings: Settings, *, expected_output_tokens: int | None = None
+) -> dict[str, float | int]:
     """Streaming limits for one `chat_completion` call.
 
     Collected in one place because all four call sites pass the same six
     values; threading them individually would be six chances to diverge.
+
+    `expected_output_tokens` is what scales the wall-clock ceiling to the size
+    of the job. Without it `derive_stream_ceiling` has nothing to work from and
+    returns the flat cap, so a small segment window would wait as long as a
+    final summary before being called stuck (vts-svnj). It is passed only when
+    the caller has a real estimate; a fabricated one would be worse than the
+    cap, because it would cut generation short.
     """
-    return {
+    kwargs: dict[str, float | int] = {
         "stream_idle_timeout": float(settings.llm_stream_idle_timeout_seconds),
         "stream_first_chunk_timeout": float(
             settings.llm_stream_first_chunk_timeout_seconds
@@ -144,6 +153,9 @@ def stream_kwargs(settings: Settings) -> dict[str, float | int]:
         "ceiling_floor_seconds": int(settings.llm_ceiling_floor_seconds),
         "ceiling_cap_seconds": int(settings.llm_ceiling_cap_seconds),
     }
+    if expected_output_tokens is not None:
+        kwargs["expected_output_tokens"] = int(expected_output_tokens)
+    return kwargs
 
 
 async def count_tokens(
@@ -867,7 +879,7 @@ class SummarizeWindowsStep(Step):
                                 use_json_format=False,
                                 thinking=ctx.settings.llm_thinking,
                                 num_ctx=budget_cfg.n_ctx,
-                                **stream_kwargs(ctx.settings),
+                                **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
                             )
                         except RuntimeError as exc:
                             if whole_mode and is_context_overflow_error(str(exc)):
@@ -1137,7 +1149,7 @@ class PackWindowNotesStep(Step):
                             use_json_format=False,
                             thinking=ctx.settings.llm_thinking,
                             num_ctx=budget_cfg.n_ctx,
-                            **stream_kwargs(ctx.settings),
+                            **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
                         )
                     packed_tc = await count_tokens(ctx, packed_text, timeout_seconds=timeout_seconds)
                     log_metrics(st.logger, SummarizationMetrics(
@@ -1368,7 +1380,7 @@ class FinalizePromptStep(Step):
                 use_json_format=False,
                 thinking=ctx.settings.llm_thinking,
                 num_ctx=budget_cfg.n_ctx,
-                **stream_kwargs(ctx.settings),
+                **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 

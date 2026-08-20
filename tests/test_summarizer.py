@@ -1808,3 +1808,122 @@ def test_stop_the_queue_clause_excludes_http_status_errors() -> None:
     assert "except httpx.HTTPError" not in source, (
         "HTTPError also catches HTTPStatusError — the HTTP 400 the queue walks"
     )
+
+
+# --- vts-svnj: the ceiling has to receive a budget ---------------------------
+
+
+def test_stream_kwargs_passes_the_expected_output_budget() -> None:
+    """The ceiling scales to the work requested — it needs the number.
+
+    `derive_stream_ceiling` returns the flat cap when it gets no budget, so
+    without this every generation shares one hour-long ceiling regardless of
+    size. The budget travels beside the other streaming limits rather than as
+    `max_tokens`, because it must not become a hard generation limit.
+    """
+    from vts.pipeline.steps.summarization import stream_kwargs
+
+    class _S:
+        llm_stream_idle_timeout_seconds = 90
+        llm_stream_first_chunk_timeout_seconds = 200
+        llm_min_tokens_per_second = 5.0
+        llm_ceiling_slack_multiplier = 2.0
+        llm_ceiling_floor_seconds = 100
+        llm_ceiling_cap_seconds = 900
+
+    assert stream_kwargs(_S(), expected_output_tokens=1200) == {
+        "stream_idle_timeout": 90.0,
+        "stream_first_chunk_timeout": 200.0,
+        "min_tokens_per_second": 5.0,
+        "ceiling_slack": 2.0,
+        "ceiling_floor_seconds": 100,
+        "ceiling_cap_seconds": 900,
+        "expected_output_tokens": 1200,
+    }
+    # Omitted stays omitted: callers that genuinely have no estimate must keep
+    # getting the cap rather than a fabricated one.
+    assert "expected_output_tokens" not in stream_kwargs(_S())
+
+
+def test_expected_output_tokens_scales_the_ceiling_without_capping_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It must reach the ceiling and NOT the request body.
+
+    `max_tokens` goes into the payload, so reusing it here would truncate a
+    legitimately long summary mid-sentence: `max_out` sits only ~15% above the
+    target the prompt already aims for. This budget is an estimate used for
+    timing, never a limit on what the model may produce.
+    """
+    from vts.services import summarizer as sm
+
+    sent: list[dict] = []
+    ceilings: list[float] = []
+    real_derive = sm.derive_stream_ceiling
+
+    def spy(max_tokens, **kw):
+        value = real_derive(max_tokens, **kw)
+        ceilings.append(value)
+        return value
+
+    class StubAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "StubAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, json: dict[str, object]):
+            sent.append(json)
+            return _StubStream(content="ok")
+
+        async def get(self, url: str) -> httpx.Response:
+            return _response(status_code=404, url=url, payload={}, method="GET")
+
+    monkeypatch.setattr("vts.services.summarizer.httpx.AsyncClient", StubAsyncClient)
+    monkeypatch.setattr("vts.services.summarizer.derive_stream_ceiling", spy)
+
+    raw = asyncio.run(
+        _client().chat_completion(
+            model="m",
+            system_prompt="sys",
+            user_prompt="user",
+            expected_output_tokens=1200,
+            min_tokens_per_second=4.0,
+            ceiling_slack=1.5,
+            ceiling_floor_seconds=100,
+            ceiling_cap_seconds=3600,
+        )
+    )
+
+    assert raw == "ok"
+    # 1200 / 4.0 * 1.5 = 450 — scaled to the work, not the flat 3600 cap.
+    assert ceilings and ceilings[0] == pytest.approx(450.0)
+    # And nothing about the budget leaked into the request body.
+    assert sent and all("max_tokens" not in p for p in sent)
+    assert all("expected_output_tokens" not in p for p in sent)
+
+
+def test_every_real_generation_call_passes_a_budget_to_the_ceiling() -> None:
+    """The wiring, not just the helper — this is what actually regressed.
+
+    `derive_stream_ceiling` and `stream_kwargs` were both correct and both
+    live, yet every user-facing generation still got the flat cap, because no
+    call site passed the budget it had already computed. A unit test of either
+    piece stays green through that, so assert the call sites themselves.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("vts/pipeline/steps/summarization.py").read_text(encoding="utf-8")
+    calls = re.findall(r"\*\*stream_kwargs\(ctx\.settings([^)]*)\)", src)
+    # Four call sites: the warm-up plus the three real generations.
+    assert len(calls) == 4, f"expected 4 stream_kwargs call sites, found {len(calls)}"
+    with_budget = [c for c in calls if "expected_output_tokens" in c]
+    assert len(with_budget) == 3, (
+        "the window, pack and final-summary calls must each pass a budget; "
+        f"only {len(with_budget)} do"
+    )

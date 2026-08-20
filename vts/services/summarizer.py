@@ -1106,6 +1106,12 @@ class LLMClient:
         use_json_format: bool = True,
         thinking: bool | None = None,
         num_ctx: int | None = None,
+        # How much output this call is expected to produce, for sizing the
+        # ceiling only. Deliberately NOT `max_tokens`: that goes into the
+        # payload and would cap generation, and the estimate sits only ~15%
+        # above the target the prompt already aims for, so a long-but-valid
+        # summary would be truncated mid-sentence (vts-svnj).
+        expected_output_tokens: int | None = None,
         stream_idle_timeout: float = 120.0,
         stream_first_chunk_timeout: float = 300.0,
         min_tokens_per_second: float = 3.0,
@@ -1163,7 +1169,7 @@ class LLMClient:
             while queue:
                 label, payload = queue.pop(0)
                 ceiling = derive_stream_ceiling(
-                    max_tokens,
+                    expected_output_tokens if expected_output_tokens is not None else max_tokens,
                     min_tokens_per_second=min_tokens_per_second,
                     slack=ceiling_slack,
                     floor_seconds=ceiling_floor_seconds,
