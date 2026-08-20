@@ -5334,6 +5334,9 @@ const promptsListEl = document.getElementById("prompts-list");
 let promptsManagerCache = [];
 const promptForm = document.getElementById("prompt-form");
 const promptEditIdInput = document.getElementById("prompt-edit-id");
+// Whether what is open in the editor is the user's copy of a vendor prompt.
+// Decides both the button's wording and which confirmation it asks for.
+let currentPromptIsSystem = false;
 const promptNameInput = document.getElementById("prompt-name-input");
 const promptBodyInput = document.getElementById("prompt-body-input");
 const promptSubmitBtn = document.getElementById("prompt-submit-btn");
@@ -5399,13 +5402,48 @@ document.getElementById("prompt-duplicate-btn")?.addEventListener("click", () =>
 document.getElementById("prompt-delete-btn")?.addEventListener("click", async () => {
   const id = promptEditIdInput?.value;
   if (!id) return;
+  // The same button restores a system prompt and deletes a user one: for the
+  // system prompt, deleting the row *is* the restore, because the next request
+  // recreates it from the vendor file.
+  const isSystem = Boolean(currentPromptIsSystem);
+  // Both ask first. Deleting a user prompt used to be irreversible AND silent.
+  const confirmed = window.confirm(
+    t(isSystem ? "prompts.manage.confirm_restore" : "prompts.manage.confirm_delete")
+  );
+  if (!confirmed) return;
   const resp = await fetch(buildPath(`/api/prompts/${encodeURIComponent(id)}`), { method: "DELETE" });
-  if (resp.ok) {
-    resetPromptForm();
-    syncPromptEditorState(null);
-    await refreshPromptsManager();
-    await loadPrompts();
+  if (!resp.ok) return;
+  await refreshPromptsManager();
+  await loadPrompts();
+  if (isSystem) {
+    // Re-open it so the restored vendor text is on screen without a manual
+    // reload. The GET recreates the row from the vendor file, so the editor is
+    // live again rather than showing the text of something that no longer
+    // exists.
+    try {
+      const restored = await api("/api/prompts/system/summary/text");
+      const body = document.getElementById("prompt-body-input");
+      if (body) body.value = restored.system_prompt || "";
+      // The recreated row has a NEW id; the editor still holds the deleted
+      // one, and saving or restoring again with it would hit a 404. Take the
+      // fresh id from the list we just reloaded — it is the same request that
+      // recreated the row, so the flag is there to find it by.
+      const fresh = promptsManagerCache.find((p) => p.is_system);
+      if (fresh) {
+        setPromptFormMode(fresh.id);
+        promptsListEl?.querySelectorAll(".mgr-item").forEach((el) => {
+          el.classList.toggle("active", el.dataset.promptId === fresh.id);
+        });
+        syncPromptEditorState(fresh);
+      }
+      updatePromptBodyMeta();
+      return;
+    } catch (err) {
+      console.error("Failed to reload the restored system prompt", err);
+    }
   }
+  resetPromptForm();
+  syncPromptEditorState(null);
 });
 
 document.getElementById("prompt-body-input")?.addEventListener("input", updatePromptBodyMeta);
@@ -5502,11 +5540,28 @@ async function openPromptInEditor(prompt) {
 // Which actions the editor offers depends on what is open in it.
 function syncPromptEditorState(prompt) {
   const editable = Boolean(prompt?.editable);
+  currentPromptIsSystem = Boolean(prompt?.is_system);
   const bodyInput = document.getElementById("prompt-body-input");
   const nameInput = document.getElementById("prompt-name-input");
   if (bodyInput) bodyInput.readOnly = prompt ? !editable : false;
   if (nameInput) nameInput.readOnly = prompt ? !editable : false;
-  document.getElementById("prompt-delete-btn")?.classList.toggle("hidden", !editable);
+  const deleteBtn = document.getElementById("prompt-delete-btn");
+  deleteBtn?.classList.toggle("hidden", !editable);
+  if (deleteBtn) {
+    // Same button, same place — only the wording changes with the context: for
+    // the user's copy of a vendor prompt, deleting the row IS the restore.
+    //
+    // The state has to live in the data-i18n ATTRIBUTE, not just in textContent.
+    // applyI18n() rewrites textContent from data-i18n for every element that
+    // carries it, and it runs on every language switch — so a label set only
+    // imperatively would silently revert to "Delete" while the system prompt is
+    // still open, leaving a button that says Delete but restores.
+    const labelKey = currentPromptIsSystem
+      ? "prompts.manage.restore"
+      : "prompts.manage.delete";
+    deleteBtn.setAttribute("data-i18n", labelKey);
+    deleteBtn.textContent = t(labelKey);
+  }
   document.getElementById("prompt-duplicate-btn")?.classList.toggle("hidden", !prompt);
   const submit = document.getElementById("prompt-submit-btn");
   if (submit) submit.classList.toggle("hidden", Boolean(prompt) && !editable);

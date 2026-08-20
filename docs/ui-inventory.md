@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 52 capabilities · 101 routes (74 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 391 English UI strings.
+**Counts:** 52 capabilities · 101 routes (74 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 394 English UI strings.
 
 ## Capabilities by entity
 
@@ -262,4 +262,5 @@ Migrations that introduced or changed the entities above.
 | `0021_delivery_attempts` | delivery_attempts |
 | `0022_delivery_credentials` | delivery_credentials: split the connection out of delivery_targets (vts-929) |
 | `0023_delivery_variant_width` | widen delivery_attempts.variant for prompt refs (vts-as1i) |
+| `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 
