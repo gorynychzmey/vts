@@ -20,9 +20,11 @@ export const name = "system-prompt-restore";
 
 const SYSTEM_ID = "11111111-1111-1111-1111-111111111111";
 const USER_ID = "22222222-2222-2222-2222-222222222222";
+// The restore DELETEs the row and the next read recreates it — with a new id.
+const RESTORED_ID = "33333333-3333-3333-3333-333333333333";
 
 const PROMPTS = [
-  { source: "user", id: SYSTEM_ID, name: "Summary", editable: true, is_system: true },
+  { source: "user", id: SYSTEM_ID, name: "My tweaked summary", editable: true, is_system: true },
   { source: "user", id: USER_ID, name: "Meeting memo", editable: true, is_system: false },
 ];
 
@@ -45,9 +47,18 @@ export async function run() {
     [`/api/prompts/${SYSTEM_ID}`]: {
       source: "user",
       id: SYSTEM_ID,
-      name: "Summary",
+      name: "My tweaked summary",
       system_prompt: "EDITED vendor text",
       editable: true,
+    },
+    // The row the restore recreates: same flag, vendor name, pristine text.
+    [`/api/prompts/${RESTORED_ID}`]: {
+      source: "user",
+      id: RESTORED_ID,
+      name: "Summary",
+      system_prompt: "PRISTINE vendor text",
+      editable: true,
+      is_system: true,
     },
     [`/api/prompts/${USER_ID}`]: {
       source: "user",
@@ -163,6 +174,11 @@ export async function run() {
     page.once("dialog", async (d) => {
       await d.accept();
     });
+    // The backend recreates the row lazily on the next read: a NEW id, and the
+    // vendor's own name back in place of whatever the user had renamed it to.
+    // The stub serialises this array on every request, so mutating it here is
+    // what the next GET /api/prompts will see.
+    PROMPTS[0] = { source: "user", id: RESTORED_ID, name: "Summary", editable: true, is_system: true };
     mark = since();
     await clickReal(page, "#prompt-delete-btn");
     await page.waitForTimeout(600);
@@ -178,6 +194,21 @@ export async function run() {
     const body = await page.inputValue("#prompt-body-input");
     if (body !== "PRISTINE vendor text") {
       failures.push(`after restore the editor shows ${JSON.stringify(body)}, expected the vendor text`);
+    }
+
+    // --- (5) Restoring returns the NAME too, not just the body ---
+    // The row was recreated from the vendor file, so the list shows the vendor
+    // name. If the field kept the user's edited name the two panes would
+    // disagree, and Save would PATCH that name right back onto the row the user
+    // just reset — a half-restore that silently undoes itself.
+    const restoredName = await page.inputValue("#prompt-name-input");
+    if (restoredName !== "Summary") {
+      failures.push(`after restore the name field reads ${JSON.stringify(restoredName)}, expected the vendor name "Summary"`);
+    }
+    // And the editor must point at the RECREATED row, not the deleted id.
+    const editIdAfter = await page.inputValue("#prompt-edit-id");
+    if (editIdAfter !== RESTORED_ID) {
+      failures.push(`after restore the editor holds id ${JSON.stringify(editIdAfter)}, expected the recreated row ${RESTORED_ID}`);
     }
 
     // --- A user prompt confirms too, and its confirmation is the delete one ---
@@ -200,6 +231,39 @@ export async function run() {
     }
     if (sentSince(mark).some((r) => r.startsWith("DELETE"))) {
       failures.push("dismissing the user-prompt confirm still sent a DELETE");
+    }
+
+    // --- (6) Cancel must not leave a "Restore" button over an empty editor ---
+    // Cancel clears the form and the id it acts on, so the label has to go with
+    // it. Otherwise a red button still reading "Restore" sits above an empty
+    // form and silently does nothing when clicked — it no-ops on the empty id.
+    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${RESTORED_ID}"]`);
+    await settled(page);
+    if ((await label(page)) !== "Restore") {
+      failures.push("re-opening the restored system prompt did not read Restore");
+    }
+    // Cancel only appears once the form holds an id (setPromptFormMode).
+    await page.waitForSelector("#prompt-cancel-btn:not(.hidden)", { state: "visible" });
+    await clickReal(page, "#prompt-cancel-btn");
+    await settled(page);
+    const afterCancelHidden = await page.$eval("#prompt-delete-btn", (el) => el.classList.contains("hidden"));
+    if (!afterCancelHidden) {
+      failures.push(`after Cancel the button is still shown, reading ${JSON.stringify(await label(page))} over an empty editor`);
+    }
+
+    // --- (7) Duplicate must not keep the Restore label over an unsaved copy ---
+    // Duplicate opens an unsaved NEW prompt. Carrying the system flag over would
+    // put "Restore" above a copy that has never been saved.
+    await clickReal(page, `#prompts-list .mgr-item[data-prompt-id="${RESTORED_ID}"]`);
+    await settled(page);
+    await clickReal(page, "#prompt-duplicate-btn");
+    await settled(page);
+    const dupHidden = await page.$eval("#prompt-delete-btn", (el) => el.classList.contains("hidden"));
+    if (!dupHidden) {
+      const dupLabel = await label(page);
+      if (dupLabel === "Restore") {
+        failures.push("after Duplicate the button still reads Restore, over an unsaved copy");
+      }
     }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));

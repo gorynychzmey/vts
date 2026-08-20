@@ -5356,12 +5356,18 @@ function resetPromptForm() {
   if (promptNameInput) promptNameInput.value = "";
   if (promptBodyInput) promptBodyInput.value = "";
   setPromptFormMode("");
+  // Clearing the form clears what the buttons act on, so the editor state has
+  // to go with it. Otherwise the red button keeps the label of whatever was
+  // open last — reading "Restore" over an empty form, or over an unsaved
+  // duplicate — while its click handler no-ops on the empty id.
+  syncPromptEditorState(null);
 }
 
 function fillPromptForm({ name, body, editId }) {
   if (promptNameInput) promptNameInput.value = name || "";
   if (promptBodyInput) promptBodyInput.value = body || "";
   setPromptFormMode(editId || "");
+  syncPromptEditorState(null);
   promptNameInput?.focus();
 }
 
@@ -5430,6 +5436,12 @@ document.getElementById("prompt-delete-btn")?.addEventListener("click", async ()
       // recreated the row, so the flag is there to find it by.
       const fresh = promptsManagerCache.find((p) => p.is_system);
       if (fresh) {
+        // The name is part of what gets restored: the row was recreated from
+        // the vendor file, so the list already shows the vendor's name. Leaving
+        // the user's edited name in the field would make the two panes disagree
+        // and, worse, Save would PATCH that name straight back onto the row the
+        // user just asked to reset.
+        if (promptNameInput) promptNameInput.value = fresh.name || "";
         setPromptFormMode(fresh.id);
         promptsListEl?.querySelectorAll(".mgr-item").forEach((el) => {
           el.classList.toggle("active", el.dataset.promptId === fresh.id);
