@@ -351,6 +351,13 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Say whether this deployment runs the prompts we shipped. An operator
+        # can mount a prompts directory over the image's own to override one
+        # for the whole service, and that is meant to outlive releases — so a
+        # newly released wording silently does not reach them (vts-2a0w).
+        from vts.services.system_prompt import log_prompt_overrides
+
+        log_prompt_overrides(settings.prompts_dir)
         # Watched by long-lived streams (/api/events) so they can end
         # themselves. Without it uvicorn's graceful shutdown waits on SSE
         # clients that never disconnect, so the container only died once

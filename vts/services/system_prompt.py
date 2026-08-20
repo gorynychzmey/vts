@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -24,7 +25,19 @@ from vts.services.summarizer import load_prompt
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 _SUMMARY_KEY = "summary"
+
+# Every prompt file the service reads. The registry only knows the one that
+# users can copy; segment and pack are read straight from the directory by the
+# pipeline, and an operator can override any of them.
+_PROMPT_FILES = ("global_prompt.md", "segment_prompt.md", "pack_prompt.md")
+
+# The image's own copy, next to the package rather than at a hardcoded /app:
+# this file is vts/services/system_prompt.py, so three parents up is the tree
+# root that `COPY . /app` produced.
+_IMAGE_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 _FALLBACK = "Produce a structured knowledge document from the notes."
 
 
@@ -116,3 +129,74 @@ async def refresh_untouched_system_prompts(
         skipped,
     )
     return refreshed, skipped
+
+
+@dataclass(frozen=True)
+class PromptOverrideReport:
+    """Which prompt files the host directory overrides, and which it does not."""
+
+    overridden: list[str] = field(default_factory=list)
+    identical: list[str] = field(default_factory=list)
+    from_image: list[str] = field(default_factory=list)
+
+    @property
+    def has_overrides(self) -> bool:
+        return bool(self.overridden)
+
+
+def describe_prompt_overrides(
+    prompts_dir: Path, image_dir: Path | None = None
+) -> PromptOverrideReport:
+    """Compare the prompts the service will use against the image's defaults.
+
+    Mounting a directory over the image's own `prompts/` is how an operator
+    overrides a prompt for the whole service, and it is designed to survive
+    releases — the deploy deliberately does not copy prompts onto the host.
+    The cost is that a newly shipped vendor prompt then does not reach
+    production and nothing says why. This report is that missing signal.
+
+    Returns empty when there is no image directory to compare against: a dev
+    checkout reads its prompts straight from the tree, and warning there would
+    be noise that teaches operators to ignore the real warning.
+    """
+    image = _IMAGE_PROMPTS_DIR if image_dir is None else image_dir
+    try:
+        if not image.is_dir() or image.resolve() == prompts_dir.resolve():
+            return PromptOverrideReport()
+    except OSError:
+        return PromptOverrideReport()
+
+    overridden: list[str] = []
+    identical: list[str] = []
+    from_image: list[str] = []
+    for name in _PROMPT_FILES:
+        shipped = image / name
+        if not shipped.is_file():
+            continue
+        local = prompts_dir / name
+        try:
+            if not local.is_file():
+                from_image.append(name)
+            elif local.read_text(encoding="utf-8") == shipped.read_text(encoding="utf-8"):
+                identical.append(name)
+            else:
+                overridden.append(name)
+        except OSError:
+            # Unreadable is not "identical": say it differs rather than
+            # claiming the service runs the default when we cannot tell.
+            overridden.append(name)
+    return PromptOverrideReport(overridden, identical, from_image)
+
+
+def log_prompt_overrides(prompts_dir: Path) -> PromptOverrideReport:
+    """Report at startup whether the service runs the shipped prompts."""
+    report = describe_prompt_overrides(prompts_dir)
+    if report.has_overrides:
+        logger.warning(
+            "prompt override active: %s in %s replace(s) the shipped version, "
+            "so a newly released wording of these files does NOT reach this "
+            "deployment until the override is updated too",
+            ", ".join(report.overridden),
+            prompts_dir,
+        )
+    return report

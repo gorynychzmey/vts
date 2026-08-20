@@ -469,3 +469,98 @@ def test_refresh_cli_never_fails_the_deploy(monkeypatch, caplog) -> None:
     with caplog.at_level("ERROR"):
         assert cli.main() == 0
     assert "users keep the previous text" in caplog.text
+
+
+# --- Visibility of the host-level override (vts-2a0w) ---------------------
+
+
+def test_override_report_names_the_files_that_differ(tmp_path) -> None:
+    """The service level silently wins over the image, so say so at startup.
+
+    Mounting a prompts directory over the image's own is how an operator
+    overrides a prompt for the whole service, and it is meant to survive
+    releases. The cost is that a newly shipped vendor prompt then does NOT
+    reach production and nothing says why. This report is the missing signal:
+    it names which files are overridden, and which are merely identical
+    copies, so an operator can see the service is not running the default.
+    """
+    from vts.services.system_prompt import describe_prompt_overrides
+
+    image = tmp_path / "image"
+    host = tmp_path / "host"
+    image.mkdir()
+    host.mkdir()
+    (image / "global_prompt.md").write_text("vendor v2", encoding="utf-8")
+    (image / "segment_prompt.md").write_text("same", encoding="utf-8")
+    (image / "pack_prompt.md").write_text("packing", encoding="utf-8")
+    # Overridden, identical, and absent from the host — the three cases.
+    (host / "global_prompt.md").write_text("operator's tuned wording", encoding="utf-8")
+    (host / "segment_prompt.md").write_text("same", encoding="utf-8")
+
+    report = describe_prompt_overrides(host, image)
+
+    assert report.overridden == ["global_prompt.md"]
+    assert report.identical == ["segment_prompt.md"]
+    # Absent on the host means the image's own file is what gets used.
+    assert report.from_image == ["pack_prompt.md"]
+
+
+def test_override_report_is_empty_when_there_is_no_image_dir(tmp_path) -> None:
+    """Outside a container there is nothing to compare against.
+
+    The report must stay quiet rather than guess — a dev checkout has no
+    image layer, and a warning there would be noise that teaches operators to
+    ignore the real one.
+    """
+    from vts.services.system_prompt import describe_prompt_overrides
+
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "global_prompt.md").write_text("whatever", encoding="utf-8")
+
+    report = describe_prompt_overrides(host, tmp_path / "does-not-exist")
+
+    assert report.overridden == []
+    assert report.identical == []
+    assert report.from_image == []
+    assert not report.has_overrides
+
+
+def test_log_prompt_overrides_warns_and_names_the_file(tmp_path, monkeypatch, caplog) -> None:
+    """The warning has to name the file, or an operator cannot act on it."""
+    from vts.services import system_prompt as sp
+
+    image = tmp_path / "image"
+    host = tmp_path / "host"
+    image.mkdir()
+    host.mkdir()
+    (image / "global_prompt.md").write_text("vendor", encoding="utf-8")
+    (host / "global_prompt.md").write_text("operator's own", encoding="utf-8")
+    monkeypatch.setattr(sp, "_IMAGE_PROMPTS_DIR", image)
+
+    with caplog.at_level("WARNING"):
+        report = sp.log_prompt_overrides(host)
+
+    assert report.overridden == ["global_prompt.md"]
+    assert "global_prompt.md" in caplog.text
+
+
+def test_log_prompt_overrides_stays_quiet_when_running_the_shipped_prompts(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """No override, no warning — otherwise the real one gets tuned out."""
+    from vts.services import system_prompt as sp
+
+    image = tmp_path / "image"
+    host = tmp_path / "host"
+    image.mkdir()
+    host.mkdir()
+    (image / "global_prompt.md").write_text("vendor", encoding="utf-8")
+    (host / "global_prompt.md").write_text("vendor", encoding="utf-8")
+    monkeypatch.setattr(sp, "_IMAGE_PROMPTS_DIR", image)
+
+    with caplog.at_level("WARNING"):
+        report = sp.log_prompt_overrides(host)
+
+    assert not report.has_overrides
+    assert caplog.text == ""
