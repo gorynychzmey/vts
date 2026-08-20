@@ -557,40 +557,6 @@ async def read_sse_stream(
     return "".join(buffer)
 
 
-def _is_transient_http_error(exc: Exception) -> bool:
-    return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError))
-
-
-async def _post_with_transient_retry(
-    *,
-    client: httpx.AsyncClient,
-    endpoint: str,
-    payload: dict[str, Any],
-    loading_wait_seconds: float,
-    max_attempts: int,
-) -> httpx.Response:
-    attempts = max(1, max_attempts)
-    last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            return await _post_with_loading_retry(
-                client=client,
-                endpoint=endpoint,
-                payload=payload,
-                loading_wait_seconds=loading_wait_seconds,
-            )
-        except Exception as exc:
-            if not _is_transient_http_error(exc):
-                raise
-            last_exc = exc
-            if attempt >= attempts:
-                break
-            await asyncio.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("llama request failed without response and without captured exception")
-
-
 def _build_chat_payload(
     *,
     model: str,
