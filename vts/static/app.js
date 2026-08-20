@@ -1316,6 +1316,8 @@ function resolveTaskMessage(runtime) {
 }
 
 const taskAboutDialog = document.getElementById("task-about-dialog");
+// The task the open About dialog is showing, or null when it is closed.
+let aboutDialogTask = null;
 
 // Resolve a {source,id} prompt ref to a display-name-bearing object. Prefers a
 // name carried in prompt_results, else looks the user prompt up in promptsCache
@@ -1524,12 +1526,35 @@ function renderTaskAboutDialog(task) {
 // What actually ran, in order, with each step's outcome and how long it took.
 // Only the steps the task really has — the enabled-step list is derived from
 // its options, so a task without diarization does not show a "pending" one.
+// The card's live step statuses, laid over the snapshot the dialog was opened
+// with. Re-rendering alone would not help: SSE writes to
+// `taskEl._runtime.stepStatusByName` and never touches `task.steps`, so the
+// captured object stays frozen at whatever it held when the CARD was built
+// (vts-4k1e). A step the snapshot has never heard of is appended, so a run
+// that reaches a new step while the dialog is open shows it rather than
+// silently omitting it.
+function stepsWithLiveStatus(task) {
+  const raw = Array.isArray(task.steps) ? task.steps : [];
+  const live = findTaskEl(task.id)?._runtime?.stepStatusByName;
+  if (!live) return raw;
+  const merged = raw.map((step) =>
+    Object.prototype.hasOwnProperty.call(live, step.name)
+      ? { ...step, status: live[step.name] }
+      : step
+  );
+  const known = new Set(merged.map((step) => step.name));
+  Object.keys(live).forEach((name) => {
+    if (!known.has(name)) merged.push({ name, status: live[name] });
+  });
+  return merged;
+}
+
 function renderAboutSteps(task) {
   const wrap = taskAboutDialog?.querySelector(".about-steps");
   const section = taskAboutDialog?.querySelector(".about-steps-section");
   if (!wrap) return;
   wrap.innerHTML = "";
-  const raw = Array.isArray(task.steps) ? task.steps : [];
+  const raw = stepsWithLiveStatus(task);
   // The API returns steps sorted ALPHABETICALLY by name (serialization.py sorts
   // on item.name), which puts "detect_language" before "download" and makes the
   // list read as if the pipeline ran out of order. Re-order to the real pipeline
@@ -1607,6 +1632,9 @@ async function openTaskAboutDialog(task) {
     return;
   }
   await ensurePromptsCache();
+  // Remembered so a step event can tell whether it concerns what is on screen:
+  // the dialog is modal and shows exactly one task (vts-4k1e).
+  aboutDialogTask = task;
   renderTaskAboutDialog(task);
   if (typeof taskAboutDialog.showModal === "function") {
     taskAboutDialog.showModal();
@@ -4128,6 +4156,7 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", qu
   }
   const runtime = taskEl._runtime;
   runtime.baseStatus = String(status || "");
+  refreshAboutLive(taskId, { status: String(status || "") });
   // The backend emits awaiting_step alongside the status when a task pauses for
   // review (processor.py). Without copying it here, runtime.awaitingStep kept
   // its stale value from the last full load, so the resolve-voices button's
@@ -4259,6 +4288,23 @@ function patchTaskStep(taskId, name, status) {
     }).catch(() => {});
   }
   renderTaskRuntime(taskEl);
+  refreshAboutLive(taskId);
+}
+
+// Redraw ONLY what actually moved in the open dialog, and only for the task it
+// is showing. Re-rendering the whole dialog would rebuild the facts table under
+// the reader's cursor for a change that touches one row of it (vts-4k1e).
+function refreshAboutLive(taskId, { status } = {}) {
+  if (!aboutDialogTask || !taskAboutDialog?.open) return;
+  if (String(aboutDialogTask.id) !== String(taskId)) return;
+  if (status) {
+    // Keep the captured object in step with what is on screen: reopening the
+    // dialog, or a later step event, must not resurrect the old status.
+    aboutDialogTask.status = status;
+    const statusEl = taskAboutDialog.querySelector(".about-status");
+    if (statusEl) statusEl.textContent = statusText(String(status));
+  }
+  renderAboutSteps(aboutDialogTask);
 }
 
 function patchTaskProgress(taskId, phase, payload) {
@@ -7455,6 +7501,13 @@ document.getElementById("presets-close-btn")?.addEventListener("click", () => {
 
 document.getElementById("task-about-close-btn")?.addEventListener("click", () => {
   taskAboutDialog?.close();
+});
+
+// Listen on the dialog rather than the button: <dialog> also closes on Esc and
+// from other call sites, and a stale reference here would keep step events
+// redrawing a dialog nobody is looking at (vts-4k1e).
+taskAboutDialog?.addEventListener("close", () => {
+  aboutDialogTask = null;
 });
 
 presetCancelBtn?.addEventListener("click", () => {
