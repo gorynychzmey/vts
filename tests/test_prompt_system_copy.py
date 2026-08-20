@@ -448,3 +448,24 @@ async def test_refresh_rewrites_untouched_copies_and_spares_edited_ones(
     assert rows[untouched_user].system_prompt == "v3"
     assert rows[untouched_user].updated_at is None, "a refresh is not a user edit"
     assert rows[editing_user].system_prompt == "mine"
+
+
+def test_refresh_cli_never_fails_the_deploy(monkeypatch, caplog) -> None:
+    """A broken refresh must still exit 0, or the deploy dies mid-migration.
+
+    `main` runs inside `migrate()` in docker/vts-entrypoint.sh, which is
+    `set -eu`, and it runs *after* `alembic upgrade head`. A non-zero exit
+    would therefore abort a deploy whose schema is already migrated: webapi
+    and worker never start, and in the pod topology the init container never
+    lets them. Users keeping last release's prompt text is the cheaper
+    failure by far, so this asserts the exit code, not the log line.
+    """
+    from vts.cli import refresh_system_prompts as cli
+
+    async def boom() -> None:
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(cli, "_main", boom)
+    with caplog.at_level("ERROR"):
+        assert cli.main() == 0
+    assert "users keep the previous text" in caplog.text
