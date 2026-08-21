@@ -1,0 +1,33 @@
+# Keep yt-dlp moving, and only yt-dlp (vts-268n).
+#
+# It was pinned at 2026.7.4 in the very first commit and never touched again —
+# `git log -S'yt-dlp=='` over requirements.txt returned exactly one commit — so
+# by the time this was noticed production was running a version six weeks
+# behind upstream.
+#
+# yt-dlp is the one dependency here whose correctness depends on a third party
+# that changes without us: it tracks YouTube, and when YouTube shifts, only an
+# upstream release fixes it. That is why it ships every week or two. A stale
+# pin therefore does not surface as a CVE, it surfaces as "downloads stopped
+# working" on some links, suddenly and with no change on our side.
+#
+# Scoped deliberately to this one package. Everything else in requirements.txt
+# is pinned for reproducibility and moves when we choose to move it; opening
+# weekly PRs for all of them would be noise that trains us to ignore the one
+# that matters. The version stays pinned either way — Dependabot proposes the
+# bump as a PR, and the Tests workflow (which runs on every pull_request to
+# main) says whether it is safe to take.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: yt-dlp
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+    open-pull-requests-limit: 1
