@@ -32,6 +32,8 @@ import json
 import sys
 from typing import Any
 
+from vts.services.egress_guard import install_egress_guard
+
 
 def _emit(obj: dict[str, Any]) -> None:
     """Write one protocol line. Flushed immediately: the parent streams these
@@ -108,6 +110,12 @@ def run(request: dict[str, Any]) -> int:
 
 
 def main() -> int:
+    # Before anything reads the request, let alone fetches it: the URL in that
+    # request is attacker-controlled, so private space has to be closed off
+    # first. Installed here rather than in run() so it covers the whole
+    # process, and never uninstalled — this process exists to download and then
+    # exit (vts-xkx4).
+    install_egress_guard()
     try:
         request = json.loads(sys.stdin.read())
     except Exception as exc:  # noqa: BLE001
