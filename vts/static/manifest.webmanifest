@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "vts — Video Transcribe & Summarize",
   "short_name": "vts",
   "description": "Queue URLs, monitor pipeline, inspect transcript and summary artifacts.",
