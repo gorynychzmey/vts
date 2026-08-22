@@ -5286,6 +5286,11 @@ dialog:not([open]) {
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.2rem;
+  /* Four buttons with translated labels do not fit a phone on one line — on a
+     360px screen two of them ran past the right edge, unreachable (reported
+     from a real device). Wrapping is the honest answer: shrinking the buttons
+     would trade an off-screen control for an untappable one. */
+  flex-wrap: wrap;
 }
 
 /* Destructive action to the far left, away from the primary one. */

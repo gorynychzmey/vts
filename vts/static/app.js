@@ -3272,14 +3272,19 @@ function buildPromptRow(prompt, refs) {
   checkbox.checked = isSelected;
   checkbox.dataset.source = prompt.source;
   checkbox.dataset.id = prompt.id;
+  checkbox.dataset.isSystem = String(Boolean(prompt.is_system));
 
   const name = document.createElement("span");
   name.className = "prompt-name";
   name.textContent = promptDisplayName(prompt);
 
+  // `source` alone stopped telling these apart: the vendor prompt became an
+  // ordinary editable row, so the list reports it as "user" and carries the
+  // real answer in `is_system` (vts-kujy). Read the flag first.
+  const kind = prompt.is_system || prompt.source === "system" ? "system" : "user";
   const badge = document.createElement("span");
-  badge.className = `prompt-badge prompt-badge-${prompt.source}`;
-  badge.textContent = t(`prompt.badge.${prompt.source}`);
+  badge.className = `prompt-badge prompt-badge-${kind}`;
+  badge.textContent = t(`prompt.badge.${kind}`);
 
   label.append(checkbox, name, badge);
   return label;
@@ -3337,9 +3342,19 @@ function renderPromptSelect(prompts) {
     return;
   }
   promptsCache = Array.isArray(prompts) ? prompts : [];
-  renderPromptMultiselect(promptSelect, promptsCache, [
-    { source: "system", id: "summary" },
-  ]);
+  // The default selection is the vendor prompt, found by its flag rather than
+  // by a hardcoded {source:"system", id:"summary"}: that row is now an ordinary
+  // editable prompt with a generated uuid, so the literal matched nothing and a
+  // new task started with NOTHING ticked — no summary, and no sign why
+  // (vts-kujy). Falls back to the literal so an older payload still works.
+  const defaults = promptsCache
+    .filter((p) => p && p.is_system)
+    .map((p) => ({ source: p.source, id: p.id }));
+  renderPromptMultiselect(
+    promptSelect,
+    promptsCache,
+    defaults.length ? defaults : [{ source: "system", id: "summary" }]
+  );
   syncSummaryToggle();
 }
 
@@ -3359,8 +3374,14 @@ function resetPromptSelection() {
   if (!promptSelect) {
     return;
   }
+  // Match on the is_system flag, not on source/id: the vendor prompt is now an
+  // ordinary row with a generated uuid, so `source === "system" && id ===
+  // "summary"` matched NOTHING and every new task started with no prompt
+  // selected at all — silently producing no summary (vts-kujy).
   promptSelect.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.checked = cb.dataset.source === "system" && cb.dataset.id === "summary";
+    cb.checked =
+      cb.dataset.isSystem === "true" ||
+      (cb.dataset.source === "system" && cb.dataset.id === "summary");
   });
   updatePromptSelectSummary(promptSelect);
 }
