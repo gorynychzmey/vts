@@ -37,7 +37,24 @@ const rows = (page) =>
   );
 
 export async function run() {
-  const { server, baseUrl } = await startStubServer({ "/api/prompts": PROMPTS });
+  const { server, baseUrl } = await startStubServer({
+    "/api/prompts": PROMPTS,
+    // Exactly what the server stores for the system "Default" preset: the
+    // historical {source:"system", id:"summary"} ref (preset_registry.py).
+    "/api/presets": [
+      {
+        source: "system",
+        id: "default",
+        name: "Default",
+        options: {
+          language: null,
+          audio_only: false,
+          transcript: true,
+          prompts: [{ source: "system", id: "summary" }],
+        },
+      },
+    ],
+  });
   const browser = await launch();
   const failures = [];
   try {
@@ -102,6 +119,51 @@ export async function run() {
     if (typeof offscreen === "string") failures.push(offscreen);
     else if (offscreen.length) {
       failures.push(`buttons run past the right edge at 360px: ${JSON.stringify(offscreen)}`);
+    }
+
+    // --- 4. A preset's historical ref still selects the vendor prompt ---
+    // Every preset — the shipped "Default" among them — stores the selection as
+    // {source:"system", id:"summary"} (preset_registry.py). After vts-kujy that
+    // names a row which no longer exists under those keys, so applying a preset
+    // ticked nothing and the task ran with no prompt.
+    //
+    // Driven through the real control: untick everything first, so a pass
+    // cannot be inherited from the default selection, then pick the preset the
+    // way a user does.
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('#prompt-select input[type="checkbox"]')
+        .forEach((cb) => {
+          if (cb.checked) cb.click();
+        });
+    });
+    await settled(page);
+    const clearedOk = (await rows(page)).every((r) => !r.checked);
+    if (!clearedOk) {
+      failures.push("could not clear the selection, so the preset test would prove nothing");
+    } else {
+      const applied = await page.evaluate(() => {
+        const sel = document.getElementById("preset-select");
+        if (!sel) return { ok: false, why: "no #preset-select" };
+        const opt = [...sel.options].find((o) => /default/i.test(o.value) || /default/i.test(o.textContent));
+        if (!opt) return { ok: false, why: `no Default option; saw ${[...sel.options].map((o) => o.value)}` };
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        return { ok: true };
+      });
+      if (!applied.ok) {
+        failures.push(`cannot apply the Default preset: ${applied.why}`);
+      } else {
+        await page.waitForTimeout(400);
+        const ticked = (await rows(page)).filter((r) => r.checked).map((r) => r.id);
+        if (!ticked.includes(SYSTEM_ID)) {
+          failures.push(
+            'applying the Default preset selected ' +
+              `${JSON.stringify(ticked)} — its stored {source:"system", id:"summary"} ref did not resolve`
+          );
+        }
+      }
     }
 
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));

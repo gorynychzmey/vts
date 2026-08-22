@@ -3260,10 +3260,20 @@ function updatePromptSelectSummary(container) {
 // Builds the toggle + popover into `container`; a checkbox is checked iff its
 // {source,id} appears in `selectedRefs`. Used by the create-form selector and,
 // in a later task, by the restart dialog with its own selection.
+// A saved selection may name the vendor prompt the old way, as
+// {source:"system", id:"summary"} — that is what every preset stores, the
+// system "Default" preset included, and what older tasks carry. Since vts-kujy
+// that prompt is an ordinary row with a generated uuid, so matching on
+// source+id alone missed it and the preset applied with nothing ticked.
+// Resolve the historical ref against the is_system flag instead of rewriting
+// stored data.
+function promptMatchesRef(prompt, ref) {
+  if (ref.source === prompt.source && ref.id === prompt.id) return true;
+  return Boolean(prompt.is_system) && ref.source === "system" && ref.id === "summary";
+}
+
 function buildPromptRow(prompt, refs) {
-  const isSelected = refs.some(
-    (r) => r.source === prompt.source && r.id === prompt.id
-  );
+  const isSelected = refs.some((r) => promptMatchesRef(prompt, r));
   const label = document.createElement("label");
   label.className = "prompt-row";
 
