@@ -129,7 +129,10 @@ def tokenizer_path(settings: Settings) -> str | None:
 
 
 def stream_kwargs(
-    settings: Settings, *, expected_output_tokens: int | None = None
+    settings: Settings,
+    *,
+    expected_output_tokens: int | None = None,
+    input_tokens: int | None = None,
 ) -> dict[str, float | int]:
     """Streaming limits for one `chat_completion` call.
 
@@ -155,6 +158,20 @@ def stream_kwargs(
     }
     if expected_output_tokens is not None:
         kwargs["expected_output_tokens"] = int(expected_output_tokens)
+    if input_tokens is not None:
+        # Sizes the wait for the FIRST token: prefill is linear in the prompt,
+        # so a 50k-token final summary needs minutes before anything comes back
+        # while a 1k window needs seconds (vts-0nx3).
+        kwargs["input_tokens"] = int(input_tokens)
+        # getattr with the client's own defaults: this helper is called with
+        # stub settings objects in tests, and a missing knob must degrade to
+        # the shipped default rather than crash the pipeline step.
+        kwargs["prefill_tokens_per_second"] = float(
+            getattr(settings, "llm_prefill_tokens_per_second", 44.0)
+        )
+        kwargs["first_chunk_cap_seconds"] = int(
+            getattr(settings, "llm_first_chunk_cap_seconds", 2400)
+        )
     return kwargs
 
 
@@ -879,7 +896,7 @@ class SummarizeWindowsStep(Step):
                                 use_json_format=False,
                                 thinking=ctx.settings.llm_thinking,
                                 num_ctx=budget_cfg.n_ctx,
-                                **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
+                                **stream_kwargs(ctx.settings, expected_output_tokens=max_out, input_tokens=input_tokens),
                             )
                         except RuntimeError as exc:
                             if whole_mode and is_context_overflow_error(str(exc)):
@@ -1149,7 +1166,7 @@ class PackWindowNotesStep(Step):
                             use_json_format=False,
                             thinking=ctx.settings.llm_thinking,
                             num_ctx=budget_cfg.n_ctx,
-                            **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
+                            **stream_kwargs(ctx.settings, expected_output_tokens=max_out, input_tokens=batch_input_tokens),
                         )
                     packed_tc = await count_tokens(ctx, packed_text, timeout_seconds=timeout_seconds)
                     log_metrics(st.logger, SummarizationMetrics(
@@ -1380,7 +1397,7 @@ class FinalizePromptStep(Step):
                 use_json_format=False,
                 thinking=ctx.settings.llm_thinking,
                 num_ctx=budget_cfg.n_ctx,
-                **stream_kwargs(ctx.settings, expected_output_tokens=max_out),
+                **stream_kwargs(ctx.settings, expected_output_tokens=max_out, input_tokens=input_tokens),
             )
             _fin_t_ms = round((time.monotonic() - _fin_t0) * 1000)
 

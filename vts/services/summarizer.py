@@ -327,6 +327,38 @@ def _loading_wait_seconds(timeout_seconds: int, *, cap_seconds: float = 120.0) -
     return max(5.0, min(float(timeout_seconds) * 0.6, cap_seconds))
 
 
+def derive_first_chunk_timeout(
+    input_tokens: int | None,
+    *,
+    base_seconds: int,
+    prefill_tokens_per_second: float,
+    slack: float,
+    cap_seconds: int,
+) -> float:
+    """How long to wait for the FIRST token, scaled to the prompt.
+
+    Time-to-first-token is two things added together: loading the model, which
+    is a fixed cost and says nothing about the prompt, and prefill — reading
+    the prompt itself — which is linear in its size. The old constant only
+    covered the first, because it was calibrated at "14-16s once warm" on
+    prompts small enough for prefill to vanish into the noise.
+
+    It does not vanish at scale. Measured on prod at 44 tokens/s, a 51.8k-token
+    final summary needs about twenty minutes before the first token appears, so
+    a 300s limit failed it every single time while the backend was working
+    perfectly (vts-0nx3).
+
+    Scaling only ever ADDS to the base: a short prompt must still get the full
+    window that covers a cold model load. The cap keeps a pathological prompt
+    from turning a dead backend into an hour of silence.
+    """
+    if input_tokens is None or input_tokens <= 0:
+        return float(base_seconds)
+    rate = prefill_tokens_per_second if prefill_tokens_per_second > 0 else 1.0
+    prefill = input_tokens / rate * slack
+    return float(min(max(base_seconds, prefill), cap_seconds))
+
+
 def derive_stream_ceiling(
     max_tokens: int | None,
     *,
@@ -1112,6 +1144,12 @@ class LLMClient:
         # above the target the prompt already aims for, so a long-but-valid
         # summary would be truncated mid-sentence (vts-svnj).
         expected_output_tokens: int | None = None,
+        # Size of the prompt, for the first-token wait only. Prefill is linear
+        # in this, so a fixed window cannot serve both a 1k window and a 50k
+        # final summary (vts-0nx3).
+        input_tokens: int | None = None,
+        prefill_tokens_per_second: float = 44.0,
+        first_chunk_cap_seconds: int = 2400,
         stream_idle_timeout: float = 120.0,
         stream_first_chunk_timeout: float = 300.0,
         min_tokens_per_second: float = 3.0,
@@ -1161,9 +1199,18 @@ class LLMClient:
         loading_wait_seconds = _loading_wait_seconds(timeout_seconds)
         loading_waited = 0.0
         loading_attempts = 0
+        # Prefill is part of the wait for the first token, and it scales with the
+        # prompt — see derive_first_chunk_timeout (vts-0nx3).
+        effective_first_chunk_timeout = derive_first_chunk_timeout(
+            input_tokens,
+            base_seconds=int(stream_first_chunk_timeout),
+            prefill_tokens_per_second=prefill_tokens_per_second,
+            slack=ceiling_slack,
+            cap_seconds=first_chunk_cap_seconds,
+        )
         async with self._stream_client(
             timeout_seconds,
-            first_chunk_timeout=stream_first_chunk_timeout,
+            first_chunk_timeout=effective_first_chunk_timeout,
             idle_timeout=stream_idle_timeout,
         ) as client:
             while queue:
@@ -1253,7 +1300,7 @@ class LLMClient:
                             continue
                         text = await read_sse_stream(
                             response.aiter_lines(),
-                            first_chunk_timeout=stream_first_chunk_timeout,
+                            first_chunk_timeout=effective_first_chunk_timeout,
                             idle_timeout=stream_idle_timeout,
                             ceiling=ceiling,
                             on_progress=_log_progress,

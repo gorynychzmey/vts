@@ -1927,3 +1927,76 @@ def test_every_real_generation_call_passes_a_budget_to_the_ceiling() -> None:
         "the window, pack and final-summary calls must each pass a budget; "
         f"only {len(with_budget)} do"
     )
+
+
+# --- vts-0nx3: first-chunk timeout must scale with the INPUT ----------------
+
+
+def test_first_chunk_timeout_scales_with_prompt_size() -> None:
+    """Time-to-first-token is model load PLUS prefill, and prefill is linear.
+
+    The old constant was calibrated on "14-16s once warm", which only holds
+    while the prompt is small enough for prefill to disappear into the noise.
+    Measured on prod at 44 tok/s, a 51.8k-token final summary needs ~20 minutes
+    before the first token — it died on a 300s limit every time.
+    """
+    from vts.services.summarizer import derive_first_chunk_timeout
+
+    kw = dict(base_seconds=300, prefill_tokens_per_second=44.0, slack=1.5, cap_seconds=3600)
+
+    # No estimate: the base is all we can defend, exactly as before.
+    assert derive_first_chunk_timeout(None, **kw) == 300
+
+    # Small prompts keep the old behaviour — prefill is noise at this size.
+    assert derive_first_chunk_timeout(1200, **kw) == 300
+
+    # The failing case: 51779 / 44 * 1.5 ≈ 1765s, comfortably over the 300s
+    # that killed it and under the cap.
+    big = derive_first_chunk_timeout(51779, **kw)
+    assert 1500 < big < 2000, big
+
+    # A pathological prompt is still bounded: never wait longer than the cap.
+    assert derive_first_chunk_timeout(10_000_000, **kw) == 3600
+
+
+def test_first_chunk_timeout_never_drops_below_the_base() -> None:
+    """A tiny prompt must not shorten the window that covers model load.
+
+    Cold-loading the model was measured at 75s and has nothing to do with the
+    prompt, so scaling must only ever add time.
+    """
+    from vts.services.summarizer import derive_first_chunk_timeout
+
+    kw = dict(base_seconds=300, prefill_tokens_per_second=44.0, slack=1.5, cap_seconds=3600)
+    for tokens in (0, 1, 10, 500):
+        assert derive_first_chunk_timeout(tokens, **kw) == 300, tokens
+
+
+def test_a_broken_prefill_rate_cannot_disable_the_timeout() -> None:
+    """A zero or negative rate must not divide by zero or wait forever."""
+    from vts.services.summarizer import derive_first_chunk_timeout
+
+    value = derive_first_chunk_timeout(
+        51779, base_seconds=300, prefill_tokens_per_second=0.0, slack=1.5, cap_seconds=3600
+    )
+    assert 300 <= value <= 3600
+
+
+def test_every_real_generation_call_passes_its_input_size() -> None:
+    """The wiring — the half that a unit test of the formula cannot see.
+
+    `derive_stream_ceiling` shipped correct and inert for exactly this reason
+    (vts-svnj): nothing passed it the budget it needed. Assert the call sites,
+    so the same mistake cannot repeat one field over.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("vts/pipeline/steps/summarization.py").read_text(encoding="utf-8")
+    calls = re.findall(r"\*\*stream_kwargs\(ctx\.settings([^)]*)\)", src)
+    assert len(calls) == 4, f"expected 4 stream_kwargs call sites, found {len(calls)}"
+    with_input = [c for c in calls if "input_tokens=" in c]
+    assert len(with_input) == 3, (
+        "the window, pack and final-summary calls must each pass their prompt "
+        f"size; only {len(with_input)} do"
+    )

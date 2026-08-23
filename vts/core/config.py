@@ -144,8 +144,16 @@ class Settings(BaseSettings):
     # "slow but working" from "wedged" — silence between chunks can.
     llm_stream_idle_timeout_seconds: int = 120
     # Separate and much larger: it covers model load, measured at 75 s cold,
-    # with time-to-first-token of 14-16 s once warm.
+    # with time-to-first-token of 14-16 s once warm. That figure holds only for
+    # small prompts — it is a BASE, and prefill is added on top (vts-0nx3).
     llm_stream_first_chunk_timeout_seconds: int = 300
+    # Prefill speed, measured on prod from ollama's own slot print_timing on a
+    # 104k-token prompt: 43.7-44.3 tok/s, steady across the whole run. The
+    # first-token wait is base + input_tokens / this * slack, capped. Without
+    # it a 51.8k-token final summary died on the 300 s base every time while
+    # the backend was working perfectly.
+    llm_prefill_tokens_per_second: float = 44.0
+    llm_first_chunk_cap_seconds: int = 2400
     # Overall ceiling = clamp(max_tokens / min_tps * slack, floor, cap).
     llm_min_tokens_per_second: float = 3.0
     llm_ceiling_slack_multiplier: float = 1.5
@@ -523,6 +531,8 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llm_final_timeout_seconds": "llm_final_timeout_seconds",
         "services_llm_stream_idle_timeout_seconds": "llm_stream_idle_timeout_seconds",
         "services_llm_stream_first_chunk_timeout_seconds": "llm_stream_first_chunk_timeout_seconds",
+        "services_llm_prefill_tokens_per_second": "llm_prefill_tokens_per_second",
+        "services_llm_first_chunk_cap_seconds": "llm_first_chunk_cap_seconds",
         "services_llm_min_tokens_per_second": "llm_min_tokens_per_second",
         "services_llm_ceiling_slack_multiplier": "llm_ceiling_slack_multiplier",
         "services_llm_ceiling_floor_seconds": "llm_ceiling_floor_seconds",
