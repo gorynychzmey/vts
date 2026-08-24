@@ -596,6 +596,20 @@ async def delete_tasks(
         tasks_to_delete.append(task)
         results[tid] = "deleted"
     if tasks_to_delete:
+        # Audit, not debug output (vts-om71). Deleting drops the row AND
+        # rmtree's the artifacts, so the access log's bare
+        #   "DELETE /api/tasks HTTP/1.1" 200 OK
+        # was the only trace an irreversible operation left behind — no actor
+        # and no ids. Both identities go in: `acting_as` alone cannot tell a
+        # user deleting their own tasks from an admin impersonating them,
+        # which is exactly what a 2026-08-24 incident could not reconstruct.
+        logger.info(
+            "task.delete requested_by=%s acting_as=%s count=%d task_ids=%s",
+            user.requested_by,
+            user.acting_as,
+            len(tasks_to_delete),
+            ",".join(str(t.id) for t in tasks_to_delete),
+        )
         await asyncio.gather(
             *[bus.request_cancel(t.id) for t in tasks_to_delete],
         )
