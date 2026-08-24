@@ -2389,8 +2389,10 @@ function renderTaskCard(task) {
         void activateTaskTab(root, task.id, activeTab);
       }
       // First expand only: /speaker-matches is a real request and most cards are
-      // never opened.
-      if (!root._speakerRows) void loadSpeakerPanel(root, task.id);
+      // never opened. An EMPTY result does not count as loaded — a card expanded
+      // while diarization is still running gets [] and must retry later, or the
+      // panel would stay empty for the life of the page.
+      if (!root._speakerRows || !root._speakerRows.length) void loadSpeakerPanel(root, task.id);
       else renderSpeakerPanel(root, task.id);
     } else {
       stopLogPolling(root);
@@ -3524,6 +3526,10 @@ function applyPresetOptions(options) {
       deliveryTargetsList().some((t) => t.id === d.deliver_to)
     )
   );
+  // Snapshot AFTER every control has been written, so it reflects the filtered
+  // refs and anything syncSummaryToggle() normalised — this is the baseline
+  // recomputePresetDirty() compares against.
+  appliedPresetOptions = currentFormOptions();
   return dangling;
 }
 
@@ -3553,9 +3559,21 @@ function updatePresetSaveBtn() {
   renderPresetMenu();
 }
 
+// What applyPresetOptions() actually PUT in the form, which is not always the
+// preset as stored: prompt refs whose prompt was deleted are filtered out, and
+// so are delivery refs whose target is gone. Comparing the form against the raw
+// preset.options therefore reported "changed" from the very first paint for any
+// preset carrying a stale ref — masked at apply time (applyPresetById forces
+// presetDirty = false), but the badge could then never go out again, because
+// returning every control to its original value still did not match. Compare
+// against the applied snapshot instead, so "back to where I started" is a state
+// the form can actually reach (vts-oz84).
+let appliedPresetOptions = null;
+
 function recomputePresetDirty() {
   const preset = findPreset(selectedPresetRef);
-  presetDirty = preset ? !optionsEqual(currentFormOptions(), preset.options) : false;
+  const baseline = appliedPresetOptions || (preset ? preset.options : null);
+  presetDirty = preset ? !optionsEqual(currentFormOptions(), baseline) : false;
   updatePresetSaveBtn();
 }
 
@@ -3572,6 +3590,7 @@ function applyPresetById(ref) {
   const preset = findPreset(ref);
   if (!preset) {
     selectedPresetRef = null;
+    appliedPresetOptions = null;
     showDanglingHint(false);
     presetDirty = false;
     updatePresetSaveBtn();
@@ -4243,6 +4262,21 @@ function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", qu
   updateQueueWatcherFromDom();
   if (runtime.baseStatus === "queued") {
     void refreshQueuePositions();
+  }
+  // The speakers panel is loaded lazily on expand, which assumes the speakers
+  // already exist by then. They do not when the card was expanded WHILE
+  // diarization was still running: /speaker-matches answered empty, the panel
+  // stayed hidden, and nothing reloaded it when the task later paused — the
+  // user had to reload the page to bind anyone. Pull it in here, on the event
+  // that means the speakers now exist. Only for an expanded card: a collapsed
+  // one loads on expand as before, and firing a request per paused task would
+  // undo the laziness this panel was built with.
+  if (runtime.awaitingStep === "match_speakers" && statusPred.needsInput(runtime.baseStatus)) {
+    const body = taskEl.querySelector(".task-body");
+    const expanded = body && !body.classList.contains("hidden");
+    if (expanded && !(Array.isArray(taskEl._speakerRows) && taskEl._speakerRows.length)) {
+      void loadSpeakerPanel(taskEl, taskId);
+    }
   }
 }
 
@@ -6565,9 +6599,25 @@ async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
       return { ...base, action: "leave_anonymous", add_fragment: false };
     }
     if (r.outcome === "auto" && r.selection === r.matchedSpeakerId) {
+      // Confirming the auto-match adds nothing: the person was recognised BY an
+      // existing fragment, so a new one from this clip is a near-duplicate of it.
+      // Skipping it is also what keeps the registry from growing forever — see
+      // the add_fragment note below.
       return { ...base, action: "accept_auto", speaker_id: r.selection, add_fragment: false };
     }
-    return { ...base, action: "bind_existing", speaker_id: r.selection, add_fragment: false };
+    // A hand-made binding means the matcher did NOT recognise this voice, so the
+    // clip covers something the registry is missing and is worth keeping
+    // (vts-k5va). The panel used to hard-code false here, so binding from the
+    // card created the person but never any fragment — "персоны есть, а
+    // фрагментов у них нет".
+    //
+    // This grows the registry without a prune, which is safe precisely because
+    // it is gated on a MANUAL binding: every fragment raises the chance the next
+    // meeting resolves to `auto` above, which adds nothing. The loop damps
+    // itself. Matching takes MIN(cosine_distance) over a person's fragments, so
+    // extra samples widen coverage (a different mic, a noisier room) rather than
+    // dilute an average.
+    return { ...base, action: "bind_existing", speaker_id: r.selection, add_fragment: true };
   });
   // A task parked in awaiting_input is waiting for exactly this: once no voice
   // is left undecided, binding the last one should let it carry on rather than
