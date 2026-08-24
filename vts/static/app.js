@@ -627,10 +627,20 @@ async function loadTabContent(taskEl, taskId, tabName) {
     return value;
   }
   if (tabName === "summary") {
-    // The summary tab renders system:summary specifically. It used to be the
+    // The summary tab renders the vendor prompt specifically. It used to be the
     // generic "results" view fronted by a dropdown; user prompts now have their
     // own tabs, so this is just one more result.
-    return loadPromptResult(taskEl, taskId, { source: "system", id: "summary" }, "summary");
+    //
+    // Resolve the ref against the task's own prompts rather than hard-coding
+    // {source:"system", id:"summary"}: on a task whose vendor prompt is the
+    // modern row, that literal matched nothing in prompt_results, so this fell
+    // through to the legacy /summary endpoint and rendered its 404
+    // ("Summary is not ready") while the duplicate tab showed the real text.
+    const refs = Array.isArray(taskEl._runtime && taskEl._runtime.promptRefs)
+      ? taskEl._runtime.promptRefs
+      : [];
+    const ref = refs.find((r) => isSystemPromptRef(r)) || { source: "system", id: "summary" };
+    return loadPromptResult(taskEl, taskId, ref, "summary");
   }
   if (isPromptTabName(tabName)) {
     const ref = promptTabRef(taskEl, tabName);
@@ -744,8 +754,12 @@ function syncPromptTabs(taskEl, taskId) {
   if (!tabsBar) {
     return;
   }
+  // Exclude the vendor prompt by its is_system FLAG, not by source: since
+  // vts-kujy it is served as source:"user" with a generated uuid, so the old
+  // source check stopped excluding it and it got a second tab beside the
+  // built-in "Summary" one — two tabs rendering the same result.
   const refs = (Array.isArray(taskEl._runtime.promptRefs) ? taskEl._runtime.promptRefs : [])
-    .filter((ref) => ref && ref.source === "user");
+    .filter((ref) => ref && ref.source === "user" && !isSystemPromptRef(ref));
   const logBtn = getTabButton(taskEl, "log");
   const wanted = new Set(refs.map((ref) => promptTabName(ref)));
 
@@ -3272,6 +3286,20 @@ function updatePromptSelectSummary(container) {
 function promptMatchesRef(prompt, ref) {
   if (ref.source === prompt.source && ref.id === prompt.id) return true;
   return Boolean(prompt.is_system) && ref.source === "system" && ref.id === "summary";
+}
+
+// Does this ref name the vendor prompt? Two shapes have to be recognised: the
+// historical {source:"system", id:"summary"} that older tasks and every preset
+// still carry, and the modern one — an ordinary row served as source:"user"
+// with is_system set (vts-kujy). The flag lives in promptsCache, not in the
+// ref, so it has to be looked up.
+function isSystemPromptRef(ref) {
+  if (!ref) return false;
+  const source = String(ref.source || "");
+  const id = String(ref.id || "");
+  if (source === "system" && id === "summary") return true;
+  const cached = promptsCache.find((p) => p.source === source && p.id === id);
+  return Boolean(cached && cached.is_system);
 }
 
 function buildPromptRow(prompt, refs) {
