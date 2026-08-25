@@ -631,6 +631,11 @@ class MergeTranscriptStep(Step):
                     "text": final_text,
                     "raw_text": merged_text,
                     "entries": entries,
+                    # The unfiltered set, kept so re-rendering can be undone.
+                    # `entries` is what consumers read and is narrowed by noise
+                    # marks; rebuilding from it made every pass destructive
+                    # (vts-ra24).
+                    "all_entries": entries,
                     "cleanup": cleanup_meta,
                 },
             )

@@ -231,3 +231,72 @@ async def test_rerender_transcript_empty_guard_renders_all_and_warns(
 
     txt = (outputs / "transcript.txt").read_text(encoding="utf-8")
     assert txt.strip() != ""
+
+
+@pytest.mark.asyncio
+async def test_unmarking_noise_brings_the_speaker_back(authed_app, tmp_path):
+    """Marking a speaker as noise must be REVERSIBLE.
+
+    The function rebuilt `entries` from transcript.json and wrote the filtered
+    result back into the same file, so every pass narrowed the set for good.
+    One pass with the wrong labels — a task where all six speakers were briefly
+    flagged — permanently deleted 54% of a real transcript, and unticking the
+    box afterwards could not bring it back: the entries no longer existed to
+    re-render (vts-ra24).
+
+    Reversibility is the whole property. Asserted by doing what an operator
+    does: mark, look, unmark, look again.
+    """
+    from tests.conftest import _TEST_USER_ID
+    from vts.db.models import TaskStatus
+    from vts.db.repo import Repo
+
+    app, factory = authed_app
+    _ = app
+    outputs = _seed_outputs(tmp_path)
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/v",
+            options={},
+            artifact_dir=str(tmp_path),
+        )
+        await repo.set_task_status(task, TaskStatus.awaiting_input)
+        await repo.record_decision(
+            user_id=uuid.UUID(_TEST_USER_ID), source_task_id=task.id,
+            speaker_label="SPEAKER_01", speaker_id=None, voice_sample_id=None,
+            distance=None, embedding_model="ecapa", outcome="noise", is_noise=True,
+        )
+        await session.commit()
+        task_id = task.id
+
+    # Pass 1: SPEAKER_01 is noise, so its line goes.
+    async with factory() as session:
+        await rerender_transcript(await Repo(session).get_task_by_id(task_id), session, language="ru")
+    after_noise = json.loads((outputs / "transcript.json").read_text(encoding="utf-8"))
+    assert {e["speaker"] for e in after_noise["entries"]} == {"SPEAKER_00"}
+
+    # The operator changes their mind: SPEAKER_01 is a real voice after all.
+    async with factory() as session:
+        repo = Repo(session)
+        await repo.record_decision(
+            user_id=uuid.UUID(_TEST_USER_ID), source_task_id=task.id,
+            speaker_label="SPEAKER_01", speaker_id=None, voice_sample_id=None,
+            distance=None, embedding_model="ecapa", outcome="unmatched", is_noise=False,
+        )
+        await session.commit()
+
+    # Pass 2 must restore the line, not merely keep what survived pass 1.
+    async with factory() as session:
+        await rerender_transcript(await Repo(session).get_task_by_id(task_id), session, language="ru")
+
+    restored = json.loads((outputs / "transcript.json").read_text(encoding="utf-8"))
+    speakers = {e["speaker"] for e in restored["entries"]}
+    assert speakers == {"SPEAKER_00", "SPEAKER_01"}, (
+        f"unmarking noise did not bring the speaker back: {speakers} — "
+        "the entries were destroyed by the first pass"
+    )
+    txt = (outputs / "transcript.txt").read_text(encoding="utf-8")
+    assert "шум шум шум" in txt, "the text of the un-noised speaker is gone for good"
