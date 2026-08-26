@@ -400,18 +400,41 @@ def test_capabilities_failed_final_summary_can_restart_final_only(tmp_path: Path
     assert payload.capabilities.can_restart_final_summary is True
 
 
-def test_capabilities_completed_without_summary_prompt_cannot_restart_summary(tmp_path: Path) -> None:
+def test_capabilities_completed_without_any_prompt_cannot_restart_summary(tmp_path: Path) -> None:
+    """No prompt at all means there is no summary to restart.
+
+    This once asserted that a `{"source": "user"}` prompt could not restart the
+    summary, on the assumption that "user" meant "not the vendor one". Since
+    vts-kujy that assumption is false: the vendor prompt IS a user-owned row
+    with a generated uuid, so the old expectation greyed the entry out for
+    every task that had one (vts-jyz6). A transcript-only task is what actually
+    has nothing to restart.
+    """
     task = _task(
         tmp_path,
         steps=[_step("summarize_windows", StepStatus.completed)],
-        options={"prompts": [{"source": "user", "id": "custom"}]},
+        options={"prompts": []},
     )
     task.status = TaskStatus.completed
 
     payload = serialize_task(task)
 
     assert payload.capabilities.can_restart_summary is False
-    # final-summary restart does not depend on prompt selection
+    assert payload.capabilities.can_restart_final_summary is False
+
+
+def test_capabilities_a_user_owned_prompt_can_restart_summary(tmp_path: Path) -> None:
+    """The vendor prompt now looks exactly like this, so it must be allowed."""
+    task = _task(
+        tmp_path,
+        steps=[_step("summarize_windows", StepStatus.completed)],
+        options={"prompts": [{"source": "user", "id": "ee04304f-4950-41ed-9fd6-06dacd46c99d"}]},
+    )
+    task.status = TaskStatus.completed
+
+    payload = serialize_task(task)
+
+    assert payload.capabilities.can_restart_summary is True
     assert payload.capabilities.can_restart_final_summary is True
 
 

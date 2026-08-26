@@ -363,3 +363,54 @@ async def test_transition_task_status_noop_on_canceled(session):
     assert changed is False
     await session.refresh(task)
     assert task.status == TaskStatus.canceled
+
+
+def test_restart_summary_allows_the_modern_system_prompt_ref() -> None:
+    """The summary prompt no longer names itself {system, summary}.
+
+    Since vts-kujy it is an ordinary editable row with a generated uuid, so a
+    task created after that carries `{"source": "user", "id": "<uuid>"}` and
+    the literal gate matched nothing — "restart summary" was greyed out for
+    every such task, which is all of them (vts-jyz6).
+
+    Nothing at this layer can tell the vendor copy from a user prompt — the
+    flag lives in the DB and this is a synchronous serializer — so the gate
+    asks the weaker, answerable question: is any prompt selected at all. That
+    is safe because the restart resets SUMMARY_STEP_NAMES, the head shared by
+    every prompt, so it is meaningful whichever one was chosen.
+    """
+    modern = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": [{"source": "user", "id": "ee04304f-4950-41ed-9fd6-06dacd46c99d"}]},
+        steps=[
+            SimpleNamespace(name="summarize_windows", status=StepStatus.completed),
+            SimpleNamespace(name="finalize:user:ee04304f-4950-41ed-9fd6-06dacd46c99d", status=StepStatus.completed),
+        ],
+    )
+    assert can_restart_summary_task(modern) is True
+
+    # The historical shape must keep working: older tasks and presets still
+    # store it, and they built a `summarize_final` step.
+    legacy = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": [{"source": "system", "id": "summary"}]},
+        steps=[
+            SimpleNamespace(name="summarize_windows", status=StepStatus.completed),
+            SimpleNamespace(name="summarize_final", status=StepStatus.completed),
+        ],
+    )
+    assert can_restart_summary_task(legacy) is True
+
+
+def test_restart_summary_still_refused_without_any_prompt() -> None:
+    """The gate must not become "always true" — no prompt, no summary.
+
+    A transcript-only task builds no finalize step at all, so there is nothing
+    to restart and the menu entry must stay disabled.
+    """
+    no_prompt = SimpleNamespace(
+        status=TaskStatus.completed,
+        options={"transcript": True, "prompts": []},
+        steps=[SimpleNamespace(name="summarize_windows", status=StepStatus.completed)],
+    )
+    assert can_restart_summary_task(no_prompt) is False

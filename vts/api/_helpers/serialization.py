@@ -28,9 +28,18 @@ def can_resume_task(status: TaskStatus) -> bool:
     return _ts.can_resume(status)
 
 def can_restart_summary_task(task: Task) -> bool:
-    refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
-    summary_selected = any(r["source"] == "system" and r["id"] == "summary" for r in refs)
-    if not summary_selected:
+    # Gated on "any prompt selected", not on the literal {system, summary}.
+    # Since vts-kujy the vendor prompt is an ordinary row with a generated uuid,
+    # so a modern task stores {"source": "user", "id": <uuid>} and the literal
+    # matched nothing — the entry was greyed out for every task that had one
+    # (vts-jyz6). Nothing available here can tell the vendor copy from a user
+    # prompt: the flag lives in the DB and this is a synchronous serializer.
+    #
+    # Weakening it is safe because of what the restart actually does: it resets
+    # SUMMARY_STEP_NAMES, the head shared by every prompt, so the operation is
+    # meaningful for any selected prompt. A transcript-only task selects none
+    # and stays refused.
+    if not selected_prompt_refs(task.options if isinstance(task.options, dict) else {}):
         return False
     if task.status == TaskStatus.completed:
         return True
