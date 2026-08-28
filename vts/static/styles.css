@@ -2094,6 +2094,15 @@ input[type="file"] {
   height: 2.05rem;
 }
 
+/* The subtitles toggle only belongs to the transcript tab, so it ships hidden
+   and is shown per tab. `.icon-btn` sets display:inline-flex, which beats the
+   browser's `[hidden]` default at equal specificity — the same trap this file
+   documents for .task-load-more and the dialogs — so the hidden state needs to
+   be stated explicitly rather than left to the attribute. */
+.tab-actions .tab-subtitles-btn[hidden] {
+  display: none;
+}
+
 /* Underlined, not filled (redesign v2). Six filled pills in a row competed with
    the content below them; an underline marks the active tab without turning the
    strip into a block of colour.

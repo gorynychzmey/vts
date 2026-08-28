@@ -280,6 +280,8 @@ window.__VTS_I18N.en = {
 "action.edit_name": "Rename task",
 "action.save_name": "Save the new name",
 "action.cancel_edit": "Cancel renaming",
+"action.subtitles": "Show the transcript as subtitles",
+"action.subtitles_off": "Show the transcript as running text",
 "action.copy_tab": "Copy the open tab's content to the clipboard",
 "action.save_tab": "Download the open tab's content as a file",
 "action.expand": "Expand task details",

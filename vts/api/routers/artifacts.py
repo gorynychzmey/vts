@@ -34,6 +34,7 @@ from vts.api.schemas import TextSliceOut
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.media_kind import media_content_type, media_kind
+from vts.services.subtitles import render_webvtt
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +373,46 @@ async def get_transcript_entries(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"blocks": await _load_player_blocks(task, session)}
+
+
+@router.get(
+    "/api/tasks/{task_id}/subtitles",
+    responses={
+        200: {
+            "description": (
+                "The transcript as a WebVTT subtitle track (vts-fkyq). WebVTT "
+                "rather than SRT because it carries the speaker natively as a "
+                "voice tag; undiarized transcripts simply get no tag."
+            ),
+            "content": {"text/vtt": {"schema": {"type": "string"}}},
+        },
+        404: {"description": "Task not found"},
+    },
+)
+async def get_subtitles(
+    task_id: uuid.UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> Response:
+    """The transcript as a WebVTT subtitle track, derived from the same blocks
+    the /player page uses. Returns a header-only track when the transcript is
+    not ready yet."""
+    # Derived on demand rather than persisted: speaker names live in the
+    # registry and can be renamed, and deriving the track keeps it correct
+    # after a rename instead of freezing a stale name into a file.
+    #
+    # Not-ready yields 200 with an empty track, not 404, so a caller can show an
+    # empty subtitle view without special-casing it — matching how
+    # /transcript-entries returns an empty block list.
+    repo = Repo(session)
+    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    blocks = await _load_player_blocks(task, session)
+    return Response(
+        content=render_webvtt(blocks),
+        media_type="text/vtt; charset=utf-8",
+    )
 
 
 @router.get(

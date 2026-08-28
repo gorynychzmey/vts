@@ -608,6 +608,37 @@ async function copyTextToClipboard(text) {
   return ok;
 }
 
+// Subtitles view (vts-fkyq / VOS-128): the raw transcript can be read as
+// running text or as a WebVTT subtitle track. The choice is per task card and
+// lives on the element rather than in storage — it is a way of looking at the
+// open transcript, not a saved preference.
+function isSubtitlesView(taskEl) {
+  return Boolean(taskEl && taskEl._subtitlesView);
+}
+
+function updateSubtitlesToggle(taskEl) {
+  const btn = taskEl?.querySelector(".tab-subtitles-btn");
+  if (!btn) {
+    return;
+  }
+  // The toggle only makes sense on the transcript tab; other tabs are not
+  // timed text and have nothing to render as cues.
+  const onTranscript = Boolean(taskEl.querySelector(".tab-content.transcript.active"));
+  btn.hidden = !onTranscript;
+  const on = isSubtitlesView(taskEl);
+  btn.classList.toggle("active", on);
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  const label = t(on ? "action.subtitles_off" : "action.subtitles");
+  btn.setAttribute("title", label);
+  btn.setAttribute("aria-label", label);
+}
+
+async function toggleSubtitlesView(taskEl, taskId) {
+  taskEl._subtitlesView = !isSubtitlesView(taskEl);
+  updateSubtitlesToggle(taskEl);
+  await loadTabContent(taskEl, taskId, "transcript");
+}
+
 async function loadTabContent(taskEl, taskId, tabName) {
   if (tabName === "log") {
     const panel = getTabPanel(taskEl, "log");
@@ -649,7 +680,16 @@ async function loadTabContent(taskEl, taskId, tabName) {
     }
     return loadPromptResult(taskEl, taskId, ref, tabName);
   }
-  const endpoint = tabName === "transcript" ? "transcript" : tabName === "redacted" ? "redacted" : "";
+  // The transcript tab has two views: running text (default) and subtitles.
+  // Both are the same transcript, so the toggle only picks which endpoint to
+  // read — the server derives the WebVTT track on demand from the same blocks
+  // the player uses, which keeps speaker names correct after a rename.
+  const endpoint =
+    tabName === "transcript"
+      ? (isSubtitlesView(taskEl) ? "subtitles" : "transcript")
+      : tabName === "redacted"
+        ? "redacted"
+        : "";
   if (!endpoint) {
     return "";
   }
@@ -902,6 +942,7 @@ async function activateTaskTab(taskEl, taskId, tabName) {
     activeBtn.classList.add("active");
   }
   panel.classList.add("active");
+  updateSubtitlesToggle(taskEl);
   if (tab === "log") {
     startLogPolling(taskEl, taskId);
     return;
@@ -2332,6 +2373,7 @@ function renderTaskCard(task) {
   const redactedTabBtn = root.querySelector('.tab-btn[data-tab="redacted"]');
   const copyTabBtn = root.querySelector(".tab-copy-btn");
   const saveTabBtn = root.querySelector(".tab-save-btn");
+  const subtitlesTabBtn = root.querySelector(".tab-subtitles-btn");
 
   applyI18n(root);
 
@@ -2514,6 +2556,11 @@ function renderTaskCard(task) {
   if (saveTabBtn) {
     saveTabBtn.addEventListener("click", async () => {
       await saveActiveTabContent(root, task.id);
+    });
+  }
+  if (subtitlesTabBtn) {
+    subtitlesTabBtn.addEventListener("click", async () => {
+      await toggleSubtitlesView(root, task.id);
     });
   }
 

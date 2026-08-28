@@ -280,6 +280,8 @@ window.__VTS_I18N.de = {
 "action.edit_name": "Aufgabe umbenennen",
 "action.save_name": "Neuen Namen speichern",
 "action.cancel_edit": "Umbenennen abbrechen",
+"action.subtitles": "Transkript als Untertitel anzeigen",
+"action.subtitles_off": "Transkript als Fließtext anzeigen",
 "action.copy_tab": "Inhalt des geöffneten Tabs in die Zwischenablage kopieren",
 "action.save_tab": "Inhalt des geöffneten Tabs als Datei herunterladen",
 "action.expand": "Aufgabendetails ausklappen",
