@@ -58,11 +58,16 @@ def can_restart_summary_task(task: Task) -> bool:
 def can_restart_final_summary_task(task: Task) -> bool:
     # Mirrors the frontend's `summaryExpected`: ANY selected prompt yields a
     # finalize step (system:summary -> summarize_final, anything else ->
-    # finalize:<source>:<id>), so restarting the final summary only requires that
-    # at least one prompt is selected. This is deliberately weaker than
-    # can_restart_summary_task's system:summary gate above -- restarting *the
-    # summary* is meaningless without the summary prompt, but restarting the
-    # finalize tail is valid for a user-prompt-only task.
+    # finalize:<source>:<id>), so restarting the final summary only requires
+    # that at least one prompt is selected.
+    #
+    # That used to be deliberately weaker than the gate above, which demanded
+    # a literal system:summary ref. It no longer is: that literal stopped
+    # matching anything once the vendor prompt became an ordinary row, so both
+    # gates now ask "any prompt selected" and differ only in what else they
+    # require — this one also needs summarize_windows to have completed,
+    # because the finalize tail has nothing to rebuild from otherwise
+    # (vts-jyz6, vts-e6q3).
     refs = selected_prompt_refs(task.options if isinstance(task.options, dict) else {})
     if not refs:
         return False
