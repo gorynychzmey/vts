@@ -344,6 +344,22 @@ CAPABILITIES: list[Cap] = [
     },
     {
         "entity": "Task artefact",
+        "action": "Read raw transcript as subtitles",
+        "label": "action.subtitles",
+        "endpoints": ["GET /api/tasks/{task_id}/subtitles"],
+        "screen": "Task card — Transcript tab, subtitles toggle in the tab actions",
+        "states": "enabled once produced; works with or without diarization",
+    },
+    {
+        "entity": "Task artefact",
+        "action": "Share a result",
+        "label": "action.share",
+        "endpoints": [],
+        "screen": "Task card — share button in the tab actions, opens #share-dialog",
+        "states": "offers every ready artefact except the log",
+    },
+    {
+        "entity": "Task artefact",
         "action": "Read processed transcript",
         "label": "tab.redacted",
         "endpoints": ["GET /api/tasks/{task_id}/redacted"],

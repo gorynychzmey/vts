@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 52 capabilities · 101 routes (74 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 394 English UI strings.
+**Counts:** 54 capabilities · 102 routes (75 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 406 English UI strings.
 
 ## Capabilities by entity
 
@@ -31,6 +31,8 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
 | Read raw transcript | Raw transcript | enabled once produced | `GET /api/tasks/{task_id}/transcript` | Task card — Transcript tab |
+| Read raw transcript as subtitles | Show the transcript as subtitles | enabled once produced; works with or without diarization | `GET /api/tasks/{task_id}/subtitles` | Task card — Transcript tab, subtitles toggle in the tab actions |
+| Share a result | Share a result | offers every ready artefact except the log | — | Task card — share button in the tab actions, opens #share-dialog |
 | Read processed transcript | Processed transcript | enabled once produced | `GET /api/tasks/{task_id}/redacted` | Task card — Processed transcript tab (disabled until ready) |
 | Read summary | Summary | enabled once produced | `GET /api/tasks/{task_id}/summary` | Task card — Summary tab, with a per-prompt result selector when >1 prompt ran |
 | Read task log | Log | any | `GET /api/tasks/{task_id}/log` | Task card — Log tab |
@@ -197,6 +199,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 | `#prompts-dialog` | Manage prompts |
 | `#presets-dialog` | Manage presets |
 | `#delivery-dialog` | Manage delivery |
+| `#share-dialog` | Share |
 | `#restart-final-dialog` | Restart final with prompts |
 | `#task-about-dialog` | — |
 | `#speaker-registry-dialog` | Voice registry |

@@ -2094,6 +2094,46 @@ input[type="file"] {
   height: 2.05rem;
 }
 
+/* Share dialog (vts-qv6l): one list of radio choices — which artifact — and a
+   note about the download fallback. */
+.share-dialog .share-hint {
+  margin: 0 0 0.6rem;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.share-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.share-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.share-option:hover {
+  background: var(--bg-chip);
+}
+
+.share-empty,
+.share-note {
+  margin: 0.6rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+/* Same `[hidden]` trap as the subtitles toggle: a later `display` at equal
+   specificity would beat the attribute. */
+.share-dialog .share-note[hidden] {
+  display: none;
+}
+
 /* The subtitles toggle only belongs to the transcript tab, so it ships hidden
    and is shown per tab. `.icon-btn` sets display:inline-flex, which beats the
    browser's `[hidden]` default at equal specificity — the same trap this file

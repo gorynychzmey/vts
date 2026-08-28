@@ -867,6 +867,22 @@
                   <path d="M9 14h6" />
                 </svg>
               </button>
+              <button
+                class="icon-btn ghost tab-share-btn"
+                type="button"
+                title="Share a result"
+                aria-label="Share a result"
+                data-i18n-title="action.share"
+                data-i18n-aria-label="action.share"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="18" cy="5" r="2.5" />
+                  <circle cx="6" cy="12" r="2.5" />
+                  <circle cx="18" cy="19" r="2.5" />
+                  <path d="M8.2 10.8l7.6-4.1" />
+                  <path d="M8.2 13.2l7.6 4.1" />
+                </svg>
+              </button>
             </div>
           </div>
           <pre class="tab-content transcript active"></pre>
@@ -1198,6 +1214,36 @@
           </form>
           </div>
         </section>
+      </div>
+    </dialog>
+
+    <!-- Sharing (vts-qv6l / VOS-127): pick WHICH artifact, then hand it to the
+         OS share sheet as a FILE. There is deliberately no "via Telegram /
+         WhatsApp / mail" choice here: navigator.share({files}) opens the system
+         sheet where the user picks the app, and the web link forms those
+         services expose (t.me/share/url, wa.me, mailto:) take text in a URL and
+         cannot carry a file at all — transcripts run 83-159 KB and do not fit.
+         Where file sharing is unsupported we fall back to downloading. -->
+    <dialog id="share-dialog" class="tokens-dialog share-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="share.title">Share</h2>
+        <button type="button" id="share-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+      <p class="share-hint" data-i18n="share.hint">Choose what to share.</p>
+      <div class="share-options" id="share-options"></div>
+      <p class="share-note" id="share-note" hidden data-i18n="share.download_note">
+        Your browser cannot share files, so the file will be downloaded instead.
+      </p>
+      <div class="prompt-form-actions">
+        <button type="button" id="share-submit-btn" class="btn-text primary"
+                data-i18n="share.submit">Share</button>
       </div>
     </dialog>
 

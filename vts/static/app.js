@@ -902,6 +902,142 @@ async function getActiveTabPayload(taskEl, taskId) {
   return { tabName, text: String(text || "") };
 }
 
+// ---------------------------------------------------------------------------
+// Sharing a result (vts-qv6l / VOS-127).
+//
+// The dialog asks ONE question — which artifact — and then hands that artifact
+// to the OS share sheet as a FILE. There is deliberately no "via Telegram /
+// WhatsApp / mail" choice: navigator.share({files}) opens the system sheet
+// where the user picks the app, and the web link forms those services expose
+// (t.me/share/url, wa.me, mailto:) carry text in a URL and cannot take a file at
+// all. Transcripts measured 83-159 KB on prod, far past what a URL survives, so
+// sharing text was not an option to begin with.
+
+// The artifacts this task can currently share, read off the tab strip rather
+// than a hardcoded list: prompt tabs are dynamic, and a disabled tab is one
+// whose artifact is not ready.
+function collectShareOptions(taskEl) {
+  const options = [];
+  const buttons = taskEl ? [...taskEl.querySelectorAll(".tab-btn")] : [];
+  for (const btn of buttons) {
+    const tabName = String(btn.dataset.tab || "");
+    // The log is diagnostics, not a result — nothing to share with a person.
+    if (!tabName || btn.disabled || tabName === "log") {
+      continue;
+    }
+    if (isPromptTabName(tabName)) {
+      // A prompt tab's label is the prompt's own name, which is what the user
+      // recognises it by.
+      options.push({ tab: tabName, label: (btn.textContent || "").trim() || tabName });
+      continue;
+    }
+    const key = `share.${tabName}`;
+    const label = t(key);
+    options.push({ tab: tabName, label: label === key ? tabName : label });
+  }
+  // The transcript can also be shared as subtitles — the same artifact in the
+  // other view, so it is a share choice rather than a second tab.
+  const transcript = options.find((o) => o.tab === "transcript");
+  if (transcript) {
+    const at = options.indexOf(transcript) + 1;
+    options.splice(at, 0, { tab: "transcript", view: "subtitles", label: t("share.subtitles") });
+  }
+  return options;
+}
+
+function shareOptionKey(option) {
+  return option.view ? `${option.tab}:${option.view}` : option.tab;
+}
+
+// Whether this browser can hand a File to the system share sheet. Checked with
+// a real File because canShare({files}) is narrower than share() itself — a
+// browser can support sharing text and still refuse files.
+function canShareFiles() {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+    return false;
+  }
+  if (typeof navigator.canShare !== "function") {
+    return false;
+  }
+  try {
+    const probe = new File(["x"], "probe.txt", { type: "text/plain" });
+    return navigator.canShare({ files: [probe] });
+  } catch {
+    return false;
+  }
+}
+
+// The text behind one share option, fetched the same way the tab itself would
+// load it — so sharing never invents a second path to the same artifact.
+async function loadShareContent(taskEl, taskId, option) {
+  if (option.view === "subtitles") {
+    const text = await api(`/api/tasks/${taskId}/subtitles`).catch((err) => err.message);
+    return String(text || "");
+  }
+  const wasSubtitles = isSubtitlesView(taskEl);
+  if (option.tab === "transcript" && wasSubtitles) {
+    // The tab is currently showing subtitles; the plain transcript is wanted
+    // here, so read it directly rather than disturbing the visible view.
+    const text = await api(`/api/tasks/${taskId}/transcript`).catch((err) => err.message);
+    return String(text || "");
+  }
+  const panel = getTabPanel(taskEl, option.tab);
+  const shown = String(panel?.textContent || "");
+  const placeholder = t(`tab.prompt_${option.tab}`);
+  if (shown && shown !== placeholder) {
+    return shown;
+  }
+  return String((await loadTabContent(taskEl, taskId, option.tab)) || "");
+}
+
+function shareFileName(taskId, option) {
+  if (option.view === "subtitles") {
+    const idPart = String(taskId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 12) || "task";
+    return `subtitles-${idPart}.vtt`;
+  }
+  return buildTabFilename(taskId, option.tab);
+}
+
+function shareMimeType(fileName) {
+  if (fileName.endsWith(".vtt")) {
+    return "text/vtt";
+  }
+  if (fileName.endsWith(".md")) {
+    return "text/markdown";
+  }
+  return "text/plain";
+}
+
+// Share the chosen artifact as a file, falling back to a download where the
+// browser cannot. Returns "shared" | "downloaded" | "" (nothing to share).
+async function shareTabArtifact(taskEl, taskId, option) {
+  const text = await loadShareContent(taskEl, taskId, option);
+  if (!text) {
+    return "";
+  }
+  const fileName = shareFileName(taskId, option);
+  const type = shareMimeType(fileName);
+  if (canShareFiles()) {
+    try {
+      const file = new File([text], fileName, { type });
+      // Re-check with the real file: canShareFiles() probes with a tiny stub,
+      // and a browser may still refuse this one (size or type).
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: fileName });
+        return "shared";
+      }
+    } catch (err) {
+      // AbortError means the user dismissed the sheet — that is a completed
+      // interaction, not a failure to fall back from.
+      if (err && err.name === "AbortError") {
+        return "shared";
+      }
+    }
+  }
+  downloadTextFile(fileName, text);
+  return "downloaded";
+}
+
 async function copyActiveTabContent(taskEl, taskId) {
   const payload = await getActiveTabPayload(taskEl, taskId);
   if (!payload.text) {
@@ -2374,6 +2510,7 @@ function renderTaskCard(task) {
   const copyTabBtn = root.querySelector(".tab-copy-btn");
   const saveTabBtn = root.querySelector(".tab-save-btn");
   const subtitlesTabBtn = root.querySelector(".tab-subtitles-btn");
+  const shareTabBtn = root.querySelector(".tab-share-btn");
 
   applyI18n(root);
 
@@ -2561,6 +2698,11 @@ function renderTaskCard(task) {
   if (subtitlesTabBtn) {
     subtitlesTabBtn.addEventListener("click", async () => {
       await toggleSubtitlesView(root, task.id);
+    });
+  }
+  if (shareTabBtn) {
+    shareTabBtn.addEventListener("click", () => {
+      openShareDialog(root, task.id);
     });
   }
 
@@ -7750,6 +7892,88 @@ presetDeleteBtn?.addEventListener("click", () => {
 
 presetDuplicateBtn?.addEventListener("click", () => {
   if (presetEditing) duplicatePreset(presetEditing);
+});
+
+// ---------- Share dialog ----------
+//
+// One question only — WHICH artifact. See collectShareOptions / shareTabArtifact
+// for why there is no "via Telegram / WhatsApp / mail" choice.
+
+const shareDialog = document.getElementById("share-dialog");
+const shareOptionsEl = document.getElementById("share-options");
+const shareNoteEl = document.getElementById("share-note");
+const shareCloseBtn = document.getElementById("share-close-btn");
+const shareSubmitBtn = document.getElementById("share-submit-btn");
+let shareTaskEl = null;
+let shareTaskId = null;
+let shareChoices = [];
+
+function renderShareOptions(options) {
+  if (!shareOptionsEl) return;
+  shareOptionsEl.textContent = "";
+  options.forEach((option, index) => {
+    const key = shareOptionKey(option);
+    const row = document.createElement("label");
+    row.className = "share-option";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "share-choice";
+    input.value = key;
+    input.checked = index === 0;
+    const span = document.createElement("span");
+    // textContent, not data-i18n: the label is already resolved (a prompt tab
+    // carries the prompt's own name, which has no i18n key).
+    span.textContent = option.label;
+    row.append(input, span);
+    shareOptionsEl.append(row);
+  });
+  if (!options.length) {
+    const empty = document.createElement("p");
+    empty.className = "share-empty";
+    empty.textContent = t("share.empty");
+    shareOptionsEl.append(empty);
+  }
+  if (shareSubmitBtn) {
+    shareSubmitBtn.disabled = options.length === 0;
+  }
+}
+
+function openShareDialog(taskEl, taskId) {
+  if (!shareDialog) return;
+  shareTaskEl = taskEl;
+  shareTaskId = taskId;
+  shareChoices = collectShareOptions(taskEl);
+  renderShareOptions(shareChoices);
+  // State the fallback up front rather than surprising the user with a download
+  // after they pressed "Share".
+  if (shareNoteEl) {
+    shareNoteEl.hidden = canShareFiles();
+  }
+  if (!shareDialog.open) {
+    shareDialog.showModal();
+  }
+}
+
+shareCloseBtn?.addEventListener("click", () => shareDialog?.close());
+
+shareSubmitBtn?.addEventListener("click", async () => {
+  const selected = shareOptionsEl?.querySelector('input[name="share-choice"]:checked');
+  const key = String(selected?.value || "");
+  const option = shareChoices.find((o) => shareOptionKey(o) === key);
+  if (!option || !shareTaskEl || !shareTaskId) {
+    return;
+  }
+  const taskEl = shareTaskEl;
+  const taskId = shareTaskId;
+  // Share BEFORE closing: navigator.share() must be called from within the
+  // user-gesture window, and closing the dialog first has been known to end it.
+  // The dialog closes afterwards, once the system sheet has been handed the
+  // file (or the download fallback has run).
+  try {
+    await shareTabArtifact(taskEl, taskId, option);
+  } finally {
+    shareDialog?.close();
+  }
 });
 
 // ---------- Restart final dialog ----------
