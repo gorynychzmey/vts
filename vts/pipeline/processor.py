@@ -694,12 +694,10 @@ class TaskProcessor:
         # Copy ASR segments
         await repo.clone_asr_segments(donor.id, task.id)
 
-        # Mark task as completed
-        task.status = TaskStatus.completed
-        task.error_message = None
-        from vts.db.models import utcnow as _utcnow
-        task.updated_at = _utcnow()
-        await session.flush()
+        # Mark task as completed. Through the repo rather than by hand: this
+        # used to set the same three fields inline and so missed the
+        # awaiting_step cleanup that set_task_status does (vts-47w6).
+        await repo.set_task_status(task, TaskStatus.completed)
 
     def _task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:
         value = options.get(key, default)

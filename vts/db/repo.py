@@ -386,6 +386,17 @@ class Repo:
     ) -> None:
         task.status = status
         task.error_message = error_message
+        # The awaited step describes a wait, so it ends with the wait (vts-47w6).
+        # It used to be written by set_awaiting_input and cleared by nobody, so a
+        # task that resumed and finished kept reporting the step it had once
+        # paused at — the API then served `completed` alongside
+        # `awaiting_step=match_speakers`. The SPA never showed it because every
+        # read pairs the step with the status, but the serialized task is a
+        # contract other clients read too.
+        #
+        # set_awaiting_input does not go through here, so re-entering a wait
+        # still sets the step normally.
+        task.awaiting_step = None
         task.updated_at = utcnow()
         await self.session.flush()
 
