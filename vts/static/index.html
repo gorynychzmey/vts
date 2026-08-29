@@ -101,6 +101,16 @@
                   </svg>
                   <span data-i18n="preset.manage.open">Manage presets</span>
                 </button>
+                <!-- The library lists RECORDINGS, which outlive the tasks that
+                     produced them (vts-8w1r) — so it belongs next to the other
+                     things that outlive a run, not in the task list. -->
+                <button type="button" id="library-btn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 5v14M9 5v14M14 6l4 13" />
+                    <path d="M3 19h18" />
+                  </svg>
+                  <span data-i18n="library.open">Library</span>
+                </button>
                 <button type="button" id="prompts-btn">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
@@ -1386,6 +1396,31 @@
         <h3 class="about-section-title" data-i18n="about.section_steps">Pipeline steps</h3>
         <div class="about-steps"></div>
       </section>
+    </dialog>
+
+    <!-- Knowledge library (vts-8w1r / VOS-130): the recordings a task produced,
+         which outlive it. A dialog rather than a page because this SPA has one
+         page and every other list — voices, prompts, presets — already lives in
+         one; a second page would be the odd one out. -->
+    <dialog id="library-dialog" class="tokens-dialog library-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="library.title">Library</h2>
+        <button type="button" id="library-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+      <p class="tokens-help" data-i18n="library.hint">
+        Processed recordings. These stay here after their task is gone.
+      </p>
+      <div id="library-list" class="library-list"></div>
+      <p id="library-empty" class="library-empty" hidden data-i18n="library.empty">
+        Nothing here yet.
+      </p>
     </dialog>
 
     <dialog id="speaker-registry-dialog" class="tokens-dialog speaker-registry-dialog">

@@ -346,17 +346,17 @@ CAPABILITIES: list[Cap] = [
     {
         "entity": "Recording",
         "action": "Browse the library",
-        "label": "",
+        "label": "library.open",
         "endpoints": ["GET /api/recordings"],
-        "screen": "Library (API only so far; no page yet)",
-        "states": "one recording per task, outliving it",
+        "screen": "Header menu -> Library (#library-dialog): title, duration, language, and what each recording still has",
+        "states": "one recording per task, outliving it; a detached one says so",
     },
     {
         "entity": "Recording",
         "action": "Open a recording",
-        "label": "",
+        "label": "library.title",
         "endpoints": ["GET /api/recordings/{recording_id}"],
-        "screen": "Library (API only so far; no page yet)",
+        "screen": "Library dialog row",
         "states": "owner-scoped, 404 otherwise",
     },
     {

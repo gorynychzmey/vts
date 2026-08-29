@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 56 capabilities · 104 routes (77 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 406 English UI strings.
+**Counts:** 56 capabilities · 104 routes (77 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 414 English UI strings.
 
 ## Capabilities by entity
 
@@ -45,8 +45,8 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
-| Browse the library | — | one recording per task, outliving it | `GET /api/recordings` | Library (API only so far; no page yet) |
-| Open a recording | — | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library (API only so far; no page yet) |
+| Browse the library | Library | one recording per task, outliving it; a detached one says so | `GET /api/recordings` | Header menu -> Library (#library-dialog): title, duration, language, and what each recording still has |
+| Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library dialog row |
 
 ### Speaker (voice)
 
@@ -209,6 +209,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 | `#share-dialog` | Share |
 | `#restart-final-dialog` | Restart final with prompts |
 | `#task-about-dialog` | — |
+| `#library-dialog` | Library |
 | `#speaker-registry-dialog` | Voice registry |
 | `#voice-resolution-dialog` | Resolve voices |
 | `#speaker-picker-dialog` | Move fragment to a person (set at runtime) |

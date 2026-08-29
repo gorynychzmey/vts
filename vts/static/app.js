@@ -7894,6 +7894,122 @@ presetDuplicateBtn?.addEventListener("click", () => {
   if (presetEditing) duplicatePreset(presetEditing);
 });
 
+// ---------- Knowledge library ----------
+//
+// The recordings a task produced, which outlive it (vts-8w1r / VOS-130). A
+// dialog rather than a page: this SPA has one page, and every other list —
+// voices, prompts, presets — already lives in a dialog.
+
+const libraryDialog = document.getElementById("library-dialog");
+const libraryList = document.getElementById("library-list");
+const libraryEmpty = document.getElementById("library-empty");
+const libraryBtn = document.getElementById("library-btn");
+const libraryCloseBtn = document.getElementById("library-close-btn");
+
+function libraryMetaLine(item) {
+  // Only what is actually known: a recording whose media never arrived has no
+  // duration, and stating "0:00" would be a claim rather than a gap.
+  const parts = [];
+  if (typeof item.duration_sec === "number" && item.duration_sec > 0) {
+    parts.push(formatDuration(item.duration_sec));
+  }
+  if (item.language) {
+    parts.push(String(item.language).toUpperCase());
+  }
+  const when = item.recorded_at || item.created_at;
+  if (when) {
+    // formatRelativeTime falls back to the locale date once an age stops being
+    // useful as a relative figure — which is most of a library.
+    const label = formatRelativeTime(when);
+    if (label) parts.push(label);
+  }
+  // The recording outliving its task is the whole point of this feature, so
+  // say so rather than leaving a row that looks the same as any other.
+  if (!item.source_task_id) {
+    parts.push(t("library.detached"));
+  }
+  return parts.join(" · ");
+}
+
+function renderLibrary(items) {
+  if (!libraryList) return;
+  libraryList.textContent = "";
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "library-row";
+    row.dataset.recordingId = String(item.id || "");
+
+    const title = document.createElement("div");
+    title.className = "library-row-title";
+    title.textContent = item.title || t("library.no_title");
+    row.append(title);
+
+    const meta = document.createElement("div");
+    meta.className = "library-row-meta";
+    meta.textContent = libraryMetaLine(item);
+    row.append(meta);
+
+    // What this recording still HAS. Probed server-side from disk, because
+    // archiving removes the media while the transcript stays.
+    const flags = document.createElement("div");
+    flags.className = "library-row-flags";
+    for (const [key, present] of [
+      ["tab.transcript", item.has_transcript],
+      ["tab.summary", item.has_summary],
+      ["library.has_media", item.has_media],
+    ]) {
+      if (!present) continue;
+      const pill = document.createElement("span");
+      pill.className = "library-flag";
+      const label = t(key);
+      pill.textContent = label === key ? key : label;
+      flags.append(pill);
+    }
+    if (flags.childElementCount) {
+      row.append(flags);
+    }
+    libraryList.append(row);
+  }
+  if (libraryEmpty) {
+    libraryEmpty.hidden = items.length > 0;
+  }
+}
+
+async function openLibraryDialog() {
+  if (!libraryDialog) return;
+  if (!libraryDialog.open) {
+    libraryDialog.showModal();
+  }
+  if (libraryList) {
+    libraryList.textContent = "";
+  }
+  if (libraryEmpty) {
+    libraryEmpty.hidden = true;
+  }
+  try {
+    const payload = await api("/api/recordings");
+    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    renderLibrary(items);
+  } catch {
+    // A failed load must not leave an empty dialog that reads as "you have
+    // nothing", which is a different statement entirely.
+    if (libraryEmpty) {
+      libraryEmpty.textContent = t("library.load_failed");
+      libraryEmpty.hidden = false;
+    }
+  }
+}
+
+libraryBtn?.addEventListener("click", () => {
+  // The burger menu closes the same way every other entry closes it: by
+  // dropping the class the toggle sets. There is no helper for it.
+  document.getElementById("header-menu")?.classList.remove("open");
+  document.getElementById("header-menu-btn")?.setAttribute("aria-expanded", "false");
+  void openLibraryDialog();
+});
+
+libraryCloseBtn?.addEventListener("click", () => libraryDialog?.close());
+
 // ---------- Share dialog ----------
 //
 // One question only — WHICH artifact. See collectShareOptions / shareTabArtifact

@@ -2094,6 +2094,64 @@ input[type="file"] {
   height: 2.05rem;
 }
 
+/* Knowledge library (vts-8w1r): a list of recordings, each a title with a
+   quiet metadata line and pills for what it still has on disk. */
+.library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.library-row {
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.library-row-title {
+  font-weight: 600;
+  /* A source title can be a whole sentence; one line keeps the rows scannable
+     and the full text stays available on the task itself. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-row-meta {
+  margin-top: 0.15rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.library-row-flags {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.library-flag {
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-chip);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.library-empty {
+  margin: 0.6rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+/* Same `[hidden]` trap as the other additions in this file: a later `display`
+   at equal specificity would beat the attribute. */
+.library-dialog .library-empty[hidden] {
+  display: none;
+}
+
 /* Share dialog (vts-qv6l): one list of radio choices — which artifact — and a
    note about the download fallback. */
 .share-dialog .share-hint {
