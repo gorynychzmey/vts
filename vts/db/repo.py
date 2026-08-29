@@ -30,6 +30,7 @@ from vts.db.models import (
 )
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
+from vts.services.asr_payload import decompose_raw_json
 from vts.services.delivery_status import RETRYABLE_STATUSES
 
 
@@ -470,6 +471,7 @@ class Repo:
             end_sec=end_sec,
             text=text,
             raw_json=raw_json,
+            payload=decompose_raw_json(raw_json),
         )
         self.session.add(segment)
         await self.session.flush()
@@ -506,6 +508,7 @@ class Repo:
         segment.end_sec = end_sec
         segment.text = text
         segment.raw_json = raw_json
+        segment.payload = decompose_raw_json(raw_json)
         await self.session.flush()
         return segment
 

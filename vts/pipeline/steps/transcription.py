@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
+from vts.services.asr_payload import segment_raw_payload
 from vts.services.diarization.merge import (
     SENTENCE_SPLIT_RE,
     drop_marginal_speakers,
@@ -356,7 +357,9 @@ class TranscribeSegmentsStep(Step):
             if seg is None:
                 missing.append(spec)
                 continue
-            if isinstance(seg.raw_json, dict) and seg.raw_json:
+            # Either stored form counts as done. Testing raw_json alone would
+            # re-transcribe every segment once the legacy column is cleared.
+            if segment_raw_payload(seg):
                 continue
             missing.append(spec)
         if not missing:
@@ -367,8 +370,9 @@ class TranscribeSegmentsStep(Step):
         """Transcribe every segment listed in the manifest, resuming as needed.
 
         **Resume.** A segment counts as done only if its row carries a
-        non-empty `raw_json`; a row with text but no payload is re-done, since
-        the raw response is what later stages (diarization merge, the player)
+        non-empty payload in EITHER stored form — the decomposed axes or the
+        legacy `raw_json` (vts-6qwy). A row with text but neither is re-done,
+        since that payload is what later stages (diarization merge, the player)
         read. Each segment is committed as it completes, so an interrupted run
         loses at most the segment in flight.
 
@@ -406,7 +410,9 @@ class TranscribeSegmentsStep(Step):
             if seg is None:
                 missing.append(spec)
                 continue
-            if isinstance(seg.raw_json, dict) and seg.raw_json:
+            # Either stored form counts as done. Testing raw_json alone would
+            # re-transcribe every segment once the legacy column is cleared.
+            if segment_raw_payload(seg):
                 continue
             missing.append(spec)
         if not missing:
@@ -547,10 +553,10 @@ class TranscribeSegmentsStep(Step):
                         "segment_index": int(seg.segment_index),
                         "start": float(seg.start_sec),
                         "end": float(seg.end_sec),
-                        "raw_json": seg.raw_json,
+                        "raw_json": segment_raw_payload(seg),
                     }
                     for seg in all_segments
-                    if isinstance(seg.raw_json, dict) and bool(seg.raw_json)
+                    if segment_raw_payload(seg)
                 ]
             },
         )
@@ -582,8 +588,9 @@ class MergeTranscriptStep(Step):
                 text = segment.text.strip()
                 if text:
                     merged_tokens.append(text)
-                    if isinstance(segment.raw_json, dict) and segment.raw_json:
-                        raw_json_by_index[len(entries)] = segment.raw_json
+                    seg_payload = segment_raw_payload(segment)
+                    if seg_payload:
+                        raw_json_by_index[len(entries)] = seg_payload
                     entries.append({"start": segment.start_sec, "end": segment.end_sec, "text": text})
             merged_text = " ".join(merged_tokens).strip()
             cleaned_text, cleanup_meta = trim_repetitive_edges(merged_text)

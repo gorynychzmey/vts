@@ -279,3 +279,37 @@ def test_round_trip_agrees_on_every_payload_shape_in_the_test_suite():
     # Guard the guard: if the harvesting ever stops finding payloads, this test
     # would pass vacuously and prove nothing.
     assert checked >= 20, f"only {checked} payloads harvested — the scan is not finding them"
+
+
+# ------------------------------------------------- reading either stored form
+
+def test_segment_payload_prefers_the_decomposed_axes():
+    from types import SimpleNamespace
+
+    from vts.services.asr_payload import segment_raw_payload
+
+    original = _payload()
+    seg = SimpleNamespace(payload=decompose_raw_json(original), raw_json={"segments": []})
+    out = segment_raw_payload(seg)
+    # The decomposed axes win: raw_json is legacy and will be cleared.
+    assert out["segments"], "fell back to the empty legacy column"
+    assert len(out["segments"]) == 2
+
+
+def test_segment_payload_falls_back_to_raw_json_before_the_migration():
+    from types import SimpleNamespace
+
+    from vts.services.asr_payload import segment_raw_payload
+
+    original = _payload()
+    seg = SimpleNamespace(payload=None, raw_json=original)
+    assert segment_raw_payload(seg) is original
+
+
+def test_segment_payload_is_empty_when_neither_form_is_present():
+    from types import SimpleNamespace
+
+    from vts.services.asr_payload import segment_raw_payload
+
+    assert segment_raw_payload(SimpleNamespace(payload=None, raw_json={})) == {}
+    assert segment_raw_payload(SimpleNamespace(payload={}, raw_json={})) == {}

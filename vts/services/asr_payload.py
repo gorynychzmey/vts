@@ -173,3 +173,18 @@ def recompose_raw_json(decomposed: Any) -> dict[str, Any]:
     if meta.get("duration") is not None:
         payload["duration"] = meta["duration"]
     return payload
+
+
+def segment_raw_payload(segment: Any) -> dict[str, Any]:
+    """The payload shape consumers parse, from whichever form a row carries.
+
+    One place decides this, rather than each consumer testing both columns:
+    rows written before the decomposition still carry only `raw_json`, and rows
+    written after carry both until the legacy column is cleared. Preferring
+    `payload` means the cleanup does not have to be coordinated with a deploy.
+    """
+    decomposed = getattr(segment, "payload", None)
+    if isinstance(decomposed, dict) and (decomposed.get("tokens") or decomposed.get("sentences")):
+        return recompose_raw_json(decomposed)
+    raw = getattr(segment, "raw_json", None)
+    return raw if isinstance(raw, dict) else {}

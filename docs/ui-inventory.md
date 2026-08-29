@@ -265,5 +265,7 @@ Migrations that introduced or changed the entities above.
 | `0021_delivery_attempts` | delivery_attempts |
 | `0022_delivery_credentials` | delivery_credentials: split the connection out of delivery_targets (vts-929) |
 | `0023_delivery_variant_width` | widen delivery_attempts.variant for prompt refs (vts-as1i) |
+| `0024_clear_stale_awaiting_step` | clear awaiting_step left behind on tasks that are no longer waiting (vts-47w6) |
+| `0025_asr_payload_axes` | decompose asr_segments.raw_json into payload axes (vts-6qwy) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 
