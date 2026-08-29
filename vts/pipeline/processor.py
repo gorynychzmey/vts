@@ -189,6 +189,18 @@ class TaskProcessor:
                     await self._ctx.refresh_task(session, task)
                     await asyncio.sleep(self.settings.services_database_write_throttle_ms / 1000.0)
                 await self._cleanup_media(dirs["media"])
+                # The lasting record of this run (vts-8w1r). Written here, while
+                # the media is still on disk and task.options still carries the
+                # detected language, because both are gone once the task is
+                # archived — that is why duration and language are columns.
+                #
+                # A failure here must not fail a task that has already produced
+                # its transcript: the recording is derived, and the next run (or
+                # the backfill) can create it.
+                try:
+                    await repo.upsert_recording_for_task(task)
+                except Exception:
+                    logger.exception("failed to record task %s in the library", task.id)
                 await repo.set_task_status(task, TaskStatus.completed)
                 await session.commit()
                 await self.bus.publish_event(

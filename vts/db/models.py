@@ -402,6 +402,69 @@ class MatchDecision(Base):
     )
 
 
+class Recording(Base):
+    """A processed recording, outliving the task that produced it (vts-8w1r).
+
+    Until now the task WAS the recording: deleting a task deleted the
+    transcript, the media and the segments with it, because nothing else
+    claimed them. A knowledge library needs the opposite — the recording is the
+    lasting object, and a task is one way of creating or updating it.
+
+    `source_task_id` is SET NULL rather than CASCADE, the same shape
+    `voice_samples` already uses to outlive its task. The recording keeps its
+    own `artifact_dir`, inherited from the task that produced it, so the files
+    are not moved anywhere: ownership of the directory passes to the recording,
+    and task deletion stops removing a directory a live recording still owns.
+
+    `duration` and `language` are columns rather than derived on read. Duration
+    used to be probed from the media file (cached in a sidecar NEXT TO that
+    file), and language lived inside `Task.options` — so archiving a task, which
+    deletes the media and the sidecar, lost both. They are the two facts a
+    library list is built from, so they have to survive the media.
+    """
+
+    __tablename__ = "recordings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # The task that produced this recording, when it still exists. Nullable and
+    # SET NULL: the recording is what lasts.
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_dir: Mapped[str] = mapped_column(Text, nullable=False)
+    transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Seconds. Nullable because a recording whose media never arrived has no
+    # duration to state — better an absent value than a fabricated zero.
+    duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_recordings_user_created", "user_id", "created_at"),
+        # One recording per task: a task creates or updates its recording, it
+        # does not accumulate them. Partial, since source_task_id goes NULL when
+        # the task is deleted and several such orphans may coexist.
+        Index(
+            "uq_recordings_source_task",
+            "source_task_id",
+            unique=True,
+            postgresql_where=text("source_task_id IS NOT NULL"),
+        ),
+    )
+
+
 class AsrSegment(Base):
     __tablename__ = "asr_segments"
 

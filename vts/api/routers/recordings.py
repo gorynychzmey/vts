@@ -1,0 +1,88 @@
+"""The knowledge library: recordings that outlive the tasks that made them.
+
+A Recording (vts-8w1r / VOS-130) is the lasting object — a task is one way of
+creating or updating it. These endpoints are read-only for now: creation happens
+in the pipeline, and the library lists what has been produced.
+
+Access is owner-scoped exactly as tasks are: every read goes through
+get_recording_for_user / list_recordings, which filter on user_id. Sharing a
+recording is not part of this.
+"""
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from vts.api._helpers.base import _find_media_file
+from vts.api.deps import get_current_user, get_session_dep
+from vts.api.schemas import RecordingListOut, RecordingOut
+from vts.db.models import Recording
+from vts.db.repo import Repo
+from vts.services.auth import AuthenticatedUser
+
+router = APIRouter()
+
+
+def _serialize(recording: Recording) -> RecordingOut:
+    """A recording as the library shows it.
+
+    The three `has_*` flags are probed from disk rather than stored: archiving
+    removes the media (and, for an archived task, the transcript stays but the
+    rest goes), so a stored flag would go stale the moment a recording is
+    archived. What is NOT probed is duration and language — those are columns
+    precisely because they must survive the files.
+    """
+    transcript = recording.transcript_path
+    summary = recording.summary_path
+    return RecordingOut(
+        id=recording.id,
+        source_task_id=recording.source_task_id,
+        title=recording.title,
+        source_url=recording.source_url,
+        duration_sec=recording.duration_sec,
+        language=recording.language,
+        tags=list(recording.tags or []),
+        has_transcript=bool(transcript and Path(transcript).exists()),
+        has_summary=bool(summary and Path(summary).exists()),
+        has_media=_find_media_file(recording.artifact_dir) is not None,
+        recorded_at=recording.recorded_at,
+        created_at=recording.created_at,
+        updated_at=recording.updated_at,
+    )
+
+
+@router.get("/api/recordings", response_model=RecordingListOut)
+async def list_recordings(
+    limit: int = 50,
+    offset: int = 0,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> RecordingListOut:
+    """The user's recordings, newest first."""
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    repo = Repo(session)
+    user_id = uuid.UUID(user.id)
+    items = await repo.list_recordings(user_id, limit=limit, offset=offset)
+    total = await session.scalar(
+        select(func.count()).select_from(Recording).where(Recording.user_id == user_id)
+    )
+    return RecordingListOut(items=[_serialize(r) for r in items], total=int(total or 0))
+
+
+@router.get("/api/recordings/{recording_id}", response_model=RecordingOut)
+async def get_recording(
+    recording_id: uuid.UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> RecordingOut:
+    """One recording. 404 for another user's, same as tasks."""
+    repo = Repo(session)
+    recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return _serialize(recording)

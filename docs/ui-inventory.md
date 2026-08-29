@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 54 capabilities · 102 routes (75 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 406 English UI strings.
+**Counts:** 56 capabilities · 104 routes (77 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 406 English UI strings.
 
 ## Capabilities by entity
 
@@ -40,6 +40,13 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Download original media | Download the original media file | media present | `GET /api/tasks/{task_id}/media` | Task card toolbar; hidden once the retention policy expires the file (`tasks.media_expired_badge`) |
 | Play media alongside transcript | Open player with transcript | media + transcript present | `GET /player/{task_id}`<br>`GET /api/tasks/{task_id}/transcript-entries` | Standalone player page opened from the task card |
 | Fetch a single prompt result | — | result exists | `GET /api/tasks/{task_id}/results/{source}/{ref}` | Backing endpoint for the Summary tab result selector — not a screen of its own |
+
+### Recording
+
+| Action | Label (en) | States | Endpoint(s) | Screen |
+| --- | --- | --- | --- | --- |
+| Browse the library | — | one recording per task, outliving it | `GET /api/recordings` | Library (API only so far; no page yet) |
+| Open a recording | — | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library (API only so far; no page yet) |
 
 ### Speaker (voice)
 
@@ -268,5 +275,6 @@ Migrations that introduced or changed the entities above.
 | `0024_clear_stale_awaiting_step` | clear awaiting_step left behind on tasks that are no longer waiting (vts-47w6) |
 | `0025_asr_payload_axes` | decompose asr_segments.raw_json into payload axes (vts-6qwy) |
 | `0026_clear_raw_json` | clear asr_segments.raw_json now that the axes carry it (vts-6qwy) |
+| `0027_recordings` | a Recording that outlives the task that produced it (vts-8w1r / VOS-130) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

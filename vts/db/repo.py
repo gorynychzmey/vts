@@ -17,6 +17,7 @@ from vts.db.models import (
     DeliveryStatus,
     DeliveryTarget,
     MatchDecision,
+    Recording,
     Preset,
     Prompt,
     Speaker,
@@ -31,6 +32,7 @@ from vts.db.models import (
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 from vts.services.asr_payload import decompose_raw_json
+from vts.services.recording_meta import language_code
 from vts.services.delivery_status import RETRYABLE_STATUSES
 
 
@@ -476,6 +478,76 @@ class Repo:
         self.session.add(segment)
         await self.session.flush()
         return segment
+
+    async def upsert_recording_for_task(self, task: Task) -> "Recording":
+        """The recording this task produces, created on first call and updated
+        after (vts-8w1r).
+
+        A task creates OR UPDATES its recording; re-running one must not
+        accumulate copies, which is what the partial unique index on
+        source_task_id enforces at the database level.
+
+        `duration_sec` comes from the last ASR segment's end rather than from
+        probing the media file: the ASR covers the whole recording, and unlike
+        the media (and the probe sidecar sitting next to it) the segments
+        survive archiving. `language` follows effective_language's order —
+        an explicit choice first, detection second.
+        """
+        recording = await self.session.scalar(
+            select(Recording).where(Recording.source_task_id == task.id)
+        )
+        duration = await self.session.scalar(
+            select(func.max(AsrSegment.end_sec)).where(AsrSegment.task_id == task.id)
+        )
+        options = task.options if isinstance(task.options, dict) else {}
+        # Normalised, because the pipeline stores whichever spelling its backend
+        # produced — "ru" from the ASR sidecar, "russian" from cpp — and a
+        # library listing both as separate languages is wrong on its face.
+        language = language_code(options.get("language") or options.get("detected_language"))
+
+        if recording is None:
+            recording = Recording(
+                user_id=task.user_id,
+                source_task_id=task.id,
+                artifact_dir=task.artifact_dir,
+                recorded_at=task.created_at,
+            )
+            self.session.add(recording)
+
+        recording.title = task.source_title
+        recording.source_url = task.source_url
+        recording.transcript_path = task.transcript_path
+        recording.summary_path = task.summary_path
+        # Never overwrite a known length or language with nothing: the media may
+        # already be archived by the time this runs again.
+        if duration is not None:
+            recording.duration_sec = float(duration)
+        if language:
+            recording.language = language
+        await self.session.flush()
+        return recording
+
+    async def list_recordings(
+        self, user_id: uuid.UUID, limit: int = 100, offset: int = 0
+    ) -> list["Recording"]:
+        """A user's recordings, newest first."""
+        stmt = (
+            select(Recording)
+            .where(Recording.user_id == user_id)
+            .order_by(Recording.created_at.desc(), Recording.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def get_recording_for_user(
+        self, user_id: uuid.UUID, recording_id: uuid.UUID
+    ) -> "Recording | None":
+        return await self.session.scalar(
+            select(Recording).where(
+                Recording.id == recording_id, Recording.user_id == user_id
+            )
+        )
 
     async def get_task_segment_by_index(self, task_id: uuid.UUID, segment_index: int) -> AsrSegment | None:
         stmt = select(AsrSegment).where(

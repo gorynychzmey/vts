@@ -342,6 +342,23 @@ CAPABILITIES: list[Cap] = [
         "screen": "Task card — Transcript tab",
         "states": "enabled once produced",
     },
+    # ---- Knowledge library ----
+    {
+        "entity": "Recording",
+        "action": "Browse the library",
+        "label": "",
+        "endpoints": ["GET /api/recordings"],
+        "screen": "Library (API only so far; no page yet)",
+        "states": "one recording per task, outliving it",
+    },
+    {
+        "entity": "Recording",
+        "action": "Open a recording",
+        "label": "",
+        "endpoints": ["GET /api/recordings/{recording_id}"],
+        "screen": "Library (API only so far; no page yet)",
+        "states": "owner-scoped, 404 otherwise",
+    },
     {
         "entity": "Task artefact",
         "action": "Read raw transcript as subtitles",

@@ -474,6 +474,37 @@ class RestartSummaryRequest(BaseModel):
         return self
 
 
+class RecordingOut(BaseModel):
+    """A recording in the library (vts-8w1r).
+
+    Deliberately not a TaskOut: a recording outlives the task that produced it,
+    so it carries no status, no progress and no steps. `source_task_id` is null
+    once that task is gone — the recording is what lasts.
+
+    `duration_sec` and `language` are stored rather than derived, so they are
+    still here after the media has been archived away.
+    """
+
+    id: UUID
+    source_task_id: UUID | None = None
+    title: str | None = None
+    source_url: str | None = None
+    duration_sec: float | None = None
+    language: str | None = None
+    tags: list[str] = []
+    has_transcript: bool = False
+    has_summary: bool = False
+    has_media: bool = False
+    recorded_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecordingListOut(BaseModel):
+    items: list[RecordingOut]
+    total: int
+
+
 class BatchResultOut(BaseModel):
     results: dict[str, str]
 

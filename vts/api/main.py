@@ -468,6 +468,7 @@ def create_app() -> FastAPI:
     from vts.api.routers.delivery import router as delivery_router
     from vts.api.routers.meta import router as meta_router
     from vts.api.routers.pages import router as pages_router
+    from vts.api.routers.recordings import router as recordings_router
     from vts.api.routers.speakers import router as speakers_router
     from vts.api.routers.tasks import router as tasks_router
     from vts.api.routers.uploads import router as uploads_router
@@ -480,6 +481,7 @@ def create_app() -> FastAPI:
         uploads_router,
         artifacts_router,
         speakers_router,
+        recordings_router,
     ):
         app.include_router(domain_router)
 

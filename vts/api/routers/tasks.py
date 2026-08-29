@@ -46,6 +46,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step
+from vts.api._helpers.recordings import artifacts_removable_for_task
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
@@ -615,7 +616,12 @@ async def delete_tasks(
         )
         for task in tasks_to_delete:
             await repo.set_task_status(task, TaskStatus.canceled)
-            artifacts_to_remove.append(Path(task.artifact_dir))
+            # A recording can outlive its task (vts-8w1r) and keeps pointing at
+            # these same files. Only remove the directory when no OTHER
+            # recording claims it — otherwise deleting a task would destroy a
+            # live recording's transcript and media.
+            if await artifacts_removable_for_task(session, task):
+                artifacts_to_remove.append(Path(task.artifact_dir))
             await session.delete(task)
     await session.commit()
     await asyncio.gather(
