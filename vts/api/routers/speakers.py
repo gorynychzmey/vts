@@ -54,6 +54,7 @@ from vts.core.config import Settings, get_settings
 from vts.db.models import TaskStatus
 from vts.db.repo import Repo
 from vts.pipeline.rerender import rerender_transcript
+from vts.services.indexing import reindex_task
 from vts.pipeline.steps.transcription import effective_language
 from vts.services.auth import AuthenticatedUser
 from vts.services.redis_bus import RedisBus
@@ -520,6 +521,13 @@ async def resolve_task_speakers(
         {"outputs": Path(task.artifact_dir) / "outputs"},
     )
     await rerender_transcript(task, session, language=language)
+
+    # The transcript just changed, so the corpus index describes text that is no
+    # longer there (vts-twe7). Re-indexing here rather than on the event keeps
+    # it in the same transaction as the rename — the alternative is a window
+    # where a search cites a speaker name the user has already corrected.
+    await reindex_task(session, task, settings)
+    await session.commit()
 
     bus = RedisBus(redis, settings)
     # Universal "transcript is whole again" signal (vts-at8): resolve/save

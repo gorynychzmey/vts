@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from vts.db.repo import Repo
 from vts.services.asr_payload import segment_raw_payload
+from vts.services.indexing import reindex_task
 from vts.services.diarization.merge import (
     SENTENCE_SPLIT_RE,
     drop_marginal_speakers,
@@ -668,6 +669,15 @@ class MergeTranscriptStep(Step):
             event="phase",
             data={"phase": "merge_transcript", "status": "done"},
         )
+        # Index the transcript for corpus search (vts-twe7). Here rather than
+        # at task completion because this is where the text becomes final; a
+        # later resolve/rename re-indexes through the same helper.
+        async with ctx.session_factory() as session:
+            task_row = await Repo(session).get_task_by_id(st.task_id)
+            if task_row is not None:
+                await reindex_task(session, task_row, ctx.settings)
+                await session.commit()
+
         # Universal "transcript is whole again" signal (vts-at8): the /player
         # page and the main SPA both re-fetch on this rather than owning ad-hoc
         # refresh logic. Also fired after rerender_transcript on resolve/save.

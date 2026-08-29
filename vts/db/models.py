@@ -23,7 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC, Vector
 
 from vts.db.base import Base
 
@@ -490,6 +490,54 @@ class AsrSegment(Base):
     __table_args__ = (
         UniqueConstraint("task_id", "segment_index", name="uq_asr_segments_task_segment"),
         Index("ix_asr_segments_task_start", "task_id", "start_sec"),
+    )
+
+
+class TranscriptChunk(Base):
+    """One retrievable passage of a recording, with its embedding (vts-twe7).
+
+    Chunks hang off the RECORDING, not the task: the recording is what lasts,
+    and a corpus that died with its tasks would be no corpus at all. Re-indexing
+    replaces a recording's chunks wholesale, which is what makes it safe to run
+    again after `rerender_transcript` changes the text.
+
+    `speakers` holds the technical SPEAKER_NN tags, never display names. Names
+    are substituted at render time, so a speaker rename does not invalidate the
+    index — the same property the player already relies on.
+
+    The embedding is HALFVEC, not VECTOR. bge-m3 is 1024-dimensional, so float4
+    costs 4 KB per chunk against 2 KB in fp16, and vectors — not text — become
+    the bulk of this database as soon as a corpus exists. Measured before
+    choosing: fp16 shifts cosine scores by 0.00001, which is 0.01% of the
+    0.379..0.521 band that separates answerable queries from unanswerable ones,
+    and changes no ranking. TOAST does not help here: these are dense binary
+    values, so the type is the only lever.
+    """
+
+    __tablename__ = "transcript_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    recording_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recordings.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    start_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    end_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    speakers: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(1024), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("recording_id", "chunk_index", name="uq_chunks_recording_index"),
+        Index("ix_chunks_recording", "recording_id"),
+        # Scoping every search to one user is not an optimisation, it is the
+        # access rule — so the column it filters on carries an index.
+        Index("ix_chunks_user", "user_id"),
     )
 
 

@@ -277,5 +277,6 @@ Migrations that introduced or changed the entities above.
 | `0025_asr_payload_axes` | decompose asr_segments.raw_json into payload axes (vts-6qwy) |
 | `0026_clear_raw_json` | clear asr_segments.raw_json now that the axes carry it (vts-6qwy) |
 | `0027_recordings` | a Recording that outlives the task that produced it (vts-8w1r / VOS-130) |
+| `0028_transcript_chunks` | semantic chunks of a recording, with embeddings (vts-twe7 / VOS-131) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

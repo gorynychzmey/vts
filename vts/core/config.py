@@ -138,6 +138,17 @@ class Settings(BaseSettings):
     llm_repeat_penalty: float | None = None
     llm_thinking: bool | None = None
     llm_chat_timeout_seconds: int = 600
+    # Corpus indexing (vts-twe7). Served by the same gateway as the chat model,
+    # so no new sidecar: only the model name differs. Empty disables indexing
+    # entirely rather than failing every completed task.
+    embedding_model: str = "bge-m3"
+    embedding_dimensions: int = 1024
+    # Measured on the deployment: 32 texts in 1.49s (~21 chunks/s), so a whole
+    # recording indexes in seconds. The ceiling is for a stalled gateway, not
+    # for normal work.
+    embedding_timeout_seconds: int = 120
+    embedding_batch_size: int = 32
+    embedding_enabled: bool = True
     llm_final_timeout_seconds: int = 1800
     # Streaming timeouts (vts-gouq). The segment stage generates for 10-17
     # minutes at 9-13 tokens/s, so a total-duration timeout cannot separate
@@ -523,6 +534,10 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llm_url": "llm_url",
         "services_llm_api_key": "llm_api_key",
         "services_llm_model": "llm_model",
+        "services_embedding_model": "embedding_model",
+        "services_embedding_enabled": "embedding_enabled",
+        "services_embedding_batch_size": "embedding_batch_size",
+        "services_embedding_timeout_seconds": "embedding_timeout_seconds",
         "services_llm_temperature": "llm_temperature",
         "services_llm_top_p": "llm_top_p",
         "services_llm_min_p": "llm_min_p",
