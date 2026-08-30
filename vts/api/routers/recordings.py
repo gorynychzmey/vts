@@ -23,13 +23,20 @@ from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
 from vts.api.schemas import (
     RecordingListOut,
     RecordingOut,
+    RecordingTranscriptOut,
     SearchHitOut,
     SearchResultOut,
+    TranscriptEntryOut,
 )
 from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.corpus_search import search_corpus
+from vts.services.recording_artifacts import (
+    RecordingArtifactMissing,
+    read_recording_transcript,
+    recording_transcript_entries,
+)
 
 router = APIRouter()
 
@@ -151,3 +158,59 @@ async def search_corpus_endpoint(
             for h in hits
         ],
     )
+
+
+@router.get(
+    "/api/recordings/{recording_id}/transcript",
+    response_model=RecordingTranscriptOut,
+)
+async def get_recording_transcript_endpoint(
+    recording_id: uuid.UUID,
+    variant: str = "raw",
+    around_sec: float | None = None,
+    window_sec: float = 60.0,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> RecordingTranscriptOut:
+    """A recording's transcript. With `around_sec`, only the passage around
+    that second. Works after the originating task has been deleted."""
+    # The docstring becomes the OpenAPI operation description, capped at 300
+    # chars for ChatGPT Actions (tests/test_openapi_spec.py), so the rationale
+    # lives here: a recording keeps its own artifacts, which is what makes this
+    # answer when /player/{task_id} would 404. The window is what expanding a
+    # search hit needs — showing one quote in context should not mean loading a
+    # two-hour transcript.
+    repo = Repo(session)
+    recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    kind = variant if variant in {"raw", "redacted", "summary"} else "raw"
+    try:
+        if around_sec is not None:
+            entries = recording_transcript_entries(
+                recording, around_sec=around_sec, window_sec=window_sec
+            )
+            return RecordingTranscriptOut(
+                recording_id=recording.id,
+                title=recording.title,
+                variant=kind,
+                around_sec=around_sec,
+                entries=[
+                    TranscriptEntryOut(
+                        start_sec=float(e.get("start") or 0.0),
+                        end_sec=float(e.get("end") or 0.0),
+                        text=str(e.get("text") or ""),
+                        speaker=(str(e["speaker"]) if e.get("speaker") else None),
+                    )
+                    for e in entries
+                ],
+            )
+        return RecordingTranscriptOut(
+            recording_id=recording.id,
+            title=recording.title,
+            variant=kind,
+            content=read_recording_transcript(recording, kind),
+        )
+    except RecordingArtifactMissing as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

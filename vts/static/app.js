@@ -8115,6 +8115,43 @@ async function searchLibraryContent() {
   }
 }
 
+// The passage around a hit, as timed lines. Rendered from the RECORDING's
+// transcript, so it works whether or not the task still exists.
+function renderHitContext(container, payload, hit) {
+  container.textContent = "";
+  const entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
+  if (!entries.length) {
+    container.textContent = t("library.context_empty");
+    return;
+  }
+  for (const entry of entries) {
+    const line = document.createElement("p");
+    line.className = "library-context-line";
+    // The hit's own line is marked, so the quote is findable in its context
+    // rather than the reader having to scan for it.
+    const isHit = typeof hit.start_sec === "number"
+      && entry.start_sec <= hit.start_sec + 0.01
+      && entry.end_sec >= hit.start_sec - 0.01;
+    if (isHit) line.classList.add("is-hit");
+
+    const time = document.createElement("span");
+    time.className = "library-context-time";
+    time.textContent = formatDuration(entry.start_sec || 0);
+    line.append(time);
+
+    if (entry.speaker) {
+      const who = document.createElement("span");
+      who.className = "library-context-speaker";
+      who.textContent = entry.speaker;
+      line.append(who);
+    }
+    const text = document.createElement("span");
+    text.textContent = entry.text || "";
+    line.append(text);
+    container.append(line);
+  }
+}
+
 function renderLibraryHits(query, hits) {
   if (!libraryHitsList || !libraryHitsSummary) return;
   libraryHitsList.textContent = "";
@@ -8146,8 +8183,44 @@ function renderLibraryHits(query, hits) {
     text.textContent = hit.text || "";
     row.append(text);
 
-    // The citation: opens the recording at the quoted second. Absent when the
-    // task is gone — the passage is still real, it just has no player page.
+    // Expand the passage IN PLACE, from the recording. Linking to
+    // /player/{task}?t= was the obvious move and the wrong one: the player is
+    // addressed by TASK, so the link 404s once the task is deleted — it made a
+    // library result depend on a job that may be long gone. The transcript
+    // belongs to the recording, so that is where it is read from.
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "btn-text ghost library-hit-expand";
+    expand.textContent = t("library.show_context");
+    const context = document.createElement("div");
+    context.className = "library-hit-context";
+    context.hidden = true;
+    expand.addEventListener("click", async () => {
+      if (!context.hidden) {
+        context.hidden = true;
+        expand.textContent = t("library.show_context");
+        return;
+      }
+      expand.textContent = t("library.loading_context");
+      try {
+        const payload = await api(
+          `/api/recordings/${encodeURIComponent(hit.recording_id)}/transcript` +
+          `?around_sec=${encodeURIComponent(String(hit.start_sec || 0))}&window_sec=45`
+        );
+        renderHitContext(context, payload, hit);
+        context.hidden = false;
+        expand.textContent = t("library.hide_context");
+      } catch {
+        context.textContent = t("library.context_failed");
+        context.hidden = false;
+        expand.textContent = t("library.show_context");
+      }
+    });
+    row.append(expand);
+    // Watching the moment is genuinely useful — it just must not be the ONLY
+    // way to follow a hit, because the player is addressed by task and dies
+    // with it. So it sits beside the expander and is simply absent when the
+    // task is gone.
     if (hit.source_task_id) {
       const link = document.createElement("a");
       link.className = "library-hit-link";
@@ -8156,9 +8229,10 @@ function renderLibraryHits(query, hits) {
           String(Math.floor(hit.start_sec || 0))
         )}`
       );
-      link.textContent = t("library.open_at");
+      link.textContent = t("library.open_in_player");
       row.append(link);
     }
+    row.append(context);
     libraryHitsList.append(row);
   }
 }

@@ -9,6 +9,6 @@ The tool bodies are unchanged: each opens its own DB session and calls
 `mcp_authenticate`, so they share nothing but the decorator.
 """
 
-from vts.mcp.tools_registry import delivery, presets, prompts, search, tasks
+from vts.mcp.tools_registry import delivery, presets, prompts, recordings, search, tasks
 
-__all__ = ["delivery", "presets", "prompts", "search", "tasks"]
+__all__ = ["delivery", "presets", "prompts", "recordings", "search", "tasks"]

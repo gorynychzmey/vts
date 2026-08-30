@@ -183,17 +183,33 @@ of the two happened. Do not lower it to manufacture matches.
 Retrieval works across languages: an English question finds the passage that
 answers it in another language.
 
-**Building a citation.** `source_task_id` and `start_sec` give a deep link —
-`/player/{source_task_id}?t={start_sec}` opens the recording at that passage
-with it highlighted; `?cue=<n>` addresses a sentence directly and survives a
-re-rendered transcript. `source_task_id` is `null` when the originating task
-has been deleted: the passage is still valid evidence, it just has no player
-page, so quote it without a link.
+**Following a hit — two routes, different lifetimes.**
+
+| | addressed by | survives task deletion |
+|---|---|---|
+| `GET /api/recordings/{id}/transcript?around_sec=` | recording | **yes** |
+| `/player/{source_task_id}?t=` | task | no |
+
+Read a passage through the RECORDING: it owns its artifacts, so the transcript
+answers whether or not the job that produced it still exists. `around_sec`
+returns just the passage around that second — showing one quote in context
+should not mean loading a two-hour transcript.
+
+The player link is for a person to WATCH the moment, and it is the one that
+expires: `source_task_id` is `null` once that task has been deleted, and the
+URL 404s. Offer it when present; never assemble it for a hit that does not
+carry the id.
 
 `recording_id` is the identifier to store — it outlives the task.
 
 The same search is available as the MCP tool `search_transcripts`, with the
-same threshold and rules.
+same threshold and rules. There each hit carries both links ready-made
+(`transcript_url`, `player_url`), the second being `null` when the task is
+gone — so a client never has to work out which kind of URL it is holding.
+
+Recordings are also addressable as MCP tools: `list_recordings` and
+`get_recording_transcript` (with `structured` and `around_sec`). The
+task-scoped `get_transcript` remains for asking about a run in progress.
 
 ## Paginated reads of large text artifacts
 

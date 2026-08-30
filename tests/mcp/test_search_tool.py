@@ -74,8 +74,18 @@ async def test_the_tool_explains_how_to_cite_a_hit() -> None:
     tools = await build_mcp_server().list_tools()
     description = (next(
         t for t in tools if t.name == "search_transcripts").description or "")
-    assert "/player/" in description, "the citation URL shape is not documented"
-    assert "start_sec" in description
+    # Two links with different lifetimes, and the description has to say which
+    # is which: a client told only about the player would produce dead
+    # citations for exactly the recordings that outlived their jobs.
+    assert "transcript_url" in description, "the durable link is not documented"
+    assert "player_url" in description, "the media link is not documented"
+    assert "get_recording_transcript" in description, (
+        "the tool does not point at the recording-scoped follow-up"
+    )
+    assert "around_sec" in description
     assert "null" in description.lower(), (
         "the description does not say what a missing task means"
     )
+    # And it must discourage assembling the player URL by hand, since only the
+    # server knows whether the task still exists.
+    assert "do not construct it yourself" in description.lower()

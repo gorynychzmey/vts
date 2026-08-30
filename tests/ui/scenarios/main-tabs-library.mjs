@@ -54,6 +54,17 @@ export async function run() {
     "/api/tasks": [TASK],
     "/api/recordings": RECORDINGS,
     "/api/search": HITS,
+    // Addressed by RECORDING, not by task — that is what keeps a citation
+    // working after the job is deleted.
+    [`/api/recordings/${REC_ID}/transcript`]: {
+      recording_id: REC_ID, title: "Team sync", variant: "raw",
+      content: "", around_sec: 754.0,
+      entries: [
+        { start_sec: 740.0, end_sec: 752.0, text: "до этого обсуждали план", speaker: "SPEAKER_00" },
+        { start_sec: 754.0, end_sec: 800.0, text: "про найм говорили в самом начале", speaker: "SPEAKER_00" },
+        { start_sec: 800.0, end_sec: 812.0, text: "и дальше про сроки", speaker: "SPEAKER_01" },
+      ],
+    },
   });
   const browser = await launch();
   try {
@@ -147,15 +158,48 @@ export async function run() {
       if (!el) return null;
       return {
         text: el.querySelector(".library-hit-text")?.textContent || "",
-        href: el.querySelector(".library-hit-link")?.getAttribute("href") || "",
+        // A citation must not depend on the TASK: /player/{task} 404s once the
+        // task is deleted, and a library result is about the recording.
+        playerLink: Boolean(el.querySelector("a[href*='/player/']")),
+        hasExpand: Boolean(el.querySelector(".library-hit-expand")),
       };
     });
     if (!hit) {
       failures.push("pressing Enter did not run a content search");
     } else {
       if (!hit.text.includes("найм")) failures.push("the hit does not show the passage");
-      if (!/\/player\/.*[?&]t=754/.test(hit.href)) {
-        failures.push(`the hit's deep link is wrong: ${JSON.stringify(hit.href)}`);
+      // Both ways to follow a hit, because they serve different needs: the
+      // player is for a person to watch, the expander is for reading the
+      // passage — and only the second survives the task's deletion.
+      if (!hit.playerLink) {
+        failures.push("no player link on a hit whose task is alive");
+      }
+      if (!hit.hasExpand) failures.push("no way to see the passage in its transcript");
+    }
+
+    // 7. Expanding reads the passage from the RECORDING, and marks the quoted
+    //    line inside its context.
+    await page.click("#library-hits-list .library-hit-expand");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#library-hits-list .library-context-line").length > 0,
+      null, { timeout: 5000 },
+    ).catch(() => {});
+    const context = await page.evaluate(() => {
+      const lines = [...document.querySelectorAll("#library-hits-list .library-context-line")];
+      return {
+        count: lines.length,
+        marked: lines.filter((l) => l.classList.contains("is-hit")).length,
+        text: lines.map((l) => l.textContent).join(" | "),
+      };
+    });
+    if (!context.count) {
+      failures.push("expanding a hit showed no transcript context");
+    } else {
+      if (!context.marked) {
+        failures.push("the quoted line is not marked inside its context");
+      }
+      if (!context.text.includes("найм")) {
+        failures.push(`the context does not contain the quoted passage: ${context.text}`);
       }
     }
 

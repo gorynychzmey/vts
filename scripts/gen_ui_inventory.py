@@ -353,6 +353,14 @@ CAPABILITIES: list[Cap] = [
     },
     {
         "entity": "Recording",
+        "action": "Read a recording's transcript",
+        "label": "library.show_context",
+        "endpoints": ["GET /api/recordings/{recording_id}/transcript"],
+        "screen": "Library tab — 'Show in transcript' on a search hit",
+        "states": "works after the originating task is deleted; windowed with around_sec",
+    },
+    {
+        "entity": "Recording",
         "action": "Rename a recording",
         "label": "library.rename",
         "endpoints": ["PATCH /api/recordings/{recording_id}"],

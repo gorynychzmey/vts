@@ -56,6 +56,60 @@ class TranscriptResult(BaseModel):
     format: Literal["txt", "json"]
 
 
+class RecordingInfo(BaseModel):
+    """A recording in the library — the lasting object, not the job.
+
+    `source_task_id` is null once the task that produced it has been deleted;
+    the recording and its artifacts are unaffected, which is the whole reason
+    these tools address recordings rather than tasks.
+    """
+
+    id: uuid.UUID
+    source_task_id: uuid.UUID | None = None
+    title: str | None = None
+    duration_sec: float | None = None
+    language: str | None = None
+    has_transcript: bool = False
+    has_summary: bool = False
+    has_media: bool = False
+    created_at: datetime
+
+
+class RecordingList(BaseModel):
+    items: list[RecordingInfo]
+    total: int
+
+
+class TranscriptEntry(BaseModel):
+    """One timed line of a transcript.
+
+    Timecodes and the speaker are what make a quote checkable — flat text can
+    be read but not cited.
+    """
+
+    start_sec: float
+    end_sec: float
+    text: str
+    speaker: str | None = None
+
+
+class RecordingTranscript(BaseModel):
+    """A recording's transcript, optionally windowed around a moment.
+
+    `entries` is empty for a plain-text read; ask for the structured form to
+    get them. When `around_sec` was given, only the passage around that second
+    is returned — a two-hour transcript fetched to show one quote buries the
+    part that mattered.
+    """
+
+    recording_id: uuid.UUID
+    title: str | None = None
+    variant: str
+    content: str = ""
+    entries: list[TranscriptEntry] = []
+    around_sec: float | None = None
+
+
 class SearchHit(BaseModel):
     """One passage of a recording that matched a corpus search.
 
@@ -75,6 +129,10 @@ class SearchHit(BaseModel):
     end_sec: float
     speakers: list[str] = []
     score: float
+    # Read the passage — via the RECORDING, so it survives the task's deletion.
+    transcript_url: str | None = None
+    # Watch the moment — via the TASK, so it is null once that task is gone.
+    player_url: str | None = None
 
 
 class SearchResult(BaseModel):

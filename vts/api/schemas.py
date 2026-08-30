@@ -504,6 +504,30 @@ class RecordingOut(BaseModel):
     updated_at: datetime
 
 
+class TranscriptEntryOut(BaseModel):
+    """One timed line of a transcript — what makes a quote checkable."""
+
+    start_sec: float
+    end_sec: float
+    text: str
+    speaker: str | None = None
+
+
+class RecordingTranscriptOut(BaseModel):
+    """A recording's transcript, optionally windowed around a moment.
+
+    `entries` is filled when `around_sec` was given; otherwise `content` holds
+    the plain text.
+    """
+
+    recording_id: UUID
+    title: str | None = None
+    variant: str
+    content: str = ""
+    entries: list[TranscriptEntryOut] = []
+    around_sec: float | None = None
+
+
 class SearchHitOut(BaseModel):
     """One passage returned by corpus search (vts-uurt).
 
