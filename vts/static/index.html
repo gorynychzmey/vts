@@ -101,16 +101,6 @@
                   </svg>
                   <span data-i18n="preset.manage.open">Manage presets</span>
                 </button>
-                <!-- The library lists RECORDINGS, which outlive the tasks that
-                     produced them (vts-8w1r) — so it belongs next to the other
-                     things that outlive a run, not in the task list. -->
-                <button type="button" id="library-btn">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 5v14M9 5v14M14 6l4 13" />
-                    <path d="M3 19h18" />
-                  </svg>
-                  <span data-i18n="library.open">Library</span>
-                </button>
                 <button type="button" id="prompts-btn">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
@@ -262,6 +252,35 @@
           </button>
         </div>
       </section>
+
+      <!-- Main view switcher (vts-lib2). Tasks are JOBS — they run, fail, get
+           restarted; recordings are what those jobs produced and outlive them.
+           Showing both in one list forced every row to carry both vocabularies;
+           two views let each show only what applies to it. Placed above the New
+           Task panel because that panel belongs to the Tasks view. -->
+      <nav class="main-tabs" role="tablist" aria-label="Main views"
+           data-i18n-aria-label="main_tabs.label">
+        <button type="button" id="main-tab-tasks" class="main-tab active"
+                role="tab" aria-selected="true" aria-controls="view-tasks"
+                data-view="tasks">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </svg>
+          <span data-i18n="main_tabs.tasks">Tasks</span>
+        </button>
+        <button type="button" id="main-tab-library" class="main-tab"
+                role="tab" aria-selected="false" aria-controls="view-library"
+                data-view="library">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 5v14M9 5v14M14 6l4 13" />
+            <path d="M3 19h18" />
+          </svg>
+          <span data-i18n="main_tabs.library">Library</span>
+        </button>
+      </nav>
+
+      <div id="view-tasks" class="main-view" role="tabpanel"
+           aria-labelledby="main-tab-tasks">
 
       <section class="card">
         <div class="new-task-header">
@@ -577,6 +596,71 @@
           <span class="task-sentinel-end" data-i18n="tasks.no_more" hidden></span>
         </div>
       </section>
+      </div><!-- /#view-tasks -->
+
+      <!-- The Library view (vts-lib2). Same shape as the task list — a
+           searchable list of expandable cards with tabs and a menu — minus
+           everything that belongs to a JOB rather than to a recording: no
+           progress, no status, no log tab, no restart or diarize actions. -->
+      <div id="view-library" class="main-view" role="tabpanel"
+           aria-labelledby="main-tab-library" hidden>
+        <section class="task-section">
+          <div class="title-row">
+            <h2 data-i18n="library.title">Library</h2>
+            <span id="library-count" class="tasks-count hidden" aria-live="polite"></span>
+            <button
+              id="library-refresh-btn"
+              class="icon-btn ghost"
+              type="button"
+              title="Refresh the library"
+              aria-label="Refresh library"
+              data-i18n-title="library.refresh"
+              data-i18n-aria-label="library.refresh"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- One field, two searches. Typing filters by title immediately;
+               pressing Enter also asks the corpus what was SAID, which is the
+               thing a library of transcripts is actually for. -->
+          <div class="library-filters">
+            <div class="filter-search">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" />
+                <path d="m16 16 4.5 4.5" />
+              </svg>
+              <input
+                type="search"
+                id="library-q"
+                class="filter-search-input"
+                autocomplete="off"
+                placeholder="Filter by name — press Enter to search inside recordings"
+                aria-label="Search the library"
+                data-i18n-placeholder="library.search_placeholder"
+                data-i18n-aria-label="library.search_label"
+              />
+            </div>
+          </div>
+
+          <!-- Passages found by semantic search, above the list they came from.
+               Hidden until a content search actually runs. -->
+          <div id="library-hits" class="library-hits" hidden>
+            <div class="library-hits-head">
+              <span id="library-hits-summary" class="library-hits-summary"></span>
+              <button type="button" id="library-hits-clear" class="btn-text ghost"
+                      data-i18n="library.clear_search">Clear</button>
+            </div>
+            <div id="library-hits-list" class="library-hits-list"></div>
+          </div>
+
+          <p id="library-empty-state" class="library-empty" hidden
+             data-i18n="library.empty">Nothing here yet.</p>
+          <div id="library-list" class="task-list"></div>
+        </section>
+      </div><!-- /#view-library -->
     </main>
 
     <template id="task-template">
@@ -1396,31 +1480,6 @@
         <h3 class="about-section-title" data-i18n="about.section_steps">Pipeline steps</h3>
         <div class="about-steps"></div>
       </section>
-    </dialog>
-
-    <!-- Knowledge library (vts-8w1r / VOS-130): the recordings a task produced,
-         which outlive it. A dialog rather than a page because this SPA has one
-         page and every other list — voices, prompts, presets — already lives in
-         one; a second page would be the odd one out. -->
-    <dialog id="library-dialog" class="tokens-dialog library-dialog">
-      <div class="tokens-dialog-header">
-        <h2 data-i18n="library.title">Library</h2>
-        <button type="button" id="library-close-btn" class="icon-btn ghost"
-                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
-                title="Close" aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 6l12 12" />
-            <path d="M6 18L18 6" />
-          </svg>
-        </button>
-      </div>
-      <p class="tokens-help" data-i18n="library.hint">
-        Processed recordings. These stay here after their task is gone.
-      </p>
-      <div id="library-list" class="library-list"></div>
-      <p id="library-empty" class="library-empty" hidden data-i18n="library.empty">
-        Nothing here yet.
-      </p>
     </dialog>
 
     <dialog id="speaker-registry-dialog" class="tokens-dialog speaker-registry-dialog">

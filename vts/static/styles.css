@@ -2094,6 +2094,151 @@ input[type="file"] {
   height: 2.05rem;
 }
 
+/* Main view switcher (vts-lib2). Sits between the impersonation row and the
+   New Task panel, because that panel belongs to the Tasks view. */
+.main-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0 0 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.main-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  /* Pull the underline onto the container's border so the two do not stack
+     into a 3px line under the active tab. */
+  margin-bottom: -1px;
+}
+
+.main-tab svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.main-tab:hover {
+  color: var(--ink);
+}
+
+.main-tab.active {
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
+}
+
+.main-view[hidden] {
+  display: none;
+}
+
+/* A RECORDING is the base object: a lasting thing with artifacts. A TASK is a
+   recording plus a job — progress, a status, a log, restart actions. One card
+   serves both, and what is listed here is the job half, hidden when the card is
+   showing a recording. Framing it that way round matters: these are additions
+   a task makes, not features a recording is missing. */
+.task[data-card-kind="recording"] .progress-group,
+.task[data-card-kind="recording"] .progress-stack,
+.task[data-card-kind="recording"] .overall-progress,
+.task[data-card-kind="recording"] .task-dot,
+.task[data-card-kind="recording"] .task-status,
+.task[data-card-kind="recording"] .pause-btn,
+.task[data-card-kind="recording"] .resume-btn,
+.task[data-card-kind="recording"] .resolve-voices-btn,
+.task[data-card-kind="recording"] .restart-summary-btn,
+.task[data-card-kind="recording"] .restart-summary-full-btn,
+.task[data-card-kind="recording"] .restart-summary-final-btn,
+.task[data-card-kind="recording"] .tab-btn[data-tab="log"] {
+  display: none !important;
+}
+
+.library-meta {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.library-filters {
+  margin: 0 0 0.6rem;
+}
+
+/* Passages found by content search, above the list they came from. */
+.library-hits {
+  margin: 0 0 0.8rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-chip);
+}
+
+.library-hits[hidden] {
+  display: none;
+}
+
+.library-hits-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.library-hits-summary {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.library-hits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.library-hit {
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  background: var(--bg-field);
+}
+
+.library-hit-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.library-hit-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-hit-text {
+  margin: 0.2rem 0 0;
+  font-size: 0.9rem;
+}
+
+.library-hit-link {
+  display: inline-block;
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--accent-ink);
+}
+
 /* Knowledge library (vts-8w1r): a list of recordings, each a title with a
    quiet metadata line and pills for what it still has on disk. */
 .library-list {
@@ -2190,6 +2335,23 @@ input[type="file"] {
    specificity would beat the attribute. */
 .share-dialog .share-note[hidden] {
   display: none;
+}
+
+/* A toggle has to show which way it is set. The subtitles button carried
+   .active and aria-pressed from the start, but nothing painted them, so the
+   control looked identical in both modes and the only way to find out was to
+   click it. Accent fill rather than a swapped icon: the icon says WHAT the
+   button does, and changing it would make the two states look like two
+   different buttons. */
+.tab-actions .tab-subtitles-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.tab-actions .tab-subtitles-btn.active:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-ink);
 }
 
 /* The subtitles toggle only belongs to the transcript tab, so it ships hidden

@@ -54,3 +54,33 @@ def language_code(value: Any) -> str | None:
     if not text:
         return None
     return _NAME_TO_CODE.get(text, text)
+
+
+def recording_display_name(title: Any, source_url: Any) -> str | None:
+    """The name a recording is known by.
+
+    Derived HERE, not in the browser: the name is a property of the recording,
+    and it has to be the same string in the library, in the API, in an MCP
+    client and in anything exported later. A view that computed it would be one
+    of several answers.
+
+    Measured on production: 55 of 122 recordings had no title, because their
+    TASK had none — an upload is only titled if the user types something. The
+    name was in `source_url` all along, and the task list already fell back to
+    it while the library printed "untitled".
+
+    An upload carries its filename in a `file://` pseudo-URL; that is what the
+    user recognises. Otherwise the URL itself is a poor name but a true one,
+    which beats no name at all.
+    """
+    explicit = str(title).strip() if isinstance(title, str) else ""
+    if explicit:
+        return explicit
+    url = str(source_url).strip() if isinstance(source_url, str) else ""
+    if not url:
+        return None
+    if url.startswith("file://"):
+        from urllib.parse import unquote
+
+        return unquote(url[len("file://"):]) or url
+    return url

@@ -435,6 +435,15 @@ class Recording(Base):
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True once someone named THIS RECORDING rather than inheriting the task's
+    # name. A recording outlives its task and is the object the library is
+    # about, so its name must be independently editable — and without this flag
+    # the next task rename, or simply the next pipeline run (which upserts the
+    # recording), would silently overwrite a deliberate name with a derived one.
+    # Clearing the name resets the flag, so the recording follows its task again.
+    title_is_custom: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_dir: Mapped[str] = mapped_column(Text, nullable=False)
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -444,3 +444,224 @@ async def test_deleting_a_task_leaves_a_detached_recording_alone(factory):
         assert await session.get(Recording, kept_id) is not None, (
             "deleting a task destroyed a recording that no longer belonged to it"
         )
+
+
+# --------------------------------------------- a recording knows its own name
+
+@pytest.mark.asyncio
+async def test_a_recording_falls_back_to_the_source_when_the_task_is_untitled(factory):
+    """A recording must carry a usable name, not an empty one.
+
+    Measured on production: 55 of 122 recordings had no title — not because
+    anything was lost, but because their TASK had none either. An upload only
+    gets a title if the user types one, and the name was sitting in
+    `source_url` all along (`file://19.05.2026 22.10.m4a`).
+
+    Deriving it in the browser would be wrong twice over: the name is a
+    property of the recording, not of one rendering of it, and it has to be
+    the same string everywhere — the list, the API, an MCP client, a future
+    export.
+    """
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://19.05.2026 22.10.m4a",
+            options={}, artifact_dir="/tmp/x",
+        )
+        task.source_title = None
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert recording.title == "19.05.2026 22.10.m4a", (
+            "an uploaded recording did not take its filename as a name"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_url_task_without_a_title_uses_the_url(factory):
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="https://example.com/watch?v=abc",
+            options={}, artifact_dir="/tmp/x",
+        )
+        task.source_title = None
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert recording.title == "https://example.com/watch?v=abc"
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_title_always_wins(factory):
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://recording.m4a",
+            options={}, artifact_dir="/tmp/x",
+        )
+        task.source_title = "Планёрка 12 марта"
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert recording.title == "Планёрка 12 марта"
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_task_renames_its_recording(factory):
+    """The name has to stay in step, or the two views disagree about one thing.
+
+    Renaming is a task action, but the recording is what the library shows —
+    so a rename that stopped at the task would leave the library displaying the
+    old name with no way to fix it.
+    """
+    from vts.api._helpers.recordings import rename_recording_for_task
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://old.m4a", options={},
+            artifact_dir="/tmp/x",
+        )
+        task.source_title = "Old name"
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert recording.title == "Old name"
+
+        task.source_title = "New name"
+        await rename_recording_for_task(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(select(Recording))).scalars().first()
+        assert stored.title == "New name"
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_title_falls_back_rather_than_blanking(factory):
+    # Emptying the field means "use the default name", not "have no name".
+    from vts.api._helpers.recordings import rename_recording_for_task
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://clip.m4a", options={},
+            artifact_dir="/tmp/x",
+        )
+        task.source_title = "Something"
+        await repo.upsert_recording_for_task(task)
+        await session.commit()
+
+        task.source_title = None
+        await rename_recording_for_task(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(select(Recording))).scalars().first()
+        assert stored.title == "clip.m4a"
+
+
+# ------------------------------------- a recording's own name is its own
+
+@pytest.mark.asyncio
+async def test_a_recording_renamed_by_hand_keeps_its_name(factory):
+    """Once someone names a RECORDING, the task stops speaking for it.
+
+    A recording outlives its task and is the object the library is about, so
+    its name has to be independently editable. Without a marker for "someone
+    chose this", the next task rename — or the next pipeline run, which upserts
+    the recording — would silently overwrite a deliberate name with a derived
+    one. That is data loss the user cannot see coming.
+    """
+    from vts.api._helpers.recordings import (
+        rename_recording,
+        rename_recording_for_task,
+    )
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://raw.m4a", options={},
+            artifact_dir="/tmp/x",
+        )
+        task.source_title = "Task name"
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert recording.title == "Task name"
+
+        await rename_recording(session, recording, "Планёрка по релизу")
+        await session.commit()
+        assert recording.title == "Планёрка по релизу"
+
+        # The task is renamed afterwards; the recording must not follow.
+        task.source_title = "Task renamed again"
+        await rename_recording_for_task(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(select(Recording))).scalars().first()
+        assert stored.title == "Планёрка по релизу", (
+            "a task rename overwrote a name the user gave the recording"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_pipeline_rerun_does_not_overwrite_a_chosen_name(factory):
+    # upsert_recording_for_task runs again on every re-index and at task
+    # completion — the most likely way a deliberate name would disappear.
+    from vts.api._helpers.recordings import rename_recording
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://raw.m4a", options={},
+            artifact_dir="/tmp/x",
+        )
+        task.source_title = "Task name"
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+
+        await rename_recording(session, recording, "Мой заголовок")
+        await session.commit()
+
+        again = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert again.title == "Мой заголовок", (
+            "re-running the pipeline reset the recording's name"
+        )
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_recording_name_returns_it_to_following_the_task(factory):
+    """Emptying the field means "go back to the default", not "be nameless".
+
+    It is also the only way out: without it, naming a recording once would lock
+    it away from its task forever.
+    """
+    from vts.api._helpers.recordings import (
+        rename_recording,
+        rename_recording_for_task,
+    )
+
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://raw.m4a", options={},
+            artifact_dir="/tmp/x",
+        )
+        task.source_title = "Task name"
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+
+        await rename_recording(session, recording, "Своё имя")
+        await session.commit()
+        await rename_recording(session, recording, "   ")
+        await session.commit()
+        assert recording.title == "Task name", "clearing did not restore the derived name"
+
+        task.source_title = "Task renamed"
+        await rename_recording_for_task(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(select(Recording))).scalars().first()
+        assert stored.title == "Task renamed", (
+            "the recording did not resume following its task after being cleared"
+        )

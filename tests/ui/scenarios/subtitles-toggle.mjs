@@ -98,6 +98,34 @@ export async function run() {
       failures.push(`toggle should be pressed in subtitles view, aria-pressed=${JSON.stringify(pressedAfter)}`);
     }
 
+    // 2b. The two modes must be told apart AT A GLANCE, not only by reading
+    //     the tooltip. The button carries .active and aria-pressed, but until
+    //     a style backed them the control looked identical in both states —
+    //     the user had to click to find out which mode they were in.
+    const offStyle = await page.evaluate((s) => {
+      const el = document.querySelector(`${s} .tab-subtitles-btn`);
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, color: cs.color, border: cs.borderColor };
+    }, SEL);
+    // (we are currently ON — captured below and compared)
+    const onStyle = offStyle;
+    await page.click(btnSel);   // back to running text
+    await page.waitForTimeout(250);
+    const backStyle = await page.evaluate((s) => {
+      const el = document.querySelector(`${s} .tab-subtitles-btn`);
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, color: cs.color, border: cs.borderColor };
+    }, SEL);
+    if (JSON.stringify(onStyle) === JSON.stringify(backStyle)) {
+      failures.push(
+        `the subtitles button looks identical in both modes ` +
+        `(${JSON.stringify(backStyle)}) — the state is invisible`
+      );
+    }
+    // Put it back into subtitles mode for the checks that follow.
+    await page.click(btnSel);
+    await page.waitForTimeout(250);
+
     // 3. The toggle belongs to the transcript tab only.
     await page.click(`${SEL} .tab-btn[data-tab="summary"]`);
     await page.waitForTimeout(400);

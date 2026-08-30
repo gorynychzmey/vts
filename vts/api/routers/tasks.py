@@ -46,7 +46,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step
-from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording
+from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording, rename_recording_for_task
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
@@ -414,6 +414,9 @@ async def update_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     task.source_title = normalize_display_name(payload.display_name)
+    # Carry it through to the recording, which is what the library shows — but
+    # only if nobody has named the recording itself (vts-lib2).
+    await rename_recording_for_task(session, task)
     await session.commit()
     queue_positions = await _get_cached_queue_positions(redis, repo, settings.redis_prefix)
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)

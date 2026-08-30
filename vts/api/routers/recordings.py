@@ -13,11 +13,12 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api._helpers.base import _find_media_file
+from vts.api._helpers.recordings import rename_recording
 from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
 from vts.api.schemas import (
     RecordingListOut,
@@ -48,6 +49,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         id=recording.id,
         source_task_id=recording.source_task_id,
         title=recording.title,
+        title_is_custom=bool(recording.title_is_custom),
         source_url=recording.source_url,
         duration_sec=recording.duration_sec,
         language=recording.language,
@@ -91,6 +93,29 @@ async def get_recording(
     recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
     if recording is None:
         raise HTTPException(status_code=404, detail="Recording not found")
+    return _serialize(recording)
+
+
+@router.patch("/api/recordings/{recording_id}", response_model=RecordingOut)
+async def rename_recording_endpoint(
+    recording_id: uuid.UUID,
+    display_name: str | None = Body(default=None, embed=True),
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> RecordingOut:
+    """Give a recording a name of its own.
+
+    Marks it as chosen, so neither a task rename nor the next pipeline run
+    replaces it. Sending an empty name clears that and restores the derived
+    one — the way back, without which naming a recording once would cut it off
+    from its task for good.
+    """
+    repo = Repo(session)
+    recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    await rename_recording(session, recording, display_name)
+    await session.commit()
     return _serialize(recording)
 
 

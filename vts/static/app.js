@@ -1845,6 +1845,32 @@ function readStageProgress(task, stageName) {
   };
 }
 
+// What to call a recording or a task that was never given a name.
+//
+// 55 of 122 production recordings had no title — not because anything was lost,
+// but because their TASK had none either: an uploaded file only gets a title if
+// the user types one. The information was there all along in `source_url`
+// (`file://19.05.2026 22.10.m4a`), and the task list already fell back to it.
+// The library printed "Untitled recording" instead, which read as missing data.
+//
+// One helper so both views name things the same way.
+function displayNameFor(name, sourceUrl) {
+  const explicit = typeof name === "string" ? name.trim() : "";
+  if (explicit) {
+    return explicit;
+  }
+  const url = typeof sourceUrl === "string" ? sourceUrl.trim() : "";
+  if (!url) {
+    return "";
+  }
+  // An upload carries its filename in the pseudo-URL; that is the name the
+  // user recognises, not the scheme.
+  if (url.startsWith("file://")) {
+    return decodeURIComponent(url.slice("file://".length)) || url;
+  }
+  return url;
+}
+
 function createRuntime(task) {
   const runningStep = findStep(task, "running");
   const failedStep = findStep(task, "failed");
@@ -2478,7 +2504,9 @@ function renderTaskRuntime(taskEl) {
   }
 }
 
-function renderTaskCard(task) {
+function renderTaskCard(task, options = {}) {
+  // `kind` says whether this card is a recording (the base object) or a task
+  // (a recording plus a running job).
   const node = taskTemplate.content.cloneNode(true);
   const root = node.querySelector(".task");
   const body = node.querySelector(".task-body");
@@ -2768,6 +2796,11 @@ function renderTaskCard(task) {
     if (e.key === "Enter") { e.preventDefault(); commitTitleEdit(root); }
     else if (e.key === "Escape") { e.preventDefault(); cancelTitleEdit(root); }
   });
+  // What this card IS. A recording is the base object — a lasting thing with
+  // artifacts — and a task is a recording plus a job: progress, status, a log,
+  // restart actions. Marking both (rather than only the exception) keeps the
+  // CSS honest about which one is the addition.
+  root.dataset.cardKind = options.kind === "recording" ? "recording" : "task";
   renderTaskRuntime(root);
   return root;
 }
@@ -7894,121 +7927,248 @@ presetDuplicateBtn?.addEventListener("click", () => {
   if (presetEditing) duplicatePreset(presetEditing);
 });
 
-// ---------- Knowledge library ----------
+
+// ---------- Main views: Tasks and Library ----------
 //
-// The recordings a task produced, which outlive it (vts-8w1r / VOS-130). A
-// dialog rather than a page: this SPA has one page, and every other list —
-// voices, prompts, presets — already lives in a dialog.
+// Tasks are JOBS — they run, fail, get restarted. Recordings are what those
+// jobs produced, and they outlive them. One list had to speak both vocabularies
+// at once; two views let each show only what applies.
+//
+// The Library reuses renderTaskCard rather than growing a second card
+// implementation. A recording's artifacts live at the same /api/tasks/{id}/…
+// paths, so the card is fed the recording's source_task_id and marked
+// `data-card-kind="library"`; what belongs to a job (progress, status, log,
+// restart, diarize) is hidden by that marker instead of being reimplemented.
 
-const libraryDialog = document.getElementById("library-dialog");
+const mainTabs = document.querySelectorAll(".main-tab");
 const libraryList = document.getElementById("library-list");
-const libraryEmpty = document.getElementById("library-empty");
-const libraryBtn = document.getElementById("library-btn");
-const libraryCloseBtn = document.getElementById("library-close-btn");
+const libraryCount = document.getElementById("library-count");
+const libraryQ = document.getElementById("library-q");
+const libraryHits = document.getElementById("library-hits");
+const libraryHitsList = document.getElementById("library-hits-list");
+const libraryHitsSummary = document.getElementById("library-hits-summary");
+const libraryHitsClear = document.getElementById("library-hits-clear");
+const libraryEmptyState = document.getElementById("library-empty-state");
+const libraryRefreshBtn = document.getElementById("library-refresh-btn");
 
-function libraryMetaLine(item) {
-  // Only what is actually known: a recording whose media never arrived has no
-  // duration, and stating "0:00" would be a claim rather than a gap.
+let libraryLoaded = false;
+let libraryItems = [];
+
+function showMainView(view) {
+  const target = view === "library" ? "library" : "tasks";
+  mainTabs.forEach((tab) => {
+    const on = tab.dataset.view === target;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const tasksView = document.getElementById("view-tasks");
+  const libraryView = document.getElementById("view-library");
+  if (tasksView) tasksView.hidden = target !== "tasks";
+  if (libraryView) libraryView.hidden = target !== "library";
+  try {
+    localStorage.setItem("vts.mainView", target);
+  } catch {
+    // Private mode or blocked storage: the choice just does not persist.
+  }
+  if (target === "library" && !libraryLoaded) {
+    void loadLibrary();
+  }
+}
+
+mainTabs.forEach((tab) => {
+  tab.addEventListener("click", () => showMainView(tab.dataset.view || "tasks"));
+});
+
+// A recording, shaped like the task the card expects. Only the fields
+// createRuntime actually reads are supplied; everything job-shaped is left
+// absent on purpose, so a card cannot show progress for something that is not
+// running.
+function recordingAsTask(recording) {
+  return {
+    id: recording.source_task_id || recording.id,
+    source_url: recording.source_url || "",
+    source_title: displayNameFor(recording.title, recording.source_url),
+    status: "completed",
+    created_at: recording.created_at,
+    updated_at: recording.updated_at,
+    steps: [],
+    // The card decides which tabs exist from these. A recording has whatever
+    // its artifacts say it has — probed server-side, since archiving removes
+    // the media while the transcript stays.
+    transcript_path: recording.has_transcript ? "present" : null,
+    summary_path: recording.has_summary ? "present" : null,
+    options: { prompts: [], prompt_results: [] },
+    capabilities: {},
+    progress: {},
+    stats: {},
+  };
+}
+
+function renderLibraryList(items) {
+  if (!libraryList) return;
+  libraryList.textContent = "";
+  for (const item of items) {
+    // renderTaskCard returns the card ELEMENT itself, so the marker goes on it
+    // — not on something inside it.
+    const root = renderTaskCard(recordingAsTask(item), { kind: "recording" });
+    root.dataset.recordingId = String(item.id || "");
+    if (!item.source_task_id) {
+      // The task is gone, and its artifacts may be too. Say so rather than
+      // offering tabs that will 404.
+      root.dataset.detached = "1";
+    }
+    applyLibraryMeta(root, item);
+    libraryList.appendChild(root);
+  }
+  if (libraryEmptyState) {
+    libraryEmptyState.hidden = items.length > 0;
+  }
+  if (libraryCount) {
+    libraryCount.textContent = String(items.length);
+    libraryCount.classList.toggle("hidden", !items.length);
+  }
+}
+
+// Duration, language and what the recording still has — the facts a library
+// row is scanned by, and the ones that survive the media being archived.
+function applyLibraryMeta(root, item) {
+  const holder = root.querySelector(".task-meta-row") || root.querySelector(".task-header-row");
+  if (!holder) return;
+  const meta = document.createElement("div");
+  meta.className = "library-meta";
   const parts = [];
   if (typeof item.duration_sec === "number" && item.duration_sec > 0) {
     parts.push(formatDuration(item.duration_sec));
   }
-  if (item.language) {
-    parts.push(String(item.language).toUpperCase());
-  }
-  const when = item.recorded_at || item.created_at;
-  if (when) {
-    // formatRelativeTime falls back to the locale date once an age stops being
-    // useful as a relative figure — which is most of a library.
-    const label = formatRelativeTime(when);
-    if (label) parts.push(label);
-  }
-  // The recording outliving its task is the whole point of this feature, so
-  // say so rather than leaving a row that looks the same as any other.
-  if (!item.source_task_id) {
-    parts.push(t("library.detached"));
-  }
-  return parts.join(" · ");
+  if (item.language) parts.push(String(item.language).toUpperCase());
+  if (!item.source_task_id) parts.push(t("library.detached"));
+  meta.textContent = parts.join(" · ");
+  if (parts.length) holder.appendChild(meta);
 }
 
-function renderLibrary(items) {
+async function loadLibrary() {
   if (!libraryList) return;
-  libraryList.textContent = "";
-  for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "library-row";
-    row.dataset.recordingId = String(item.id || "");
-
-    const title = document.createElement("div");
-    title.className = "library-row-title";
-    title.textContent = item.title || t("library.no_title");
-    row.append(title);
-
-    const meta = document.createElement("div");
-    meta.className = "library-row-meta";
-    meta.textContent = libraryMetaLine(item);
-    row.append(meta);
-
-    // What this recording still HAS. Probed server-side from disk, because
-    // archiving removes the media while the transcript stays.
-    const flags = document.createElement("div");
-    flags.className = "library-row-flags";
-    for (const [key, present] of [
-      ["tab.transcript", item.has_transcript],
-      ["tab.summary", item.has_summary],
-      ["library.has_media", item.has_media],
-    ]) {
-      if (!present) continue;
-      const pill = document.createElement("span");
-      pill.className = "library-flag";
-      const label = t(key);
-      pill.textContent = label === key ? key : label;
-      flags.append(pill);
-    }
-    if (flags.childElementCount) {
-      row.append(flags);
-    }
-    libraryList.append(row);
-  }
-  if (libraryEmpty) {
-    libraryEmpty.hidden = items.length > 0;
-  }
-}
-
-async function openLibraryDialog() {
-  if (!libraryDialog) return;
-  if (!libraryDialog.open) {
-    libraryDialog.showModal();
-  }
-  if (libraryList) {
-    libraryList.textContent = "";
-  }
-  if (libraryEmpty) {
-    libraryEmpty.hidden = true;
-  }
   try {
-    const payload = await api("/api/recordings");
-    const items = payload && Array.isArray(payload.items) ? payload.items : [];
-    renderLibrary(items);
+    const payload = await api("/api/recordings?limit=200");
+    libraryItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    libraryLoaded = true;
+    applyLibraryFilter();
   } catch {
-    // A failed load must not leave an empty dialog that reads as "you have
-    // nothing", which is a different statement entirely.
-    if (libraryEmpty) {
-      libraryEmpty.textContent = t("library.load_failed");
-      libraryEmpty.hidden = false;
+    // A failed load must not read as "you have nothing".
+    if (libraryEmptyState) {
+      libraryEmptyState.textContent = t("library.load_failed");
+      libraryEmptyState.hidden = false;
     }
   }
 }
 
-libraryBtn?.addEventListener("click", () => {
-  // The burger menu closes the same way every other entry closes it: by
-  // dropping the class the toggle sets. There is no helper for it.
-  document.getElementById("header-menu")?.classList.remove("open");
-  document.getElementById("header-menu-btn")?.setAttribute("aria-expanded", "false");
-  void openLibraryDialog();
+// Typing filters by name. It is deliberately not the content search: that one
+// costs an embedding round-trip, so it waits for Enter.
+function applyLibraryFilter() {
+  const needle = (libraryQ?.value || "").trim().toLowerCase();
+  const items = !needle
+    ? libraryItems
+    : libraryItems.filter((item) => {
+        const name = displayNameFor(item.title, item.source_url).toLowerCase();
+        return name.includes(needle);
+      });
+  renderLibraryList(items);
+}
+
+libraryQ?.addEventListener("input", () => {
+  applyLibraryFilter();
 });
 
-libraryCloseBtn?.addEventListener("click", () => libraryDialog?.close());
+libraryQ?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void searchLibraryContent();
+  }
+});
+
+libraryRefreshBtn?.addEventListener("click", () => {
+  libraryLoaded = false;
+  void loadLibrary();
+});
+
+libraryHitsClear?.addEventListener("click", () => {
+  if (libraryHits) libraryHits.hidden = true;
+  if (libraryQ) libraryQ.value = "";
+  applyLibraryFilter();
+});
+
+// Semantic search over what was SAID. Returns passages, and an empty result is
+// an answer — the corpus does not cover the question — so it is stated rather
+// than left as a blank area.
+async function searchLibraryContent() {
+  const query = (libraryQ?.value || "").trim();
+  if (!query || !libraryHits) return;
+  libraryHits.hidden = false;
+  if (libraryHitsSummary) libraryHitsSummary.textContent = t("library.searching");
+  if (libraryHitsList) libraryHitsList.textContent = "";
+  try {
+    const payload = await api(`/api/search?q=${encodeURIComponent(query)}&limit=20`);
+    const hits = payload && Array.isArray(payload.hits) ? payload.hits : [];
+    renderLibraryHits(query, hits);
+  } catch {
+    if (libraryHitsSummary) libraryHitsSummary.textContent = t("library.search_failed");
+  }
+}
+
+function renderLibraryHits(query, hits) {
+  if (!libraryHitsList || !libraryHitsSummary) return;
+  libraryHitsList.textContent = "";
+  if (!hits.length) {
+    // Not a failure: the recordings do not cover this.
+    libraryHitsSummary.textContent = t("library.no_matches", { query });
+    return;
+  }
+  libraryHitsSummary.textContent = t("library.matches", { count: hits.length, query });
+  for (const hit of hits) {
+    const row = document.createElement("div");
+    row.className = "library-hit";
+
+    const head = document.createElement("div");
+    head.className = "library-hit-head";
+    const title = document.createElement("span");
+    title.className = "library-hit-title";
+    title.textContent = hit.title || t("library.no_title");
+    head.append(title);
+
+    const when = document.createElement("span");
+    when.className = "library-hit-time";
+    when.textContent = formatDuration(hit.start_sec || 0);
+    head.append(when);
+    row.append(head);
+
+    const text = document.createElement("p");
+    text.className = "library-hit-text";
+    text.textContent = hit.text || "";
+    row.append(text);
+
+    // The citation: opens the recording at the quoted second. Absent when the
+    // task is gone — the passage is still real, it just has no player page.
+    if (hit.source_task_id) {
+      const link = document.createElement("a");
+      link.className = "library-hit-link";
+      link.href = buildPath(
+        `/player/${encodeURIComponent(hit.source_task_id)}?t=${encodeURIComponent(
+          String(Math.floor(hit.start_sec || 0))
+        )}`
+      );
+      link.textContent = t("library.open_at");
+      row.append(link);
+    }
+    libraryHitsList.append(row);
+  }
+}
+
+try {
+  const saved = localStorage.getItem("vts.mainView");
+  if (saved === "library") showMainView("library");
+} catch {
+  // No stored preference; Tasks stays the default.
+}
 
 // ---------- Share dialog ----------
 //

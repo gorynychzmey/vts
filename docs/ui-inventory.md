@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 57 capabilities · 105 routes (78 in the OpenAPI schema, 27 hidden) · 27 MCP tools · 414 English UI strings.
+**Counts:** 58 capabilities · 106 routes (79 in the OpenAPI schema, 27 hidden) · 27 MCP tools · 425 English UI strings.
 
 ## Capabilities by entity
 
@@ -45,9 +45,10 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
-| Browse the library | Library | one recording per task, outliving it; a detached one says so | `GET /api/recordings` | Header menu -> Library (#library-dialog): title, duration, language, and what each recording still has |
+| Browse the library | Library | one recording per task, outliving it; a detached one says so | `GET /api/recordings` | Library tab on the main screen: same cards as Tasks, minus progress/status/log/restart |
+| Rename a recording | Rename recording | a chosen name stops following the task; clearing it resumes | `PATCH /api/recordings/{recording_id}` | Library tab — recording card menu |
 | Search the corpus | — | returns nothing below the relevance threshold, never the nearest passages | `GET /api/search` | API and the search_transcripts MCP tool (no page yet) |
-| Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library dialog row |
+| Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library tab — recording card |
 
 ### Speaker (voice)
 
@@ -210,7 +211,6 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 | `#share-dialog` | Share |
 | `#restart-final-dialog` | Restart final with prompts |
 | `#task-about-dialog` | — |
-| `#library-dialog` | Library |
 | `#speaker-registry-dialog` | Voice registry |
 | `#voice-resolution-dialog` | Resolve voices |
 | `#speaker-picker-dialog` | Move fragment to a person (set at runtime) |
@@ -279,5 +279,6 @@ Migrations that introduced or changed the entities above.
 | `0026_clear_raw_json` | clear asr_segments.raw_json now that the axes carry it (vts-6qwy) |
 | `0027_recordings` | a Recording that outlives the task that produced it (vts-8w1r / VOS-130) |
 | `0028_transcript_chunks` | semantic chunks of a recording, with embeddings (vts-twe7 / VOS-131) |
+| `0029_recording_title_custom` | a recording owns its name (vts-lib2) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

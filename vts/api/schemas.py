@@ -488,6 +488,10 @@ class RecordingOut(BaseModel):
     id: UUID
     source_task_id: UUID | None = None
     title: str | None = None
+    # True when the name was given to THIS recording rather than inherited from
+    # its task — so a client can show that renaming it will stop following the
+    # task, and that clearing the field restores the inherited name.
+    title_is_custom: bool = False
     source_url: str | None = None
     duration_sec: float | None = None
     language: str | None = None

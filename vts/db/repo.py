@@ -32,7 +32,7 @@ from vts.db.models import (
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 from vts.services.asr_payload import decompose_raw_json
-from vts.services.recording_meta import language_code
+from vts.services.recording_meta import language_code, recording_display_name
 from vts.services.delivery_status import RETRYABLE_STATUSES
 
 
@@ -514,7 +514,11 @@ class Repo:
             )
             self.session.add(recording)
 
-        recording.title = task.source_title
+        # A name the user gave the RECORDING is not the task's to overwrite —
+        # and this runs on every re-index and at completion, so without the
+        # check a chosen name would not survive the next pipeline pass.
+        if not recording.title_is_custom:
+            recording.title = recording_display_name(task.source_title, task.source_url)
         recording.source_url = task.source_url
         recording.transcript_path = task.transcript_path
         recording.summary_path = task.summary_path

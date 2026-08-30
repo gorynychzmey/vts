@@ -348,8 +348,16 @@ CAPABILITIES: list[Cap] = [
         "action": "Browse the library",
         "label": "library.open",
         "endpoints": ["GET /api/recordings"],
-        "screen": "Header menu -> Library (#library-dialog): title, duration, language, and what each recording still has",
+        "screen": "Library tab on the main screen: same cards as Tasks, minus progress/status/log/restart",
         "states": "one recording per task, outliving it; a detached one says so",
+    },
+    {
+        "entity": "Recording",
+        "action": "Rename a recording",
+        "label": "library.rename",
+        "endpoints": ["PATCH /api/recordings/{recording_id}"],
+        "screen": "Library tab — recording card menu",
+        "states": "a chosen name stops following the task; clearing it resumes",
     },
     {
         "entity": "Recording",
@@ -364,7 +372,7 @@ CAPABILITIES: list[Cap] = [
         "action": "Open a recording",
         "label": "library.title",
         "endpoints": ["GET /api/recordings/{recording_id}"],
-        "screen": "Library dialog row",
+        "screen": "Library tab — recording card",
         "states": "owner-scoped, 404 otherwise",
     },
     {

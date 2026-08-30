@@ -71,3 +71,52 @@ async def delete_task_with_recording(session: AsyncSession, task: Any) -> None:
         delete(Recording).where(Recording.source_task_id == task.id)
     )
     await session.delete(task)
+
+
+async def rename_recording_for_task(session: AsyncSession, task: Any) -> None:
+    """Carry a task rename through to the recording it produced.
+
+    Renaming is a task action, but the LIBRARY is where the name is read — so a
+    rename that stopped at the task would leave the library showing the old one
+    with no way to correct it. Clearing the title falls back to the source name
+    rather than blanking it: an empty field means "use the default", not "have
+    no name".
+    """
+    from vts.services.recording_meta import recording_display_name
+
+    recording = await session.scalar(
+        select(Recording).where(Recording.source_task_id == task.id)
+    )
+    if recording is None:
+        return
+    # A recording that was named by hand has stopped following its task.
+    if recording.title_is_custom:
+        return
+    recording.title = recording_display_name(task.source_title, task.source_url)
+    await session.flush()
+
+
+async def rename_recording(session: AsyncSession, recording: Any, name: Any) -> None:
+    """Name a recording in its own right.
+
+    Marks the name as the user's, so neither a task rename nor the next
+    pipeline run replaces it. An empty name clears the flag and restores the
+    derived one — that is the way back, and without it naming a recording once
+    would cut it off from its task permanently.
+    """
+    from vts.services.recording_meta import recording_display_name
+
+    cleaned = str(name).strip() if isinstance(name, str) else ""
+    if cleaned:
+        recording.title = cleaned[:500]
+        recording.title_is_custom = True
+    else:
+        recording.title_is_custom = False
+        source_title = None
+        if recording.source_task_id is not None:
+            from vts.db.models import Task
+
+            task = await session.get(Task, recording.source_task_id)
+            source_title = task.source_title if task is not None else None
+        recording.title = recording_display_name(source_title, recording.source_url)
+    await session.flush()
