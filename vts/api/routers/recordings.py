@@ -18,11 +18,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api._helpers.base import _find_media_file
-from vts.api.deps import get_current_user, get_session_dep
-from vts.api.schemas import RecordingListOut, RecordingOut
+from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
+from vts.api.schemas import (
+    RecordingListOut,
+    RecordingOut,
+    SearchHitOut,
+    SearchResultOut,
+)
 from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
+from vts.services.corpus_search import search_corpus
 
 router = APIRouter()
 
@@ -86,3 +92,37 @@ async def get_recording(
     if recording is None:
         raise HTTPException(status_code=404, detail="Recording not found")
     return _serialize(recording)
+
+
+@router.get("/api/search", response_model=SearchResultOut)
+async def search_corpus_endpoint(
+    q: str,
+    limit: int = 10,
+    threshold: float | None = None,
+    recording_id: uuid.UUID | None = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+    settings=Depends(get_settings_dep),
+) -> SearchResultOut:
+    """Search the transcript corpus (vts-uurt).
+
+    Returns nothing when nothing clears the relevance threshold, rather than
+    the nearest passages. The threshold is echoed back so an empty result can
+    be read correctly.
+    """
+    hits, effective = await search_corpus(
+        session, uuid.UUID(user.id), q, settings,
+        threshold=threshold, limit=limit, recording_id=recording_id,
+    )
+    return SearchResultOut(
+        query=q,
+        threshold=effective,
+        hits=[
+            SearchHitOut(
+                chunk_id=h.chunk_id, recording_id=h.recording_id, title=h.title,
+                text=h.text, start_sec=h.start_sec, end_sec=h.end_sec,
+                speakers=h.speakers, score=h.score,
+            )
+            for h in hits
+        ],
+    )

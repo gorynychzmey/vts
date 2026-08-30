@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: int = 120
     embedding_batch_size: int = 32
     embedding_enabled: bool = True
+    # Corpus search (vts-uurt). Below this cosine similarity a result is not
+    # returned at all — the requirement is an empty answer rather than the
+    # nearest irrelevant passages. Calibrated on the real corpus: answerable
+    # queries scored 0.521-0.762, unanswerable ones 0.317-0.379.
+    search_threshold: float = 0.45
     llm_final_timeout_seconds: int = 1800
     # Streaming timeouts (vts-gouq). The segment stage generates for 10-17
     # minutes at 9-13 tokens/s, so a total-duration timeout cannot separate
@@ -535,6 +540,7 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "services_llm_api_key": "llm_api_key",
         "services_llm_model": "llm_model",
         "services_embedding_model": "embedding_model",
+        "services_search_threshold": "search_threshold",
         "services_embedding_enabled": "embedding_enabled",
         "services_embedding_batch_size": "embedding_batch_size",
         "services_embedding_timeout_seconds": "embedding_timeout_seconds",

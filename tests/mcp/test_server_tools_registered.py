@@ -24,6 +24,7 @@ async def test_server_registers_expected_tools() -> None:
         "get_default_preset",
         "set_default_preset",
         "wait_for_task",
+        "search_transcripts",
     }
     assert expected.issubset(names), f"missing tools: {expected - names}"
     assert "get_summary" not in names

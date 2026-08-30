@@ -500,6 +500,37 @@ class RecordingOut(BaseModel):
     updated_at: datetime
 
 
+class SearchHitOut(BaseModel):
+    """One passage returned by corpus search (vts-uurt).
+
+    `recording_id` is the stable identifier a client holds on to and can use to
+    fetch the whole transcript later — deliberately not the task id, which goes
+    away when the task is deleted while the recording remains.
+    """
+
+    chunk_id: UUID
+    recording_id: UUID
+    title: str | None = None
+    text: str
+    start_sec: float
+    end_sec: float
+    speakers: list[str] = []
+    score: float
+
+
+class SearchResultOut(BaseModel):
+    """Search results, with the threshold that produced them.
+
+    `threshold` is echoed back because an empty `hits` means "nothing in the
+    corpus is this relevant" rather than "the corpus is empty" — and the caller
+    cannot tell those apart without knowing where the bar was set.
+    """
+
+    hits: list[SearchHitOut]
+    threshold: float
+    query: str
+
+
 class RecordingListOut(BaseModel):
     items: list[RecordingOut]
     total: int

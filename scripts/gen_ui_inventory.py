@@ -353,6 +353,14 @@ CAPABILITIES: list[Cap] = [
     },
     {
         "entity": "Recording",
+        "action": "Search the corpus",
+        "label": "",
+        "endpoints": ["GET /api/search"],
+        "screen": "API and the search_transcripts MCP tool (no page yet)",
+        "states": "returns nothing below the relevance threshold, never the nearest passages",
+    },
+    {
+        "entity": "Recording",
         "action": "Open a recording",
         "label": "library.title",
         "endpoints": ["GET /api/recordings/{recording_id}"],

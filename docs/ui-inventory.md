@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 56 capabilities · 104 routes (77 in the OpenAPI schema, 27 hidden) · 26 MCP tools · 414 English UI strings.
+**Counts:** 57 capabilities · 105 routes (78 in the OpenAPI schema, 27 hidden) · 27 MCP tools · 414 English UI strings.
 
 ## Capabilities by entity
 
@@ -46,6 +46,7 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
 | Browse the library | Library | one recording per task, outliving it; a detached one says so | `GET /api/recordings` | Header menu -> Library (#library-dialog): title, duration, language, and what each recording still has |
+| Search the corpus | — | returns nothing below the relevance threshold, never the nearest passages | `GET /api/search` | API and the search_transcripts MCP tool (no page yet) |
 | Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library dialog row |
 
 ### Speaker (voice)
@@ -218,7 +219,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 
 `vts/mcp/tools_registry/` exposes the same capabilities to agents. Tools with no matching UI control are the practical reason the “no screen” list above is not a gap.
 
-`submit_video`, `list_tasks`, `get_status`, `get_transcript`, `get_prompt_result`, `wait_for_task`, `list_prompts`, `create_prompt`, `update_prompt`, `delete_prompt`, `list_presets`, `create_preset`, `update_preset`, `delete_preset`, `get_default_preset`, `set_default_preset`, `list_delivery_targets`, `list_delivery_credentials`, `create_delivery_credential`, `update_delivery_credential`, `delete_delivery_credential`, `create_delivery_target`, `update_delivery_target`, `delete_delivery_target`, `get_delivery_status`, `retry_delivery`
+`submit_video`, `list_tasks`, `get_status`, `get_transcript`, `get_prompt_result`, `wait_for_task`, `list_prompts`, `create_prompt`, `update_prompt`, `delete_prompt`, `list_presets`, `create_preset`, `update_preset`, `delete_preset`, `get_default_preset`, `set_default_preset`, `list_delivery_targets`, `list_delivery_credentials`, `create_delivery_credential`, `update_delivery_credential`, `delete_delivery_credential`, `create_delivery_target`, `update_delivery_target`, `delete_delivery_target`, `get_delivery_status`, `retry_delivery`, `search_transcripts`
 
 ## Route coverage
 

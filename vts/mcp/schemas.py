@@ -56,6 +56,41 @@ class TranscriptResult(BaseModel):
     format: Literal["txt", "json"]
 
 
+class SearchHit(BaseModel):
+    """One passage of a recording that matched a corpus search.
+
+    `recording_id` is the stable identifier to hold on to and to fetch the full
+    transcript with later — not the task id, which disappears when a task is
+    deleted while the recording remains.
+    """
+
+    recording_id: uuid.UUID
+    title: str | None = None
+    text: str
+    start_sec: float
+    end_sec: float
+    speakers: list[str] = []
+    score: float
+
+
+class SearchResult(BaseModel):
+    """Evidence for a question, never an answer to it.
+
+    VOS-132 is explicit that VTS stays a retrieval server: the reasoning
+    belongs to the client. So this returns passages with their positions and
+    scores and nothing that resembles a composed reply.
+
+    An empty `hits` means nothing in the corpus is relevant enough — NOT that
+    the corpus is empty, and not that the nearest passages were withheld
+    arbitrarily. `threshold` is returned so a client can tell those apart, and
+    say so to its user rather than inventing an answer from weak matches.
+    """
+
+    query: str
+    threshold: float
+    hits: list[SearchHit]
+
+
 class PromptInfo(BaseModel):
     """One prompt available to the calling user (system or user-defined)."""
     source: Literal["system", "user"]
