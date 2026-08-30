@@ -119,7 +119,7 @@ async def search_corpus_endpoint(
         threshold=effective,
         hits=[
             SearchHitOut(
-                chunk_id=h.chunk_id, recording_id=h.recording_id, title=h.title,
+                chunk_id=h.chunk_id, recording_id=h.recording_id, source_task_id=h.source_task_id, title=h.title,
                 text=h.text, start_sec=h.start_sec, end_sec=h.end_sec,
                 speakers=h.speakers, score=h.score,
             )

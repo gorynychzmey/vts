@@ -16,6 +16,12 @@
   .cue { cursor: pointer; border-radius: 3px; padding: 0 0.1rem; }
   .cue:hover { background: #222; }
   .cue.active { background: #2a3d55; }
+  /* The passage a citation pointed at (vts-5yyo). Distinct from .active,
+     which follows playback: the two can be different sentences at once, and a
+     citation that vanished as soon as playback moved on would defeat the link.
+     An outline rather than a fill, so a cue that is both cited and playing
+     still reads as playing. */
+  .cue.cited { outline: 2px solid #c98a3e; outline-offset: 1px; border-radius: 3px; }
   .cue:focus-visible { outline: 2px solid #7aa; outline-offset: 1px; }
   .media-unavailable { color: #ccc; font-size: 1.05rem; text-align: center;
     margin: 3rem 1rem; }

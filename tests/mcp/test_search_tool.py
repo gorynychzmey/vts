@@ -59,3 +59,23 @@ def test_both_entry_points_call_the_same_search_function() -> None:
             f"{module.__name__} hard-codes a threshold instead of taking the "
             f"configured one"
         )
+
+
+async def test_the_tool_explains_how_to_cite_a_hit() -> None:
+    """A client that cannot build the link will paraphrase instead of citing.
+
+    The player is addressed by TASK while the stable identifier is the
+    RECORDING, so the URL shape is not guessable from the field names — it has
+    to be stated. And a null source_task_id (deleted task) must be described,
+    or a client will happily emit /player/None?t=12.
+    """
+    from vts.mcp.server import build_mcp_server
+
+    tools = await build_mcp_server().list_tools()
+    description = (next(
+        t for t in tools if t.name == "search_transcripts").description or "")
+    assert "/player/" in description, "the citation URL shape is not documented"
+    assert "start_sec" in description
+    assert "null" in description.lower(), (
+        "the description does not say what a missing task means"
+    )

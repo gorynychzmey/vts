@@ -510,6 +510,9 @@ class SearchHitOut(BaseModel):
 
     chunk_id: UUID
     recording_id: UUID
+    # For building /player/{task}?t=; null once the task is deleted, which
+    # means the passage is still real but no longer openable in a player.
+    source_task_id: UUID | None = None
     title: str | None = None
     text: str
     start_sec: float

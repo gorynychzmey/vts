@@ -44,6 +44,8 @@
     return span;
   }
 
+  var cueCounter = 0;
+
   function buildBlock(block) {
     var li = document.createElement("li");
     li.className = "block";
@@ -57,7 +59,12 @@
     body.className = "block-body";
     (block.sentences || []).forEach(function(sentence, i) {
       if (i) body.appendChild(document.createTextNode(" "));
-      body.appendChild(buildCue(sentence));
+      // Numbered across the WHOLE transcript, exactly as the server renders it
+      // — a deep link addresses a sentence in the recording, and the two paths
+      // must agree or a citation breaks the moment the transcript rebuilds.
+      var cue = buildCue(sentence);
+      cue.setAttribute("data-cue", String(cueCounter++));
+      body.appendChild(cue);
     });
     li.appendChild(body);
     return li;
@@ -73,6 +80,7 @@
       document.body.appendChild(ol);
     }
     ol.innerHTML = "";
+    cueCounter = 0;
     blocks.forEach(function(block) { ol.appendChild(buildBlock(block)); });
     wireCues(media);
     wireAutoscroll();

@@ -42,6 +42,13 @@ def register(mcp: FastMCP) -> None:
         was.
 
         Use `recording_id` from a hit to fetch that recording's full transcript.
+
+        To cite a hit so a person can verify it, link to
+        `/player/{source_task_id}?t={start_sec}` — that opens the recording at
+        the quoted passage with it highlighted. When `source_task_id` is null
+        the task has been deleted: the passage and its timecode are still real,
+        but there is no player page to link to, so quote it without a link
+        rather than inventing one.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -55,7 +62,7 @@ def register(mcp: FastMCP) -> None:
                 threshold=effective,
                 hits=[
                     SearchHit(
-                        recording_id=h.recording_id, title=h.title, text=h.text,
+                        recording_id=h.recording_id, source_task_id=h.source_task_id, title=h.title, text=h.text,
                         start_sec=h.start_sec, end_sec=h.end_sec,
                         speakers=h.speakers, score=h.score,
                     )

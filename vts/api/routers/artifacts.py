@@ -96,11 +96,18 @@ def _media_unavailable_block_html() -> str:
     )
 
 
-def _player_block_html(block: dict[str, Any]) -> str:
+def _player_block_html(
+    block: dict[str, Any], first_cue_index: int = 0
+) -> tuple[str, int]:
     """One transcript block: its speaker label (when diarized) plus each inner
     sentence as an individually clickable cue that seeks to its own start.
     A block with a single sentence renders as one cue — same structure, so the
-    whole block is still clickable when there were no finer timings."""
+    whole block is still clickable when there were no finer timings.
+
+    `first_cue_index` numbers the cues CONSECUTIVELY ACROSS THE PAGE, not within
+    the block: `data-cue` is what a deep link addresses (vts-5yyo), so it has to
+    identify a sentence in the recording rather than in whichever block it
+    happens to sit. Returns (html, next_index) so the caller keeps the count."""
     label = str(block.get("label") or "").strip()
     label_html = (
         f'<div class="block-label">{_html.escape(label)}</div>' if label else ""
@@ -114,13 +121,16 @@ def _player_block_html(block: dict[str, Any]) -> str:
         text = str(sentence.get("text") or "").strip()
         if not text:
             continue
+        cue_index = first_cue_index + len(cues)
         cues.append(
-            f'<span class="cue" data-start="{start}" role="button" tabindex="0" '
+            f'<span class="cue" data-start="{start}" data-cue="{cue_index}" '
+            f'role="button" tabindex="0" '
             f'title="{_format_timecode(start)}">{_html.escape(text)}</span>'
         )
     if not cues:
-        return ""
-    return f'<li class="block">{label_html}<p class="block-body">{" ".join(cues)}</p></li>'
+        return "", first_cue_index
+    html = f'<li class="block">{label_html}<p class="block-body">{" ".join(cues)}</p></li>'
+    return html, first_cue_index + len(cues)
 
 
 def _parse_range_header(value: str, total: int) -> tuple[int, int] | None:
@@ -256,7 +266,12 @@ def _player_page_html(
         blocks = []
     else:
         media_block = media_tag
-    rows = [html for block in blocks if (html := _player_block_html(block))]
+    rows = []
+    next_cue = 0
+    for block in blocks:
+        html, next_cue = _player_block_html(block, next_cue)
+        if html:
+            rows.append(html)
     transcript_html = (
         f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
     )

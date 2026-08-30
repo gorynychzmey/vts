@@ -59,6 +59,12 @@ class SearchHit:
     # The stable identifier callers should hold on to. NOT the task id: a task
     # can be deleted, and the recording is what lasts (vts-8w1r).
     recording_id: uuid.UUID
+    # The task the recording came from, or None once it has been deleted. Only
+    # here so a caller can build /player/{task}?t= — the player is addressed by
+    # task, while `recording_id` is the identifier that lasts. A null means the
+    # evidence is still valid but no longer openable in a player, which the
+    # caller can show instead of producing a dead link.
+    source_task_id: uuid.UUID | None
     title: str | None
     text: str
     start_sec: float
@@ -103,7 +109,8 @@ async def search_chunks(
     # The ORDER BY ... LIMIT form an hnsw index can actually serve. The join to
     # recordings only decorates the rows the index already chose.
     rows = (await session.execute(text(f"""
-        SELECT c.id, c.recording_id, r.title, c.text, c.start_sec, c.end_sec,
+        SELECT c.id, c.recording_id, r.source_task_id, r.title, c.text,
+               c.start_sec, c.end_sec,
                c.speakers, 1 - (c.embedding <=> CAST(:q AS halfvec)) AS score
         FROM transcript_chunks c
         JOIN recordings r ON r.id = c.recording_id
@@ -132,6 +139,7 @@ async def search_chunks(
         hits.append(SearchHit(
             chunk_id=row.id,
             recording_id=row.recording_id,
+            source_task_id=row.source_task_id,
             title=row.title,
             text=row.text,
             start_sec=float(row.start_sec),

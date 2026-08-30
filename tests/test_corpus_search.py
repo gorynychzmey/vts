@@ -360,3 +360,40 @@ async def test_a_request_may_override_the_configured_threshold(factory):
         await _seed(session, [0.40])
         assert await search_chunks(session, _USER, _query(), threshold=DEFAULT_THRESHOLD) == []
         assert len(await search_chunks(session, _USER, _query(), threshold=0.35)) == 1
+
+
+# ------------------------------------------------- following a hit to the audio
+
+@pytest.mark.asyncio
+async def test_a_hit_carries_enough_to_build_a_deep_link(factory):
+    """A citation has to be followable, and the player is addressed by TASK.
+
+    Search returns `recording_id` as the stable identifier — correctly, since
+    the recording outlives its task. But /player/{task_id} is what exists, so a
+    result that carried only the recording id could not be linked to at all.
+
+    So a hit also carries `source_task_id` (null once the task is gone) plus
+    the start time, which is what `?t=` needs. When it IS null the citation is
+    still valid as evidence — the passage and its timecode are real — it simply
+    cannot be opened in a player any more, and the caller can see that rather
+    than building a broken URL.
+    """
+    async with factory() as session:
+        recording = await _seed(session, [0.90])
+        hit = (await search_chunks(session, _USER, _query(), threshold=0.5))[0]
+        assert hit.source_task_id == recording.source_task_id
+        assert hit.source_task_id is not None
+        # Everything /player/{task}?t= needs.
+        assert hit.start_sec == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_hit_from_a_deleted_task_says_so_rather_than_lying(factory):
+    async with factory() as session:
+        recording = await _seed(session, [0.90])
+        recording.source_task_id = None
+        await session.commit()
+        hit = (await search_chunks(session, _USER, _query(), threshold=0.5))[0]
+        assert hit.source_task_id is None
+        # The evidence itself is unaffected.
+        assert hit.text and hit.recording_id == recording.id

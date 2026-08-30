@@ -65,6 +65,10 @@ class SearchHit(BaseModel):
     """
 
     recording_id: uuid.UUID
+    # Present so a client can open /player/{task}?t=<start_sec>; null once the
+    # task is gone, in which case the passage is still citable but no longer
+    # has a player page.
+    source_task_id: uuid.UUID | None = None
     title: str | None = None
     text: str
     start_sec: float

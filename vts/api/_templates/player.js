@@ -63,6 +63,92 @@
   var media = document.querySelector("video, audio");
   wireCues(media);
 
+  // --- Deep links (vts-5yyo) ---
+  // A citation is only a citation if following it lands on the passage. The
+  // seeking, highlighting and autoscrolling above already existed (VOS-111);
+  // what was missing was ADDRESSING — a way to arrive here already positioned,
+  // and a way to mark WHICH fragment was cited rather than which one happens
+  // to be playing.
+  //
+  // Both ?t=12.5 and #t=12.5 are read: a query string survives copy-paste
+  // through more tools, while a fragment never reaches the server, which is
+  // the better default for a link that names a moment in someone's recording.
+  function urlParam(name) {
+    try {
+      var value = new URLSearchParams(window.location.search).get(name);
+      if (value !== null) return value;
+      if (window.location.hash) {
+        var m = window.location.hash.match(new RegExp("(?:^#|&)" + name + "=([^&]+)"));
+        if (m) return decodeURIComponent(m[1]);
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  function citedTarget() {
+    var raw = urlParam("t");
+    if (raw === null || raw === "") return null;
+    var seconds = parseFloat(raw);
+    // A malformed ?t=abc leaves the player alone rather than seeking to 0:00 —
+    // jumping to the start would look like the link worked and lie about where
+    // the citation pointed.
+    return isNaN(seconds) ? null : Math.max(0, seconds);
+  }
+
+  // The cue whose window contains `seconds`, i.e. the sentence a citation at
+  // that moment refers to.
+  function cueAt(seconds) {
+    var all = document.querySelectorAll(".cue");
+    var found = null;
+    for (var i = 0; i < all.length; i++) {
+      var start = parseFloat(all[i].getAttribute("data-start"));
+      if (!isNaN(start) && start <= seconds + 0.001) found = all[i];
+      else break;
+    }
+    return found;
+  }
+
+  // "cited" is deliberately NOT "active": they mean different things and can
+  // sit on different sentences at once — one is what the link pointed at, the
+  // other is what is playing now. Reusing .active would make the citation
+  // vanish the moment playback moved on.
+  function markCited(cue) {
+    var previous = document.querySelector(".cue.cited");
+    if (previous) previous.classList.remove("cited");
+    if (cue) cue.classList.add("cited");
+  }
+
+  function applyDeepLink() {
+    // ?cue= addresses a sentence directly. Preferred over a timecode where
+    // both are given: a time can drift if the transcript is re-rendered, while
+    // the cue a citation named is the passage it actually quoted.
+    var cueParam = urlParam("cue");
+    var seconds = citedTarget();
+    var cue = null;
+    if (cueParam !== null && cueParam !== "") {
+      cue = document.querySelector('.cue[data-cue="' + String(cueParam).replace(/["\\]/g, "") + '"]');
+      if (cue && seconds === null) {
+        var cueStart = parseFloat(cue.getAttribute("data-start"));
+        if (!isNaN(cueStart)) seconds = cueStart;
+      }
+    }
+    if (cue === null && seconds === null) return;
+    if (cue === null) cue = cueAt(seconds);
+    if (cue) {
+      markCited(cue);
+      scrollCueToCenter(cue);
+    }
+    if (media && !isNaN(seconds)) {
+      // Seek without autoplaying: arriving at someone's recording should not
+      // start sound the reader did not ask for.
+      var seek = function() { try { media.currentTime = seconds; } catch (e) {} };
+      if (media.readyState > 0) seek();
+      else media.addEventListener("loadedmetadata", seek, { once: true });
+    }
+  }
+
   // --- Autoscroll (vts-eho) ---
   // The checkbox renders whenever media is present, even before the
   // transcript exists (task still processing -> blocks=[] on first paint).
@@ -116,5 +202,10 @@
   }
 
   wireAutoscroll();
+  // After wireAutoscroll, so scrollCueToCenter has its scroll box. Exposed for
+  // the live-rebuild path: a transcript that streams in after load must still
+  // honour the link that brought the reader here.
+  window.__vtsApplyDeepLink = applyDeepLink;
+  applyDeepLink();
 /*__LIVE_SCRIPT__*/
 })();
