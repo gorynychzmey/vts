@@ -50,8 +50,8 @@ GPT Builder both speak OpenAPI 3.x natively.
    (tasks, transcripts, summaries, admin) with the right request bodies
    and response shapes derived from VTS' Pydantic models.
 
-What gets exposed (everything under `/api/tasks`, `/api/me`,
-`/api/admin`, `/api/version`):
+What gets exposed (everything under `/api/tasks`, `/api/recordings`,
+`/api/search`, `/api/me`, `/api/admin`, `/api/version`):
 
 - `POST /api/tasks` — submit by URL
 - `POST /api/tasks/upload` — upload a file (multipart)
@@ -60,6 +60,10 @@ What gets exposed (everything under `/api/tasks`, `/api/me`,
 - `GET /api/tasks/{id}/transcript|summary|media` — fetch artifacts
 - `POST /api/tasks/pause|resume|archive|restart_summary` — task control
 - `DELETE /api/tasks` — batch delete
+- `GET /api/tasks/{id}/subtitles` — the transcript as a WebVTT track
+- `GET /api/recordings` — the library of recordings
+- `GET /api/recordings/{id}` — one recording
+- `GET /api/search` — semantic search across the corpus (see below)
 - `GET /api/me` — who am I (acting_as, is_admin)
 - `GET /api/admin/users` — admin only
 
@@ -137,6 +141,59 @@ do this independently:
 What the OpenAPI spec carries is the same for everyone — the endpoints,
 the schemas, the auth method. What differs per user is their `vts_…`
 token (issued from their own VTS account) and their system prompt.
+
+## Corpus search
+
+`GET /api/search?q=<question>` searches every recording you own and returns the
+matching passages — not an answer.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `q` | — | the question, in any language |
+| `limit` | 10 | maximum hits |
+| `threshold` | server setting (0.45) | minimum cosine similarity |
+| `recording_id` | — | confine the search to one recording |
+
+```json
+{
+  "query": "what did we decide about pricing",
+  "threshold": 0.45,
+  "hits": [
+    {
+      "chunk_id": "...",
+      "recording_id": "...",
+      "source_task_id": "...",
+      "title": "Team sync",
+      "text": "...the passage...",
+      "start_sec": 5014.5,
+      "end_sec": 5061.0,
+      "speakers": ["SPEAKER_00"],
+      "score": 0.556
+    }
+  ]
+}
+```
+
+**An empty `hits` is an answer, not a failure.** It means nothing in your
+recordings is relevant enough — the alternative, returning the closest
+available text, produces confident nonsense for questions the corpus cannot
+answer. The `threshold` comes back with the results so a client can say which
+of the two happened. Do not lower it to manufacture matches.
+
+Retrieval works across languages: an English question finds the passage that
+answers it in another language.
+
+**Building a citation.** `source_task_id` and `start_sec` give a deep link —
+`/player/{source_task_id}?t={start_sec}` opens the recording at that passage
+with it highlighted; `?cue=<n>` addresses a sentence directly and survives a
+re-rendered transcript. `source_task_id` is `null` when the originating task
+has been deleted: the passage is still valid evidence, it just has no player
+page, so quote it without a link.
+
+`recording_id` is the identifier to store — it outlives the task.
+
+The same search is available as the MCP tool `search_transcripts`, with the
+same threshold and rules.
 
 ## Paginated reads of large text artifacts
 

@@ -2,15 +2,21 @@
 
 ![vts — your videos, your machine](docs/assets/hero.png)
 
-Self-hosted pipeline that turns long-form video into structured transcripts
-and summaries. Uses Whisper for transcription and a local LLM for
-summarization, with silence-aware audio segmentation and backpressure-managed
-parallel processing so it runs on modest hardware.
+Self-hosted pipeline that turns video and audio into a **searchable private
+knowledge base**. Whisper transcribes, a local LLM summarizes, and everything
+that comes out stays queryable: recordings outlive the jobs that produced them,
+and any passage can be found again by meaning — in any language — and opened at
+the exact second it was said.
 
-Give it a YouTube URL or upload a video file — it downloads, segments,
-transcribes, summarizes, and notifies. Runs entirely on your own machine.
-Installable as a PWA on Android and desktop, with system share-sheet
-integration and push notifications when long-running tasks finish.
+Give it a YouTube URL, upload a file, or share from your phone. It downloads,
+segments, transcribes, diarizes, summarizes, indexes, and notifies. Nothing
+leaves your machine: transcription, embeddings and search all run against your
+own services.
+
+Retrieval, not answers. Search returns the passages themselves with their
+timecodes and speakers, and **returns nothing when nothing is relevant enough**
+rather than the closest available text. Your own AI client does the reasoning —
+over MCP, against evidence it can verify.
 
 > **Status:** working personal project, used in production by the author.
 > The internal API is stable enough to depend on but not formally versioned —
@@ -21,16 +27,42 @@ integration and push notifications when long-running tasks finish.
 ## Why this exists
 
 There are plenty of tools that transcribe a video and plenty that summarize a
-transcript. Most online services either send your data to a third party or
-charge per minute. vts stitches together open-source pieces (yt-dlp, Whisper,
-llama.cpp/Ollama) into a small web service that runs on your hardware, with
-sensible defaults for queueing, restartability, and progress reporting.
+transcript. Almost all of them treat the result as **output**: a file you
+download, read once, and lose track of. And most online services either send
+your recordings to a third party or charge per minute.
+
+vts treats the result as a **knowledge base**. A meeting you transcribed six
+months ago is still there, still searchable by what was said in it, and one
+click from the moment someone said it. It stitches together open-source pieces
+(yt-dlp, Whisper, llama.cpp/Ollama, pgvector) into a small web service that runs
+on your hardware.
+
+Three properties are deliberate, because they are what make the archive worth
+keeping:
+
+1. **Recordings outlive their jobs.** A processing task is one way to create or
+   update a recording, not the thing itself. Deleting or archiving a job does
+   not take the knowledge with it.
+2. **Search that admits it does not know.** Below a calibrated relevance
+   threshold you get an empty result, not the nearest passages. A confident
+   answer assembled from irrelevant fragments is worse than no answer.
+3. **Everything traceable to the audio.** Every retrieved passage carries its
+   recording, speakers and timecodes, and links straight to that second of the
+   recording — so any claim can be checked against what was actually said.
 
 What you get:
 
 - A web UI for submitting tasks (URL or file upload, including a set of files
   joined into one recording), watching progress live via SSE, and reading the
   resulting transcript and summary.
+- A **Library** of recordings that survive their tasks, with duration,
+  language and what each one still has on disk.
+- **Semantic search across the whole corpus** (Postgres + pgvector, no separate
+  vector database), with a configurable relevance threshold and cross-language
+  retrieval — an English question finds the Russian passage that answers it.
+- The **same search as an MCP tool**, so an external AI client retrieves
+  evidence directly, with identical threshold and rules. VTS stays a retrieval
+  server; the reasoning belongs to the client.
 - A worker that downloads, segments, transcribes, and summarizes — restart-safe,
   with backpressure and a single "heavy slot" so a small machine doesn't
   thrash.
@@ -127,16 +159,63 @@ MCP tools exposed once authenticated:
   `get_summary`, `wait_for_task` — see
   [docs/AUTH.md](docs/AUTH.md#mcp-tools) for the full signatures.
 
+## Search and MCP
+
+Every recording is split into passages on speaker turns and timecodes — not on
+a fixed token count — embedded, and indexed in Postgres. Re-processing a
+recording replaces its passages, so a transcript corrected after speakers are
+resolved does not leave stale text behind.
+
+**The threshold is the feature.** Search returns nothing when nothing clears it:
+
+```
+GET /api/search?q=what+did+we+decide+about+pricing
+{
+  "query": "...",
+  "threshold": 0.45,
+  "hits": [
+    {
+      "recording_id": "...", "source_task_id": "...",
+      "title": "Team sync", "text": "...",
+      "start_sec": 5014.5, "end_sec": 5061.0,
+      "speakers": ["SPEAKER_00"], "score": 0.556
+    }
+  ]
+}
+```
+
+An empty `hits` means "the recordings do not cover this", which is a real
+answer. The threshold comes back with the results so a caller can say that
+rather than guess. It is configurable (`services.search_threshold`), and the
+default is calibrated rather than picked — see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#corpus-search-threshold) for the
+measurements and how to re-calibrate on your own corpus.
+
+`source_task_id` plus `start_sec` build a deep link —
+`/player/{task}?t={start_sec}` opens the recording at that passage with it
+highlighted. That is what makes a citation checkable in one click.
+
+**The same search is an MCP tool** (`search_transcripts`), with identical
+threshold and rules — both go through one function, so they cannot drift apart.
+It returns evidence, never a composed answer: passages, positions, speakers and
+scores for your client to reason over. Point Claude, or any MCP client, at your
+own archive and it cites your recordings instead of inventing an answer.
+
 ## Stack
 
 - **Python 3.14**, FastAPI, async SQLAlchemy.
-- **Postgres** for state, **Redis** (or Valkey/KeyDB) for queue + pub/sub.
+- **Postgres + pgvector** for state and the semantic index — no separate vector
+  database. Embeddings are stored as `halfvec` with an HNSW cosine index.
+- **Redis** (or Valkey/KeyDB) for queue + pub/sub.
 - **yt-dlp** + **ffmpeg** for ingest and segmentation.
 - **Whisper ASR webservice** for transcription.
 - **pyannote.audio** for optional speaker diarization (own container, weights
   vendored at build time — nothing is fetched at runtime).
 - **llama.cpp server** for summarization (Ollama and others also work — see
   [docs/LLM_BACKENDS.md](docs/LLM_BACKENDS.md)).
+- **A multilingual embedding model** for search, served through the same
+  OpenAI-compatible gateway as the chat model — no extra service to run. The
+  default is `bge-m3` (1024 dimensions).
 - **Podman + systemd** for production runtime; **Docker Compose** for local.
 
 ## Configuration

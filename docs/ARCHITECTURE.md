@@ -1,6 +1,9 @@
 # vts
 
-Production-ready self-hosted service for video transcription and summarization.
+Production-ready self-hosted service that turns video and audio into a
+searchable private knowledge base: transcription, diarization and summarization
+feed a durable library of recordings, indexed for semantic retrieval and
+exposed to external AI clients over MCP as evidence rather than answers.
 
 ## Documentation map
 
@@ -16,8 +19,10 @@ Production-ready self-hosted service for video transcription and summarization.
 - Python 3.14+
 - FastAPI (`webapi`) + SSE + minimal SPA
 - Async SQLAlchemy + Postgres + Alembic
+- pgvector for the semantic index (no separate vector database)
 - Redis queue + pub/sub events (`vts:` prefix)
-- Worker pipeline (`yt-dlp`, `ffmpeg`, Whisper API, llama.cpp API)
+- Worker pipeline (`yt-dlp`, `ffmpeg`, Whisper API, llama.cpp API, embeddings API)
+- MCP server exposing tasks, prompts, presets, delivery and corpus search
 - Podman containers + systemd units
 
 ## Runtime architecture
@@ -238,11 +243,51 @@ Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, su
 | `users` | `id UUID PK`, `username TEXT UNIQUE`, `created_at TIMESTAMPTZ`, `preferred_ytdlp_client TEXT?` | unique on `username` |
 | `tasks` | `id UUID PK`, `user_id UUID FK→users`, `source_url TEXT`, `source_title TEXT?`, `status ENUM(queued, running, paused, completed, failed, canceled, archived)`, `options JSON`, `artifact_dir TEXT`, `transcript_path TEXT?`, `summary_path TEXT?`, `summary_progress JSON?`, `error_message TEXT?`, `created_at`, `updated_at` | FK CASCADE; indexes `(user_id, created_at)`, `(status, created_at)` |
 | `steps` | `id UUID PK`, `task_id UUID FK→tasks`, `name TEXT(64)`, `status ENUM(pending, running, completed, failed, skipped)`, `attempt INT`, `started_at?`, `finished_at?`, `message TEXT?` | FK CASCADE; unique `(task_id, name)`; index `(task_id, status)` |
-| `asr_segments` | `id UUID PK`, `task_id UUID FK→tasks`, `segment_index INT`, `start_sec FLOAT`, `end_sec FLOAT`, `text TEXT`, `raw_json JSON` (full Whisper response) | FK CASCADE; unique `(task_id, segment_index)`; index `(task_id, start_sec)` |
+| `asr_segments` | `id UUID PK`, `task_id UUID FK→tasks`, `segment_index INT`, `start_sec FLOAT`, `end_sec FLOAT`, `text TEXT`, `payload JSON` (decomposed axes), `raw_json JSON` (legacy, cleared by `0026`) | FK CASCADE; unique `(task_id, segment_index)`; index `(task_id, start_sec)` |
+| `recordings` | `id UUID PK`, `user_id UUID FK→users`, `source_task_id UUID? FK→tasks`, `title TEXT?`, `source_url TEXT?`, `artifact_dir TEXT`, `transcript_path TEXT?`, `summary_path TEXT?`, `duration_sec FLOAT?`, `language TEXT?`, `tags JSON`, `meta JSON`, `recorded_at?`, `created_at`, `updated_at` | user FK CASCADE, **task FK SET NULL**; index `(user_id, created_at)`; partial unique on `source_task_id` |
+| `transcript_chunks` | `id UUID PK`, `recording_id UUID FK→recordings`, `user_id UUID FK→users`, `chunk_index INT`, `text TEXT`, `start_sec FLOAT`, `end_sec FLOAT`, `speakers JSON`, `embedding HALFVEC(1024)?`, `embedding_model TEXT?`, `created_at` | both FKs CASCADE; unique `(recording_id, chunk_index)`; HNSW index on `embedding` with `halfvec_cosine_ops` |
 | `push_subscriptions` | `id UUID PK`, `user_id UUID FK→users`, `endpoint TEXT`, `p256dh TEXT`, `auth TEXT`, `user_agent TEXT?`, `created_at` | FK CASCADE; one row per Web Push subscription |
 | `api_tokens` | `id UUID PK`, `user_id UUID FK→users`, `name TEXT`, `token_hash CHAR(64)` (SHA-256), `prefix TEXT`, `created_at`, `last_used_at?`, `revoked_at?` | FK CASCADE; unique on `token_hash`; index `(user_id, revoked_at)` |
 
 The `tasks.artifact_dir` is the per-task subdirectory under `artifacts_root` that holds every on-disk artifact (see *Processing Artifacts* below). The `steps` table is the durable record of which DAG stages have completed; the restart contract reads it on worker startup.
+
+### Recordings outlive tasks
+
+`recordings.source_task_id` is **SET NULL**, not CASCADE, and that asymmetry is
+the point: a task is one way to create or update a recording, not the recording
+itself. Deleting a task detaches its recording rather than destroying it, and
+the recording keeps its own `artifact_dir` — ownership of the files passes to
+it, nothing moves on disk.
+
+Two consequences worth stating, because both were defects before they were
+decisions:
+
+* **The Delete button still deletes.** Removing a task removes ITS OWN
+  recording and artifacts, so "delete" means what it says. What is refused is
+  removing a directory some OTHER recording claims — the detached case SET NULL
+  exists for. (`transcript_chunks` cascade from the recording and hold the full
+  text of each passage, so a recording left behind would keep the transcript in
+  the database and, once search is running, keep answering with it.)
+* **`duration_sec` and `language` are columns, not derived.** Duration used to
+  be probed from the media file and language read out of `Task.options`;
+  archiving deletes the media, so both vanished exactly when a library needs
+  them. They are written while the media is still there.
+
+### Why `asr_segments` has two payload columns
+
+`raw_json` held Whisper's entire response — duplicated text and model internals
+included — and dominated the database. Migration `0025` decomposes it into
+`payload` (`{tokens, sentences, meta}`: a word timeline, a sentence timeline,
+and the quality metrics), `0026` clears `raw_json` and reclaims the space.
+
+Both granularities are kept because two consumers need different ones:
+diarization walks the word level, while the player and the subtitle view walk
+sentences. `probability`, `avg_logprob` and `no_speech_prob` survive
+deliberately — they describe the quality of the SOURCE MATERIAL and cannot be
+recovered without re-running ASR on audio that may be gone.
+
+Readers go through `segment_raw_payload`, which prefers the decomposed axes and
+falls back to `raw_json`, so rows written before the migration keep working.
 
 ## Auth and user context
 
@@ -506,6 +551,53 @@ already produced.
 
 **yt-dlp:** see the *yt-dlp YouTube auth and diagnostics* section above.
 
+## From recording to retrievable knowledge
+
+What turns a finished transcript into something searchable, and where each step
+runs.
+
+**1. Chunking** (`services/chunking.py`). The transcript is split on speaker
+turns and timecodes rather than a fixed token count, because that is what the
+recording's own structure offers. Speaker turns are the right SEAMS but the
+wrong SIZES — measured on a real corpus, the median turn is 169 characters
+while a third fall under 100 and a few run past 1000 — so short turns are
+merged and long ones split. Splitting is safe (one speaker, no boundary
+crossed); merging crosses a seam, so a merged chunk records every speaker it
+spans and a citation cannot misattribute the passage.
+
+Across the whole production corpus this yields chunks with a median of ~940
+characters, none over the cap, and 0.2% below the floor (those have both
+neighbours full).
+
+**2. Embedding** (`services/embeddings.py`). Passages go to the same
+OpenAI-compatible gateway that serves the chat model — only the model name
+differs, so there is no second service to deploy or secure. The client is
+strict about partial results: a short or out-of-order batch raises rather than
+pairing vectors with the wrong passages, a corruption nothing downstream could
+detect.
+
+**3. Storage** (`transcript_chunks`). Chunks hang off the RECORDING, not the
+task, so the corpus does not die with a cleaned-up job. Vectors are `halfvec`
+(fp16): half the size of `float4`, and measured to shift cosine scores by
+0.00001 — 0.01% of the band that separates answerable queries from unanswerable
+ones, changing no ranking. Once a corpus exists the vectors, not the text,
+dominate this database.
+
+**4. Re-indexing.** Triggered when a transcript is first assembled and again
+after speakers are resolved or renamed. It REPLACES a recording's chunks rather
+than diffing them: a diff would have to decide which stored chunk "is" which
+after the text moved, and getting that wrong leaves passages that no longer
+exist but still answer searches. Embeddings are obtained BEFORE the old index
+is deleted, so a gateway outage costs a re-index, not the corpus. The whole
+thing runs inside a SAVEPOINT — indexing is derived data and must never take a
+speaker rename down with it.
+
+**5. Retrieval** (`services/corpus_search.py`) — see the threshold section
+below. The query is a direct top-k over raw rows (`ORDER BY embedding <=> q
+LIMIT k`), the only shape an HNSW index can serve; the threshold is applied
+after, over an over-fetched window, so the cut is decided by relevance and not
+by how many rows happened to be selected.
+
 ## Corpus search threshold
 
 `services.search_threshold` is the one search key worth explaining, because its
@@ -685,6 +777,11 @@ Bearer); browser/MCP-only routes (`/auth/*`, `/api/me/tokens`,
 `/api/events`, `/api/push/*`, `/player/<id>`) are excluded. See
 [docs/API.md](API.md) for setup notes.
 
+MCP tools mirror the REST surface (tasks, prompts, presets, delivery) and add
+`search_transcripts`, which shares its threshold and rules with `/api/search`
+by going through the same function. It returns evidence — passages, timecodes,
+speakers, scores — never a composed answer.
+
 REST endpoints:
 
 - `POST /api/tasks`
@@ -695,6 +792,9 @@ REST endpoints:
 - `DELETE /api/tasks/{id}`
 - `GET /api/tasks/{id}/transcript`
 - `GET /api/tasks/{id}/summary`
+- `GET /api/tasks/{id}/subtitles` — the transcript as a WebVTT track
+- `GET /api/recordings` / `GET /api/recordings/{id}` — the library
+- `GET /api/search?q=&limit=&threshold=&recording_id=` — corpus search
 - `GET /api/version`
 - `GET /api/me`
 - `GET /api/me/tokens` / `POST /api/me/tokens` / `DELETE /api/me/tokens/<id>` (session-only)
