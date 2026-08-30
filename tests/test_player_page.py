@@ -166,9 +166,18 @@ def test_player_html_localizes_autoscroll_label_client_side():
     blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
                "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
     html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
-    # A dedicated client-side localizer resolves the label from navigator.language.
+    # The label carries its translations and a client-side localizer resolves
+    # them. Asserted on the CONTRACT — the marker attribute and the message map
+    # — rather than on a variable name: the previous check pinned `labelEl`,
+    # which broke the moment two copies of the same lookup were folded into one
+    # function, without any behaviour having changed.
     assert "data-autoscroll-label" in html
-    assert "labelEl" in html  # the localizer variable — absent until Step 3
+    assert "localize(" in html, "no client-side localizer on the page"
+    # And the user's own choice wins over the browser's language: a German
+    # browser was showing German to someone who had set the app to Russian.
+    assert "vts_locale" in html, (
+        "the player ignores the language chosen in the app"
+    )
 
 
 def test_player_html_autoscroll_logic_present():

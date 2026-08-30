@@ -1,29 +1,34 @@
 (function() {
-  // Localize the media-unavailable message client-side (the page has no
-  // access to app.js i18n). Runs whether or not media is present.
-  var mu = document.querySelector("[data-media-unavailable]");
-  if (mu) {
+  // Which language to show. The user's CHOICE in the app comes first: this page
+  // has no access to app.js i18n, so it read navigator.languages alone — and a
+  // German browser showed German to someone who had set the app to Russian.
+  // Same origin, so the stored preference is readable here.
+  function preferredLangs() {
+    var out = [];
     try {
-      var msgs = JSON.parse(mu.getAttribute("data-msgs") || "{}");
-      var langs = (navigator.languages || [navigator.language || "en"]);
-      for (var li = 0; li < langs.length; li++) {
-        var code = String(langs[li] || "").slice(0, 2).toLowerCase();
-        if (msgs[code]) { mu.textContent = msgs[code]; break; }
+      var chosen = localStorage.getItem("vts_locale");
+      if (chosen) out.push(chosen);
+    } catch (e) { /* private mode: fall through to the browser */ }
+    var browser = navigator.languages || [navigator.language || "en"];
+    for (var i = 0; i < browser.length; i++) out.push(browser[i]);
+    return out;
+  }
+
+  // Pick the first translation matching the preference order.
+  function localize(el, attr) {
+    if (!el) return;
+    try {
+      var msgs = JSON.parse(el.getAttribute(attr) || "{}");
+      var langs = preferredLangs();
+      for (var i = 0; i < langs.length; i++) {
+        var code = String(langs[i] || "").slice(0, 2).toLowerCase();
+        if (msgs[code]) { el.textContent = msgs[code]; return; }
       }
     } catch (e) { /* keep the default English text */ }
   }
-  // Localize the autoscroll checkbox label client-side.
-  var labelEl = document.querySelector("[data-autoscroll-label]");
-  if (labelEl) {
-    try {
-      var acMsgs = JSON.parse(labelEl.getAttribute("data-msgs") || "{}");
-      var acLangs = (navigator.languages || [navigator.language || "en"]);
-      for (var ai = 0; ai < acLangs.length; ai++) {
-        var acCode = String(acLangs[ai] || "").slice(0, 2).toLowerCase();
-        if (acMsgs[acCode]) { labelEl.textContent = acMsgs[acCode]; break; }
-      }
-    } catch (e) { /* keep the default English label */ }
-  }
+
+  localize(document.querySelector("[data-media-unavailable]"), "data-msgs");
+  localize(document.querySelector("[data-autoscroll-label]"), "data-msgs");
   // Wire seek-on-click + active-cue highlight. Re-queries .cue each call so it
   // works after the transcript list is rebuilt from a transcript_updated event.
   function wireCues(media) {

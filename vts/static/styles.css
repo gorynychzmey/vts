@@ -2159,7 +2159,15 @@ input[type="file"] {
 .task[data-card-kind="recording"] .restart-summary-btn,
 .task[data-card-kind="recording"] .restart-summary-full-btn,
 .task[data-card-kind="recording"] .restart-summary-final-btn,
-.task[data-card-kind="recording"] .tab-btn[data-tab="log"] {
+.task[data-card-kind="recording"] .tab-btn[data-tab="log"],
+/* The pipeline step caption ("Step 8 of 8"): a recording is not mid-anything. */
+.task[data-card-kind="recording"] .progress-caption,
+/* Opening the player and downloading media go through the TASK, which may be
+   gone — and archiving means "free the space this JOB used", which a recording
+   has no equivalent of. */
+.task[data-card-kind="recording"] .task-player-btn,
+.task[data-card-kind="recording"] .download-media-btn,
+.task[data-card-kind="recording"] .archive-btn {
   display: none !important;
 }
 
@@ -2232,9 +2240,42 @@ input[type="file"] {
   font-size: 0.9rem;
 }
 
-.library-hit-expand {
-  margin-top: 0.25rem;
-  font-size: 0.82rem;
+/* Two ways to follow one hit, so they read as a pair of equals rather than as
+   two differently-shaped links. */
+.library-hit-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+
+.library-hit-actions .icon-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+.library-hit-actions .icon-btn svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The expander stays lit while its passage is open. */
+.library-hit-actions .library-hit-expand.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The library filters lay out like the task ones. */
+.library-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 /* The passage around a hit, read from the RECORDING — so it opens whether or
@@ -3818,7 +3859,8 @@ dialog:not([open]) {
 }
 
 .task-filters .filter-type,
-.task-filters .filter-date {
+.task-filters .filter-date,
+.library-filters .filter-date {
   flex: 0 1 auto;
   min-width: 0;
   font-size: 0.85rem;
@@ -4486,7 +4528,8 @@ dialog:not([open]) {
   border-radius: var(--r-sm);
 }
 
-.task-filters .filter-range:focus-within {
+.task-filters .filter-range:focus-within,
+.library-filters .filter-range:focus-within {
   border-color: var(--accent);
 }
 

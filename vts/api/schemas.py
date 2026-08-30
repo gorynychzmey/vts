@@ -497,8 +497,16 @@ class RecordingOut(BaseModel):
     language: str | None = None
     tags: list[str] = []
     has_transcript: bool = False
+    # The processed transcript — its own artifact, and its own tab. Absent from
+    # the payload before, so the tab was dead even where the file existed.
+    has_redacted: bool = False
     has_summary: bool = False
+    # Whether the recording HAS media, which is not the same as media having
+    # been deleted: most recordings never had any on their own.
     has_media: bool = False
+    # A recording's own prompt results, snapshotted from the task that produced
+    # it — so a "Memo" tab appears in the library and survives that task.
+    prompt_results: list[dict] = []
     recorded_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

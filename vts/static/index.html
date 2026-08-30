@@ -626,6 +626,10 @@
           <!-- One field, two searches. Typing filters by title immediately;
                pressing Enter also asks the corpus what was SAID, which is the
                thing a library of transcripts is actually for. -->
+          <!-- The same controls as the Tasks filters: a library is scanned the
+               same way a task list is, and offering less would be an arbitrary
+               difference. Search doubles as content search on Enter or the
+               button beside it. -->
           <div class="library-filters">
             <div class="filter-search">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -637,12 +641,49 @@
                 id="library-q"
                 class="filter-search-input"
                 autocomplete="off"
-                placeholder="Filter by name — press Enter to search inside recordings"
+                placeholder="Filter by name"
                 aria-label="Search the library"
                 data-i18n-placeholder="library.search_placeholder"
                 data-i18n-aria-label="library.search_label"
               />
             </div>
+            <!-- Content search is a separate ACTION, not a side effect of
+                 typing: it costs an embedding round-trip, and nothing on screen
+                 hinted that Enter would do something different from filtering. -->
+            <button
+              type="button"
+              id="library-search-btn"
+              class="icon-btn ghost"
+              title="Search inside recordings"
+              aria-label="Search inside recordings"
+              data-i18n-title="library.search_content"
+              data-i18n-aria-label="library.search_content"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" />
+                <path d="m16 16 4.5 4.5" />
+                <path d="M8.5 11h5M11 8.5v5" />
+              </svg>
+            </button>
+            <div class="filter-range">
+              <div class="filter-date-wrap">
+                <input type="date" id="library-from" class="filter-date"
+                       aria-label="From date" data-i18n-aria-label="filters.from" />
+              </div>
+              <span class="filter-range-dash" aria-hidden="true">–</span>
+              <div class="filter-date-wrap">
+                <input type="date" id="library-to" class="filter-date"
+                       aria-label="To date" data-i18n-aria-label="filters.to" />
+              </div>
+            </div>
+            <button type="button" id="library-clear" class="icon-btn ghost hidden"
+                    title="Clear filters" aria-label="Clear filters"
+                    data-i18n-title="filters.clear" data-i18n-aria-label="filters.clear">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12" />
+                <path d="M6 18L18 6" />
+              </svg>
+            </button>
           </div>
 
           <!-- Passages found by semantic search, above the list they came from.
@@ -1480,6 +1521,26 @@
         <h3 class="about-section-title" data-i18n="about.section_steps">Pipeline steps</h3>
         <div class="about-steps"></div>
       </section>
+    </dialog>
+
+    <!-- About a RECORDING (vts-lib4). The task dialog answers "how did this run
+         go" — steps, timings, restart history — which a recording has no
+         business claiming. This answers "what is this recording": its own
+         metadata, what it still has on disk, and how much of it there is. -->
+    <dialog id="recording-about-dialog" class="tokens-dialog about-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="library.about">About recording</h2>
+        <button type="button" id="recording-about-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+      <h3 class="about-source-title" id="recording-about-title"></h3>
+      <div class="about-grid" id="recording-about-grid"></div>
     </dialog>
 
     <dialog id="speaker-registry-dialog" class="tokens-dialog speaker-registry-dialog">

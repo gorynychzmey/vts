@@ -2325,7 +2325,12 @@ function renderTaskTitle(taskEl) {
     // (reported: the note hung on a freshly created task). A running task simply
     // has nothing to say here, so it says nothing, and the note appears if and
     // when the retention policy actually prunes the file.
-    const mediaPruned = !mediaReady && statusPred.isFinished(runtime.baseStatus);
+    // Never on a recording: "deleted" claims something WAS there and went
+    // away, while a recording that has no media usually never had any of its
+    // own. Saying it on every library row was simply false.
+    const isRecording = taskEl.dataset.cardKind === "recording";
+    const mediaPruned = !isRecording && !mediaReady
+      && statusPred.isFinished(runtime.baseStatus);
     elements.expiredEl.classList.toggle("hidden", !mediaPruned);
   }
 
@@ -2679,7 +2684,15 @@ function renderTaskCard(task, options = {}) {
     taskMenu?.classList.add("open");
   });
   if (taskAboutBtn) {
-    taskAboutBtn.addEventListener("click", () => openTaskAboutDialog(task));
+    taskAboutBtn.addEventListener("click", () => {
+      // A recording gets its own dialog: the task one is about a RUN.
+      const rec = root._recording;
+      if (rec) {
+        void openRecordingAboutDialog(rec);
+        return;
+      }
+      openTaskAboutDialog(task);
+    });
   }
   if (restartSummaryBtn && restartSummaryMenu) {
     restartSummaryBtn.addEventListener("click", (e) => {
@@ -7950,6 +7963,10 @@ const libraryHitsSummary = document.getElementById("library-hits-summary");
 const libraryHitsClear = document.getElementById("library-hits-clear");
 const libraryEmptyState = document.getElementById("library-empty-state");
 const libraryRefreshBtn = document.getElementById("library-refresh-btn");
+const librarySearchBtn = document.getElementById("library-search-btn");
+const libraryFrom = document.getElementById("library-from");
+const libraryTo = document.getElementById("library-to");
+const libraryClear = document.getElementById("library-clear");
 
 let libraryLoaded = false;
 let libraryItems = [];
@@ -7996,8 +8013,16 @@ function recordingAsTask(recording) {
     // its artifacts say it has — probed server-side, since archiving removes
     // the media while the transcript stays.
     transcript_path: recording.has_transcript ? "present" : null,
+    // The processed transcript is its own artifact and its own tab; without
+    // this the tab sat disabled even for recordings that have one.
+    redacted_path: recording.has_redacted ? "present" : null,
     summary_path: recording.has_summary ? "present" : null,
-    options: { prompts: [], prompt_results: [] },
+    // A user prompt's result ("Memo") is a tab too. These are snapshotted onto
+    // the recording, so they are here even when the task is long gone.
+    options: {
+      prompts: (recording.prompt_results || []).map((r) => ({ source: r.source, id: r.id })),
+      prompt_results: recording.prompt_results || [],
+    },
     capabilities: {},
     progress: {},
     stats: {},
@@ -8012,6 +8037,7 @@ function renderLibraryList(items) {
     // — not on something inside it.
     const root = renderTaskCard(recordingAsTask(item), { kind: "recording" });
     root.dataset.recordingId = String(item.id || "");
+    root._recording = item;
     if (!item.source_task_id) {
       // The task is gone, and its artifacts may be too. Say so rather than
       // offering tabs that will 404.
@@ -8066,12 +8092,24 @@ async function loadLibrary() {
 // costs an embedding round-trip, so it waits for Enter.
 function applyLibraryFilter() {
   const needle = (libraryQ?.value || "").trim().toLowerCase();
-  const items = !needle
-    ? libraryItems
-    : libraryItems.filter((item) => {
-        const name = displayNameFor(item.title, item.source_url).toLowerCase();
-        return name.includes(needle);
-      });
+  const from = (libraryFrom?.value || "").trim();
+  const to = (libraryTo?.value || "").trim();
+  const items = libraryItems.filter((item) => {
+    if (needle) {
+      const name = displayNameFor(item.title, item.source_url).toLowerCase();
+      if (!name.includes(needle)) return false;
+    }
+    // Compared on the DATE part alone: the inputs are dates, so a recording
+    // made late on the "to" day must still match rather than being cut off at
+    // midnight.
+    const when = String(item.recorded_at || item.created_at || "").slice(0, 10);
+    if (from && when && when < from) return false;
+    if (to && when && when > to) return false;
+    return true;
+  });
+  if (libraryClear) {
+    libraryClear.classList.toggle("hidden", !needle && !from && !to);
+  }
   renderLibraryList(items);
 }
 
@@ -8084,6 +8122,23 @@ libraryQ?.addEventListener("keydown", (event) => {
     event.preventDefault();
     void searchLibraryContent();
   }
+});
+
+libraryFrom?.addEventListener("change", () => applyLibraryFilter());
+libraryTo?.addEventListener("change", () => applyLibraryFilter());
+
+// Content search as an explicit action. Enter still works, but nothing on
+// screen said so — a button beside the field is what makes it discoverable.
+librarySearchBtn?.addEventListener("click", () => {
+  void searchLibraryContent();
+});
+
+libraryClear?.addEventListener("click", () => {
+  if (libraryQ) libraryQ.value = "";
+  if (libraryFrom) libraryFrom.value = "";
+  if (libraryTo) libraryTo.value = "";
+  if (libraryHits) libraryHits.hidden = true;
+  applyLibraryFilter();
 });
 
 libraryRefreshBtn?.addEventListener("click", () => {
@@ -8188,20 +8243,31 @@ function renderLibraryHits(query, hits) {
     // addressed by TASK, so the link 404s once the task is deleted — it made a
     // library result depend on a job that may be long gone. The transcript
     // belongs to the recording, so that is where it is read from.
+    // Icon buttons rather than two differently-shaped text links: they are two
+    // ways of following the same hit, so they belong in one row of equals.
+    const actions = document.createElement("div");
+    actions.className = "library-hit-actions";
+
     const expand = document.createElement("button");
     expand.type = "button";
-    expand.className = "btn-text ghost library-hit-expand";
-    expand.textContent = t("library.show_context");
+    expand.className = "icon-btn ghost library-hit-expand";
+    expand.title = t("library.show_context");
+    expand.setAttribute("aria-label", t("library.show_context"));
+    expand.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M4 6h16M4 12h10M4 18h13" /><path d="M17 15l3 3-3 3" /></svg>';
     const context = document.createElement("div");
     context.className = "library-hit-context";
     context.hidden = true;
     expand.addEventListener("click", async () => {
       if (!context.hidden) {
         context.hidden = true;
-        expand.textContent = t("library.show_context");
+        expand.title = t("library.show_context");
+        expand.setAttribute("aria-label", t("library.show_context"));
+        expand.classList.remove("active");
         return;
       }
-      expand.textContent = t("library.loading_context");
+      expand.title = t("library.loading_context");
       try {
         const payload = await api(
           `/api/recordings/${encodeURIComponent(hit.recording_id)}/transcript` +
@@ -8209,30 +8275,40 @@ function renderLibraryHits(query, hits) {
         );
         renderHitContext(context, payload, hit);
         context.hidden = false;
-        expand.textContent = t("library.hide_context");
+        expand.title = t("library.hide_context");
+        expand.setAttribute("aria-label", t("library.hide_context"));
+        expand.classList.add("active");
       } catch {
         context.textContent = t("library.context_failed");
         context.hidden = false;
-        expand.textContent = t("library.show_context");
+        expand.title = t("library.show_context");
       }
     });
-    row.append(expand);
+    actions.append(expand);
     // Watching the moment is genuinely useful — it just must not be the ONLY
     // way to follow a hit, because the player is addressed by task and dies
     // with it. So it sits beside the expander and is simply absent when the
     // task is gone.
     if (hit.source_task_id) {
       const link = document.createElement("a");
-      link.className = "library-hit-link";
+      link.className = "icon-btn ghost library-hit-link";
       link.href = buildPath(
         `/player/${encodeURIComponent(hit.source_task_id)}?t=${encodeURIComponent(
           String(Math.floor(hit.start_sec || 0))
         )}`
       );
-      link.textContent = t("library.open_in_player");
-      row.append(link);
+      // A new tab, like every other player link in the app: following a
+      // citation should not throw away the search you ran to find it.
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.title = t("library.open_in_player");
+      link.setAttribute("aria-label", t("library.open_in_player"));
+      link.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M8 5v14l11-7z" /></svg>';
+      actions.append(link);
     }
-    row.append(context);
+    row.append(actions, context);
     libraryHitsList.append(row);
   }
 }
@@ -8242,6 +8318,87 @@ try {
   if (saved === "library") showMainView("library");
 } catch {
   // No stored preference; Tasks stays the default.
+}
+
+// ---------- About a recording ----------
+//
+// The task dialog answers "how did this run go" — pipeline steps, timings,
+// restart history. A recording has none of that and should not pretend to. This
+// answers "what is this recording": its own metadata, what survives on disk,
+// and how much text there is.
+
+const recordingAboutDialog = document.getElementById("recording-about-dialog");
+const recordingAboutTitle = document.getElementById("recording-about-title");
+const recordingAboutGrid = document.getElementById("recording-about-grid");
+
+document.getElementById("recording-about-close-btn")
+  ?.addEventListener("click", () => recordingAboutDialog?.close());
+
+function aboutRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "about-row";
+  const l = document.createElement("span");
+  l.className = "about-label";
+  l.textContent = label;
+  const v = document.createElement("span");
+  v.className = "about-value mono";
+  v.textContent = value;
+  row.append(l, v);
+  return row;
+}
+
+async function openRecordingAboutDialog(recording) {
+  if (!recordingAboutDialog || !recordingAboutGrid) return;
+  recordingAboutGrid.textContent = "";
+  if (recordingAboutTitle) {
+    recordingAboutTitle.textContent =
+      displayNameFor(recording.title, recording.source_url) || t("library.no_title");
+  }
+
+  const dash = "—";
+  const rows = [
+    [t("about.id"), String(recording.id || "")],
+    [t("about.created"), recording.created_at
+      ? new Date(recording.created_at).toLocaleString() : dash],
+    [t("about.media"), typeof recording.duration_sec === "number" && recording.duration_sec > 0
+      ? formatDuration(recording.duration_sec) : dash],
+    [t("about.language"), recording.language ? String(recording.language).toUpperCase() : dash],
+    [t("about.source_url"), recording.source_url || dash],
+    // What actually survives — the question a library raises and the task
+    // dialog never answered.
+    [t("tab.transcript"), recording.has_transcript ? "✓" : dash],
+    [t("tab.redacted"), recording.has_redacted ? "✓" : dash],
+    [t("tab.summary"), recording.has_summary ? "✓" : dash],
+    [t("library.has_media"), recording.has_media ? "✓" : dash],
+  ];
+  for (const [label, value] of rows) {
+    recordingAboutGrid.append(aboutRow(label, value));
+  }
+
+  // Sizes come from the artifacts themselves: the task dialog's character
+  // counts live in task stats, which a recording does not have.
+  const sizes = [
+    ["raw", t("tab.transcript")],
+    ["redacted", t("tab.redacted")],
+    ["summary", t("tab.summary")],
+  ];
+  for (const [variant, label] of sizes) {
+    try {
+      const payload = await api(
+        `/api/recordings/${encodeURIComponent(recording.id)}/transcript?variant=${variant}`
+      );
+      const chars = String(payload?.content || "").length;
+      if (chars) {
+        recordingAboutGrid.append(
+          aboutRow(`${label}, ${t("about.chars")}`, formatMetricChars(chars))
+        );
+      }
+    } catch {
+      // Absent artifact: the row above already says it is not there.
+    }
+  }
+
+  if (!recordingAboutDialog.open) recordingAboutDialog.showModal();
 }
 
 // ---------- Share dialog ----------

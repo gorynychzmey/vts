@@ -3,7 +3,16 @@
   var MEDIA_MSGS = __MEDIA_MSGS__;
 
   function localizedMsg(map) {
-    var langs = (navigator.languages || [navigator.language || "en"]);
+    // The user's choice in the app first, the browser after — a German browser
+    // was showing German to someone who had set the app to Russian. Same fix as
+    // in player.js; both run on this page.
+    var langs = [];
+    try {
+      var chosen = localStorage.getItem("vts_locale");
+      if (chosen) langs.push(chosen);
+    } catch (e) { /* private mode */ }
+    var browser = navigator.languages || [navigator.language || "en"];
+    for (var b = 0; b < browser.length; b++) langs.push(browser[b]);
     for (var i = 0; i < langs.length; i++) {
       var code = String(langs[i] || "").slice(0, 2).toLowerCase();
       if (map[code]) return map[code];

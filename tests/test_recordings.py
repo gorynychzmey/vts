@@ -665,3 +665,91 @@ async def test_clearing_a_recording_name_returns_it_to_following_the_task(factor
         assert stored.title == "Task renamed", (
             "the recording did not resume following its task after being cleared"
         )
+
+
+# --------------------------------------- a recording knows what it actually has
+
+@pytest.mark.asyncio
+async def test_a_recording_records_which_artifacts_it_has(factory, tmp_path):
+    """A recording has to answer for its OWN contents.
+
+    The card was fed `has_transcript` / `has_summary` and nothing else, so:
+      * the processed-transcript tab was dead even for recordings that have one,
+      * a user prompt's result (a "Memo" tab) never appeared at all,
+      * "media deleted" showed on every row, because absent media was read as
+        deleted media rather than as a recording that simply has none.
+
+    The list of prompt results comes from the TASK's options, which a recording
+    does not carry — so it is snapshotted when the recording is written.
+    """
+    async with factory() as session:
+        repo = Repo(session)
+        outputs = tmp_path / "outputs"
+        outputs.mkdir()
+        (outputs / "transcript.txt").write_text("raw", encoding="utf-8")
+        (outputs / "redacted_transcript.txt").write_text("processed", encoding="utf-8")
+        (outputs / "summary.md").write_text("# sum", encoding="utf-8")
+
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://a.m4a",
+            options={"prompt_results": [
+                {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
+            ]},
+            artifact_dir=str(tmp_path),
+        )
+        task.transcript_path = str(outputs / "transcript.txt")
+        task.summary_path = str(outputs / "summary.md")
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+
+        results = recording.meta.get("prompt_results") or []
+        assert [r["name"] for r in results] == ["Memo"], (
+            "the recording did not remember its prompt results"
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_results_survive_the_task(factory, tmp_path):
+    # The snapshot is the point: options belong to the task, and the task can go.
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://a.m4a",
+            options={"prompt_results": [
+                {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
+            ]},
+            artifact_dir=str(tmp_path),
+        )
+        recording = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        rec_id = recording.id
+        recording.source_task_id = None
+        await session.delete(task)
+        await session.commit()
+
+    async with factory() as session:
+        stored = await session.get(Recording, rec_id)
+        assert [r["name"] for r in stored.meta.get("prompt_results", [])] == ["Memo"]
+
+
+@pytest.mark.asyncio
+async def test_a_rerun_refreshes_the_snapshot(factory, tmp_path):
+    # A second prompt run must show up; a stale snapshot would hide a tab.
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=_USER, source_url="file://a.m4a",
+            options={"prompt_results": [{"source": "user", "id": "u1", "name": "Memo",
+                                         "status": "completed"}]},
+            artifact_dir=str(tmp_path),
+        )
+        await repo.upsert_recording_for_task(task)
+        await session.commit()
+
+        task.options = {**task.options, "prompt_results": [
+            {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
+            {"source": "user", "id": "u2", "name": "Действия", "status": "completed"},
+        ]}
+        again = await repo.upsert_recording_for_task(task)
+        await session.commit()
+        assert [r["name"] for r in again.meta["prompt_results"]] == ["Memo", "Действия"]

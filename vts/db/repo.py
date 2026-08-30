@@ -522,6 +522,18 @@ class Repo:
         recording.source_url = task.source_url
         recording.transcript_path = task.transcript_path
         recording.summary_path = task.summary_path
+        # Snapshot the prompt results. They live in the TASK's options, which a
+        # recording does not carry — so without this a user prompt's result
+        # ("Memo") had no tab in the library, and the recording lost them
+        # entirely once its task was deleted. Refreshed on every upsert, so a
+        # later prompt run shows up rather than being hidden by a stale copy.
+        prompt_results = options.get("prompt_results")
+        meta = dict(recording.meta or {})
+        meta["prompt_results"] = [
+            dict(r) for r in prompt_results if isinstance(r, dict)
+        ] if isinstance(prompt_results, list) else []
+        # Reassigned, never mutated: JSON columns do not track in-place changes.
+        recording.meta = meta
         # Never overwrite a known length or language with nothing: the media may
         # already be archived by the time this runs again.
         if duration is not None:

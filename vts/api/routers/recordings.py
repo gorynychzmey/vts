@@ -52,6 +52,10 @@ def _serialize(recording: Recording) -> RecordingOut:
     """
     transcript = recording.transcript_path
     summary = recording.summary_path
+    root = Path(recording.artifact_dir or "")
+    redacted = root / "outputs" / "redacted_transcript.txt"
+    meta = recording.meta if isinstance(recording.meta, dict) else {}
+    prompt_results = meta.get("prompt_results")
     return RecordingOut(
         id=recording.id,
         source_task_id=recording.source_task_id,
@@ -62,8 +66,10 @@ def _serialize(recording: Recording) -> RecordingOut:
         language=recording.language,
         tags=list(recording.tags or []),
         has_transcript=bool(transcript and Path(transcript).exists()),
+        has_redacted=redacted.exists(),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
+        prompt_results=[r for r in (prompt_results or []) if isinstance(r, dict)],
         recorded_at=recording.recorded_at,
         created_at=recording.created_at,
         updated_at=recording.updated_at,

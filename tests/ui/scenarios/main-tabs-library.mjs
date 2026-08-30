@@ -30,7 +30,8 @@ const RECORDINGS = {
       id: REC_ID, source_task_id: TASK_ID, title: "Team sync",
       title_is_custom: false, source_url: "file://sync.m4a",
       duration_sec: 3725, language: "ru", tags: [],
-      has_transcript: true, has_summary: true, has_media: false,
+      has_transcript: true, has_redacted: true, has_summary: true, has_media: false,
+      prompt_results: [{ source: "user", id: "u1", name: "Memo", status: "completed" }],
       recorded_at: "2026-08-20T10:00:00Z",
       created_at: "2026-08-20T10:00:00Z", updated_at: "2026-08-20T11:00:00Z",
     },
@@ -110,6 +111,19 @@ export async function run() {
         `the library search icon is ${icon.w}x${icon.h}px, expected about 15x15`
       );
     }
+    // Reported: the filter row was one short text field with no date range.
+    const filters = await page.evaluate(() => ({
+      from: Boolean(document.querySelector("#library-from")),
+      to: Boolean(document.querySelector("#library-to")),
+      searchBtn: Boolean(document.querySelector("#library-search-btn")),
+    }));
+    if (!filters.from || !filters.to) {
+      failures.push("the library has no date-range filter, unlike the task list");
+    }
+    if (!filters.searchBtn) {
+      failures.push("no search button — nothing hints that Enter searches content");
+    }
+
     const box = await page.evaluate(() => {
       const el = document.querySelector("#view-library .filter-search");
       const r = el.getBoundingClientRect();
@@ -148,6 +162,17 @@ export async function run() {
         pause: vis(".pause-btn"),
         restart: vis(".restart-summary-btn"),
         meta: card.querySelector(".library-meta")?.textContent || "",
+        // Reported: every library row claimed "media deleted", the pipeline
+        // step caption showed, the processed-transcript tab was dead even
+        // where the artifact exists, no prompt tab appeared, and the menu
+        // offered player/archive/download — all of which belong to a task.
+        expired: vis(".task-expired, [data-expired]"),
+        stepCaption: vis(".progress-caption"),
+        redactedTab: Boolean(card.querySelector(".tab-btn[data-tab='redacted']:not([disabled])")),
+        promptTab: Boolean(card.querySelector(".tab-btn[data-prompt-id]")),
+        playerItem: vis(".task-player-btn"),
+        archiveItem: vis(".archive-btn"),
+        downloadItem: vis(".download-media-btn"),
       };
     });
 
@@ -166,8 +191,21 @@ export async function run() {
       "the progress bar": shape.progress,
       "the pause button": shape.pause,
       "the restart-summary action": shape.restart,
+      "the pipeline step caption": shape.stepCaption,
+      "the 'media deleted' note": shape.expired,
+      "the open-player menu item": shape.playerItem,
+      "the archive menu item": shape.archiveItem,
+      "the download-media menu item": shape.downloadItem,
     })) {
       if (shown) failures.push(`${what} is shown on a recording, where it means nothing`);
+    }
+
+    // …and what a recording DOES have must be reachable.
+    if (!shape.redactedTab) {
+      failures.push("the processed-transcript tab is dead for a recording that has one");
+    }
+    if (!shape.promptTab) {
+      failures.push("a user prompt's result has no tab in the library");
     }
 
     // 5. Duration and language are what a library row is scanned by.
@@ -192,6 +230,13 @@ export async function run() {
         // task is deleted, and a library result is about the recording.
         playerLink: Boolean(el.querySelector("a[href*='/player/']")),
         hasExpand: Boolean(el.querySelector(".library-hit-expand")),
+        // Two ways to follow one hit, so they read as a pair of equals.
+        bothAreIcons: Boolean(el.querySelector(".library-hit-actions .icon-btn.library-hit-expand"))
+          && Boolean(el.querySelector(".library-hit-actions a.icon-btn")),
+        // Following a citation must not throw away the search that found it.
+        opensInNewTab: el.querySelector("a[href*='/player/']")?.getAttribute("target") === "_blank",
+        tooltips: Boolean(el.querySelector(".library-hit-expand")?.getAttribute("title"))
+          && Boolean(el.querySelector("a[href*='/player/']")?.getAttribute("title")),
       };
     });
     if (!hit) {
@@ -205,6 +250,13 @@ export async function run() {
         failures.push("no player link on a hit whose task is alive");
       }
       if (!hit.hasExpand) failures.push("no way to see the passage in its transcript");
+      if (!hit.bothAreIcons) {
+        failures.push("the two hit actions are not a matching pair of icon buttons");
+      }
+      if (!hit.opensInNewTab) {
+        failures.push("the player link replaces the page, losing the search behind it");
+      }
+      if (!hit.tooltips) failures.push("an icon button with no tooltip says nothing");
     }
 
     // 7. Expanding reads the passage from the RECORDING, and marks the quoted
