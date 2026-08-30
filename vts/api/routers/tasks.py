@@ -46,7 +46,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step
-from vts.api._helpers.recordings import artifacts_removable_for_task
+from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
 from vts.api.deps import (
@@ -622,7 +622,12 @@ async def delete_tasks(
             # live recording's transcript and media.
             if await artifacts_removable_for_task(session, task):
                 artifacts_to_remove.append(Path(task.artifact_dir))
-            await session.delete(task)
+            # Takes the task's own recording with it (vts-t4kg). Plain
+            # session.delete(task) relied on SET NULL, which DETACHED the
+            # recording instead of removing it — leaving a library entry whose
+            # files were already gone, and whose chunks kept the transcript
+            # text searchable.
+            await delete_task_with_recording(session, task)
     await session.commit()
     await asyncio.gather(
         *[asyncio.to_thread(shutil.rmtree, artifact, True) for artifact in artifacts_to_remove]

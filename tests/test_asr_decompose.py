@@ -163,6 +163,49 @@ def test_duplicated_text_is_not_stored_twice():
     assert "Привет мир" not in repr(out.get("meta", {}))
 
 
+def test_quality_metrics_stay_with_their_own_sentence():
+    """A skipped segment must not shift every later metric by one (vts-belb).
+
+    `sentences` was appended CONDITIONALLY (a segment with no text is not a
+    sentence) while the metric axes were appended UNCONDITIONALLY, and recompose
+    indexed the metrics by sentence position. From the first skipped segment
+    onward, every avg_logprob and no_speech_prob described a different sentence
+    than the one it was attached to.
+
+    These are exactly the values kept because they describe the quality of the
+    SOURCE MATERIAL — a wrong one is worse than none, since it reads as a
+    measurement.
+    """
+    raw = {"segments": [
+        {"start": 0.0, "end": 1.0, "text": "A", "avg_logprob": -0.11, "no_speech_prob": 0.01},
+        # No text: not a sentence, so it contributes nothing to either axis.
+        {"start": 1.0, "end": 2.0, "avg_logprob": -0.22, "no_speech_prob": 0.02},
+        {"start": 2.0, "end": 3.0, "text": "C", "avg_logprob": -0.33, "no_speech_prob": 0.03},
+    ]}
+    out = decompose_raw_json(raw)
+    assert out["sentences"] == [[0.0, 1.0, "A"], [2.0, 3.0, "C"]]
+    assert out["meta"]["avg_logprob"] == [-0.11, -0.33]
+    assert out["meta"]["no_speech_prob"] == [0.01, 0.03]
+
+    back = recompose_raw_json(out)
+    pairs = [(s["text"], s.get("avg_logprob"), s.get("no_speech_prob")) for s in back["segments"]]
+    assert pairs == [("A", -0.11, 0.01), ("C", -0.33, 0.03)], (
+        f"metrics drifted onto the wrong sentences: {pairs}"
+    )
+
+
+def test_a_segment_without_metrics_does_not_shift_the_others():
+    raw = {"segments": [
+        {"start": 0.0, "end": 1.0, "text": "A", "avg_logprob": -0.11},
+        {"start": 1.0, "end": 2.0, "text": "B"},
+        {"start": 2.0, "end": 3.0, "text": "C", "avg_logprob": -0.33},
+    ]}
+    out = decompose_raw_json(raw)
+    assert out["meta"]["avg_logprob"] == [-0.11, None, -0.33]
+    back = recompose_raw_json(out)
+    assert [s.get("avg_logprob") for s in back["segments"]] == [-0.11, None, -0.33]
+
+
 # --------------------------------------------------------------- round trip
 
 def test_recompose_feeds_the_word_level_consumer_unchanged():

@@ -44,6 +44,23 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
 
 
+def _voice_name(label: str) -> str:
+    """A speaker name that cannot break out of its own voice tag.
+
+    Names come from the speaker registry, which a user edits freely, so this is
+    a controlled field reaching a format with line-based framing. `.strip()`
+    only removes the edges, so a name carrying a blank line plus a timing line
+    ended the cue early and injected a forged one (vts-70a1) — the same class of
+    problem `_cue_text` already guards for the caption, applied to the label the
+    original left out.
+
+    `>` closes the tag, so it goes too: a name containing one would end the tag
+    mid-name and spill the remainder into the visible caption.
+    """
+    flattened = " ".join(str(label).split())
+    return flattened.replace(">", "").replace("<", "").strip()
+
+
 def _cue_text(text: str) -> str:
     """Collapse a cue payload into lines that cannot terminate the cue early.
 
@@ -71,7 +88,7 @@ def render_webvtt(blocks: list[dict[str, Any]]) -> str:
     for block in blocks or []:
         if not isinstance(block, dict):
             continue
-        label = str(block.get("label") or "").strip()
+        label = _voice_name(block.get("label") or "")
         for sentence in block.get("sentences") or []:
             if not isinstance(sentence, dict):
                 continue

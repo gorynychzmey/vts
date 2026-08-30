@@ -74,11 +74,15 @@ def decompose_raw_json(raw_json: Any) -> dict[str, Any]:
         start = _as_float(segment.get("start"))
         end = _as_float(segment.get("end"))
         text = segment.get("text")
+        # The metric axes are indexed BY SENTENCE on the way back, so they may
+        # only grow when a sentence does. Appending unconditionally shifted
+        # every metric after the first skipped segment onto the wrong sentence
+        # (vts-belb) — and a wrong quality figure is worse than none, because it
+        # still reads as a measurement.
         if start is not None and end is not None and isinstance(text, str):
             sentences.append([start, end, text])
-
-        avg_logprob.append(_as_float(segment.get("avg_logprob")))
-        no_speech_prob.append(_as_float(segment.get("no_speech_prob")))
+            avg_logprob.append(_as_float(segment.get("avg_logprob")))
+            no_speech_prob.append(_as_float(segment.get("no_speech_prob")))
 
         for word in segment.get("words") or []:
             if not isinstance(word, dict):

@@ -23,6 +23,7 @@ from tests._db import ensure_pgvector, make_test_engine
 from vts.db.base import Base
 from vts.db.models import Recording, Task, TaskStatus, User
 from vts.db.repo import Repo
+from vts.api._helpers.recordings import delete_task_with_recording
 
 _USER = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 
@@ -381,3 +382,65 @@ def test_migration_language_map_matches_the_python_one():
         f"only in SQL={set(arms) - set(_NAME_TO_CODE)}, "
         f"only in Python={set(_NAME_TO_CODE) - set(arms)}"
     )
+
+
+# ------------------------------------- deletion must not leave a ghost behind
+
+@pytest.mark.asyncio
+async def test_deleting_a_task_deletes_its_recording_row_too(factory):
+    """The docstring above says a task deletion deletes its recording. Prove it.
+
+    The earlier test only asserted that the ARTIFACTS were removable — which
+    they were — and never checked the row. So the intent was documented, tested
+    in appearance, and absent in fact (vts-t4kg): SET NULL detached the
+    recording instead, leaving a library entry whose files were gone and which
+    no path could delete afterwards, because `source_task_id` was already NULL.
+
+    It matters beyond tidiness: transcript_chunks cascade from the RECORDING,
+    and each chunk holds the full text of its passage. A "deleted" recording
+    would keep the transcript in the database and, once corpus search is wired
+    up, keep answering searches with it.
+    """
+    from vts.db.models import TranscriptChunk
+
+    async with factory() as session:
+        task, recording = await _task_with_recording(session)
+        recording_id = recording.id
+        session.add(TranscriptChunk(
+            recording_id=recording_id, user_id=_USER, chunk_index=0,
+            text="что было сказано в этой записи", start_sec=0.0, end_sec=5.0,
+            speakers=[], embedding=None, embedding_model=None,
+        ))
+        await session.commit()
+
+        await delete_task_with_recording(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        assert await session.get(Recording, recording_id) is None, (
+            "the recording survived its task as an undeletable ghost"
+        )
+        chunks = (await session.execute(select(TranscriptChunk))).scalars().all()
+        assert chunks == [], "the transcript text outlived the deletion"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_task_leaves_a_detached_recording_alone(factory):
+    """Only the task's OWN recording goes. A detached one is a separate object.
+
+    This is the case SET NULL exists for, and the reason deletion cannot simply
+    cascade at the database level.
+    """
+    async with factory() as session:
+        task, recording = await _task_with_recording(session)
+        recording.source_task_id = None
+        await session.commit()
+        kept_id = recording.id
+
+        await delete_task_with_recording(session, task)
+        await session.commit()
+
+    async with factory() as session:
+        assert await session.get(Recording, kept_id) is not None, (
+            "deleting a task destroyed a recording that no longer belonged to it"
+        )

@@ -260,3 +260,44 @@ async def test_subtitles_endpoint_returns_empty_track_when_not_ready(
     r = await client.get(f"/api/tasks/{task_id}/subtitles")
     assert r.status_code == 200, r.text
     assert r.text.strip() == "WEBVTT"
+
+
+# --------------------------------------- the speaker label is untrusted too
+
+def test_a_speaker_name_cannot_forge_a_cue():
+    """Speaker names are user input, and this module already knows not to
+    trust text — it just did not apply that to the LABEL (vts-70a1).
+
+    `.strip()` only removes the edges, so a name containing a blank line plus a
+    timing line ends the cue early and injects a second one. Names come from the
+    speaker registry, which a user edits freely, so this is a controlled field
+    reaching a format with line-based framing.
+    """
+    out = render_webvtt([{
+        "label": "Bob\n\n00:00:09.000 --> 00:00:10.000\nINJECTED",
+        "sentences": [{"text": "hello", "start": 1.0, "end": 2.0}],
+    }])
+    # Exactly one cue, and the forged timing is not one of them.
+    assert out.count("-->") == 1, f"a second cue was forged: {out!r}"
+    # No line in the output is a bare timing other than the real one.
+    timings = [ln for ln in out.splitlines() if "-->" in ln]
+    assert timings == ["00:00:01.000 --> 00:00:02.000"]
+
+
+def test_a_multiline_speaker_name_stays_on_one_line():
+    out = render_webvtt([{
+        "label": "Анна\nПетрова",
+        "sentences": [{"text": "привет", "start": 0.0, "end": 1.0}],
+    }])
+    assert "<v Анна Петрова>привет" in out
+
+
+def test_an_angle_bracket_in_a_name_cannot_close_the_voice_tag_early():
+    # <v Name> is closed by the first ">", so a name containing one would end
+    # the tag mid-name and push the rest into the visible caption.
+    out = render_webvtt([{
+        "label": "Bob>evil",
+        "sentences": [{"text": "hi", "start": 0.0, "end": 1.0}],
+    }])
+    body = out.split("-->", 1)[1]
+    assert body.count(">") == 1, f"the voice tag was closed twice: {body!r}"

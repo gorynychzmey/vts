@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.db.models import Recording
@@ -47,3 +47,27 @@ async def artifacts_removable_for_task(session: AsyncSession, task: Any) -> bool
     # Nothing claims it (a task predating recordings), or the only claim is this
     # task's own recording, which dies with it.
     return all(claim == task_id for claim in claimants)
+
+
+async def delete_task_with_recording(session: AsyncSession, task: Any) -> None:
+    """Delete a task together with the recording it produced.
+
+    `SET NULL` on `recordings.source_task_id` makes a recording SURVIVE its
+    task, which is right for a recording someone detached — and wrong for the
+    ordinary Delete button. Without this the deletion left a ghost: a library
+    entry whose files had just been removed, which no path could delete
+    afterwards because its `source_task_id` was already NULL (vts-t4kg).
+
+    It is not only untidy. `transcript_chunks` cascade from the RECORDING, and
+    each chunk holds the full text of its passage — so a "deleted" recording
+    kept the transcript in the database, ready to be returned by corpus search.
+    A product that stores transcripts of people's conversations cannot leave
+    the text behind after a delete.
+
+    Only the task's OWN recording goes. A detached one belongs to nobody and
+    stays.
+    """
+    await session.execute(
+        delete(Recording).where(Recording.source_task_id == task.id)
+    )
+    await session.delete(task)

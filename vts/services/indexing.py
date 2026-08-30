@@ -85,6 +85,40 @@ async def index_recording(
     return len(chunks)
 
 
+async def guarded_index(
+    session: AsyncSession,
+    recording: Any,
+    entries: Any,
+    *,
+    embedder: Embedder,
+    model_name: str,
+) -> int:
+    """`index_recording` inside a SAVEPOINT, so a failure costs only the index.
+
+    Catching the exception is not enough, and the difference is not academic
+    (vts-al4r). A failure inside `flush()` leaves the session in a rolled-back
+    state, so the CALLER's next `commit()` raises PendingRollbackError — and at
+    the resolve endpoint that session also holds the speaker decisions and the
+    re-rendered transcript. A wrong-dimension embedding would therefore answer
+    500 and discard a rename the user had just made: derived data taking user
+    input down with it, which is exactly what this module claims not to do.
+
+    `begin_nested()` issues a SAVEPOINT; rolling it back discards the chunk
+    writes and leaves the surrounding transaction usable.
+    """
+    try:
+        async with session.begin_nested():
+            return await index_recording(
+                session, recording, entries, embedder=embedder, model_name=model_name
+            )
+    except Exception:
+        logger.exception(
+            "failed to index recording %s; the caller's transaction is unaffected",
+            getattr(recording, "id", "?"),
+        )
+        return 0
+
+
 async def reindex_task(session: AsyncSession, task: Any, settings: Any) -> int:
     """(Re)index the recording a task produced. Returns the chunk count.
 
@@ -118,11 +152,14 @@ async def reindex_task(session: AsyncSession, task: Any, settings: Any) -> int:
             timeout_seconds=int(getattr(settings, "embedding_timeout_seconds", 120)),
             batch_size=int(getattr(settings, "embedding_batch_size", 32)),
         )
-        count = await index_recording(
+        count = await guarded_index(
             session, recording, entries, embedder=client, model_name=model_name
         )
-        logger.info("indexed recording %s into %d chunks", recording.id, count)
+        if count:
+            logger.info("indexed recording %s into %d chunks", recording.id, count)
         return count
     except Exception:
+        # Anything before the savepoint — loading the transcript, building the
+        # client — cannot have written, so there is nothing to roll back.
         logger.exception("failed to index task %s", getattr(task, "id", "?"))
         return 0

@@ -43,6 +43,20 @@ class _FakeEmbedder:
         return [[float(len(t))] * self._dims for t in texts]
 
 
+async def reindex_task_with(session, recording, entries, embedder):
+    """`index_recording` behind the same failure isolation `reindex_task` uses.
+
+    The production entry point builds its own embedding client from settings,
+    so this mirrors it with an injectable one — the isolation being tested lives
+    in `guarded_index`, which both go through.
+    """
+    from vts.services.indexing import guarded_index
+
+    return await guarded_index(
+        session, recording, entries, embedder=embedder, model_name="bge-m3"
+    )
+
+
 @pytest.fixture
 async def factory():
     engine = make_test_engine()
@@ -232,3 +246,48 @@ async def test_chunks_keep_their_place_in_the_recording(factory):
         for a, b in zip(rows, rows[1:]):
             assert a.start_sec <= b.start_sec
             assert a.start_sec < a.end_sec
+
+
+# ------------------------------------- isolation from the caller's transaction
+
+@pytest.mark.asyncio
+async def test_a_failed_index_does_not_poison_the_callers_transaction(factory):
+    """Indexing failure must cost the index, never the user's own work.
+
+    `reindex_task` catches everything and returns 0, which reads as "the caller
+    is unaffected". It is not: a failure inside `flush()` leaves the SQLAlchemy
+    session in a rolled-back state, so the caller's next `commit()` raises
+    PendingRollbackError. At the resolve endpoint that session also holds the
+    speaker decisions and the re-rendered transcript — so a broken embedding
+    would answer 500 and silently discard a rename the user had just made,
+    which is the exact outcome the docstring promises to prevent.
+
+    Reproduced before fixing: inserting a wrong-dimension vector into
+    HALFVEC(1024) raised DBAPIError on flush, and the caller's commit then
+    failed with PendingRollbackError.
+    """
+    from vts.db.models import Recording
+
+    async with factory() as session:
+        recording = await _recording(session)
+
+        class _BadVectors(_FakeEmbedder):
+            async def embed(self, texts):
+                # The realistic trigger: a configured model whose dimension does
+                # not match the column.
+                return [[0.5] * 7 for _ in texts]
+
+        # The caller's own work, which must survive.
+        recording.title = "renamed by the user"
+
+        count = await reindex_task_with(session, recording, _entries(4), _BadVectors())
+        assert count == 0, "a failing index reported success"
+
+        # The point of the test: the caller can still commit.
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(select(Recording))).scalars().first()
+        assert stored.title == "renamed by the user", (
+            "the user's change was lost because indexing failed"
+        )
