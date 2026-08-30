@@ -3809,7 +3809,8 @@ dialog:not([open]) {
   margin-bottom: 0.75rem;
 }
 
-.task-filters .filter-search {
+.task-filters .filter-search,
+.library-filters .filter-search {
   flex: 1 1 12rem;
   /* flex-basis alone is not enough: a flex item's min-width defaults to auto,
      so a long value would push the row wider than the card (vts-nr4). */
@@ -4350,7 +4351,8 @@ dialog:not([open]) {
    The search field and the date inputs inherited the body's 16px, a full step
    above the pills and selects they sit next to. */
 .task-filters input,
-.task-filters select {
+.task-filters select,
+.library-filters input {
   font-size: var(--fs-ui);
 }
 
@@ -4383,7 +4385,13 @@ dialog:not([open]) {
 
 /* The search input is now inside a shell, so the shell carries the border and
    the input goes bare. */
-.task-filters .filter-search {
+/* The search field is shared: the Tasks filters and the Library filters use the
+   same markup. Scoped to .task-filters alone, the Library copy inherited NO
+   sizing — and an SVG with no width or height fills its container, which
+   rendered the search icon as a 1068px black circle over the list. Widened
+   rather than duplicated: a copy drifts the moment one side is touched. */
+.task-filters .filter-search,
+.library-filters .filter-search {
   display: flex;
   align-items: center;
   gap: 0.44rem;
@@ -4394,12 +4402,14 @@ dialog:not([open]) {
   border-radius: var(--r-sm);
 }
 
-.task-filters .filter-search:focus-within {
+.task-filters .filter-search:focus-within,
+.library-filters .filter-search:focus-within {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
-.task-filters .filter-search > svg {
+.task-filters .filter-search > svg,
+.library-filters .filter-search > svg {
   flex: 0 0 auto;
   width: 0.94rem;
   height: 0.94rem;
@@ -4410,7 +4420,8 @@ dialog:not([open]) {
   stroke-linejoin: round;
 }
 
-.task-filters .filter-search-input {
+.task-filters .filter-search-input,
+.library-filters .filter-search-input {
   flex: 1 1 auto;
   min-width: 0;
   border: 0;

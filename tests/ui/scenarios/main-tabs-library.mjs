@@ -89,6 +89,36 @@ export async function run() {
       failures.push("the library list did not appear");
     }
 
+    // 2b. The search box must actually look like a search box. Every
+    //     .filter-search rule is scoped to .task-filters, so reusing the markup
+    //     under .library-filters left the icon with NO width or height — an
+    //     unconstrained SVG fills its container, which rendered as a huge black
+    //     circle over the list.
+    const icon = await page.evaluate(() => {
+      const el = document.querySelector("#view-library .filter-search > svg");
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    });
+    if (!icon) {
+      failures.push("the library search box has no icon at all");
+    } else if (icon.w > 24 || icon.h > 24 || icon.w < 8) {
+      // It renders at 15x15, the same as the one in the Tasks filters. The
+      // bound is tight on purpose: the bug was 1068x1068, but anything that
+      // drifts far from the sibling icon is already wrong.
+      failures.push(
+        `the library search icon is ${icon.w}x${icon.h}px, expected about 15x15`
+      );
+    }
+    const box = await page.evaluate(() => {
+      const el = document.querySelector("#view-library .filter-search");
+      const r = el.getBoundingClientRect();
+      return { h: Math.round(r.height), display: getComputedStyle(el).display };
+    });
+    if (box.h > 80) {
+      failures.push(`the library search box is ${box.h}px tall — it is not laid out`);
+    }
+
     await page.waitForFunction(
       () => document.querySelectorAll("#library-list .task").length > 0,
       null, { timeout: 5000 },
