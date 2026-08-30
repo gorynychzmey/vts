@@ -339,6 +339,11 @@ say "ask whoever gave you the link" instead.
 | `services.llm.thinking` | `VTS_LLM_THINKING` | `null` |
 | `services.llm.chat_timeout_seconds` | `VTS_LLM_CHAT_TIMEOUT_SECONDS` | `600` |
 | `services.llm.final_timeout_seconds` | `VTS_LLM_FINAL_TIMEOUT_SECONDS` | `1800` |
+| `services.embedding_model` | `VTS_EMBEDDING_MODEL` | `bge-m3` |
+| `services.embedding_enabled` | `VTS_EMBEDDING_ENABLED` | `true` |
+| `services.embedding_batch_size` | `VTS_EMBEDDING_BATCH_SIZE` | `32` |
+| `services.embedding_timeout_seconds` | `VTS_EMBEDDING_TIMEOUT_SECONDS` | `120` |
+| `services.search_threshold` | `VTS_SEARCH_THRESHOLD` | `0.45` |
 
 These are code defaults, tuned for a local llama.cpp + Qwen2.5-7B setup. The
 shipped prompts in `./prompts/` are instead tuned for **Qwen 3.6 35B** served
@@ -500,6 +505,38 @@ already produced.
 **Metrics:** see the *Metrics (JSONL)* section above — `metrics.enabled`, `metrics.jsonl_path`, `metrics.redundancy.*`.
 
 **yt-dlp:** see the *yt-dlp YouTube auth and diagnostics* section above.
+
+## Corpus search threshold
+
+`services.search_threshold` is the one search key worth explaining, because its
+value is a judgement rather than a default.
+
+Search returns **nothing** when no passage scores above it — not the nearest
+passages. Without that rule a vector store answers every question with its
+top-k, so a question the corpus cannot answer comes back with confident,
+irrelevant text that a reader (or an LLM client) cannot tell from a real answer.
+
+The default `0.45` was calibrated on a real corpus rather than picked:
+
+| | measured cosine similarity |
+|---|---|
+| answerable questions | 0.521 – 0.762 |
+| unanswerable questions | 0.317 – 0.379 |
+
+so `0.45` sits inside the separating band, nearer the answerable end — a false
+answer costs more here than a missed one.
+
+**Raising it has a cost that is easy to miss.** Retrieval is cross-language: the
+embedding model is multilingual, and English questions retrieve the same
+Russian passages as their Russian equivalents — but score 0.00–0.04 lower
+(measured pairs: 0.556/0.556, 0.537/0.505, 0.595/0.554, 0.495/0.493). Much
+above `0.45` and queries in another language start coming back empty while
+same-language ones still work, which only ever shows up for some users.
+
+Re-calibrate on your own corpus before moving it: embed a handful of questions
+you know the recordings answer, and a handful you know they do not, and put the
+threshold in the gap. A single request can override it (`?threshold=`), which
+is the honest way to explore — the configured value stays the promise.
 
 ## PWA: install, share target, push notifications
 

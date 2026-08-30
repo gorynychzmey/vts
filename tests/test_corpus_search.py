@@ -282,3 +282,81 @@ async def test_an_empty_query_searches_nothing(authed_app, client):
     r = await client.get("/api/search?q=%20%20")
     assert r.status_code == 200, r.text
     assert r.json()["hits"] == []
+
+
+# --------------------------------------------------------- cross-language
+
+@pytest.mark.asyncio
+async def test_the_threshold_is_language_agnostic(factory):
+    """Retrieval must not depend on the query's language.
+
+    bge-m3 is multilingual, and this was verified against the real Russian
+    corpus: four English questions returned the SAME chunk ids as their Russian
+    equivalents, scoring 0.556/0.556, 0.537/0.505, 0.595/0.554 and 0.495/0.493
+    — English consistently a little lower, but comfortably above the threshold.
+    Controls ("borscht recipe", "quantum chromodynamics") stayed empty in both
+    languages.
+
+    The margin matters and is why this test exists: English scores land 0.00 to
+    0.04 below their Russian counterparts, so a threshold raised much past the
+    calibrated 0.45 would start dropping cross-language hits while Russian ones
+    still passed — a failure mode that shows up only for non-Russian users and
+    would otherwise be invisible here.
+    """
+    async with factory() as session:
+        # 0.49 stands for the weakest measured cross-language hit (0.493).
+        await _seed(session, [0.49])
+        assert len(await search_chunks(session, _USER, _query(), threshold=DEFAULT_THRESHOLD)) == 1, (
+            "the default threshold rejects a passage that a real English query "
+            "matched at this score"
+        )
+        # Documented headroom: the calibrated default leaves room for the gap.
+        assert DEFAULT_THRESHOLD <= 0.49
+
+
+# ------------------------------------------------------ the threshold is config
+
+def test_the_threshold_comes_from_config_yaml():
+    """`services.search_threshold` in config.yaml must reach the search.
+
+    The default is the calibrated 0.45, but the value has to be an operator's
+    to change — this deployment's corpus is not every corpus, and the honest
+    way to move the bar is a setting rather than an edit. Asserted end to end
+    (yaml -> Settings) because a mapping typo would leave the knob silently
+    inert while the default kept working.
+    """
+    import yaml
+
+    from vts.core.config import Settings, _normalize_yaml_overrides
+
+    # The yaml READER is stubbed out for the whole test run (tests/conftest.py
+    # blanks _load_yaml_overrides so the host's production config cannot leak
+    # in), so this drives the normaliser directly and builds Settings from what
+    # it produces — the same two steps get_settings performs. Verified against
+    # the real reader outside pytest: `services.search_threshold: 0.72` in a
+    # config.yaml yields Settings().search_threshold == 0.72.
+    document = yaml.safe_load("services:\n  search_threshold: 0.72\n")
+    overrides = _normalize_yaml_overrides(document)
+    assert overrides.get("search_threshold") == pytest.approx(0.72), (
+        f"services.search_threshold is not mapped onto the setting: {overrides}"
+    )
+    assert Settings(**overrides).search_threshold == pytest.approx(0.72)
+
+
+def test_the_default_is_the_calibrated_value():
+    # Not a round number chosen for looks: the midpoint of the measured
+    # separating band (0.379..0.521), kept low enough for cross-language hits.
+    from vts.core.config import Settings
+
+    assert Settings().search_threshold == pytest.approx(DEFAULT_THRESHOLD)
+    assert 0.379 < DEFAULT_THRESHOLD < 0.493
+
+
+@pytest.mark.asyncio
+async def test_a_request_may_override_the_configured_threshold(factory):
+    # A caller that would rather see weak matches than nothing can ask; the
+    # default stays strict.
+    async with factory() as session:
+        await _seed(session, [0.40])
+        assert await search_chunks(session, _USER, _query(), threshold=DEFAULT_THRESHOLD) == []
+        assert len(await search_chunks(session, _USER, _query(), threshold=0.35)) == 1

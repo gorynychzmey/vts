@@ -153,6 +153,13 @@ class Settings(BaseSettings):
     # returned at all — the requirement is an empty answer rather than the
     # nearest irrelevant passages. Calibrated on the real corpus: answerable
     # queries scored 0.521-0.762, unanswerable ones 0.317-0.379.
+    #
+    # Raising it has a cost that is easy to miss: retrieval is cross-language
+    # (bge-m3 is multilingual, and English queries find the same Russian
+    # passages), but English scores measure 0.00-0.04 below their Russian
+    # equivalents — the weakest measured cross-language hit was 0.493. Much
+    # above 0.45 and non-Russian queries start coming back empty while Russian
+    # ones still work.
     search_threshold: float = 0.45
     llm_final_timeout_seconds: int = 1800
     # Streaming timeouts (vts-gouq). The segment stage generates for 10-17

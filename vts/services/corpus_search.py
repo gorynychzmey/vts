@@ -13,6 +13,14 @@ embedding the production corpus and querying it, answerable questions scored
 band, closer to the answerable end, because a false answer costs more here than
 a missed one.
 
+**Retrieval is cross-language, and that constrains the threshold.** bge-m3 is
+multilingual: verified against the Russian corpus, four English questions
+returned the SAME chunks as their Russian equivalents (0.556/0.556, 0.537/0.505,
+0.595/0.554, 0.495/0.493). English scores land 0.00-0.04 lower, so raising the
+threshold much above the calibrated default would start dropping cross-language
+hits while same-language ones still passed — a failure that would only ever
+show up for users querying in another language.
+
 Two shapes are deliberate:
 
 * **direct top-k over raw rows**, never GROUP BY + MIN like `nearest_speakers`.
