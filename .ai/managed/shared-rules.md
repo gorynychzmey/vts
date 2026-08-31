@@ -1,7 +1,7 @@
 <!-- internal-standards:managed -->
 # Shared Rules
 
-Generated from `internal-standards` version `0.4.0`.
+Generated from `internal-standards` version `0.7.0`.
 
 Keep this file as the compact index. Load linked files only when the task needs their details.
 
@@ -9,6 +9,7 @@ Keep this file as the compact index. Load linked files only when the task needs 
 
 - `.ai/managed/shared-engineering-policy.md`
 - `.ai/managed/definition-of-done.md`
+- `.ai/managed/multi-agent-collaboration.md`
 - `.ai/managed/context-mode-routing.md`
 - `.ai/managed/capabilities/index.md`
 

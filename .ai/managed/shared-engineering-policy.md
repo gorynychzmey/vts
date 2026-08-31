@@ -12,6 +12,8 @@
 ## Deployment and Release
 
 - Build and deployment actions happen only on explicit user request.
+- **"The work is finished and the tests are green" is not the trigger.** That reasoning is what produces unrequested releases: finished work is committed and reported, and the user decides when it becomes a version. When several changes accumulate, say so and ask — batching them is usually what the user wants anyway, and it costs one CI run instead of four.
+- A release is not a private step. It spends a shared CI budget, it publishes where a person installs and tries the result, and a version number is spent once: a burned tag cannot be reused, and a version that reaches a store can never be re-uploaded. The same applies to anything else that leaves the machine — store uploads, published artifacts, tags of any kind.
 - Build tags use `build-X.Y.Z` when the project enables build-tag releases.
 - Deployment automation must validate secrets and required runtime variables before making remote changes.
 - Release scripts and docs must stay consistent with the actual automation entrypoints.

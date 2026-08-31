@@ -1,7 +1,7 @@
 <!-- internal-standards:managed -->
 # Codex Rules
 
-Generated from `internal-standards` version `0.4.0`.
+Generated from `internal-standards` version `0.7.0`.
 
 ## Tool-Specific Guidance
 # Codex-Specific Guidance
