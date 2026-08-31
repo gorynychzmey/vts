@@ -700,6 +700,15 @@
           <p id="library-empty-state" class="library-empty" hidden
              data-i18n="library.empty">Nothing here yet.</p>
           <div id="library-list" class="task-list"></div>
+          <!-- Same shape as the task list: the library loaded everything in one
+               request, which silently truncated at the server's 200-row cap and
+               got slower with every recording. -->
+          <div id="library-sentinel" class="task-sentinel" hidden>
+            <span class="task-sentinel-spinner" aria-hidden="true"></span>
+            <button type="button" id="library-load-more" class="btn-text ghost task-load-more"
+                    hidden data-i18n="tasks.load_more">Load more</button>
+            <span class="task-sentinel-end" data-i18n="tasks.no_more" hidden></span>
+          </div>
         </section>
       </div><!-- /#view-library -->
     </main>

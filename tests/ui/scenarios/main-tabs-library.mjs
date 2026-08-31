@@ -17,6 +17,9 @@ const REC_ID = "66666666-6666-6666-6666-666666666666";
 const TASK = {
   id: TASK_ID, source_url: "https://example.com/v", source_title: "A running job",
   status: "running", awaiting_step: null, queue: null, queue_position: null,
+  // Steps and speaker matches, so the recording card is checked against a task
+  // that genuinely has both rather than against an empty one.
+  speaker_matches: { SPEAKER_00: { share: 0.6, seconds: 120, noise: false } },
   transcript_path: null, summary_path: null, media_path: null,
   options: { transcript: true, prompts: [], prompt_results: [] },
   steps: [], capabilities: {},
@@ -167,7 +170,15 @@ export async function run() {
         // where the artifact exists, no prompt tab appeared, and the menu
         // offered player/archive/download — all of which belong to a task.
         expired: vis(".task-expired, [data-expired]"),
-        stepCaption: vis(".progress-caption"),
+        // .step-label is the line the user actually sees ("Step 14 of 14: …").
+        // The first version of this check watched .progress-caption — the
+        // labels ON the progress bars — so it passed while the step line was
+        // still on screen.
+        stepCaption: vis(".step-label") || vis(".progress-caption"),
+        // Speaker resolution acts on the TASK: its controls post to task
+        // endpoints, so on a recording they would fail or edit something the
+        // card is not showing.
+        speakerBox: vis(".speaker-box"),
         redactedTab: Boolean(card.querySelector(".tab-btn[data-tab='redacted']:not([disabled])")),
         promptTab: Boolean(card.querySelector(".tab-btn[data-prompt-id]")),
         playerItem: vis(".task-player-btn"),
@@ -191,7 +202,8 @@ export async function run() {
       "the progress bar": shape.progress,
       "the pause button": shape.pause,
       "the restart-summary action": shape.restart,
-      "the pipeline step caption": shape.stepCaption,
+      "the pipeline step line": shape.stepCaption,
+      "the speaker panel": shape.speakerBox,
       "the 'media deleted' note": shape.expired,
       "the open-player menu item": shape.playerItem,
       "the archive menu item": shape.archiveItem,

@@ -7970,6 +7970,9 @@ const libraryClear = document.getElementById("library-clear");
 
 let libraryLoaded = false;
 let libraryItems = [];
+// Paged like the task list. Loading everything at once truncated at the
+// server's 200-row cap without saying so, and got slower with every recording.
+const libraryPaging = { pageSize: 30, offset: 0, loading: false, exhausted: false };
 
 function showMainView(view) {
   const target = view === "library" ? "library" : "tasks";
@@ -8072,19 +8075,53 @@ function applyLibraryMeta(root, item) {
   if (parts.length) holder.appendChild(meta);
 }
 
+function updateLibrarySentinel() {
+  const sentinel = document.getElementById("library-sentinel");
+  if (!sentinel) return;
+  const p = libraryPaging;
+  sentinel.hidden = false;
+  sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
+  sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+  const more = sentinel.querySelector("#library-load-more");
+  // The button is the fallback for a list too short to scroll — with compact
+  // cards that is ordinary, and then the observer never fires at all.
+  if (more) more.hidden = p.exhausted || p.loading;
+}
+
 async function loadLibrary() {
   if (!libraryList) return;
+  libraryPaging.offset = 0;
+  libraryPaging.exhausted = false;
+  libraryItems = [];
+  await loadLibraryPage();
+}
+
+async function loadLibraryPage() {
+  const p = libraryPaging;
+  if (p.loading || p.exhausted) return;
+  p.loading = true;
+  updateLibrarySentinel();
   try {
-    const payload = await api("/api/recordings?limit=200");
-    libraryItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    const payload = await api(
+      `/api/recordings?limit=${p.pageSize}&offset=${p.offset}`
+    );
+    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    libraryItems = libraryItems.concat(items);
+    p.offset += items.length;
+    // A short page means the end. Comparing against the requested size rather
+    // than a total keeps this correct if recordings are added while paging.
+    p.exhausted = items.length < p.pageSize;
     libraryLoaded = true;
     applyLibraryFilter();
   } catch {
     // A failed load must not read as "you have nothing".
-    if (libraryEmptyState) {
+    if (libraryEmptyState && !libraryItems.length) {
       libraryEmptyState.textContent = t("library.load_failed");
       libraryEmptyState.hidden = false;
     }
+  } finally {
+    p.loading = false;
+    updateLibrarySentinel();
   }
 }
 
@@ -8850,11 +8887,32 @@ async function bootstrap() {
   await refreshAll();
   // Infinite scroll: observe the sentinel once at bootstrap (refreshAll()
   // re-runs on user switches, so wiring here avoids duplicate observers).
+  // Both lists page the same way, and each sentinel must only speak for its own
+  // view: a hidden view's sentinel has a zero-size box, and letting it fire
+  // would load pages nobody is looking at — or, worse, interleave with the
+  // visible list's own paging.
+  function sentinelIsVisible(el) {
+    // offsetParent is null for anything inside a `hidden` container.
+    return Boolean(el && el.offsetParent !== null);
+  }
+
   const taskSentinelObserver = new IntersectionObserver((entries) => {
-    if (entries.some((e) => e.isIntersecting)) void loadNextPage();
+    if (entries.some((e) => e.isIntersecting && sentinelIsVisible(e.target))) {
+      void loadNextPage();
+    }
   }, { rootMargin: "200px" });
   const _sentinelEl = document.getElementById("task-sentinel");
   if (_sentinelEl) taskSentinelObserver.observe(_sentinelEl);
+
+  const librarySentinelObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting && sentinelIsVisible(e.target))) {
+      void loadLibraryPage();
+    }
+  }, { rootMargin: "200px" });
+  const _librarySentinel = document.getElementById("library-sentinel");
+  if (_librarySentinel) librarySentinelObserver.observe(_librarySentinel);
+  document.getElementById("library-load-more")
+    ?.addEventListener("click", () => void loadLibraryPage());
   // Same call the observer makes; loadNextPage() already guards against
   // re-entry and against there being no next page.
   document.getElementById("task-load-more")

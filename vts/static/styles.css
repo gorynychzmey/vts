@@ -2160,8 +2160,17 @@ input[type="file"] {
 .task[data-card-kind="recording"] .restart-summary-full-btn,
 .task[data-card-kind="recording"] .restart-summary-final-btn,
 .task[data-card-kind="recording"] .tab-btn[data-tab="log"],
-/* The pipeline step caption ("Step 8 of 8"): a recording is not mid-anything. */
+/* The pipeline step line ("Step 14 of 14: …"): a recording is not mid-anything.
+   .progress-caption was the wrong target — those are the labels ON the progress
+   bars, and the line the user saw is .step-label. */
+.task[data-card-kind="recording"] .step-label,
+.task[data-card-kind="recording"] .step-time,
 .task[data-card-kind="recording"] .progress-caption,
+/* Speaker resolution is work done DURING a run: naming voices, flagging noise,
+   re-rendering the transcript afterwards. All of it acts on the task, and the
+   controls post to task endpoints — on a recording they would either fail or
+   quietly edit something the card is not showing. */
+.task[data-card-kind="recording"] .speaker-box,
 /* Opening the player and downloading media go through the TASK, which may be
    gone — and archiving means "free the space this JOB used", which a recording
    has no equivalent of. */
