@@ -381,6 +381,19 @@ class Settings(BaseSettings):
     # Empty means a public repository, which needs no token at all.
     delivery_plugin_sources: list[dict[str, str]] = []
     delivery_plugin_cache_dir: Path = Path("/opt/vts/state/plugins")
+    # Where the MCP OAuth proxy keeps client registrations and refresh tokens.
+    # FastMCP defaults to a platformdirs path (/root/.local/share) that lives
+    # in the container's ephemeral layer, so every image update wiped it and
+    # every client had to authorise again. /opt/vts is a host mount, so state
+    # kept here survives a redeploy. Contains live refresh tokens: created
+    # 0700, like session_secret above.
+    mcp_oauth_state_dir: Path = Field(
+        default=Path("/opt/vts/state/mcp-oauth"),
+        validation_alias=AliasChoices(
+            "VTS_MCP_OAUTH_STATE_DIR",
+            "mcp_oauth_state_dir",
+        ),
+    )
     # Belongs to load-time validation rather than the loader: when true, an
     # adapter refused for contract incompatibility is fatal instead of merely
     # logged. Default soft, so one bad plugin cannot stop the service.

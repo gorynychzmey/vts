@@ -1,11 +1,86 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 
 from vts.core.config import get_settings
 from vts.mcp.tools_registry import delivery, presets, prompts, recordings, search, tasks
+
+logger = logging.getLogger(__name__)
+
+
+def _persistent_oauth_storage(settings: Any) -> Any:
+    """An encrypted file store for OAuth state, on a host-mounted path.
+
+    Reproduces what FastMCP builds when `client_storage` is left None, with one
+    difference: the directory comes from settings instead of platformdirs, so
+    it survives a container being replaced.
+
+    The key fingerprint in the path is kept because FastMCP derives it from the
+    encryption key — different keys get isolated directories, so a rotated
+    client secret cannot silently read a store it cannot decrypt. Decryption
+    errors stay non-fatal (`raise_on_decryption_error=False`): a rotated key
+    should mean re-registration, not a server that refuses to start.
+
+    Returns None on any failure, which hands the decision back to FastMCP's own
+    default. A server that starts with forgetful auth is better than one that
+    does not start at all — and the reason is logged either way.
+    """
+    import hashlib
+
+    try:
+        from cryptography.fernet import Fernet
+        from key_value.aio.stores.filetree import (
+            FileTreeStore,
+            FileTreeV1CollectionSanitizationStrategy,
+            FileTreeV1KeySanitizationStrategy,
+        )
+        from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+
+        from fastmcp.server.auth.jwt_issuer import derive_jwt_key
+
+        # Same two-step derivation FastMCP uses, so the fingerprint and the key
+        # match what it would have produced for this client secret.
+        jwt_key = derive_jwt_key(
+            high_entropy_material=settings.oauth_client_secret,
+            salt="fastmcp-jwt-signing-key",
+        )
+        encryption_key = derive_jwt_key(
+            high_entropy_material=jwt_key.decode(),
+            salt="fastmcp-storage-encryption-key",
+        )
+        fingerprint = hashlib.sha256(encryption_key).hexdigest()[:12]
+
+        root = Path(settings.mcp_oauth_state_dir)
+        storage_dir = root / "oauth-proxy" / fingerprint
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        # Live refresh tokens: readable by the owner only, like session_secret.
+        for path in (root, root / "oauth-proxy", storage_dir):
+            path.chmod(0o700)
+
+        store = FileTreeStore(
+            data_directory=storage_dir,
+            key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(storage_dir),
+            collection_sanitization_strategy=(
+                FileTreeV1CollectionSanitizationStrategy(storage_dir)
+            ),
+        )
+        logger.info("MCP OAuth state persisted in %s", storage_dir)
+        return FernetEncryptionWrapper(
+            key_value=store,
+            fernet=Fernet(key=encryption_key),
+            raise_on_decryption_error=False,
+        )
+    except Exception:  # noqa: BLE001 - never block startup over token storage
+        logger.warning(
+            "could not set up persistent MCP OAuth storage; falling back to "
+            "FastMCP's default, which does NOT survive a container restart",
+            exc_info=True,
+        )
+        return None
 
 
 def build_mcp_server() -> FastMCP:
@@ -37,6 +112,21 @@ def build_mcp_server() -> FastMCP:
         # redirect_path is moved off /auth/callback (used by the web UI) to
         # /mcp/auth/callback, which is what the Google client already has
         # registered for MCP.
+        # Persist OAuth state ourselves instead of letting FastMCP default it.
+        #
+        # Its default is a platformdirs path (/root/.local/share/fastmcp) that
+        # lives in the container's EPHEMERAL layer: every image update wiped
+        # the client registrations and refresh tokens, and every MCP client had
+        # to authorise again — which is exactly what kept happening after each
+        # release. Pointing it at a host-mounted directory fixes that from
+        # inside the image, with no container-level environment to keep in sync.
+        #
+        # This mirrors FastMCP's own construction (encrypted FileTreeStore,
+        # directory named by the key fingerprint) rather than inventing a
+        # scheme: the encryption key is derived from the SAME material, so an
+        # existing store stays readable and nobody is logged out by the switch.
+        client_storage = _persistent_oauth_storage(settings)
+
         auth_provider = GoogleProvider(
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
@@ -44,6 +134,7 @@ def build_mcp_server() -> FastMCP:
             redirect_path=f"{settings.mcp_path.rstrip('/')}/auth/callback",
             required_scopes=["openid", "email"],
             require_authorization_consent="remember",
+            client_storage=client_storage,
         )
     mcp = FastMCP(name="vts", auth=auth_provider)
 
