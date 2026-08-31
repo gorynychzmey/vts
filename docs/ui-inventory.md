@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 59 capabilities · 107 routes (80 in the OpenAPI schema, 27 hidden) · 33 MCP tools · 435 English UI strings.
+**Counts:** 59 capabilities · 107 routes (80 in the OpenAPI schema, 27 hidden) · 33 MCP tools · 439 English UI strings.
 
 ## Capabilities by entity
 

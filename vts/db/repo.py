@@ -767,12 +767,24 @@ class Repo:
         await self.session.flush()
         return prompt
 
-    async def list_prompts(self, user_id: uuid.UUID) -> list[Prompt]:
+    async def list_prompts(
+        self, user_id: uuid.UUID, *, include_system: bool = True
+    ) -> list[Prompt]:
+        """This user's prompts, vendor copy included by default.
+
+        The vendor prompt is not a separate kind of thing: it is a row in the
+        user's own table flagged `is_system` (see Prompt.is_system). Callers
+        that already list the built-in prompts from the registry must pass
+        `include_system=False`, or the same artifact appears twice under two
+        names — once as the built-in and once as the user's copy of it.
+        """
         stmt = (
             select(Prompt)
             .where(Prompt.user_id == user_id)
             .order_by(Prompt.created_at.desc())
         )
+        if not include_system:
+            stmt = stmt.where(Prompt.is_system.is_(False))
         result = await self.session.scalars(stmt)
         return list(result.all())
 

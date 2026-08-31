@@ -28,9 +28,28 @@ def _load_locale(name: str) -> dict[str, str]:
 LOCALES = {name: _load_locale(name) for name in ("ru", "en", "de")}
 
 
-def _tooltip_keys_from_index() -> set[str]:
+# Every i18n attribute index.html localises. data-i18n-title is checked on its
+# own below (it also pulls keys out of app.js); the rest are covered together by
+# test_every_index_i18n_key_exists_in_all_locales, which is what catches a key
+# that was used in the markup but never added to the dictionaries — the button
+# then renders the key itself, e.g. a literal "delivery.credentials.new".
+_I18N_ATTRS = (
+    "data-i18n",
+    "data-i18n-placeholder",
+    "data-i18n-aria-label",
+    "data-i18n-title",
+)
+
+
+def _keys_from_index(attr: str) -> set[str]:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    return set(re.findall(r'data-i18n-title="([^"]+)"', html))
+    # The negative lookbehind keeps `data-i18n="..."` from also matching the
+    # tail of `data-i18n-title="..."` and friends.
+    return set(re.findall(rf'(?<![-\w]){attr}="([^"]+)"', html))
+
+
+def _tooltip_keys_from_index() -> set[str]:
+    return _keys_from_index("data-i18n-title")
 
 
 def _tooltip_keys_from_app_js() -> set[str]:
@@ -51,6 +70,30 @@ def test_every_tooltip_key_exists_in_all_locales() -> None:
     }
     missing = {locale: keys_ for locale, keys_ in missing.items() if keys_}
     assert not missing, f"tooltip keys missing from locale dictionaries: {missing}"
+
+
+def test_every_index_i18n_key_exists_in_all_locales() -> None:
+    """Every key the markup localises must exist in ru, en and de.
+
+    A missing key is not a silent fallback: applyI18n writes the key itself
+    into the element, so the user reads "delivery.credentials.new" where a
+    button label belongs (vts-pvcd). The tooltip test above covers the same
+    ground for data-i18n-title only, which is why four delivery keys shipped
+    unnoticed.
+    """
+    per_attr = {attr: _keys_from_index(attr) for attr in _I18N_ATTRS}
+    keys = set().union(*per_attr.values())
+    assert len(keys) > 100, f"extractor found only {len(keys)} keys — regressed?"
+    # Guard each attribute separately too: a rename of any single attribute
+    # would otherwise hide behind the healthy total above.
+    for attr, found in per_attr.items():
+        assert found, f"no {attr} keys found in index.html — regressed?"
+    missing = {
+        locale: sorted(key for key in keys if key not in dictionary)
+        for locale, dictionary in LOCALES.items()
+    }
+    missing = {locale: keys_ for locale, keys_ in missing.items() if keys_}
+    assert not missing, f"i18n keys missing from locale dictionaries: {missing}"
 
 
 def test_static_title_fallbacks_match_en() -> None:

@@ -212,8 +212,13 @@ async def _delivery_variant_choices(session, user) -> list[DeliveryVariantOut]:
     ]
     # Only USER prompts: the system summary is already covered by the
     # "summary" variant above, so listing it again would offer the same
-    # artifact under two names.
-    for row in await Repo(session).list_prompts(uuid.UUID(user.id)):
+    # artifact under two names. include_system=False is what enforces that —
+    # the vendor prompt is a row in the user's own table (flagged is_system),
+    # not a separate kind, so an unfiltered call returns it too (vts-lzt8).
+    prompts = await Repo(session).list_prompts(
+        uuid.UUID(user.id), include_system=False
+    )
+    for row in prompts:
         choices.append(
             DeliveryVariantOut(value=f"user:{row.id}", label=row.name)
         )

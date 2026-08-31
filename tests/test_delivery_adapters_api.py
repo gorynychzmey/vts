@@ -182,3 +182,40 @@ async def test_never_serves_secret_values(client, monkeypatch):
     assert resp.status_code == 200
     creds = await client.get("/api/delivery-credentials")
     assert SECRET_VALUE not in creds.text
+
+
+@pytest.mark.asyncio
+async def test_variant_list_offers_the_summary_once(authed_app, client, monkeypatch):
+    """The built-in "summary" variant and the vendor prompt are one artifact.
+
+    The vendor prompt lives as a row in the user's own table (flagged
+    is_system), so an unfiltered list_prompts put it in the picker next to the
+    fixed `summary` variant — the user saw the summary twice, once as
+    "саммари" and once as "Summary" (vts-lzt8).
+    """
+    import uuid as _uuid
+
+    from tests.conftest import _TEST_USER_ID
+    from vts.db.repo import Repo
+
+    monkeypatch.setattr(registry, "_CACHE", {"fake": FakeAdapter()}, raising=False)
+    monkeypatch.setattr(registry, "_INCOMPATIBLE", {}, raising=False)
+
+    _app, factory = authed_app
+    async with factory() as session:
+        repo = Repo(session)
+        user_id = _uuid.UUID(_TEST_USER_ID)
+        await repo.create_prompt(user_id, "Mine", "body")
+        await repo.create_prompt(user_id, "Summary", "vendor", is_system=True)
+        await session.commit()
+
+    resp = await client.get("/api/delivery-adapters")
+    assert resp.status_code == 200, resp.text
+    labels = [v["label"] for v in resp.json()["variants"]]
+
+    assert "delivery.variant.summary" in labels, "the fixed summary variant is gone"
+    assert "Summary" not in labels, (
+        "the vendor copy is the same artifact as the summary variant — "
+        f"offering both shows it twice: {labels}"
+    )
+    assert "Mine" in labels, "the user's own prompts must still be offered"

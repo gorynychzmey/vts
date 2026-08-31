@@ -124,6 +124,31 @@ async def test_list_prompts_combines_system_and_user() -> None:
     assert user_p.name == "My prompt"
 
 
+async def test_list_prompts_does_not_repeat_the_vendor_copy() -> None:
+    """The built-in "summary" and the user's copy of it are one artifact.
+
+    list_system_prompts() already yields the built-in, and the vendor copy is
+    a row in the user's own table, so an unfiltered list_prompts offered the
+    same prompt twice under the same name (vts-lzt8) — an agent picking from
+    that list cannot tell which one to address.
+    """
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    await repo.create_prompt(uuid.UUID(user.id), "My prompt", "do stuff")
+    await repo.create_prompt(
+        uuid.UUID(user.id), "Summary", "vendor text", is_system=True
+    )
+
+    out = await tools.list_prompts(user=user, repo=repo)
+
+    assert [p.name for p in out].count("Summary") == 1, (
+        f"summary offered more than once: {[(p.source, p.name) for p in out]}"
+    )
+    summary = next(p for p in out if p.name == "Summary")
+    assert summary.source == "system", "the built-in is the addressable one"
+    assert [p.name for p in out if p.source == "user"] == ["My prompt"]
+
+
 async def test_create_prompt() -> None:
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()

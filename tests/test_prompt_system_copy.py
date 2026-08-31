@@ -564,3 +564,33 @@ def test_log_prompt_overrides_stays_quiet_when_running_the_shipped_prompts(
 
     assert not report.has_overrides
     assert caplog.text == ""
+
+
+@pytest.mark.asyncio
+async def test_list_prompts_can_exclude_the_vendor_copy(factory) -> None:
+    """The vendor copy is a row in the user's own table, not a separate kind.
+
+    So `list_prompts` returns it alongside prompts the user wrote, and any
+    caller that already offers the built-in summary separately would show the
+    same artifact twice (vts-lzt8). `include_system=False` is how such a caller
+    asks for "the prompts this user wrote".
+    """
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        user_id = uuid.uuid4()
+        session.add(User(id=user_id, username="prompt-list-filter@example.invalid"))
+        await session.commit()
+
+        await repo.create_prompt(user_id, "Mine", "body")
+        await repo.create_prompt(user_id, "Summary", "vendor", is_system=True)
+        await session.commit()
+
+        everything = await repo.list_prompts(user_id)
+        user_only = await repo.list_prompts(user_id, include_system=False)
+
+    assert sorted(p.name for p in everything) == ["Mine", "Summary"]
+    assert [p.name for p in user_only] == ["Mine"], (
+        "include_system=False must drop the vendor copy and keep the user's own"
+    )

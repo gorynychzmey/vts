@@ -34,6 +34,9 @@ class FakePrompt:
     user_id: uuid.UUID
     name: str
     system_prompt: str
+    # The user's copy of a vendor prompt, same as Prompt.is_system in the real
+    # model: a row in the user's own table, not a separate kind.
+    is_system: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
@@ -206,15 +209,23 @@ class FakeRepo:
 
     # ---- Prompt CRUD (mirrors vts.db.repo.Repo prompt methods) ----
 
-    async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> "FakePrompt":
+    async def create_prompt(
+        self, user_id: uuid.UUID, name: str, system_prompt: str, *, is_system: bool = False
+    ) -> "FakePrompt":
         prompt = FakePrompt(
-            id=uuid.uuid4(), user_id=user_id, name=name, system_prompt=system_prompt
+            id=uuid.uuid4(), user_id=user_id, name=name,
+            system_prompt=system_prompt, is_system=is_system,
         )
         self.prompts[prompt.id] = prompt
         return prompt
 
-    async def list_prompts(self, user_id: uuid.UUID) -> list["FakePrompt"]:
-        return [p for p in self.prompts.values() if p.user_id == user_id]
+    async def list_prompts(
+        self, user_id: uuid.UUID, *, include_system: bool = True
+    ) -> list["FakePrompt"]:
+        return [
+            p for p in self.prompts.values()
+            if p.user_id == user_id and (include_system or not p.is_system)
+        ]
 
     async def get_prompt(self, user_id: uuid.UUID, prompt_id: uuid.UUID) -> "FakePrompt | None":
         p = self.prompts.get(prompt_id)

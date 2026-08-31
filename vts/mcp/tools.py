@@ -61,7 +61,9 @@ class _RepoLike(Protocol):
     ) -> Any: ...
 
     async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
-    async def list_prompts(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def list_prompts(
+        self, user_id: uuid.UUID, *, include_system: bool = True
+    ) -> list[Any]: ...
     async def get_delivery_target_by_name(self, user_id: uuid.UUID, name: str) -> Any | None: ...
 
 
@@ -780,7 +782,9 @@ async def retry_delivery(
 
 class _RepoPromptLike(Protocol):
     async def create_prompt(self, user_id: uuid.UUID, name: str, system_prompt: str) -> Any: ...
-    async def list_prompts(self, user_id: uuid.UUID) -> list[Any]: ...
+    async def list_prompts(
+        self, user_id: uuid.UUID, *, include_system: bool = True
+    ) -> list[Any]: ...
     async def update_prompt(
         self,
         user_id: uuid.UUID,
@@ -798,12 +802,18 @@ async def list_prompts(
     repo: _RepoPromptLike,
 ) -> list[PromptInfo]:
     """List prompts available to the caller: built-in system prompts first,
-    then the user's own prompts (mirrors web GET /api/prompts)."""
+    then the user's own prompts (mirrors web GET /api/prompts).
+
+    include_system=False because the built-ins are already listed above: the
+    user's copy of a vendor prompt is a row in their own table, so an
+    unfiltered call would offer the same prompt twice under one name and leave
+    the caller no way to tell which entry to address (vts-lzt8).
+    """
     out: list[PromptInfo] = [
         PromptInfo(source="system", id=p.key, name=p.display_name, editable=False)
         for p in list_system_prompts()
     ]
-    for row in await repo.list_prompts(uuid.UUID(user.id)):
+    for row in await repo.list_prompts(uuid.UUID(user.id), include_system=False):
         out.append(PromptInfo(source="user", id=str(row.id), name=row.name, editable=True))
     return out
 
