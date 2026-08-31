@@ -17,6 +17,7 @@ from fastmcp import FastMCP
 
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
+from vts.mcp.annotations import READ_ONLY
 from vts.mcp.schemas import SearchHit, SearchResult
 from vts.services.corpus_search import search_corpus
 
@@ -54,7 +55,7 @@ def hit_links(
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
 
-    @mcp.tool(name="search_transcripts")
+    @mcp.tool(name="search_transcripts", annotations=READ_ONLY)
     async def _search_transcripts(
         query: str,
         limit: int = 10,

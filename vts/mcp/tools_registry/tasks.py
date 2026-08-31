@@ -13,6 +13,7 @@ from vts.core.config import get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
+from vts.mcp.annotations import READ_ONLY, SUBMIT
 from vts.mcp.schemas import (
     PromptResult,
     SubmitVideoResult,
@@ -34,7 +35,7 @@ from vts.services.redis_bus import RedisBus
 
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
-    @mcp.tool(name="submit_video")
+    @mcp.tool(name="submit_video", annotations=SUBMIT)
     async def _submit_video(
         url: str,
         language: str | None = None,
@@ -103,7 +104,7 @@ def register(mcp: FastMCP) -> None:
             finally:
                 await redis.aclose()
 
-    @mcp.tool(name="list_tasks")
+    @mcp.tool(name="list_tasks", annotations=READ_ONLY)
     async def _list_tasks(
         status: Literal[
             "queued", "running", "paused", "completed", "archived", "failed", "canceled"
@@ -141,7 +142,7 @@ def register(mcp: FastMCP) -> None:
                 source_type=source_type,
             )
 
-    @mcp.tool(name="get_status")
+    @mcp.tool(name="get_status", annotations=READ_ONLY)
     async def _get_status(task_id: uuid.UUID) -> TaskStatusResult:
         """Get current pipeline status for one task."""
         session_factory = get_db_session_factory()
@@ -149,7 +150,7 @@ def register(mcp: FastMCP) -> None:
             user, _settings = await mcp_authenticate(session)
             return await get_status(task_id=task_id, user=user, repo=Repo(session))
 
-    @mcp.tool(name="get_transcript")
+    @mcp.tool(name="get_transcript", annotations=READ_ONLY)
     async def _get_transcript(
         task_id: uuid.UUID, variant: Literal["raw", "redacted"] = "raw"
     ) -> TranscriptResult:
@@ -159,7 +160,7 @@ def register(mcp: FastMCP) -> None:
             user, _settings = await mcp_authenticate(session)
             return await get_transcript(task_id=task_id, variant=variant, user=user, repo=Repo(session))
 
-    @mcp.tool(name="get_prompt_result")
+    @mcp.tool(name="get_prompt_result", annotations=READ_ONLY)
     async def _get_prompt_result(task_id: uuid.UUID, ref: str = "system:summary") -> PromptResult:
         """Fetch the rendered text for one prompt result of a task.
 
@@ -171,7 +172,7 @@ def register(mcp: FastMCP) -> None:
             user, _settings = await mcp_authenticate(session)
             return await get_prompt_result(task_id=task_id, ref=ref, user=user, repo=Repo(session))
 
-    @mcp.tool(name="wait_for_task")
+    @mcp.tool(name="wait_for_task", annotations=READ_ONLY)
     async def _wait_for_task(
         task_id: uuid.UUID,
         until: Literal["transcript", "summary", "done"] = "done",

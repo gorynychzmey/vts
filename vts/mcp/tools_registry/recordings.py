@@ -21,6 +21,7 @@ from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
+from vts.mcp.annotations import READ_ONLY
 from vts.mcp.schemas import (
     RecordingInfo,
     RecordingList,
@@ -57,7 +58,7 @@ def _info(recording: Recording) -> RecordingInfo:
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
 
-    @mcp.tool(name="list_recordings")
+    @mcp.tool(name="list_recordings", annotations=READ_ONLY)
     async def _list_recordings(limit: int = 50, offset: int = 0) -> RecordingList:
         """List the recordings in the library, newest first.
 
@@ -78,7 +79,7 @@ def register(mcp: FastMCP) -> None:
             )
             return RecordingList(items=[_info(r) for r in items], total=int(total or 0))
 
-    @mcp.tool(name="get_recording_transcript")
+    @mcp.tool(name="get_recording_transcript", annotations=READ_ONLY)
     async def _get_recording_transcript(
         recording_id: uuid.UUID,
         variant: str = "raw",

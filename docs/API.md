@@ -211,6 +211,26 @@ Recordings are also addressable as MCP tools: `list_recordings` and
 `get_recording_transcript` (with `structured` and `around_sec`). The
 task-scoped `get_transcript` remains for asking about a run in progress.
 
+**Every MCP tool declares whether it reads or writes**, through the standard
+`annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`) — so a client can group them instead of showing one flat list:
+
+| | tools | meaning |
+|---|---|---|
+| read-only | 14 | looks, changes nothing |
+| writes | 11 | creates or updates; nothing you had is lost |
+| destructive | 4 | the four `delete_*` tools — a client should confirm first |
+
+`openWorldHint` is set on exactly two: `submit_video` (downloads from the open
+internet and occupies a GPU for the length of the recording) and
+`retry_delivery` (re-sends to an external system). Neither is marked
+destructive: a run can be cancelled, and a retry repeats something already
+configured.
+
+A test asserts the classification is exhaustive — a tool added without an
+annotation fails the build, because a missing hint reads as "unknown" and some
+clients treat unknown as safe.
+
 ## Paginated reads of large text artifacts
 
 `/api/tasks/{id}/transcript`, `/summary`, `/redacted`, and `/log` can

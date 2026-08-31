@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
+from vts.mcp.annotations import CREATE, DELIVER, DESTRUCTIVE, READ_ONLY, UPDATE
 from vts.mcp.schemas import (
     DeliveryCredentialInfo,
     DeliveryStatusInfo,
@@ -31,7 +32,7 @@ from vts.mcp.tools import (
 
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
-    @mcp.tool(name="list_delivery_targets")
+    @mcp.tool(name="list_delivery_targets", annotations=READ_ONLY)
     async def _list_delivery_targets() -> list[DeliveryTargetInfo]:
         """List the caller's delivery targets.
 
@@ -45,7 +46,7 @@ def register(mcp: FastMCP) -> None:
             user, settings = await mcp_authenticate(session)
             return await list_delivery_targets(user=user, repo=Repo(session), settings=settings)
 
-    @mcp.tool(name="list_delivery_credentials")
+    @mcp.tool(name="list_delivery_credentials", annotations=READ_ONLY)
     async def _list_delivery_credentials() -> list[DeliveryCredentialInfo]:
         """List the caller's delivery connections.
 
@@ -61,7 +62,7 @@ def register(mcp: FastMCP) -> None:
                 user=user, repo=Repo(session), settings=settings
             )
 
-    @mcp.tool(name="create_delivery_credential")
+    @mcp.tool(name="create_delivery_credential", annotations=CREATE)
     async def _create_delivery_credential(
         name: str, adapter: str, config: dict | None = None,
         secrets: dict[str, str] | None = None,
@@ -85,7 +86,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="update_delivery_credential")
+    @mcp.tool(name="update_delivery_credential", annotations=UPDATE)
     async def _update_delivery_credential(
         credential_id: str, name: str | None = None, config: dict | None = None,
         secrets: dict[str, str] | None = None, clear_secrets: bool = False,
@@ -103,7 +104,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="delete_delivery_credential")
+    @mcp.tool(name="delete_delivery_credential", annotations=DESTRUCTIVE)
     async def _delete_delivery_credential(credential_id: str) -> dict[str, Any]:
         """Delete a connection. Refused while targets still reference it."""
         session_factory = get_db_session_factory()
@@ -115,7 +116,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="create_delivery_target")
+    @mcp.tool(name="create_delivery_target", annotations=CREATE)
     async def _create_delivery_target(
         name: str, adapter: str, credential_id: str, config: dict | None = None,
     ) -> DeliveryTargetInfo:
@@ -142,7 +143,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="update_delivery_target")
+    @mcp.tool(name="update_delivery_target", annotations=UPDATE)
     async def _update_delivery_target(
         target_id: str, name: str | None = None, config: dict | None = None,
         credential_id: str | None = None,
@@ -159,7 +160,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="delete_delivery_target")
+    @mcp.tool(name="delete_delivery_target", annotations=DESTRUCTIVE)
     async def _delete_delivery_target(target_id: str) -> dict[str, Any]:
         """Delete a delivery target."""
         session_factory = get_db_session_factory()
@@ -171,7 +172,7 @@ def register(mcp: FastMCP) -> None:
             await session.commit()
             return result
 
-    @mcp.tool(name="get_delivery_status")
+    @mcp.tool(name="get_delivery_status", annotations=READ_ONLY)
     async def _get_delivery_status(task_id: uuid.UUID) -> list[DeliveryStatusInfo]:
         """Where each of a task's deliveries got to.
 
@@ -186,7 +187,7 @@ def register(mcp: FastMCP) -> None:
             user, _settings = await mcp_authenticate(session)
             return await get_delivery_status(user=user, repo=Repo(session), task_id=task_id)
 
-    @mcp.tool(name="retry_delivery")
+    @mcp.tool(name="retry_delivery", annotations=DELIVER)
     async def _retry_delivery(task_id: uuid.UUID, target_id: str | None = None) -> dict[str, Any]:
         """Retry a task's dead deliveries (optionally just one target's).
 
