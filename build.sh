@@ -67,11 +67,18 @@ run_tests_in_container() {
     -e POSTGRES_USER=vts -e POSTGRES_PASSWORD=vts -e POSTGRES_DB=vts_test \
     tensorchord/vchord-postgres:pg17-v1.1.1 >/dev/null
 
+  # Wait for the DATABASE, not just the server. `pg_isready` answers "ready"
+  # while the entrypoint is still running initdb: the official image starts a
+  # temporary server on a local socket during that pass, before POSTGRES_DB has
+  # been created. build-1.7.82 failed exactly there — `pg_isready` passed and
+  # the very next psql died with `database "vts_test" does not exist`, 1.1s
+  # apart. Polling with the same query the next step runs closes that window.
   echo "Waiting for Postgres to become ready"
   local ready=false
   local i
-  for i in $(seq 1 30); do
-    if "${runtime}" exec "${pg_container}" pg_isready -U vts >/dev/null 2>&1; then
+  for i in $(seq 1 60); do
+    if "${runtime}" exec "${pg_container}" \
+        psql -U vts -d vts_test -tAc 'select 1' >/dev/null 2>&1; then
       ready=true
       break
     fi
@@ -79,6 +86,7 @@ run_tests_in_container() {
   done
   if [[ "${ready}" != "true" ]]; then
     echo "Postgres did not become ready in time"
+    "${runtime}" logs "${pg_container}" 2>&1 | tail -20
     exit 1
   fi
 
