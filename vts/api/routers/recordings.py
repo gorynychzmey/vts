@@ -135,7 +135,8 @@ async def rename_recording_endpoint(
 @router.get("/api/search", response_model=SearchResultOut)
 async def search_corpus_endpoint(
     q: str,
-    limit: int = 10,
+    limit: int = 20,
+    offset: int = 0,
     threshold: float | None = None,
     recording_id: uuid.UUID | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
@@ -148,13 +149,18 @@ async def search_corpus_endpoint(
     the nearest passages. The threshold is echoed back so an empty result can
     be read correctly.
     """
-    hits, effective = await search_corpus(
+    hits, effective, total = await search_corpus(
         session, uuid.UUID(user.id), q, settings,
-        threshold=threshold, limit=limit, recording_id=recording_id,
+        threshold=threshold, limit=limit, offset=offset,
+        recording_id=recording_id,
     )
     return SearchResultOut(
         query=q,
         threshold=effective,
+        total=total,
+        returned=len(hits),
+        offset=max(0, int(offset)),
+        truncated=(max(0, int(offset)) + len(hits)) < total,
         hits=[
             SearchHitOut(
                 chunk_id=h.chunk_id, recording_id=h.recording_id, source_task_id=h.source_task_id, title=h.title,

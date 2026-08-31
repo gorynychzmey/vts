@@ -563,11 +563,18 @@ class SearchResultOut(BaseModel):
     `threshold` is echoed back because an empty `hits` means "nothing in the
     corpus is this relevant" rather than "the corpus is empty" — and the caller
     cannot tell those apart without knowing where the bar was set.
+
+    `total` counts everything above the threshold in the corpus, so a caller
+    can tell a complete result from a first page without guessing.
     """
 
     hits: list[SearchHitOut]
     threshold: float
     query: str
+    total: int = 0
+    returned: int = 0
+    offset: int = 0
+    truncated: bool = False
 
 
 class RecordingListOut(BaseModel):

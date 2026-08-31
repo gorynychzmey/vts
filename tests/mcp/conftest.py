@@ -71,6 +71,11 @@ class FakeRepo:
         self.last_options: dict[str, Any] | None = None
         self.delivery_targets: dict[uuid.UUID, Any] = {}
         self.delivery_credentials: dict[uuid.UUID, Any] = {}
+        # Voice identification: task -> [names], and the registry behind it.
+        # Kept as plain data so a test can set up "who appears where" without
+        # constructing MatchDecision rows.
+        self.task_people: dict[uuid.UUID, list[str]] = {}
+        self.speakers: dict[uuid.UUID, Any] = {}
 
     async def create_task(
         self,
@@ -318,6 +323,38 @@ class FakeRepo:
         items.sort(key=key_map[sort], reverse=(order == "desc"))
         return items[:limit]
 
+    async def speaker_names_for_tasks(
+        self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]:
+        return {
+            tid: list(self.task_people.get(tid, []))
+            for tid in task_ids
+            if self.task_people.get(tid)
+        }
+
+    async def tasks_featuring_speaker(
+        self, user_id: uuid.UUID, speaker_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        person = self.speakers.get(speaker_id)
+        if person is None:
+            return []
+        return [
+            tid for tid, names in self.task_people.items()
+            if person.name in names
+        ]
+
+    async def speakers_by_name(self, user_id: uuid.UUID, name: str) -> list[Any]:
+        needle = (name or "").strip().lower()
+        if not needle:
+            return []
+        return [
+            p for p in self.speakers.values()
+            if p.user_id == user_id and needle in p.name.lower()
+        ]
+
+    async def diarized_task_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        return [tid for tid, names in self.task_people.items() if names]
+
     async def list_tasks_page(
         self,
         user_id: uuid.UUID,
@@ -331,8 +368,16 @@ class FakeRepo:
         created_from: Any = None,
         created_to: Any = None,
         source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list[FakeTask]:
         items = [t for t in self.tasks.values() if t.user_id == user_id]
+        if task_ids is not None:
+            allowed = {str(i) for i in task_ids}
+            items = [t for t in items if str(t.id) in allowed]
+        if exclude_task_ids:
+            denied = {str(i) for i in exclude_task_ids}
+            items = [t for t in items if str(t.id) not in denied]
         if status is not None:
             # Real repo receives a TaskStatus enum; FakeTask.status is a str.
             want = getattr(status, "value", status)

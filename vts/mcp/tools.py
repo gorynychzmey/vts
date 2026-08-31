@@ -266,7 +266,19 @@ class _RepoListLike(Protocol):
         created_from: Any = None,
         created_to: Any = None,
         source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list[Any]: ...
+    async def speaker_names_for_tasks(
+        self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]: ...
+    async def tasks_featuring_speaker(
+        self, user_id: uuid.UUID, speaker_id: uuid.UUID
+    ) -> list[uuid.UUID]: ...
+    async def speakers_by_name(
+        self, user_id: uuid.UUID, name: str
+    ) -> list[Any]: ...
+    async def diarized_task_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]: ...
 
 
 async def list_tasks(
@@ -280,6 +292,8 @@ async def list_tasks(
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     source_type: Literal["file", "url"] | None = None,
+    diarized: bool | None = None,
+    person: str | None = None,
 ) -> TaskPage:
     """List the caller's tasks newest-first, one page at a time.
 
@@ -288,6 +302,11 @@ async def list_tasks(
     ``q`` (matches title or URL), ``created_from``/``created_to`` and
     ``source_type`` optionally narrow the set; keep them identical across
     pages, since changing a filter changes what the cursor points into.
+
+    ``diarized`` and ``person`` filter on identified voices. Both resolve
+    through the voice registry, so they select tasks where a label was bound
+    to a NAMED person — a diarised task whose speakers were left anonymous
+    does not match ``diarized=True``, because nothing in it is identifiable.
     """
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
@@ -308,8 +327,31 @@ async def list_tasks(
     # page looks like a full page, so has_more comes back True with a cursor,
     # and the next call returns nothing. One extra row settles it for real, in
     # the same round trip.
+    user_uuid = uuid.UUID(user.id)
+    # Voice filters resolve to a task-id set first: identification lives in
+    # match_decisions, which the task query does not join.
+    only_tasks: list[uuid.UUID] | None = None
+    exclude_tasks: list[uuid.UUID] | None = None
+    if person:
+        matched: list[uuid.UUID] = []
+        for sp in await repo.speakers_by_name(user_uuid, person):
+            matched.extend(await repo.tasks_featuring_speaker(user_uuid, sp.id))
+        # No such person, or nobody by that name was ever identified: the
+        # honest answer is an empty page, not the unfiltered list.
+        only_tasks = list(dict.fromkeys(matched))
+        if not only_tasks:
+            return TaskPage(tasks=[], next_cursor=None, has_more=False, total=0)
+    elif diarized is not None:
+        diarised_ids = await repo.diarized_task_ids(user_uuid)
+        if diarized:
+            only_tasks = diarised_ids
+            if not only_tasks:
+                return TaskPage(tasks=[], next_cursor=None, has_more=False, total=0)
+        else:
+            exclude_tasks = diarised_ids
+
     rows = await repo.list_tasks_page(
-        uuid.UUID(user.id),
+        user_uuid,
         before=before,
         order="desc",
         limit=limit + 1,
@@ -318,9 +360,13 @@ async def list_tasks(
         created_from=created_from,
         created_to=created_to,
         source_type=source_type,
+        task_ids=only_tasks,
+        exclude_task_ids=exclude_tasks,
     )
     has_more = len(rows) > limit
     tasks = rows[:limit]
+    # One query for the whole page, not one per task.
+    people = await repo.speaker_names_for_tasks(user_uuid, [t.id for t in tasks])
     summaries = [
         TaskSummary(
             task_id=t.id,
@@ -329,6 +375,7 @@ async def list_tasks(
             url=t.source_url,
             created_at=t.created_at,
             updated_at=t.updated_at,
+            people=people.get(t.id, []),
         )
         for t in tasks
     ]

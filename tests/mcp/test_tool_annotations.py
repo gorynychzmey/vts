@@ -20,11 +20,15 @@ READ_ONLY = {
     "wait_for_task",
     "list_prompts", "list_presets", "get_default_preset",
     "list_delivery_targets", "list_delivery_credentials", "get_delivery_status",
-    "search_transcripts", "list_recordings", "get_recording_transcript",
+    "search_transcripts", "list_recordings",
+    "list_people", "get_recording_transcript",
+    "get_recording_prompt_result",
 }
 
 # Writes that a user would not want to lose without being asked.
 DESTRUCTIVE = {
+    # Deletes a task WITH its recording, files and transcript text.
+    "delete_task",
     "delete_prompt", "delete_preset",
     "delete_delivery_credential", "delete_delivery_target",
 }
@@ -39,6 +43,7 @@ MUTATING = {
     "create_delivery_credential", "update_delivery_credential",
     "create_delivery_target", "update_delivery_target",
     "retry_delivery",
+    "rename_recording",
 }
 
 

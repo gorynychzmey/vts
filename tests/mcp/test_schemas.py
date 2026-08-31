@@ -37,7 +37,11 @@ def test_task_summary_shape() -> None:
         updated_at=datetime.now(tz=timezone.utc),
     )
     d = r.model_dump(mode="json")
-    assert set(d) == {"task_id", "status", "title", "url", "created_at", "updated_at"}
+    assert set(d) == {
+        "task_id", "status", "title", "url", "created_at", "updated_at",
+        # Names identified by voice; empty when the task was not diarised.
+        "people",
+    }
 
 
 def test_task_status_result_includes_progress() -> None:

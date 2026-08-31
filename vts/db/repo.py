@@ -186,6 +186,8 @@ class Repo:
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list[Task]:
         """Cursor page of a user's tasks within the open interval
         ``after < (created_at, id) < before`` (either bound optional), with an
@@ -207,6 +209,13 @@ class Repo:
         )
         if status is not None:
             stmt = stmt.where(Task.status == status)
+        # Membership filters, used by the voice filters: those resolve to a set
+        # of task ids in a separate query because identification lives in
+        # match_decisions, which this statement does not join.
+        if task_ids is not None:
+            stmt = stmt.where(Task.id.in_(task_ids))
+        if exclude_task_ids:
+            stmt = stmt.where(Task.id.notin_(exclude_task_ids))
         stmt = self._apply_task_filters(
             stmt, q=q, created_from=created_from,
             created_to=created_to, source_type=source_type,
@@ -1268,6 +1277,117 @@ class Repo:
         )
         rows = await self.session.execute(stmt)
         return {str(label): str(name) for label, name in rows.all()}
+
+    async def speakers_by_name(
+        self, user_id: uuid.UUID, name: str,
+    ) -> list[Speaker]:
+        """People whose name contains `name`, case-insensitively.
+
+        Substring rather than exact match: a caller filtering by person has a
+        name a human typed or read off a transcript, not an id.
+        """
+        needle = (name or "").strip()
+        if not needle:
+            return []
+        stmt = select(Speaker).where(
+            Speaker.user_id == user_id, Speaker.name.ilike(f"%{needle}%")
+        ).order_by(Speaker.name.asc())
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def diarized_task_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """Tasks with at least one label bound to a named person.
+
+        "Diarised" here means IDENTIFIED, not merely split into speakers: a
+        task whose labels were all left anonymous has no names to show and no
+        person to filter by, so counting it would make `diarized=True` return
+        rows indistinguishable from the ones it excludes.
+        """
+        stmt = (
+            select(MatchDecision.source_task_id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.speaker_id.isnot(None),
+                MatchDecision.source_task_id.isnot(None),
+            )
+            .distinct()
+        )
+        return [r[0] for r in (await self.session.execute(stmt)).all() if r[0]]
+
+    async def speaker_names_for_tasks(
+        self, user_id: uuid.UUID, task_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, list[str]]:
+        """Named people per task, for a whole page of tasks in ONE query.
+
+        The list-shaped sibling of `speaker_names_for_task`. Listing N tasks
+        must not cost N queries, and a page of 50 would do exactly that if the
+        single-task helper were called in a loop.
+
+        Only NAMED people appear: the join to Speaker drops labels left
+        anonymous or whose person was deleted. So an empty list means "nothing
+        named here", which is also the honest answer for a task that was never
+        diarised — the caller does not have to distinguish those to render.
+        """
+        if not task_ids:
+            return {}
+        stmt = (
+            select(MatchDecision.source_task_id, Speaker.name)
+            .join(Speaker, MatchDecision.speaker_id == Speaker.id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id.in_(task_ids),
+            )
+            .order_by(MatchDecision.created_at.asc(), MatchDecision.id.asc())
+        )
+        out: dict[uuid.UUID, list[str]] = {}
+        for task_id, name in (await self.session.execute(stmt)).all():
+            names = out.setdefault(task_id, [])
+            # De-duplicated: one person may hold several labels in one task,
+            # and a reader wants the cast list, not the label count.
+            if str(name) not in names:
+                names.append(str(name))
+        return out
+
+    async def speaker_labels_for_tasks(
+        self, user_id: uuid.UUID, task_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, dict[str, str]]:
+        """Per task, the label -> name map, for a whole page in ONE query.
+
+        The batched form of `speaker_names_for_task`. Pairing by LABEL and not
+        by position matters: a chunk records which labels spoke in it, and
+        guessing the name from their order would attach the wrong person to a
+        quote whenever a passage does not start with speaker 00.
+        """
+        if not task_ids:
+            return {}
+        stmt = (
+            select(MatchDecision.source_task_id, MatchDecision.speaker_label, Speaker.name)
+            .join(Speaker, MatchDecision.speaker_id == Speaker.id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.source_task_id.in_(task_ids),
+            )
+            .order_by(MatchDecision.created_at.asc(), MatchDecision.id.asc())
+        )
+        out: dict[uuid.UUID, dict[str, str]] = {}
+        # Ascending order means the LATEST decision for a label wins, matching
+        # speaker_names_for_task.
+        for task_id, label, name in (await self.session.execute(stmt)).all():
+            out.setdefault(task_id, {})[str(label)] = str(name)
+        return out
+
+    async def tasks_featuring_speaker(
+        self, user_id: uuid.UUID, speaker_id: uuid.UUID,
+    ) -> list[uuid.UUID]:
+        """Tasks where this person was identified — the filter's backing set."""
+        stmt = (
+            select(MatchDecision.source_task_id)
+            .where(
+                MatchDecision.user_id == user_id,
+                MatchDecision.speaker_id == speaker_id,
+            )
+            .distinct()
+        )
+        return [r[0] for r in (await self.session.execute(stmt)).all() if r[0]]
 
     async def decisions_for_task(
         self, user_id: uuid.UUID, task_id: uuid.UUID,

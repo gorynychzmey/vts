@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
+from pathlib import Path
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 from redis.asyncio import Redis
 
 from vts.core.config import get_settings
+from vts.api._helpers.recordings import delete_task_with_recording
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
-from vts.mcp.annotations import READ_ONLY, SUBMIT
+from vts.mcp.annotations import DESTRUCTIVE, READ_ONLY, SUBMIT
 from vts.mcp.schemas import (
     PromptResult,
     SubmitVideoResult,
@@ -115,6 +118,8 @@ def register(mcp: FastMCP) -> None:
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: Literal["file", "url"] | None = None,
+        diarized: bool | None = None,
+        person: str | None = None,
     ) -> TaskPage:
         """List the calling user's tasks, newest first, in pages.
 
@@ -129,8 +134,15 @@ def register(mcp: FastMCP) -> None:
                 remembered fragment of either finds the task.
             created_from / created_to: bound the creation time, inclusive.
             source_type: "file" for uploads, "url" for links.
+            diarized: True for tasks with identified voices, False for those
+                without.
+            person: a name (any part of it, case-insensitive) — tasks where
+                that person was identified by voice.
         Keep filters identical across pages of one walk — changing a filter
         changes the set the cursor points into.
+
+        Each task carries `people`: the names identified in it, empty when
+        voices were never resolved. Use `list_people` to see who is known.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -139,8 +151,38 @@ def register(mcp: FastMCP) -> None:
                 user=user, repo=Repo(session),
                 status=status, limit=limit, cursor=cursor,
                 q=q, created_from=created_from, created_to=created_to,
-                source_type=source_type,
+                source_type=source_type, diarized=diarized, person=person,
             )
+
+    @mcp.tool(name="delete_task", annotations=DESTRUCTIVE)
+    async def _delete_task(task_id: uuid.UUID) -> dict[str, Any]:
+        """Delete a task, its recording, and every file and transcript of it.
+
+        PERMANENT and NOT recoverable. The recording produced by this task goes
+        with it, including its transcript text in the search corpus — deleting
+        a job must not leave the conversation behind.
+
+        Ask the person before calling this. Do not call it to tidy up, to free
+        space, or because a task looks finished or failed: only when they have
+        asked for that specific task to be deleted. If they want the media gone
+        but the text kept, that is `archive_task`, not this.
+        """
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            repo = Repo(session)
+            task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="Task not found")
+            title = task.source_title or task.source_url
+            artifact_dir = task.artifact_dir
+            await delete_task_with_recording(session, task)
+            await session.commit()
+            # Files go only after the rows are committed: a crash between the
+            # two must not leave a row pointing at a directory that is gone.
+            if artifact_dir:
+                shutil.rmtree(Path(artifact_dir), ignore_errors=True)
+            return {"deleted": True, "task_id": str(task_id), "title": title}
 
     @mcp.tool(name="get_status", annotations=READ_ONLY)
     async def _get_status(task_id: uuid.UUID) -> TaskStatusResult:

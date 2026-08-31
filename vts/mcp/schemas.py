@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 TaskStatusLiteral = Literal[
@@ -31,6 +31,10 @@ class TaskSummary(BaseModel):
     url: str
     created_at: datetime
     updated_at: datetime
+    # Named people identified in this task, empty when it was not diarised or
+    # no label was ever bound to a person. Names, not SPEAKER_NN tags: the tags
+    # are an implementation detail no client should have to decode.
+    people: list[str] = Field(default_factory=list)
 
 
 class TaskPage(BaseModel):
@@ -38,6 +42,7 @@ class TaskPage(BaseModel):
     tasks: list[TaskSummary]
     next_cursor: str | None = None
     has_more: bool = False
+    total: int = 0
 
 
 class TaskStatusResult(BaseModel):
@@ -73,6 +78,11 @@ class RecordingInfo(BaseModel):
     has_summary: bool = False
     has_media: bool = False
     created_at: datetime
+    # Resolved through the source task, because voice identification is a
+    # property of the JOB, not of the recording. So this is empty for a
+    # recording whose task was deleted, even if it was diarised then — the
+    # decisions survive but no longer point anywhere.
+    people: list[str] = Field(default_factory=list)
 
 
 class RecordingList(BaseModel):
@@ -108,6 +118,26 @@ class RecordingTranscript(BaseModel):
     content: str = ""
     entries: list[TranscriptEntry] = []
     around_sec: float | None = None
+
+
+class PersonInfo(BaseModel):
+    """Someone in the voice registry.
+
+    `task_count` counts the tasks where this person was identified. It can be
+    0 for a real person: the identification survives its task's deletion with
+    a null task reference, so a person known only from deleted tasks is still
+    listed — findable by name, but not reachable by filtering.
+    """
+
+    id: uuid.UUID
+    name: str
+    task_count: int = 0
+    created_at: datetime | None = None
+
+
+class PeopleList(BaseModel):
+    items: list[PersonInfo]
+    total: int
 
 
 class SearchHit(BaseModel):
@@ -146,10 +176,20 @@ class SearchResult(BaseModel):
     the corpus is empty, and not that the nearest passages were withheld
     arbitrarily. `threshold` is returned so a client can tell those apart, and
     say so to its user rather than inventing an answer from weak matches.
+
+    `total` is how many passages clear the threshold in the whole corpus, not
+    how many came back. A client needs both to know whether to ask for more:
+    `returned` < `total` means there is more to fetch with `offset`. Guessing
+    from a full-looking page is wrong precisely when `total` is a multiple of
+    the limit, which is why the count is explicit.
     """
 
     query: str
     threshold: float
+    total: int = 0
+    returned: int = 0
+    offset: int = 0
+    truncated: bool = False
     hits: list[SearchHit]
 
 
