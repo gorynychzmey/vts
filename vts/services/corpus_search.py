@@ -34,6 +34,7 @@ Two shapes are deliberate:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import uuid
 from dataclasses import dataclass
@@ -81,6 +82,47 @@ def _vector_literal(embedding: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.6f}" for v in embedding) + "]"
 
 
+def _scope_clauses(
+    *,
+    recording_id: uuid.UUID | None,
+    task_ids: list[uuid.UUID] | None,
+    created_from: datetime | None,
+    created_to: datetime | None,
+) -> tuple[str, dict[str, Any]]:
+    """The filter SQL shared by the page query and the count.
+
+    Built once for both so `total` can never describe a different set than the
+    hits it accompanies — the entire value of that number is that a client can
+    trust it to mean "how many more of THESE".
+
+    Either date bound may be omitted: an open-ended range is a real request
+    ("anything since March"), and requiring both would force callers to invent
+    a far-future date. `task_ids=[]` means a filter matched nobody, which is
+    NOT the same as no filter — the caller must short-circuit before calling.
+    """
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if recording_id is not None:
+        clauses.append("AND c.recording_id = :recording_id")
+        params["recording_id"] = str(recording_id)
+    if task_ids is not None:
+        # Chunks reach a task only through their recording.
+        clauses.append("AND r.source_task_id = ANY(CAST(:task_ids AS uuid[]))")
+        params["task_ids"] = [str(t) for t in task_ids]
+    # Dates come from the RECORDING, never from the chunk. A chunk is created
+    # when the corpus is indexed, which has nothing to do with when the
+    # conversation happened: on prod 6624 of 6694 chunks carry a different day
+    # from their recording (the whole corpus was indexed on one afternoon).
+    # Filtering on the chunk would silently answer a different question.
+    if created_from is not None:
+        clauses.append("AND r.created_at >= :created_from")
+        params["created_from"] = created_from
+    if created_to is not None:
+        clauses.append("AND r.created_at <= :created_to")
+        params["created_to"] = created_to
+    return " ".join(clauses), params
+
+
 async def _widen_index_scan(session: AsyncSession) -> None:
     """Make the HNSW index keep scanning until the LIMIT is actually filled.
 
@@ -118,6 +160,9 @@ async def count_matching_chunks(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     recording_id: uuid.UUID | None = None,
+    task_ids: list[uuid.UUID] | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> int:
     """How many passages clear `threshold` in the WHOLE corpus.
 
@@ -134,12 +179,14 @@ async def count_matching_chunks(
         "user_id": str(user_id),
         "threshold": float(threshold),
     }
-    scope = ""
-    if recording_id is not None:
-        scope = "AND c.recording_id = :recording_id"
-        params["recording_id"] = str(recording_id)
+    scope, extra = _scope_clauses(
+        recording_id=recording_id, task_ids=task_ids,
+        created_from=created_from, created_to=created_to,
+    )
+    params.update(extra)
     return int((await session.execute(text(f"""
         SELECT count(*) FROM transcript_chunks c
+        JOIN recordings r ON r.id = c.recording_id
         WHERE c.user_id = CAST(:user_id AS uuid)
           AND c.embedding IS NOT NULL
           {scope}
@@ -156,6 +203,9 @@ async def search_chunks(
     limit: int = 10,
     offset: int = 0,
     recording_id: uuid.UUID | None = None,
+    task_ids: list[uuid.UUID] | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> list[SearchHit]:
     """Passages matching `embedding` above `threshold`, best first.
 
@@ -180,10 +230,11 @@ async def search_chunks(
         "user_id": str(user_id),
         "fetch": fetch,
     }
-    scope = ""
-    if recording_id is not None:
-        scope = "AND c.recording_id = :recording_id"
-        params["recording_id"] = str(recording_id)
+    scope, extra = _scope_clauses(
+        recording_id=recording_id, task_ids=task_ids,
+        created_from=created_from, created_to=created_to,
+    )
+    params.update(extra)
 
     # The ORDER BY ... LIMIT form an hnsw index can actually serve. The join to
     # recordings only decorates the rows the index already chose.
@@ -247,6 +298,9 @@ async def search_corpus(
     limit: int = 10,
     offset: int = 0,
     recording_id: uuid.UUID | None = None,
+    person: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> tuple[list[SearchHit], float, int]:
     """Embed `query` and search, returning the hits and the threshold applied.
 
@@ -254,6 +308,12 @@ async def search_corpus(
     requires them to use exactly the same threshold and rules; sharing this
     function is what makes that true by construction rather than by two call
     sites agreeing today and drifting tomorrow.
+
+    `person` and the date bounds narrow WHERE to look before relevance is
+    considered. Either date bound may be given alone: "anything since March"
+    is a real request, and demanding both would force a caller to invent a
+    far-future date. Dates are the RECORDING's, not the chunk's — see
+    `_scope_clauses`.
 
     Returns the threshold alongside the hits because an empty result means
     "nothing is this relevant", and a caller cannot read that correctly without
@@ -286,13 +346,34 @@ async def search_corpus(
     vectors = await client.embed([text_query])
     if not vectors:
         return [], effective, 0
+
+    # A person resolves to the tasks they were identified in. Voice
+    # identification hangs off the task, so a recording whose task was deleted
+    # can never match — correctly: nothing records who spoke in it any more.
+    task_ids: list[uuid.UUID] | None = None
+    if person and person.strip():
+        from vts.db.repo import Repo
+
+        repo = Repo(session)
+        found: list[uuid.UUID] = []
+        for sp in await repo.speakers_by_name(user_id, person):
+            found.extend(await repo.tasks_featuring_speaker(user_id, sp.id))
+        task_ids = list(dict.fromkeys(found))
+        # Nobody by that name, or they appear nowhere: an empty result is the
+        # honest answer. Passing an empty list on would filter to nothing
+        # anyway, but returning here also skips a pointless vector scan.
+        if not task_ids:
+            return [], effective, 0
+
     hits = await search_chunks(
         session, user_id, vectors[0],
         threshold=effective, limit=limit, offset=offset,
-        recording_id=recording_id,
+        recording_id=recording_id, task_ids=task_ids,
+        created_from=created_from, created_to=created_to,
     )
     total = await count_matching_chunks(
         session, user_id, vectors[0],
-        threshold=effective, recording_id=recording_id,
+        threshold=effective, recording_id=recording_id, task_ids=task_ids,
+        created_from=created_from, created_to=created_to,
     )
     return hits, effective, total

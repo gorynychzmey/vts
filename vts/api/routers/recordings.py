@@ -10,6 +10,7 @@ recording is not part of this.
 """
 from __future__ import annotations
 
+from datetime import datetime
 import uuid
 from pathlib import Path
 
@@ -139,6 +140,9 @@ async def search_corpus_endpoint(
     offset: int = 0,
     threshold: float | None = None,
     recording_id: uuid.UUID | None = None,
+    person: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
     settings=Depends(get_settings_dep),
@@ -152,7 +156,8 @@ async def search_corpus_endpoint(
     hits, effective, total = await search_corpus(
         session, uuid.UUID(user.id), q, settings,
         threshold=threshold, limit=limit, offset=offset,
-        recording_id=recording_id,
+        recording_id=recording_id, person=person,
+        created_from=created_from, created_to=created_to,
     )
     return SearchResultOut(
         query=q,

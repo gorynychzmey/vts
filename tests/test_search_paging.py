@@ -107,3 +107,52 @@ async def test_offset_is_included_in_the_fetch_budget():
         session, uuid.uuid4(), [0.1] * 4, threshold=0.5, limit=10, offset=50)
     # limit+offset drives the budget, not limit.
     assert any("LIMIT :fetch" in s for s in session.statements)
+
+
+@pytest.mark.asyncio
+async def test_open_ended_ranges_are_allowed_in_either_direction():
+    """"Anything since March" is a real request.
+
+    Requiring both bounds would force callers to invent a far-future date, so
+    each bound stands alone. Verified against production: an open `from` and
+    an open `to` at the same cut sum exactly to the unfiltered total
+    (279 + 719 = 998) — no passage lost, none counted twice.
+    """
+    from datetime import datetime, timezone
+
+    from vts.services.corpus_search import _scope_clauses
+
+    cut = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    only_from, p1 = _scope_clauses(
+        recording_id=None, task_ids=None, created_from=cut, created_to=None)
+    only_to, p2 = _scope_clauses(
+        recording_id=None, task_ids=None, created_from=None, created_to=cut)
+    assert "created_from" in p1 and "created_to" not in p1
+    assert "created_to" in p2 and "created_from" not in p2
+    assert ">=" in only_from and "<=" in only_to
+
+
+def test_dates_filter_on_the_recording_not_the_chunk():
+    """A chunk's date is when the corpus was indexed, not when people spoke.
+
+    On production 6624 of 6694 chunks carry a different day from their
+    recording — the corpus was indexed in one afternoon. Filtering on the
+    chunk would answer a different question while looking correct.
+    """
+    from datetime import datetime, timezone
+
+    from vts.services.corpus_search import _scope_clauses
+
+    sql, _ = _scope_clauses(
+        recording_id=None, task_ids=None,
+        created_from=datetime(2026, 1, 1, tzinfo=timezone.utc), created_to=None)
+    assert "r.created_at" in sql, "must filter on the recording's date"
+    assert "c.created_at" not in sql, "must NOT filter on the chunk's date"
+
+
+def test_no_filters_produce_no_clauses():
+    from vts.services.corpus_search import _scope_clauses
+
+    sql, params = _scope_clauses(
+        recording_id=None, task_ids=None, created_from=None, created_to=None)
+    assert sql == "" and params == {}

@@ -11,6 +11,7 @@ answer. VTS is a retrieval server; the reasoning belongs to the client.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
@@ -82,6 +83,9 @@ def register(mcp: FastMCP) -> None:
         offset: int = 0,
         threshold: float | None = None,
         recording_id: uuid.UUID | None = None,
+        person: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> SearchResult:
         """Search your recordings for passages relevant to a question.
 
@@ -104,6 +108,19 @@ def register(mcp: FastMCP) -> None:
           It is addressed by task, so it is null once the task is gone — offer
           it when present, and do not construct it yourself.
 
+        Narrow WHERE to look before relevance is judged:
+
+        * `person` — only recordings where that person was identified by voice
+          (any part of the name, case-insensitive). Use `list_people` to see
+          who is known. A recording whose task was deleted cannot match: what
+          recorded who spoke is gone with it.
+        * `created_from` / `created_to` — the recording's date. EITHER bound
+          may be used alone; an open-ended range is fine ("anything since
+          March"). These are the recording's dates, not indexing dates.
+
+        A filter that matches nobody returns an empty result rather than
+        quietly searching everything.
+
         `total` is how many passages clear the threshold in the whole corpus;
         `returned` is how many are in this response. When `truncated` is true
         there is more evidence than you are holding — page through it with
@@ -116,7 +133,8 @@ def register(mcp: FastMCP) -> None:
             hits, effective, total = await search_corpus(
                 session, uuid.UUID(user.id), query, settings,
                 threshold=threshold, limit=limit, offset=offset,
-                recording_id=recording_id,
+                recording_id=recording_id, person=person,
+                created_from=created_from, created_to=created_to,
             )
             base_url = str(getattr(settings, "public_base_url", "") or "")
             # Chunks store SPEAKER_NN tags; the names live with the task that
