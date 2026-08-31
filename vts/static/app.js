@@ -5114,6 +5114,34 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// A tooltip must not outlive the pointer (reported: hover a button, click it,
+// move away — the bubble stayed until you clicked somewhere empty).
+//
+// The cause is that a mouse click FOCUSES the button, and the reveal rule lists
+// `:focus` so that touch taps — which have no hover at all — can show a tooltip
+// on a phone. Dropping `:focus` would take that away, so instead the mouse case
+// is marked: when the pointer leaves a focused tooltip button, it is flagged and
+// the CSS hides the bubble while the flag is on. The flag clears when focus
+// moves on or the pointer returns, so nothing is permanently suppressed.
+document.addEventListener("pointerleave", (event) => {
+  const el = event.target;
+  if (!(el instanceof HTMLElement) || !el.hasAttribute?.("data-tooltip")) return;
+  // Only a real pointer. A touch "tap" also emits pointerleave, and marking
+  // there would hide the very tooltip the tap was meant to reveal.
+  if (event.pointerType && event.pointerType !== "mouse") return;
+  if (document.activeElement === el) el.setAttribute("data-tooltip-dismissed", "");
+}, true);
+
+document.addEventListener("pointerenter", (event) => {
+  const el = event.target;
+  if (el instanceof HTMLElement) el.removeAttribute?.("data-tooltip-dismissed");
+}, true);
+
+document.addEventListener("focusout", (event) => {
+  const el = event.target;
+  if (el instanceof HTMLElement) el.removeAttribute?.("data-tooltip-dismissed");
+}, true);
+
 // Tooltips reveal on :focus (deliberately, so touch taps — which have no hover —
 // can still show them). But a modal <dialog> moves focus PROGRAMMATICALLY twice,
 // and both fire an unwanted tooltip that the user never asked for:
@@ -7972,7 +8000,13 @@ let libraryLoaded = false;
 let libraryItems = [];
 // Paged like the task list. Loading everything at once truncated at the
 // server's 200-row cap without saying so, and got slower with every recording.
-const libraryPaging = { pageSize: 30, offset: 0, loading: false, exhausted: false };
+const libraryPaging = {
+  pageSize: 30, offset: 0, loading: false, exhausted: false,
+  // What the SERVER says the library holds. The count next to the heading was
+  // showing how many rows were on screen, so it climbed as you scrolled — a
+  // paging artefact reported as a number about your library.
+  total: 0,
+};
 
 function showMainView(view) {
   const target = view === "library" ? "library" : "tasks";
@@ -8053,8 +8087,16 @@ function renderLibraryList(items) {
     libraryEmptyState.hidden = items.length > 0;
   }
   if (libraryCount) {
-    libraryCount.textContent = String(items.length);
-    libraryCount.classList.toggle("hidden", !items.length);
+    // Unfiltered: the library's size, which does not change as you scroll.
+    // Filtered: how many rows match, since that is the question a filter asks —
+    // and the filter runs over what has been loaded, so say so rather than
+    // implying it searched everything.
+    const filtered = Boolean(
+      (libraryQ?.value || "").trim() || (libraryFrom?.value || "") || (libraryTo?.value || "")
+    );
+    const shown = filtered ? items.length : (libraryPaging.total || items.length);
+    libraryCount.textContent = String(shown);
+    libraryCount.classList.toggle("hidden", !shown);
   }
 }
 
@@ -8106,6 +8148,9 @@ async function loadLibraryPage() {
       `/api/recordings?limit=${p.pageSize}&offset=${p.offset}`
     );
     const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    if (payload && Number.isFinite(payload.total)) {
+      libraryPaging.total = payload.total;
+    }
     libraryItems = libraryItems.concat(items);
     p.offset += items.length;
     // A short page means the end. Comparing against the requested size rather

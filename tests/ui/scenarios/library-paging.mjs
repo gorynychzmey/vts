@@ -89,6 +89,18 @@ export async function run() {
       failures.push(`the first page asked for ${requests[0].limit} rows`);
     }
 
+    // The count beside the heading is about the LIBRARY, not about how far you
+    // have scrolled. It was showing the number of loaded rows, so it climbed
+    // as you scrolled — a paging artefact presented as a fact about your data.
+    const countAtFirstPage = await page.evaluate(
+      () => document.getElementById("library-count")?.textContent || "");
+    if (countAtFirstPage !== String(TOTAL)) {
+      failures.push(
+        `the library count reads ${JSON.stringify(countAtFirstPage)} after one ` +
+        `page, expected the library's size (${TOTAL})`
+      );
+    }
+
     // Scrolling brings in the next page.
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForFunction(
@@ -99,6 +111,14 @@ export async function run() {
       () => document.querySelectorAll("#library-list .task").length);
     if (grown <= first) {
       failures.push(`scrolling loaded no further recordings (still ${grown})`);
+    }
+    const countAfterScroll = await page.evaluate(
+      () => document.getElementById("library-count")?.textContent || "");
+    if (countAfterScroll !== countAtFirstPage) {
+      failures.push(
+        `the count changed from ${countAtFirstPage} to ${countAfterScroll} just ` +
+        `by scrolling — it is counting rows on screen, not recordings`
+      );
     }
 
     // A hidden list must stay quiet: its sentinel is in a `hidden` container,

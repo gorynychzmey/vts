@@ -1357,6 +1357,19 @@ input[type="file"] {
   transition-delay: 0.5s;
 }
 
+/* A tooltip must not outlive the pointer.
+   A mouse click focuses the button, and `:focus` above then kept the bubble up
+   after the pointer had moved away — it only went away on a click elsewhere.
+   `:focus` cannot simply be dropped: on a touch device there is no hover, and
+   focus is the only way a tooltip is ever shown (see tooltip-icon-buttons).
+   So the mouse case is suppressed explicitly instead: app.js marks a button the
+   pointer has left, and the mark outranks the focus rule until focus moves on
+   or the pointer comes back. */
+[data-tooltip][data-tooltip-dismissed]:not(:hover)::after {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
 .submit-progress {
   transform: rotate(-90deg);
   width: 1.7rem;
