@@ -4373,7 +4373,12 @@ async function restartSummary(taskId, mode = "full") {
 }
 
 function findTaskEl(taskId) {
-  return document.querySelector(`[data-task-id="${taskId}"]`);
+  // Scoped to the TASK list. Searching the whole document made the Library
+  // shadow it: a recording card is built by renderTaskCard and carries its
+  // source task's id, so once the Library had loaded, appendTaskCard's dedupe
+  // guard saw every task as "already rendered" and added none — the task list
+  // stayed empty while the count said 97.
+  return taskList ? taskList.querySelector(`[data-task-id="${taskId}"]`) : null;
 }
 
 // Resync after the SSE stream dropped and came back, WITHOUT rebuilding the
@@ -8075,6 +8080,14 @@ function renderLibraryList(items) {
     const root = renderTaskCard(recordingAsTask(item), { kind: "recording" });
     root.dataset.recordingId = String(item.id || "");
     root._recording = item;
+    // A recording is not a task, and must not answer to a task's id: several
+    // lookups key off data-task-id, and a library card carrying one made the
+    // task list think it was already rendered. The id it needs for artifact
+    // URLs lives on _runtime, which is unaffected.
+    if (item.source_task_id) {
+      root.dataset.sourceTaskId = String(item.source_task_id);
+    }
+    root.removeAttribute("data-task-id");
     if (!item.source_task_id) {
       // The task is gone, and its artifacts may be too. Say so rather than
       // offering tabs that will 404.
