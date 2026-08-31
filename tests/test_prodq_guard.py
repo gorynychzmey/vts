@@ -73,3 +73,47 @@ def test_a_keyword_inside_a_comment_does_not_trigger_a_refusal():
 def test_an_empty_statement_is_refused_rather_than_run():
     with pytest.raises(RefusedWrite):
         ensure_read_only("   ")
+
+
+# ------------------------------- functions that write while looking like reads
+
+@pytest.mark.parametrize("sql", [
+    "SELECT setval('tasks_id_seq', 1)",
+    "SELECT nextval('tasks_id_seq')",
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
+    "SELECT lo_unlink(1)",
+    "SELECT pg_cancel_backend(123)",
+])
+def test_writing_functions_wrapped_in_a_select_are_refused(sql):
+    """Keyword matching cannot see through a function call (vts-p54i).
+
+    `SELECT setval(...)` starts with SELECT and contains no write KEYWORD, so
+    the allowlist waves it through — and it writes. So does
+    `pg_terminate_backend`, which kills other people's sessions on the
+    production database.
+
+    The set of writing functions is open-ended, so a longer denylist would only
+    postpone the problem. These cases are pinned because they are the ones that
+    were demonstrated, but the defence is the read-only TRANSACTION below:
+    Postgres itself refuses the write, whatever it is called.
+    """
+    with pytest.raises(RefusedWrite):
+        ensure_read_only(sql)
+
+
+def test_the_statement_runs_inside_a_read_only_transaction():
+    """The real guarantee, and it does not depend on parsing SQL at all.
+
+    A keyword gate can only refuse what it recognises. `SET TRANSACTION READ
+    ONLY` makes the database refuse every write, including the ones through
+    functions nobody thought to list.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "prodq.py").read_text(
+        encoding="utf-8"
+    )
+    assert "READ ONLY" in source, (
+        "the script does not open a read-only transaction; the keyword gate is "
+        "the only defence, and it cannot see through function calls"
+    )

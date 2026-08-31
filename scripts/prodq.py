@@ -36,6 +36,22 @@ _READ_ONLY_STARTS = frozenset({"select", "with", "table", "values", "explain", "
 
 # Keywords that modify, checked against every statement including the inside of
 # a CTE: Postgres allows data-modifying CTEs, so a leading WITH proves nothing.
+# Functions that WRITE while sitting inside a plain SELECT. Keyword matching
+# cannot see them: `SELECT setval(...)` starts with SELECT and contains no write
+# keyword (vts-p54i). The list is not, and cannot be, complete — the real
+# defence is the read-only TRANSACTION in _run; this exists so the common cases
+# are refused before a connection is even opened, with a message that says why.
+_WRITE_FUNCTIONS = frozenset({
+    "setval", "nextval",
+    "pg_terminate_backend", "pg_cancel_backend",
+    "lo_unlink", "lo_import", "lo_export", "lo_create",
+    "pg_drop_replication_slot", "pg_create_physical_replication_slot",
+    "pg_create_logical_replication_slot", "pg_replication_origin_create",
+    "pg_import_system_collations", "pg_stat_reset", "pg_stat_statements_reset",
+    "pg_switch_wal", "pg_advisory_lock", "pg_advisory_unlock",
+    "dblink_exec", "query_to_xml",
+})
+
 _WRITE_KEYWORDS = frozenset({
     "insert", "update", "delete", "drop", "truncate", "alter", "create",
     "grant", "revoke", "vacuum", "reindex", "cluster", "copy", "call", "do",
@@ -79,14 +95,20 @@ def ensure_read_only(sql: str) -> None:
         # Every word, not just the first: a data-modifying CTE hides the verb
         # in the middle, and a semicolon appends a second statement.
         for word in words:
-            if word.lower() in _WRITE_KEYWORDS:
+            lowered = word.lower()
+            if lowered in _WRITE_KEYWORDS:
                 raise RefusedWrite(
                     f"refusing to run a statement containing {word.upper()} "
                     f"without --write"
                 )
+            if lowered in _WRITE_FUNCTIONS:
+                raise RefusedWrite(
+                    f"refusing to run {word}(): it modifies the database even "
+                    f"inside a SELECT"
+                )
 
 
-async def _run(sql: str, as_json: bool) -> int:
+async def _run(sql: str, as_json: bool, allow_write: bool = False) -> int:
     # Run from anywhere: the repo root goes on the path the same way
     # scripts/gen_ui_inventory.py does it.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -98,6 +120,12 @@ async def _run(sql: str, as_json: bool) -> int:
 
     settings = get_settings()
     async with SessionLocal() as session:
+        if not allow_write:
+            # The guarantee the keyword gate cannot give. A gate can only refuse
+            # what it recognises, and writing functions are an open set
+            # (vts-p54i); here Postgres itself rejects every write, whatever it
+            # is called or however it is nested.
+            await session.execute(text("SET TRANSACTION READ ONLY"))
         result = await session.execute(text(sql))
         try:
             rows = result.fetchall()
@@ -135,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         except RefusedWrite as exc:
             print(f"prodq: {exc}", file=sys.stderr)
             return 2
-    return asyncio.run(_run(args.sql, args.json))
+    return asyncio.run(_run(args.sql, args.json, allow_write=args.write))
 
 
 if __name__ == "__main__":
