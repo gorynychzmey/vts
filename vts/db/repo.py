@@ -236,10 +236,13 @@ class Repo:
         self,
         user_id: uuid.UUID,
         *,
+        status: TaskStatus | None = None,
         q: str | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> int:
         """How many of the user's tasks match these filters, ignoring paging.
 
@@ -249,6 +252,15 @@ class Repo:
         No cursor and no limit — that is the point.
         """
         stmt = select(func.count()).select_from(Task).where(Task.user_id == user_id)
+        # Every narrowing list_tasks_page applies must be applied here too, or
+        # the count describes a different set than the page it labels — the
+        # "showing 20 of 17" bug this method's own docstring warns about.
+        if status is not None:
+            stmt = stmt.where(Task.status == status)
+        if task_ids is not None:
+            stmt = stmt.where(Task.id.in_(task_ids))
+        if exclude_task_ids:
+            stmt = stmt.where(Task.id.notin_(exclude_task_ids))
         stmt = self._apply_task_filters(
             stmt, q=q, created_from=created_from,
             created_to=created_to, source_type=source_type,

@@ -82,6 +82,27 @@ def _vector_literal(embedding: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.6f}" for v in embedding) + "]"
 
 
+def _check_offset_reachable(*, offset: int, limit: int) -> None:
+    """Refuse an offset the candidate budget cannot honestly serve.
+
+    `_MAX_FETCH` caps how many candidates are ranked, so a page starting past
+    it comes back EMPTY however many results actually qualify. Combined with a
+    `total` that counts the whole corpus, that reproduces exactly the silent
+    lie `total` was added to remove: the response promises more and the next
+    page delivers nothing.
+
+    Raising beats returning empty because the caller can act on it — lower the
+    offset, or narrow the query. Silence leaves them concluding the corpus is
+    exhausted. The ceiling itself stays: it is what stops an unbounded scan.
+    """
+    if offset and offset + limit > _MAX_FETCH:
+        raise ValueError(
+            f"offset {offset} with limit {limit} exceeds the candidate ceiling "
+            f"of {_MAX_FETCH}; narrow the query (person, dates, recording_id) "
+            f"instead of paging further"
+        )
+
+
 def _scope_clauses(
     *,
     recording_id: uuid.UUID | None,
@@ -221,6 +242,7 @@ async def search_chunks(
     await _widen_index_scan(session)
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
+    _check_offset_reachable(offset=offset, limit=limit)
     # Fetch enough to serve this page: everything skipped still has to be
     # ranked and threshold-checked before the page can start.
     fetch = min(_MAX_FETCH, max((limit + offset) * _OVERFETCH, 50))

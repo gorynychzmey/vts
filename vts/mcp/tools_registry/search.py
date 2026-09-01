@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
@@ -130,12 +131,17 @@ def register(mcp: FastMCP) -> None:
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, settings = await mcp_authenticate(session)
-            hits, effective, total = await search_corpus(
-                session, uuid.UUID(user.id), query, settings,
-                threshold=threshold, limit=limit, offset=offset,
-                recording_id=recording_id, person=person,
-                created_from=created_from, created_to=created_to,
-            )
+            try:
+                hits, effective, total = await search_corpus(
+                    session, uuid.UUID(user.id), query, settings,
+                    threshold=threshold, limit=limit, offset=offset,
+                    recording_id=recording_id, person=person,
+                    created_from=created_from, created_to=created_to,
+                )
+            except ValueError as exc:
+                # An unreachable offset is a caller mistake with a clear
+                # remedy; say it plainly rather than surfacing a traceback.
+                raise ToolError(str(exc)) from exc
             base_url = str(getattr(settings, "public_base_url", "") or "")
             # Chunks store SPEAKER_NN tags; the names live with the task that
             # resolved the voices. Translate here so a hit says who spoke

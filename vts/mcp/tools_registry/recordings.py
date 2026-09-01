@@ -227,11 +227,12 @@ def register(mcp: FastMCP) -> None:
                     continue
                 entry_ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
                 if entry_ref == wanted or entry.get("ref") == wanted:
+                    source, _, ident = wanted.partition(":")
                     return PromptResult(
                         task_id=recording.source_task_id,
-                        ref=wanted,
-                        title=entry.get("title"),
-                        text=entry.get("text") or entry.get("result") or "",
+                        source=source,
+                        id=ident,
+                        content=entry.get("text") or entry.get("result") or "",
                     )
             # Falling back to the summary artifact: the oldest recordings were
             # created before results were snapshotted into meta, and for them
@@ -240,9 +241,9 @@ def register(mcp: FastMCP) -> None:
                 try:
                     return PromptResult(
                         task_id=recording.source_task_id,
-                        ref=wanted,
-                        title=None,
-                        text=read_recording_transcript(recording, "summary"),
+                        source="system",
+                        id="summary",
+                        content=read_recording_transcript(recording, "summary"),
                     )
                 except RecordingArtifactMissing:
                     pass

@@ -8,11 +8,15 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Literal
 
+from fastapi import HTTPException
 from fastmcp import FastMCP
 from redis.asyncio import Redis
 
 from vts.core.config import get_settings
-from vts.api._helpers.recordings import delete_task_with_recording
+from vts.api._helpers.recordings import (
+    artifacts_removable_for_task,
+    delete_task_with_recording,
+)
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
@@ -176,11 +180,17 @@ def register(mcp: FastMCP) -> None:
                 raise HTTPException(status_code=404, detail="Task not found")
             title = task.source_title or task.source_url
             artifact_dir = task.artifact_dir
+            # Ask BEFORE deleting the rows, while the claims are still visible:
+            # another recording may point at this same directory (the detached
+            # case SET NULL exists for), and removing it would destroy files
+            # that recording still owns. The HTTP path guards this; the tool
+            # must not be the cheaper way to lose data.
+            removable = await artifacts_removable_for_task(session, task)
             await delete_task_with_recording(session, task)
             await session.commit()
             # Files go only after the rows are committed: a crash between the
             # two must not leave a row pointing at a directory that is gone.
-            if artifact_dir:
+            if artifact_dir and removable:
                 shutil.rmtree(Path(artifact_dir), ignore_errors=True)
             return {"deleted": True, "task_id": str(task_id), "title": title}
 

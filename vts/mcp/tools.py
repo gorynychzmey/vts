@@ -271,6 +271,18 @@ class _RepoListLike(Protocol):
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list[Any]: ...
+    async def count_tasks_page(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: Any = None,
+        q: str | None = None,
+        created_from: Any = None,
+        created_to: Any = None,
+        source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
+    ) -> int: ...
     async def speaker_names_for_tasks(
         self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[str]]: ...
@@ -388,7 +400,23 @@ async def list_tasks(
         if (has_more and tasks)
         else None
     )
-    return TaskPage(tasks=summaries, next_cursor=next_cursor, has_more=has_more)
+    # `total` exists so a client can tell a first page from the whole answer.
+    # Left at its 0 default it reads as "nothing here" while rows are handed
+    # over — worse than absent, because it looks authoritative.
+    total = await repo.count_tasks_page(
+        user_uuid,
+        status=status_enum,
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        source_type=source_type,
+        task_ids=only_tasks,
+        exclude_task_ids=exclude_tasks,
+    )
+    return TaskPage(
+        tasks=summaries, next_cursor=next_cursor, has_more=has_more,
+        total=int(total or 0),
+    )
 
 
 def _stage_label(task: Any) -> str | None:

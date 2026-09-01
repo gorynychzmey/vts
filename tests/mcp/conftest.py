@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+
+import pytest
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -334,6 +336,26 @@ class FakeRepo:
         items.sort(key=key_map[sort], reverse=(order == "desc"))
         return items[:limit]
 
+    async def count_tasks_page(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: Any = None,
+        q: str | None = None,
+        created_from: Any = None,
+        created_to: Any = None,
+        source_type: str | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
+    ) -> int:
+        rows = await self.list_tasks_page(
+            user_id, limit=10**6, status=status, q=q,
+            created_from=created_from, created_to=created_to,
+            source_type=source_type, task_ids=task_ids,
+            exclude_task_ids=exclude_task_ids,
+        )
+        return len(rows)
+
     async def speaker_names_for_tasks(
         self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[str]]:
@@ -489,3 +511,24 @@ class FakeRedisWithPubSub:
     async def publish(self, channel: str, payload: dict[str, Any]) -> None:
         for sub in self._subscribers.get(channel, []):
             sub._queue.put_nowait(payload)
+
+
+@pytest.fixture
+def fake_repo_with_tasks():
+    """A repo holding five tasks for one user, newest last."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    repo = FakeRepo()
+    user = FakeUser(id=str(_uuid.uuid4()))
+    base = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    for i in range(5):
+        t = FakeTask(
+            id=_uuid.uuid4(), user_id=_uuid.UUID(user.id),
+            source_url=f"https://x/{i}", source_title=f"t-{i}",
+            status="completed",
+            created_at=base + timedelta(minutes=i),
+            updated_at=base + timedelta(minutes=i),
+        )
+        repo.tasks[t.id] = t
+    return repo, user
