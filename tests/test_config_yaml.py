@@ -309,3 +309,96 @@ def test_normalize_yaml_overrides_flattens_tasks_page_size() -> None:
     normalized = _normalize_yaml_overrides({"tasks": {"page_size": 25}})
     assert "tasks" not in normalized
     assert normalized["tasks_page_size"] == 25
+
+
+def test_env_overrides_a_key_that_config_yaml_also_sets(tmp_path, monkeypatch) -> None:
+    """An environment variable must win over config.yaml (vts-hx0y).
+
+    get_settings() used to pass the YAML in as constructor arguments, and
+    pydantic-settings ranks those above the env source — so a key present in
+    config.yaml silently ignored its VTS_* variable while a key absent from the
+    file honoured it. That inconsistency is what made it dangerous: on the prod
+    host config.yaml is read from /opt/vts/config/config.yaml, so a command run
+    with an explicit VTS_DATABASE_URL could still address production.
+    """
+    from vts.core.config import _real_load_yaml_overrides, get_settings
+
+    # conftest's autouse isolation stubs _load_yaml_overrides out so no test
+    # reads the host's real config.yaml. These three tests are about that very
+    # function, so they put the genuine one back and point it at tmp_path.
+    monkeypatch.setattr("vts.core.config._load_yaml_overrides", _real_load_yaml_overrides)
+
+    (tmp_path / "config.yaml").write_text(
+        "services:\n"
+        "  redis:\n"
+        '    prefix: "from-yaml:"\n'
+        '    url: "redis://yaml-host:6379/1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("vts.core.config._DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
+    monkeypatch.setenv("VTS_REDIS_PREFIX", "from-env:")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.redis_prefix == "from-env:"
+    # The rest of the file still applies: this is a precedence fix, not a
+    # switch that turns config.yaml off.
+    assert settings.redis_url == "redis://yaml-host:6379/1"
+
+
+def test_config_yaml_still_overrides_the_built_in_default(tmp_path, monkeypatch) -> None:
+    """The other half of the order: env > yaml > default."""
+    from vts.core.config import _real_load_yaml_overrides, get_settings
+
+    # conftest's autouse isolation stubs _load_yaml_overrides out so no test
+    # reads the host's real config.yaml. These three tests are about that very
+    # function, so they put the genuine one back and point it at tmp_path.
+    monkeypatch.setattr("vts.core.config._load_yaml_overrides", _real_load_yaml_overrides)
+
+    (tmp_path / "config.yaml").write_text(
+        'services:\n  redis:\n    prefix: "from-yaml:"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("vts.core.config._DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
+    monkeypatch.delenv("VTS_REDIS_PREFIX", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.redis_prefix == "from-yaml:"
+
+
+def test_nested_yaml_keys_still_normalize_under_the_new_source(tmp_path, monkeypatch) -> None:
+    """The flattening (services.database.url -> database_url) has to survive
+    the move from constructor arguments to a settings source."""
+    from vts.core.config import _real_load_yaml_overrides, get_settings
+
+    # conftest's autouse isolation stubs _load_yaml_overrides out so no test
+    # reads the host's real config.yaml. These three tests are about that very
+    # function, so they put the genuine one back and point it at tmp_path.
+    monkeypatch.setattr("vts.core.config._load_yaml_overrides", _real_load_yaml_overrides)
+
+    (tmp_path / "config.yaml").write_text(
+        "services:\n"
+        "  database:\n"
+        '    url: "postgresql+asyncpg://u:p@yaml-db:5432/vts"\n'
+        "tasks:\n"
+        "  page_size: 25\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("vts.core.config._DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.database_url == "postgresql+asyncpg://u:p@yaml-db:5432/vts"
+    assert settings.tasks_page_size == 25

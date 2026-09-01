@@ -7,8 +7,26 @@ from typing import Any, Literal
 import yaml
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources.providers.env import EnvSettingsSource
+
+
+class _YamlSource(PydanticBaseSettingsSource):
+    """config.yaml as a settings source ranked below the environment.
+
+    Reading the file is deferred to call time and goes through the module-level
+    `_load_yaml_overrides`, looked up by name rather than captured: the test
+    suite stubs that name out (conftest's autouse isolation) so no test ever
+    reads the host's real config, and a captured reference would defeat it.
+    """
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        # Not used: __call__ returns the whole mapping at once.
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        return dict(_load_yaml_overrides())
+
 
 # Fields that accept comma-separated strings from the environment.
 _CSV_LIST_FIELDS = frozenset({
@@ -466,10 +484,18 @@ class Settings(BaseSettings):
     def settings_customise_sources(cls, settings_cls: type[BaseSettings], **kwargs: Any) -> tuple[Any, ...]:  # type: ignore[override]
         sources = super().settings_customise_sources(settings_cls, **kwargs)
         # Replace the default EnvSettingsSource with our CSV-aware subclass.
-        return tuple(
+        sources = tuple(
             _CsvEnvSource(settings_cls) if isinstance(src, EnvSettingsSource) else src
             for src in sources
         )
+        # config.yaml goes in as a source ranked BELOW the environment, not as
+        # constructor arguments (vts-hx0y). Passed as arguments it outranked
+        # every other source, so a key present in the file silently ignored its
+        # VTS_* variable while a key absent from it honoured one — and on the
+        # prod host the file is read from /opt/vts/config/config.yaml, so a
+        # command run with an explicit VTS_DATABASE_URL could still address
+        # production. Order is now the ordinary env > file > default.
+        return (*sources, _YamlSource(settings_cls))
 
     def is_admin(self, email: str) -> bool:
         normalized = email.strip().lower()
@@ -614,7 +640,17 @@ def _normalize_yaml_overrides(data: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+# The genuine loader, kept under a second name so tests that are ABOUT config
+# .yaml can restore it: conftest stubs `_load_yaml_overrides` for every test so
+# none of them reads the host's real config (on the prod host that is
+# /opt/vts/config/config.yaml).
+_real_load_yaml_overrides = _load_yaml_overrides
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    overrides = _load_yaml_overrides()
-    return Settings(**overrides)
+    # config.yaml is NOT passed as constructor arguments here: those outrank
+    # every settings source, which is what let the file silently beat the
+    # environment (vts-hx0y). It is read by _YamlSource instead, ranked below
+    # the env source in settings_customise_sources.
+    return Settings()
