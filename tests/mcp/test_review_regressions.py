@@ -125,3 +125,33 @@ async def test_delete_task_asks_before_removing_shared_artifacts(monkeypatch):
             assert guard < delete, "guard runs after the rows are deleted"
             return
     raise AssertionError("_delete_task not found")
+
+
+def test_mcp_delete_logs_who_deleted_what():
+    """vts-wnwy: the most destructive tool left no trace at all.
+
+    HTTP logs actor and ids because a 2026-08-24 incident could not be
+    reconstructed from `"DELETE /api/tasks" 200 OK`. Through MCP it is worse:
+    there is not even an access-log line, and the caller is an agent.
+    """
+    import ast
+
+    src = open("vts/mcp/tools_registry/tasks.py").read()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_delete_task":
+            body = ast.unparse(node)
+            assert "logger.info" in body or "logger.warning" in body, (
+                "delete_task writes no audit line"
+            )
+            # Both identities: acting_as alone cannot tell a user deleting
+            # their own task from an admin impersonating them.
+            assert "requested_by" in body and "acting_as" in body, (
+                "the audit line must name both identities"
+            )
+            assert "request_cancel" in body, (
+                "delete_task does not cancel a running task before removing "
+                "its files from under the worker"
+            )
+            return
+    raise AssertionError("_delete_task not found")

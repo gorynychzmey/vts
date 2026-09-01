@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -17,6 +18,7 @@ from vts.api._helpers.recordings import (
     artifacts_removable_for_task,
     delete_task_with_recording,
 )
+from vts.db.models import TaskStatus
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.auth import mcp_authenticate
@@ -38,6 +40,9 @@ from vts.mcp.tools import (
     wait_for_task,
 )
 from vts.services.redis_bus import RedisBus
+
+
+logger = logging.getLogger(__name__)
 
 
 def register(mcp: FastMCP) -> None:
@@ -173,13 +178,47 @@ def register(mcp: FastMCP) -> None:
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
-            user, _settings = await mcp_authenticate(session)
+            user, settings = await mcp_authenticate(session)
             repo = Repo(session)
             task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
             if task is None:
                 raise HTTPException(status_code=404, detail="Task not found")
             title = task.source_title or task.source_url
             artifact_dir = task.artifact_dir
+            # The same audit line the HTTP path writes, and for the same
+            # reason: a 2026-08-24 incident could not be reconstructed because
+            # an irreversible delete left only "DELETE /api/tasks 200 OK".
+            # Through MCP there is not even that — the caller is an agent, so
+            # without this line nothing records who removed what. Both
+            # identities go in: acting_as alone cannot distinguish a user
+            # deleting their own task from an admin impersonating them.
+            logger.info(
+                "task.delete via=mcp requested_by=%s acting_as=%s task_id=%s",
+                user.requested_by,
+                user.acting_as,
+                task.id,
+            )
+            # Cancel before deleting: otherwise the rows and the directory go
+            # out from under a worker that is still running the task. What
+            # breaks depends on the stage it reached, which is precisely why
+            # the HTTP path cancels first.
+            redis = Redis.from_url(settings.redis_url, decode_responses=False)
+            try:
+                await RedisBus(redis, settings).request_cancel(task.id)
+                await repo.set_task_status(task, TaskStatus.canceled)
+            except Exception:  # noqa: BLE001 - cancellation is best-effort
+                # The delete itself does not need the bus, so an unreachable
+                # Redis must not turn "delete this task" into an error the
+                # caller cannot act on. Logged loudly because the worker may
+                # then still be running when the rows go.
+                logger.warning(
+                    "task.delete could not cancel task_id=%s before deleting; "
+                    "a worker may still be running it",
+                    task.id,
+                    exc_info=True,
+                )
+            finally:
+                await redis.aclose()
             # Ask BEFORE deleting the rows, while the claims are still visible:
             # another recording may point at this same directory (the detached
             # case SET NULL exists for), and removing it would destroy files
