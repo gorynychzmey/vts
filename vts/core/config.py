@@ -410,6 +410,13 @@ class Settings(BaseSettings):
     # Background sweep that deletes uploads abandoned before finalize (vts-ee3).
     upload_gc_enabled: bool = True
     upload_gc_interval_seconds: int = 3_600
+    # Sweep for expired browser sessions (vts-akf8). Redis used to reclaim
+    # these itself via the key TTL; a row does not expire on its own, so
+    # without this the table keeps every session ever issued. It only reclaims
+    # space — whether a session is live is decided by the expires_at filter in
+    # session_store.lookup, never by how recently this ran.
+    session_gc_enabled: bool = True
+    session_gc_interval_seconds: int = 3_600
 
     # Feature flags
     features_donor_clone: bool = False

@@ -282,5 +282,6 @@ Migrations that introduced or changed the entities above.
 | `0027_recordings` | a Recording that outlives the task that produced it (vts-8w1r / VOS-130) |
 | `0028_transcript_chunks` | semantic chunks of a recording, with embeddings (vts-twe7 / VOS-131) |
 | `0029_recording_title_custom` | a recording owns its name (vts-lib2) |
+| `0030_user_sessions` | browser sessions live in the database, not Redis (vts-akf8) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

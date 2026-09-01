@@ -135,6 +135,31 @@ async def _upload_gc_loop() -> None:
         await asyncio.sleep(settings.upload_gc_interval_seconds)
 
 
+async def _session_gc_loop() -> None:
+    """Reclaim expired browser sessions (vts-akf8).
+
+    Redis expired these itself; a row does not, so without this sweep the table
+    keeps every session ever issued. Purely space reclamation — an expired
+    session stops resolving the moment it expires, because session_store.lookup
+    filters on expires_at rather than trusting this to have run.
+    """
+    from vts.services import session_store
+
+    settings = get_settings()
+    log = logging.getLogger("vts.worker")
+    await asyncio.sleep(5)
+    while True:
+        try:
+            async with SessionLocal() as session:
+                removed = await session_store.purge_expired(session)
+                await session.commit()
+            if removed:
+                log.info("session-gc: removed %s expired session(s)", removed)
+        except Exception:
+            log.exception("session-gc loop iteration failed")
+        await asyncio.sleep(settings.session_gc_interval_seconds)
+
+
 async def _publish_lane_snapshot(redis: Redis, prefix: str, snapshot: dict[str, list[str]]) -> None:
     # Best-effort cache (10s TTL): a transient Redis failure here must never
     # propagate into LaneManager's slot bookkeeping, so swallow and log.
@@ -387,6 +412,7 @@ async def worker_loop() -> None:
     pump_task: asyncio.Task[None] | None = None
     weights_task: asyncio.Task[None] | None = None
     upload_gc_task: asyncio.Task[None] | None = None
+    session_gc_task: asyncio.Task[None] | None = None
     delivery_task: asyncio.Task[None] | None = None
     pubsub = None
     pool = WorkerPool(
@@ -420,6 +446,9 @@ async def worker_loop() -> None:
         if settings.upload_gc_enabled:
             upload_gc_task = asyncio.create_task(_upload_gc_loop())
 
+        if settings.session_gc_enabled:
+            session_gc_task = asyncio.create_task(_session_gc_loop())
+
         delivery_task = asyncio.create_task(
             delivery_loop(SessionLocal, settings, redis)
         )
@@ -448,6 +477,10 @@ async def worker_loop() -> None:
             upload_gc_task.cancel()
             with suppress(asyncio.CancelledError):
                 await upload_gc_task
+        if session_gc_task is not None:
+            session_gc_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await session_gc_task
         if delivery_task is not None:
             delivery_task.cancel()
             with suppress(asyncio.CancelledError):

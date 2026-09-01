@@ -179,6 +179,42 @@ class ApiToken(Base):
     )
 
 
+class UserSession(Base):
+    """A browser session: the cookie carries an opaque sid, this row owns it.
+
+    Lived in Redis until vts-akf8. Redis is a cache and a bus here, not
+    storage — the production instance runs without AOF and is shared with
+    other tenants, so a hard restart logged every user out. The record belongs
+    with the rest of the durable state instead.
+
+    `sid_hash` is a SHA-256 of the sid, never the sid itself, for the same
+    reason api_tokens stores token_hash: the sid is a bearer credential, and
+    unlike a Redis key with a TTL a database row is dumped, backed up and kept.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # Kept alongside user_id because the resolver re-checks it against the
+    # allow-list on every request (vts-jo2); reading it here avoids a join on
+    # the hottest path in the app.
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    sid_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_at: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("sid_hash", name="uq_user_sessions_sid_hash"),
+        # The sweep that replaces Redis's own expiry walks this.
+        Index("ix_user_sessions_expires_at", "expires_at"),
+        Index("ix_user_sessions_user", "user_id"),
+    )
+
+
 class Prompt(Base):
     __tablename__ = "prompts"
 

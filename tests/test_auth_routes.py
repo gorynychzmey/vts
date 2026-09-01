@@ -2,7 +2,28 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 import pytest
+import pytest_asyncio
+import sqlalchemy as sa
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from _db import ensure_pgvector, make_test_engine
+from vts.db.base import Base
+from vts.db.models import UserSession
+
+
+@pytest_asyncio.fixture
+async def session_db():
+    """A real database for the routes that now persist the session record."""
+    engine = make_test_engine()
+    await ensure_pgvector(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
 @pytest.fixture
@@ -76,28 +97,14 @@ async def test_auth_logout_rejects_missing_sec_fetch_site(app_with_oauth) -> Non
         assert r.status_code == 403
 
 
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.store: dict[str, bytes] = {}
-
-    async def set(self, key, value, *, ex=None) -> None:
-        if isinstance(value, str):
-            value = value.encode("utf-8")
-        self.store[key] = value
-
-    async def get(self, key):
-        return self.store.get(key)
-
-    async def delete(self, key) -> int:
-        return 1 if self.store.pop(key, None) is not None else 0
-
-
-async def test_callback_writes_sid_to_redis_and_logout_deletes_it(
-    app_with_oauth, monkeypatch
+async def test_callback_stores_the_session_and_logout_deletes_it(
+    app_with_oauth, monkeypatch, session_db
 ) -> None:
-    """vts-pa9 end-to-end: /auth/callback puts {sid->email} in Redis;
-    /auth/logout deletes it. After logout, the same cookie cannot be
-    replayed (the Redis record is gone)."""
+    """vts-pa9 end-to-end: /auth/callback stores {sid->email}; /auth/logout
+    deletes it, so the same cookie cannot be replayed afterwards.
+
+    Runs against a real database since vts-akf8 — the record is a row now,
+    written in the same transaction that creates the user."""
     fake_token = {"userinfo": {"email": "callback-test@local.invalid"}}
 
     async def _fake_authorize_access_token(self, request):
@@ -106,28 +113,12 @@ async def test_callback_writes_sid_to_redis_and_logout_deletes_it(
     from authlib.integrations.starlette_client.apps import StarletteOAuth2App
     monkeypatch.setattr(StarletteOAuth2App, "authorize_access_token", _fake_authorize_access_token)
 
-    class _NoopSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return None
-        async def commit(self): pass
-    def _noop_session_factory():
-        return _NoopSession()
-
-    class _NoopRepo:
-        def __init__(self, _db): pass
-        async def get_or_create_user(self, username):
-            return None
-
-    monkeypatch.setattr("vts.api.auth_routes.get_db_session_factory", lambda: _noop_session_factory)
-    monkeypatch.setattr("vts.api.auth_routes.Repo", _NoopRepo)
+    monkeypatch.setattr("vts.api.auth_routes.get_db_session_factory", lambda: session_db)
 
     from vts.core.config import get_settings
     get_settings.cache_clear()
     monkeypatch.setenv("VTS_OAUTH_ALLOWED_EMAILS", "callback-test@local.invalid")
     get_settings.cache_clear()
-
-    redis = _FakeRedis()
-    app_with_oauth.state.redis = redis
 
     transport = ASGITransport(app=app_with_oauth)
     async with AsyncClient(transport=transport, base_url="https://vts.test") as client:
@@ -136,10 +127,12 @@ async def test_callback_writes_sid_to_redis_and_logout_deletes_it(
         # Either successful redirect with sid stored, or state-mismatch 400.
         if r.status_code != 302:
             pytest.skip(f"OAuth state validation rejected stub flow ({r.status_code}); covered by lower-level tests")
-        # A Redis record must exist now.
-        assert len(redis.store) == 1
-        sid_key = next(iter(redis.store))
-        assert sid_key.startswith("vts:session:")
+        # A session row must exist now, and it must not hold the raw sid.
+        async with session_db() as db:
+            rows = list(await db.scalars(sa.select(UserSession)))
+        assert len(rows) == 1
+        assert rows[0].email == "callback-test@local.invalid"
+        assert len(rows[0].sid_hash) == 64
 
         # Logout should remove it.
         logout = await client.post(
@@ -147,7 +140,8 @@ async def test_callback_writes_sid_to_redis_and_logout_deletes_it(
             headers={"Sec-Fetch-Site": "same-origin"},
         )
         assert logout.status_code == 204
-        assert redis.store == {}
+        async with session_db() as db:
+            assert list(await db.scalars(sa.select(UserSession))) == []
 
 
 async def test_auth_callback_rejects_when_state_missing(app_with_oauth) -> None:
@@ -158,12 +152,17 @@ async def test_auth_callback_rejects_when_state_missing(app_with_oauth) -> None:
         assert r.status_code == 400
 
 
-async def test_auth_callback_happy_path_sets_session(app_with_oauth, monkeypatch) -> None:
-    """Monkeypatch authlib's authorize_access_token AND the DB repo so the
-    callback executes end-to-end WITHOUT touching any real database — a
-    previous version of this test had a socket.gaierror fallback that, on
-    a dev box where vts.api.db.session resolved to a real Postgres, ended
-    up writing a fake user into production."""
+async def test_auth_callback_happy_path_sets_session(
+    app_with_oauth, monkeypatch, session_db
+) -> None:
+    """Monkeypatch authlib's authorize_access_token AND point the route at the
+    throwaway test database, so the callback executes end-to-end WITHOUT
+    touching any real one — a previous version of this test had a
+    socket.gaierror fallback that, on a dev box where vts.api.db.session
+    resolved to a real Postgres, ended up writing a fake user into
+    production. The session record is a row since vts-akf8, so stubbing the
+    session factory away is no longer an option: the route must be given a
+    database, and it must be a disposable one."""
     fake_token = {"userinfo": {"email": "callback-test@local.invalid"}}
 
     async def _fake_authorize_access_token(self, request):
@@ -172,24 +171,9 @@ async def test_auth_callback_happy_path_sets_session(app_with_oauth, monkeypatch
     from authlib.integrations.starlette_client.apps import StarletteOAuth2App
     monkeypatch.setattr(StarletteOAuth2App, "authorize_access_token", _fake_authorize_access_token)
 
-    # Block the DB path completely. The route calls
-    # get_db_session_factory() → Session → Repo(db).get_or_create_user(...).
-    # Replace the factory with one that yields a session whose Repo is a
-    # no-op: it returns a sentinel user without doing any SQL.
-    class _NoopSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return None
-        async def commit(self): pass
-    def _noop_session_factory():
-        return _NoopSession()
-
-    class _NoopRepo:
-        def __init__(self, _db): pass
-        async def get_or_create_user(self, username):
-            return None  # value is unused; callback only sets request.session["email"]
-
-    monkeypatch.setattr("vts.api.auth_routes.get_db_session_factory", lambda: _noop_session_factory)
-    monkeypatch.setattr("vts.api.auth_routes.Repo", _NoopRepo)
+    # Keep the route away from any real database by pointing it at the
+    # throwaway one the session_db fixture drops after the test.
+    monkeypatch.setattr("vts.api.auth_routes.get_db_session_factory", lambda: session_db)
 
     # Allow the test email through.
     from vts.core.config import get_settings

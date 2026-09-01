@@ -90,30 +90,32 @@ async def auth_callback(request: Request):
     ):
         raise HTTPException(status_code=403, detail=f"Email {email} is not allowed for this vts instance")
 
+    # vts-pa9: store {sid -> email} server-side so /auth/logout can truly
+    # revoke the session. Cookie holds only the opaque sid; legacy
+    # `email`-only cookies still work via the resolver's fallback path.
+    #
+    # vts-akf8: the record is a database row now, so it is written in the same
+    # transaction that creates the user — the session can no longer outlive a
+    # Redis restart, nor be created for a user whose row failed to commit.
     session_factory = get_db_session_factory()
     async with session_factory() as db:
         repo = Repo(db)
         await repo.get_or_create_user(email)
-        await db.commit()
-
-    # vts-pa9: store {sid -> email} server-side so /auth/logout can truly
-    # revoke the session. Cookie holds only the opaque sid; legacy
-    # `email`-only cookies still work via the resolver's fallback path.
-    redis = getattr(request.app.state, "redis", None)
-    if redis is not None:
         sid = await session_store.create(
-            redis,
+            db,
             email=email,
             ttl_seconds=settings.session_max_age_days * 86_400,
             issued_at=int(time.time()),
         )
-        request.session["sid"] = sid
-        # Belt-and-braces: scrub any pre-vts-pa9 email left in the session.
-        request.session.pop("email", None)
-    else:
-        # No Redis (e.g. dev without app.state.redis) — fall back to the
-        # legacy email-in-cookie path so callers don't see a regression.
-        request.session["email"] = email
+        await db.commit()
+
+    if sid is None:
+        # create() only returns None when no user owns the email, and
+        # get_or_create_user just made sure one does.
+        raise HTTPException(status_code=500, detail="Could not establish a session")
+    request.session["sid"] = sid
+    # Belt-and-braces: scrub any pre-vts-pa9 email left in the session.
+    request.session.pop("email", None)
 
     next_path = _safe_next(request.session.pop("next_after_login", "/"))
     return RedirectResponse(url=next_path, status_code=302)
@@ -123,9 +125,10 @@ async def auth_callback(request: Request):
 async def auth_logout(request: Request):
     sid = (request.session.get("sid") or "").strip()
     if sid:
-        redis = getattr(request.app.state, "redis", None)
-        if redis is not None:
-            await session_store.delete(redis, sid)
+        session_factory = get_db_session_factory()
+        async with session_factory() as db:
+            await session_store.delete(db, sid)
+            await db.commit()
     request.session.pop("sid", None)
     request.session.pop("email", None)
     return Response(status_code=204)
