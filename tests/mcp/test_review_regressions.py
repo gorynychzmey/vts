@@ -155,3 +155,43 @@ def test_mcp_delete_logs_who_deleted_what():
             )
             return
     raise AssertionError("_delete_task not found")
+
+
+@pytest.mark.asyncio
+async def test_recording_prompt_result_reads_the_file_not_a_missing_text_field(tmp_path):
+    """The fix for vts-dp8d stopped the crash but returned EMPTY content.
+
+    Production entries look like this — there is no `text` and no `result`:
+
+        {"source": "user", "id": "<uuid>", "name": "Summary",
+         "path": "<artifact-dir>/summary/results/<file>.md",
+         "status": "completed"}
+
+    So `entry.get("text") or entry.get("result") or ""` yields "" for every
+    real recording. The tool answered 200 with nothing in it, which is worse
+    than the ValidationError it replaced: a caller cannot tell an empty
+    summary from a broken reader.
+    """
+    # Behaviour, not layout: feed the reader a real entry shape and check the
+    # content comes back. Asserting where read_text lives would break the
+    # moment it moved into a helper — which is exactly what happened.
+    from vts.mcp.tools_registry.recordings import _read_result_file
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    result = root / "summary.md"
+    result.write_text("итог встречи", encoding="utf-8")
+
+    class _Rec:
+        artifact_dir = str(root)
+
+    assert _read_result_file(_Rec(), str(result)) == "итог встречи"
+
+    # A path outside the recording must be refused, not read: the value comes
+    # from the database and outlives the task that wrote it.
+    outside = tmp_path / "secret.txt"
+    outside.write_text("not yours", encoding="utf-8")
+    assert _read_result_file(_Rec(), str(outside)) == ""
+
+    # A row can outlive its artifact; that reads as empty, not as a crash.
+    assert _read_result_file(_Rec(), str(root / "gone.md")) == ""

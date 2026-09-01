@@ -11,6 +11,7 @@ about a run in progress.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -60,6 +61,37 @@ def _info(recording: Recording, *, people: list[str] | None = None) -> Recording
         has_media=_find_media_file(recording.artifact_dir) is not None,
         created_at=recording.created_at,
     )
+
+
+logger = logging.getLogger(__name__)
+
+
+def _read_result_file(recording: Recording, raw_path: str) -> str:
+    """Read a prompt-result file, refusing anything outside the recording.
+
+    The path comes from the database, and a recording outlives the task that
+    wrote it, so it is data of unclear age rather than a value this code just
+    computed. Resolving it and requiring it to stay under the recording's own
+    artifact directory keeps a malformed or tampered row from turning a read
+    tool into "open any file the server can reach".
+
+    A missing file reads as empty rather than raising: the row can outlive the
+    artifact, and that is a 404-shaped answer the caller already handles.
+    """
+    from pathlib import Path
+
+    root = Path(str(getattr(recording, "artifact_dir", "") or "")).resolve()
+    try:
+        path = Path(raw_path).resolve()
+        if not root or not path.is_relative_to(root):
+            logger.warning(
+                "prompt result path %s escapes recording dir %s; refusing",
+                raw_path, root,
+            )
+            return ""
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
 
 
 def register(mcp: FastMCP) -> None:
@@ -214,11 +246,19 @@ def register(mcp: FastMCP) -> None:
                 entry_ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
                 if entry_ref == wanted or entry.get("ref") == wanted:
                     source, _, ident = wanted.partition(":")
+                    # The entry stores a PATH, not the text: real rows look
+                    # like {"source","id","name","path","status"}. Reading a
+                    # "text" key that does not exist returned 200 with empty
+                    # content — worse than the crash it replaced, because a
+                    # caller cannot tell an empty summary from a broken reader.
+                    content = entry.get("text") or entry.get("result") or ""
+                    if not content and entry.get("path"):
+                        content = _read_result_file(recording, entry["path"])
                     return PromptResult(
                         task_id=recording.source_task_id,
                         source=source,
                         id=ident,
-                        content=entry.get("text") or entry.get("result") or "",
+                        content=content,
                     )
             # Falling back to the summary artifact: the oldest recordings were
             # created before results were snapshotted into meta, and for them
