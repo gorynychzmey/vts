@@ -81,18 +81,27 @@ def _serialize(recording: Recording) -> RecordingOut:
 async def list_recordings(
     limit: int = 50,
     offset: int = 0,
+    q: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> RecordingListOut:
-    """The user's recordings, newest first."""
+    """The user's recordings, newest first, filtered server-side.
+
+    The filters live here rather than in the browser because the client only
+    holds the pages it has loaded: filtering there answers "not among the 30
+    you have", which is indistinguishable to the user from "does not exist".
+    """
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
-    items = await repo.list_recordings(user_id, limit=limit, offset=offset)
-    total = await session.scalar(
-        select(func.count()).select_from(Recording).where(Recording.user_id == user_id)
-    )
+    filters = {"q": q, "created_from": created_from, "created_to": created_to}
+    items = await repo.list_recordings(user_id, limit=limit, offset=offset, **filters)
+    # Counted with the SAME filters, so the number beside the heading describes
+    # the result set rather than the corpus.
+    total = await repo.count_recordings(user_id, **filters)
     return RecordingListOut(items=[_serialize(r) for r in items], total=int(total or 0))
 
 

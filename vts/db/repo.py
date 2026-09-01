@@ -564,18 +564,93 @@ class Repo:
         await self.session.flush()
         return recording
 
+    def _apply_recording_filters(
+        self,
+        stmt: Any,
+        *,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
+    ) -> Any:
+        """The one place recording filters are expressed.
+
+        Shared by the page query and the count so the two can never disagree,
+        and shared by the HTTP endpoint and the MCP tool so a filter added to
+        one is not missing from the other — three separate WHERE clauses is
+        how the library search came to look only at the loaded page.
+        """
+        if q:
+            stmt = stmt.where(Recording.title.ilike(f"%{q.strip()}%"))
+        if created_from is not None:
+            stmt = stmt.where(Recording.created_at >= created_from)
+        if created_to is not None:
+            stmt = stmt.where(Recording.created_at <= created_to)
+        if task_ids is not None:
+            stmt = stmt.where(Recording.source_task_id.in_(task_ids))
+        if exclude_task_ids:
+            stmt = stmt.where(
+                or_(
+                    Recording.source_task_id.is_(None),
+                    Recording.source_task_id.notin_(exclude_task_ids),
+                )
+            )
+        return stmt
+
     async def list_recordings(
-        self, user_id: uuid.UUID, limit: int = 100, offset: int = 0
+        self,
+        user_id: uuid.UUID,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list["Recording"]:
-        """A user's recordings, newest first."""
+        """A user's recordings, newest first, narrowed in the QUERY.
+
+        Filtering here rather than in the caller is the whole point: a client
+        that filters the page it happens to hold reports "not found" for a row
+        on the next page.
+        """
+        stmt = self._apply_recording_filters(
+            select(Recording).where(Recording.user_id == user_id),
+            q=q, created_from=created_from, created_to=created_to,
+            task_ids=task_ids, exclude_task_ids=exclude_task_ids,
+        )
         stmt = (
-            select(Recording)
-            .where(Recording.user_id == user_id)
-            .order_by(Recording.created_at.desc(), Recording.id.desc())
+            stmt.order_by(Recording.created_at.desc(), Recording.id.desc())
             .limit(limit)
             .offset(offset)
         )
         return list((await self.session.execute(stmt)).scalars().all())
+
+    async def count_recordings(
+        self,
+        user_id: uuid.UUID,
+        *,
+        q: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        task_ids: list[uuid.UUID] | None = None,
+        exclude_task_ids: list[uuid.UUID] | None = None,
+    ) -> int:
+        """How many recordings match, ignoring paging.
+
+        Counting the corpus while listing a filtered page produces "showing 1
+        of 3", which is why this takes the same arguments.
+        """
+        stmt = self._apply_recording_filters(
+            select(func.count()).select_from(Recording).where(
+                Recording.user_id == user_id
+            ),
+            q=q, created_from=created_from, created_to=created_to,
+            task_ids=task_ids, exclude_task_ids=exclude_task_ids,
+        )
+        return int((await self.session.scalar(stmt)) or 0)
 
     async def get_recording_for_user(
         self, user_id: uuid.UUID, recording_id: uuid.UUID

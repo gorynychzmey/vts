@@ -8157,9 +8157,22 @@ async function loadLibraryPage() {
   p.loading = true;
   updateLibrarySentinel();
   try {
-    const payload = await api(
-      `/api/recordings?limit=${p.pageSize}&offset=${p.offset}`
-    );
+    // Filters go to the SERVER. Filtering the loaded page instead answers
+    // "not among the ones you have", which a user cannot tell apart from
+    // "does not exist" — the recording they want may be on page 2.
+    const params = new URLSearchParams({
+      limit: String(p.pageSize),
+      offset: String(p.offset),
+    });
+    const needle = (libraryQ?.value || "").trim();
+    const from = (libraryFrom?.value || "").trim();
+    const to = (libraryTo?.value || "").trim();
+    if (needle) params.set("q", needle);
+    if (from) params.set("created_from", `${from}T00:00:00Z`);
+    // Through the END of the "to" day: the input is a date, so a recording
+    // made that afternoon must match rather than be cut off at midnight.
+    if (to) params.set("created_to", `${to}T23:59:59Z`);
+    const payload = await api(`/api/recordings?${params.toString()}`);
     const items = payload && Array.isArray(payload.items) ? payload.items : [];
     if (payload && Number.isFinite(payload.total)) {
       libraryPaging.total = payload.total;
@@ -8186,30 +8199,33 @@ async function loadLibraryPage() {
 // Typing filters by name. It is deliberately not the content search: that one
 // costs an embedding round-trip, so it waits for Enter.
 function applyLibraryFilter() {
-  const needle = (libraryQ?.value || "").trim().toLowerCase();
+  // The rows now arrive already filtered, so this only renders them and
+  // reflects whether a filter is active. Re-filtering here would reintroduce
+  // the bug it used to cause: the client can only ever see loaded pages.
+  const needle = (libraryQ?.value || "").trim();
   const from = (libraryFrom?.value || "").trim();
   const to = (libraryTo?.value || "").trim();
-  const items = libraryItems.filter((item) => {
-    if (needle) {
-      const name = displayNameFor(item.title, item.source_url).toLowerCase();
-      if (!name.includes(needle)) return false;
-    }
-    // Compared on the DATE part alone: the inputs are dates, so a recording
-    // made late on the "to" day must still match rather than being cut off at
-    // midnight.
-    const when = String(item.recorded_at || item.created_at || "").slice(0, 10);
-    if (from && when && when < from) return false;
-    if (to && when && when > to) return false;
-    return true;
-  });
   if (libraryClear) {
     libraryClear.classList.toggle("hidden", !needle && !from && !to);
   }
-  renderLibraryList(items);
+  renderLibraryList(libraryItems);
+}
+
+// Changing a filter changes the QUERY, so the list restarts from offset 0
+// rather than being narrowed in place. Debounced: without it every keystroke
+// is a round trip, and the answers can arrive out of order.
+let libraryFilterTimer = null;
+function reloadLibraryFiltered(delay = 250) {
+  if (libraryFilterTimer) clearTimeout(libraryFilterTimer);
+  libraryFilterTimer = setTimeout(() => {
+    libraryFilterTimer = null;
+    loadLibrary();
+  }, delay);
 }
 
 libraryQ?.addEventListener("input", () => {
-  applyLibraryFilter();
+  // Debounced, because the name filter is now a server round trip.
+  reloadLibraryFiltered();
 });
 
 libraryQ?.addEventListener("keydown", (event) => {
@@ -8219,8 +8235,8 @@ libraryQ?.addEventListener("keydown", (event) => {
   }
 });
 
-libraryFrom?.addEventListener("change", () => applyLibraryFilter());
-libraryTo?.addEventListener("change", () => applyLibraryFilter());
+libraryFrom?.addEventListener("change", () => reloadLibraryFiltered(0));
+libraryTo?.addEventListener("change", () => reloadLibraryFiltered(0));
 
 // Content search as an explicit action. Enter still works, but nothing on
 // screen said so — a button beside the field is what makes it discoverable.
@@ -8233,7 +8249,7 @@ libraryClear?.addEventListener("click", () => {
   if (libraryFrom) libraryFrom.value = "";
   if (libraryTo) libraryTo.value = "";
   if (libraryHits) libraryHits.hidden = true;
-  applyLibraryFilter();
+  reloadLibraryFiltered(0);
 });
 
 libraryRefreshBtn?.addEventListener("click", () => {
@@ -8244,7 +8260,7 @@ libraryRefreshBtn?.addEventListener("click", () => {
 libraryHitsClear?.addEventListener("click", () => {
   if (libraryHits) libraryHits.hidden = true;
   if (libraryQ) libraryQ.value = "";
-  applyLibraryFilter();
+  reloadLibraryFiltered(0);
 });
 
 // Semantic search over what was SAID. Returns passages, and an empty result is

@@ -95,57 +95,43 @@ def register(mcp: FastMCP) -> None:
             user_id = uuid.UUID(user.id)
             repo = Repo(session)
 
-            stmt = select(Recording).where(Recording.user_id == user_id)
-            count_stmt = (
-                select(func.count()).select_from(Recording)
-                .where(Recording.user_id == user_id)
-            )
-            if q:
-                like = f"%{q.strip()}%"
-                cond = Recording.title.ilike(like)
-                stmt, count_stmt = stmt.where(cond), count_stmt.where(cond)
-            if created_from is not None:
-                cond = Recording.created_at >= created_from
-                stmt, count_stmt = stmt.where(cond), count_stmt.where(cond)
-            if created_to is not None:
-                cond = Recording.created_at <= created_to
-                stmt, count_stmt = stmt.where(cond), count_stmt.where(cond)
-
             # Voice identification hangs off the TASK, so both voice filters
-            # resolve to a set of task ids and then constrain the recordings
-            # that still point at one. A recording whose task was deleted can
-            # never satisfy them — correctly: its people are unknowable now.
+            # resolve to a set of task ids the repo then constrains on.
+            task_ids = exclude_ids = None
             if person or diarized is not None:
-                named = (
-                    select(MatchDecision.source_task_id)
-                    .where(
-                        MatchDecision.user_id == user_id,
-                        MatchDecision.speaker_id.isnot(None),
-                        MatchDecision.source_task_id.isnot(None),
-                    )
-                )
                 if person:
-                    named = named.join(
-                        Speaker, MatchDecision.speaker_id == Speaker.id
-                    ).where(Speaker.name.ilike(f"%{person.strip()}%"))
-                subq = named.distinct().scalar_subquery()
-                cond = (
-                    Recording.source_task_id.in_(subq)
-                    if (person or diarized)
-                    else Recording.source_task_id.notin_(subq)
-                )
-                stmt, count_stmt = stmt.where(cond), count_stmt.where(cond)
+                    matched: list[uuid.UUID] = []
+                    for sp in await repo.speakers_by_name(user_id, person):
+                        matched.extend(
+                            await repo.tasks_featuring_speaker(user_id, sp.id)
+                        )
+                    ids = list(dict.fromkeys(matched))
+                else:
+                    ids = await repo.diarized_task_ids(user_id)
+                if person or diarized:
+                    # Nobody matched: an empty page is the honest answer, not
+                    # the unfiltered list.
+                    if not ids:
+                        return RecordingList(items=[], total=0)
+                    task_ids = ids
+                else:
+                    exclude_ids = ids
 
-            stmt = (
-                stmt.order_by(Recording.created_at.desc())
-                .limit(max(1, min(int(limit), 200)))
-                .offset(max(0, int(offset)))
+            filters = {
+                "q": q, "created_from": created_from, "created_to": created_to,
+                "task_ids": task_ids, "exclude_task_ids": exclude_ids,
+            }
+            items = await repo.list_recordings(
+                user_id,
+                limit=max(1, min(int(limit), 200)),
+                offset=max(0, int(offset)),
+                **filters,
             )
-            items = list((await session.execute(stmt)).scalars().all())
-            total = int(await session.scalar(count_stmt) or 0)
+            total = await repo.count_recordings(user_id, **filters)
 
-            task_ids = [r.source_task_id for r in items if r.source_task_id]
-            people = await repo.speaker_names_for_tasks(user_id, task_ids)
+            people = await repo.speaker_names_for_tasks(
+                user_id, [r.source_task_id for r in items if r.source_task_id]
+            )
             return RecordingList(
                 items=[
                     _info(r, people=people.get(r.source_task_id, []))
