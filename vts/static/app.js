@@ -7726,6 +7726,13 @@ function resetPresetForm() {
       { flat: true },
     );
   }
+  // The delivery control needs drawing here too, for the same reason the
+  // prompt list above does: this is the empty "new preset" form, and nothing
+  // else fills it. renderDeliverySelectors() only UNHIDES this field — the
+  // pill inside it is built by renderPresetDeliverySelect, which until now ran
+  // only when a preset was picked from the list. So the dialog opened with the
+  // "Deliver to" label above an empty gap.
+  renderPresetDeliverySelect([]);
   setPresetFormMode("");
   renderPresetsListFromCache();
 }

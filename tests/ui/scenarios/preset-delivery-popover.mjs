@@ -65,6 +65,31 @@ export async function run() {
       return failures;
     }
 
+    // BEFORE picking a preset: the dialog opens on the empty "new preset" form,
+    // and the delivery control must already be there. resetPresetForm() drew
+    // the prompt list but not this one, so the "Deliver to" label sat above an
+    // empty gap until a preset was selected.
+    const onEmptyForm = await page.waitForFunction(
+      () => {
+        const f = document.getElementById("preset-delivery-field");
+        return f && !f.hidden && !!f.querySelector(".delivery-pill");
+      },
+      { timeout: 5000 },
+    ).then(() => true).catch(() => false);
+    if (!onEmptyForm) {
+      const state = await page.evaluate(() => {
+        const f = document.getElementById("preset-delivery-field");
+        return {
+          fieldPresent: !!f,
+          hidden: f ? f.hidden : null,
+          innerHTML: f ? f.querySelector(".prompt-select")?.innerHTML.length ?? -1 : null,
+        };
+      });
+      failures.push(
+        `the delivery control is missing on the new-preset form before any preset is picked: ${JSON.stringify(state)}`,
+      );
+    }
+
     // Enter the editor for the user preset.
     await clickReal(page, "#presets-dialog .mgr-item");
     const fieldReady = await page.waitForFunction(
