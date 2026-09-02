@@ -48,6 +48,23 @@ def test_manifest_has_what_installability_requires():
     assert "maskable" in purposes, "Android needs a maskable icon for the launcher"
 
 
+def test_maskable_icon_is_not_a_copy_of_the_plain_one():
+    """A maskable icon needs a safe zone; the plain one has none.
+
+    Android crops it to the launcher's mask (circle, squircle, …), so artwork
+    that reaches the edge loses its corners. Both files were byte-identical
+    until 2026-09-02 — the maskable declaration was a label on the same image.
+    """
+    import hashlib
+
+    plain = (STATIC / "icons" / "icon-512.png").read_bytes()
+    maskable = (STATIC / "icons" / "icon-maskable-512.png").read_bytes()
+    assert hashlib.md5(plain).hexdigest() != hashlib.md5(maskable).hexdigest(), (
+        "icon-maskable-512.png is a byte-for-byte copy of icon-512.png, so it "
+        "has no safe zone and the launcher will crop the artwork"
+    )
+
+
 def test_share_target_accepts_the_media_the_pipeline_handles():
     """A container missing here means the share sheet greys the app out."""
     manifest = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
