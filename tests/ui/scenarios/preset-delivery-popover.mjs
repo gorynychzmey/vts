@@ -1,0 +1,129 @@
+// The delivery menu in the PRESET editor must not be trapped inside its pill.
+//
+// Reported from a screenshot: the "Deliver to" pill grew a horizontal
+// scrollbar and spinner arrows, as if the menu were trying to render inside
+// the pill's own box.
+//
+// Cause: a rule written for the PROMPT list,
+//     .presets-dialog .prompt-select-field .prompt-select {
+//       max-height: 13rem; overflow-y: auto;
+//     }
+// matches ANY .prompt-select in the dialog — including the delivery field.
+// `.prompt-select` is the very element the popover is appended to, and
+// overflow:auto makes it a scroll container, so an absolutely-positioned child
+// can no longer escape it: the 15rem menu is clipped into a ~9rem pill.
+//
+// Measured, not eyeballed: a clipped popover reports a scrollWidth wider than
+// its parent's clientWidth, and the parent reports overflow != "visible".
+import { startStubServer, launch, openPage, dialogOpen, clickReal, openFromHeaderMenu } from "../harness.mjs";
+
+export const name = "preset-delivery-popover";
+
+export async function run() {
+  const { server, baseUrl } = await startStubServer({
+    "/api/presets": [
+      {
+        source: "user", id: "p1", name: "Standard", editable: true,
+        options: { language: "ru", audio_only: false, transcript: true, prompts: [] },
+      },
+    ],
+    "/api/me/default_preset": { source: "user", id: "p1" },
+    // The delivery field only appears when a destination exists.
+    "/api/delivery-adapters": [
+      { name: "webdav", label: "WebDAV", fields: [] },
+      { name: "telegram", label: "Telegram", fields: [] },
+    ],
+    "/api/delivery-targets": [
+      { id: "d1", name: "Nextcloud", adapter: "webdav", credential_id: "c1", config: {} },
+      { id: "d2", name: "Telegram", adapter: "telegram", credential_id: "c2", config: {} },
+    ],
+    "/api/delivery-credentials": [
+      { id: "c1", name: "nc", adapter: "webdav", config: {} },
+      { id: "c2", name: "tg", adapter: "telegram", config: {} },
+    ],
+  });
+  const browser = await launch();
+  const failures = [];
+  try {
+    const { page } = await openPage(browser, baseUrl);
+    await openFromHeaderMenu(page, "#presets-btn");
+    if (!(await dialogOpen(page, "presets-dialog"))) {
+      failures.push("presets-dialog did not open");
+      return failures;
+    }
+
+    // Enter the editor for the user preset.
+    await clickReal(page, "#presets-dialog .mgr-item");
+    const fieldReady = await page.waitForFunction(
+      () => {
+        const f = document.getElementById("preset-delivery-field");
+        return f && !f.hidden && f.querySelector(".delivery-pill");
+      },
+      { timeout: 8000 },
+    ).then(() => true).catch(() => false);
+    if (!fieldReady) {
+      failures.push("the delivery field never appeared in the preset editor");
+      return failures;
+    }
+
+    // The container must not be a scroll container: that is what traps the menu.
+    const box = await page.evaluate(() => {
+      const sel = document.querySelector("#preset-edit-delivery");
+      const cs = getComputedStyle(sel);
+      return { overflowY: cs.overflowY, overflowX: cs.overflowX, maxHeight: cs.maxHeight };
+    });
+    if (box.overflowY !== "visible" || box.overflowX !== "visible") {
+      failures.push(
+        `#preset-edit-delivery is a scroll container (overflow ${box.overflowX}/${box.overflowY}, max-height ${box.maxHeight}) — an absolutely positioned popover cannot escape it`,
+      );
+    }
+
+    // And the menu, once open, must be wider than the pill rather than
+    // squeezed inside it.
+    await clickReal(page, "#preset-edit-delivery .delivery-pill");
+    const shape = await page.waitForFunction(
+      () => {
+        const pop = document.querySelector("#preset-edit-delivery .prompt-select-popover");
+        if (!pop || pop.hidden) return null;
+        const parent = document.querySelector("#preset-edit-delivery");
+        // Overflow INSIDE the menu, not of the pill: the popover is
+        // absolutely positioned, so it is legitimately wider than its
+        // parent and the parent's scrollWidth always exceeds clientWidth.
+        // Measuring that was my own false positive.
+        const rows = [...pop.children].map((c) => ({
+          cls: (c.className || "").split(" ")[0],
+          over: c.scrollWidth - c.clientWidth,
+        }));
+        return {
+          popWidth: Math.round(pop.getBoundingClientRect().width),
+          parentWidth: Math.round(parent.getBoundingClientRect().width),
+          popOverflow: pop.scrollWidth - pop.clientWidth,
+          worstRow: rows.sort((a, b) => b.over - a.over)[0] || null,
+        };
+      },
+      { timeout: 8000 },
+    ).then((h) => h.jsonValue()).catch(() => null);
+
+    if (!shape) {
+      failures.push("the delivery popover did not open in the preset editor");
+    } else {
+      // A row wider than the menu is what draws the scrollbar and the
+      // spinner arrows in the reported screenshot.
+      if (shape.popOverflow > 1) {
+        failures.push(
+          `the menu scrolls horizontally (scrollWidth exceeds clientWidth by ${shape.popOverflow}px); widest child: ${JSON.stringify(shape.worstRow)}`,
+        );
+      }
+      // 15rem at the default root size; the pill itself is far narrower.
+      if (shape.popWidth < 200) {
+        failures.push(
+          `the popover is ${shape.popWidth}px wide (>=200 expected) — it is being squeezed into the ${shape.parentWidth}px pill`,
+        );
+      }
+    }
+  } finally {
+    await browser.close();
+    server.close();
+  }
+  return failures;
+}

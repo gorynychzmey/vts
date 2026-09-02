@@ -3835,10 +3835,31 @@ dialog:not([open]) {
 
 /* The variant picker sits inside a row that is itself a <label>, so it needs
    to stay clickable without toggling the row's checkbox. */
+/* Four pieces share this row — checkbox, name, artifact variant and, when the
+   adapter is missing, a warning. In a popover ~280px wide they do not fit on
+   one line, and a nowrap flex row does not shrink: it grew scrollWidth to
+   ~500px and put a horizontal scrollbar inside the menu. So the row wraps, and
+   the name (the only elastic part) may ellipsise rather than push the rest
+   out. Covered by tests/ui/scenarios/preset-delivery-popover.mjs. */
 .delivery-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.delivery-row .prompt-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its own line when it wraps, so it reads as a note about the row rather than
+   a third column squeezed against the variant. */
+.delivery-row .delivery-unavailable {
+  flex: 1 1 100%;
 }
 
 .delivery-row .delivery-variant {
@@ -5748,8 +5769,15 @@ dialog:not([open]) {
 }
 
 /* The prompt list can be long; it scrolls inside the editor instead of growing
-   the dialog past the viewport, so the actions below stay reachable. */
-.presets-dialog .prompt-select-field .prompt-select {
+   the dialog past the viewport, so the actions below stay reachable.
+
+   NOT the delivery field, which shares .prompt-select-field but is a pill with
+   a POPOVER inside it. `overflow-y: auto` makes .prompt-select a scroll
+   container, and an absolutely-positioned child cannot escape one — so the
+   15rem menu was clipped into the ~9rem pill, which then grew a horizontal
+   scrollbar and spinner arrows, as if the menu were rendering inside the pill.
+   Covered by tests/ui/scenarios/preset-delivery-popover.mjs. */
+.presets-dialog .prompt-select-field:not(.delivery-select-field) .prompt-select {
   max-height: 13rem;
   overflow-y: auto;
 }
