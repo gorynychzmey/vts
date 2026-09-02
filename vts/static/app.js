@@ -3458,6 +3458,39 @@ function setPromptPopoverOpen(container, open) {
   container.classList.toggle("open", open);
   popover.hidden = !open;
   toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    placePromptPopover(toggle, popover);
+  } else {
+    popover.classList.remove("drop-up");
+  }
+}
+
+/** Open upwards when there is no room below.
+ *
+ * Inside a scrollable dialog a downward popover extends the content and makes
+ * the DIALOG scroll — the menu appears to push the form around instead of
+ * floating over it. The same control on the main page has room and behaves
+ * normally, which is why this only shows up in the managers.
+ *
+ * Measured against the nearest scrolling ancestor rather than the viewport:
+ * inside a dialog that box is what actually clips, and using the viewport
+ * would flip menus that are perfectly fine.
+ */
+function placePromptPopover(toggle, popover) {
+  popover.classList.remove("drop-up");
+  const clipper = toggle.closest("dialog") || null;
+  const bounds = clipper
+    ? clipper.getBoundingClientRect()
+    : { top: 0, bottom: window.innerHeight };
+  const pill = toggle.getBoundingClientRect();
+  const needed = popover.getBoundingClientRect().height;
+  const below = bounds.bottom - pill.bottom;
+  const above = pill.top - bounds.top;
+  // Only flip when down does not fit AND up does: a menu taller than both
+  // stays down, where scrolling at least reaches the rest of it.
+  if (needed > below - 8 && above > below) {
+    popover.classList.add("drop-up");
+  }
 }
 
 function togglePromptPopover(container) {

@@ -3057,7 +3057,12 @@ dialog:not([open]) {
   align-items: stretch;
 }
 
-.prompt-form input,
+/* Text fields only. `width: 100%` on a bare `input` also caught the checkboxes
+   inside the delivery popover, stretching one to 243px in a 259px row so it
+   took a line of its own — the checkbox-on-its-own-line in the preset editor.
+   Excluding the box-shaped inputs fixes it at the source; the row itself needs
+   no wrapping tricks. */
+.prompt-form input:not([type="checkbox"]):not([type="radio"]),
 .prompt-form textarea {
   width: 100%;
   min-width: 0;
@@ -3845,19 +3850,28 @@ dialog:not([open]) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
   max-width: 100%;
 }
 
+/* The name is the only elastic part: it shrinks and ellipsises so the checkbox
+   and the variant keep their places. Wrapping the ROW instead (my first
+   attempt) put the checkbox on a line of its own — `.delivery-row-variant`
+   carries `margin-left: auto`, so once the row wrapped it pushed the pieces
+   onto separate lines: 77px tall with the checkbox 21px above its own label. */
 .delivery-row .prompt-name {
   min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Its own line when it wraps, so it reads as a note about the row rather than
-   a third column squeezed against the variant. */
+/* Only the "plugin not installed" note may take a second line — it is a
+   sentence, not a column. The other three stay on one line. */
+.delivery-row {
+  flex-wrap: wrap;
+}
+
 .delivery-row .delivery-unavailable {
   flex: 1 1 100%;
 }
@@ -5311,6 +5325,14 @@ dialog:not([open]) {
   border: 1px solid var(--line-strong);
   border-radius: var(--r-xl);
   box-shadow: var(--sh-pop);
+}
+
+/* Opened upwards when the space below is short — see placePromptPopover().
+   Without it a menu inside a scrollable manager dialog grows the dialog's
+   content and scrolls the form instead of floating above it. */
+.popover.drop-up {
+  top: auto;
+  bottom: calc(100% + 0.3rem);
 }
 
 .popover.w-md {

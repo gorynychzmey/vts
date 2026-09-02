@@ -121,6 +121,51 @@ export async function run() {
         );
       }
     }
+
+    // The checkbox must be a checkbox, not a stretched text field.
+    // `.prompt-form input { width: 100% }` caught it and blew it up to 243px
+    // in a 259px row, so it took a line of its own above its own label.
+    const row = await page.evaluate(() => {
+      const r = document.querySelector("#preset-edit-delivery .delivery-row");
+      const cb = r.querySelector("input");
+      const name = r.querySelector(".prompt-name");
+      const top = (el) => Math.round(el.getBoundingClientRect().top);
+      return {
+        checkboxWidth: Math.round(cb.getBoundingClientRect().width),
+        sameLine: Math.abs(top(cb) - top(name)) <= 6,
+      };
+    });
+    if (row.checkboxWidth > 40) {
+      failures.push(
+        `the checkbox is ${row.checkboxWidth}px wide — a text-field rule is stretching it`,
+      );
+    }
+    if (!row.sameLine) {
+      failures.push("the checkbox is not on the same line as the destination name");
+    }
+
+    // And the menu must float over the dialog, not extend it: inside a
+    // scrollable dialog a downward popover grows the content and scrolls the
+    // form instead. It flips upwards when there is no room below.
+    const fit = await page.evaluate(() => {
+      const d = document.getElementById("presets-dialog");
+      const pop = document.querySelector("#preset-edit-delivery .prompt-select-popover");
+      const dr = d.getBoundingClientRect();
+      const pr = pop.getBoundingClientRect();
+      return {
+        inside: pr.bottom <= dr.bottom + 1 && pr.top >= dr.top - 1,
+        overflowsBy: Math.round(pr.bottom - dr.bottom),
+        dialogScrolls: d.scrollHeight > d.clientHeight + 1,
+      };
+    });
+    if (!fit.inside) {
+      failures.push(
+        `the menu extends past the dialog by ${fit.overflowsBy}px instead of flipping upwards`,
+      );
+    }
+    if (fit.dialogScrolls) {
+      failures.push("opening the menu made the dialog scrollable — it should float over it");
+    }
   } finally {
     await browser.close();
     server.close();
