@@ -29,12 +29,25 @@ export async function run() {
     ],
     "/api/me/default_preset": { source: "user", id: "p1" },
     // The delivery field only appears when a destination exists.
-    "/api/delivery-adapters": [
-      { name: "webdav", label: "WebDAV", fields: [] },
-      { name: "telegram", label: "Telegram", fields: [] },
+    "/api/prompts": [
+      { source: "user", id: "c32a70c0-fcc7-4d59-82a2-2fe225d85d9d", name: "Мемо", is_system: false },
     ],
+    "/api/delivery-adapters": {
+      adapters: [
+        { name: "webdav", label: "WebDAV", fields: [] },
+        { name: "telegram", label: "Telegram", fields: [] },
+      ],
+      incompatible: {},
+      // Variants are per-user (they include the user's own prompts) and are
+      // what turns a stored "user:<uuid>" into a name.
+      variants: [
+        { value: "summary", label: "delivery.variant.summary" },
+        { value: "user:c32a70c0-fcc7-4d59-82a2-2fe225d85d9d", label: "Мемо" },
+      ],
+    },
     "/api/delivery-targets": [
-      { id: "d1", name: "Nextcloud", adapter: "webdav", credential_id: "c1", config: {} },
+      { id: "d1", name: "Nextcloud", adapter: "webdav", credential_id: "c1",
+        config: { default_variant: "user:c32a70c0-fcc7-4d59-82a2-2fe225d85d9d" } },
       { id: "d2", name: "Telegram", adapter: "telegram", credential_id: "c2", config: {} },
     ],
     "/api/delivery-credentials": [
@@ -142,6 +155,22 @@ export async function run() {
     }
     if (!row.sameLine) {
       failures.push("the checkbox is not on the same line as the destination name");
+    }
+
+    // The variant must read as a NAME. Variants ship with the adapters, and
+    // loadDeliveryAdapters used to run only when the delivery MANAGER was
+    // opened — so everywhere else the menu printed the stored value verbatim:
+    // "user:<uuid>" for a prompt, and even a fixed variant untranslated.
+    const labels = await page.$$eval(
+      "#preset-edit-delivery .delivery-row-variant",
+      (els) => els.map((e) => e.textContent.trim()),
+    );
+    const raw = labels.filter((l) => /^user:[0-9a-f-]{36}$/i.test(l));
+    if (raw.length) {
+      failures.push(`the variant shows a raw id instead of a name: ${JSON.stringify(raw)}`);
+    }
+    if (!labels.includes("Мемо")) {
+      failures.push(`expected the prompt's name among the variants, got ${JSON.stringify(labels)}`);
     }
 
     // And the menu must float over the dialog, not extend it: inside a

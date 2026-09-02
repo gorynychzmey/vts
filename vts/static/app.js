@@ -5110,6 +5110,13 @@ async function refreshAll() {
   // Before loadTasks(): a task's finalize step labels resolve through
   // promptsCache, so a stale cache renders the wrong names on first paint.
   await loadPrompts();
+  // Variants come with the adapters, and they are PER-USER too: the list
+  // includes this user's own prompts. Loading only the entities left
+  // deliveryState.variants empty everywhere except the delivery manager
+  // (the one place that called loadDeliveryAdapters), so every other menu
+  // showed the raw stored value — "user:<uuid>" for a prompt, and even
+  // "redacted" untranslated for a fixed variant.
+  await loadDeliveryAdapters();
   await loadDeliveryEntities();
   renderDeliverySelectors();
   await loadTasks();
