@@ -3,6 +3,26 @@
 
 const SHARE_CACHE = "vts-share-inbox";
 
+// Inline rather than a cached file: the app caches no assets at all, and a
+// fetched offline page would be one more thing to keep in sync.
+const OFFLINE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>vts</title>
+<style>
+  :root { color-scheme: light dark }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         font:16px/1.5 system-ui,sans-serif; background:#efeae0; color:#2b2620 }
+  @media (prefers-color-scheme: dark) { body { background:#1b1916; color:#e8e2d8 } }
+  main { max-width:22rem; padding:2rem; text-align:center }
+  h1 { margin:0 0 .5rem; font-size:1.1rem }
+  p { margin:0; opacity:.75 }
+</style></head>
+<body><main>
+  <h1>vts is offline</h1>
+  <p>Reconnect and reload &mdash; queued work on the server is unaffected.</p>
+</main></body></html>`;
+
 self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
@@ -71,6 +91,24 @@ self.addEventListener("fetch", (event) => {
   if (req.method === "GET" && url.pathname === "/_share_inbox") {
     event.respondWith(serveShareInbox());
     return;
+  }
+  // Answer navigations, which is what makes the app INSTALLABLE in Edge.
+  // Chrome dropped the offline requirement in 2021 and installs without it;
+  // Edge still enforces it, and an app that fails the check is added as a
+  // shortcut rather than an app — no entry in the app list, though tapping
+  // the icon still opens it standalone. That is the reported symptom.
+  //
+  // Network first, and nothing is cached: index.html is deliberately served
+  // no-store because it carries per-request state, so caching it would show a
+  // stale shell. The offline branch exists to satisfy the check and to say
+  // something honest when there is no connection — not to run the app.
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req).catch(() => new Response(OFFLINE_HTML, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      })),
+    );
   }
 });
 

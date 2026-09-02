@@ -8927,12 +8927,13 @@ async function applyPendingSharedFileIfAny() {
       fileRadio.checked = true;
       syncSourceType();
     }
-    if (fileInput) {
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      fileInput.files = dt.files;
-      fileInput.focus();
-    }
+    // Go through addStagedFiles, not fileInput.files. Since multi-file upload
+    // landed, `stagedFiles` is the source of truth and the visible list is
+    // built from it — writing the hidden input straight put the file where
+    // nothing reads it, so the form switched to File mode with an empty list,
+    // which is exactly how the Android share looked: accepted, then nothing.
+    addStagedFiles([file]);
+    if (fileInput) fileInput.focus();
   } catch (err) {
     console.warn("shared file handoff failed", err);
   }
