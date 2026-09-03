@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vts.pipeline.steps.base import Step, StepState
-from vts.services.media import run_ffmpeg
+from vts.services.media import probe_duration, run_ffmpeg
 from vts.services.storage import write_json
 
 if TYPE_CHECKING:
@@ -159,11 +160,43 @@ class DiarizeStep(Step):
         # The task id doubles as the job id: it is already persistent, so a
         # worker that restarts mid-run re-attaches to the job still running in
         # the sidecar instead of paying for the whole diarization twice.
+        # RTF for diarization is a WHOLE-TASK number by necessity: the sidecar
+        # gets the entire file in one pass (see above — chunking it would split
+        # one speaker across tags), so there is no per-segment processing time
+        # to measure. The segments it returns are speech boundaries, not units
+        # of work.
+        _di_t0 = time.monotonic()
         payload = await ctx.diarization.diarize(
             audio_path=audio_path,
             job_id=str(st.task_id),
             on_progress=report,
         )
+        _di_wall_ms = round((time.monotonic() - _di_t0) * 1000)
+        # getattr, not ctx.get_emitter directly: a metric must never be the
+        # reason a step fails, and the step is constructed with a stripped
+        # context in tests and in any caller that does not collect metrics.
+        _get_emitter = getattr(ctx, "get_emitter", None)
+        _di_emitter = _get_emitter(st.task_id) if callable(_get_emitter) else None
+        if _di_emitter:
+            # Probed rather than derived from the segments: the last segment
+            # ends at the last speech, which is shorter than the audio whenever
+            # a recording ends in silence — that would flatter the RTF.
+            try:
+                _di_audio_s = probe_duration(audio_path)
+            except Exception:  # noqa: BLE001 - a metric must not fail the step
+                _di_audio_s = 0.0
+            _di_rtf = (
+                (_di_wall_ms / 1000.0) / _di_audio_s if _di_audio_s > 0 else None
+            )
+            _di_emitter.emit({
+                "stage": "diarize.run",
+                "status": "ok",
+                "audio_duration_s": round(_di_audio_s, 3),
+                "t_wall_ms": _di_wall_ms,
+                "rtf": round(_di_rtf, 4) if _di_rtf is not None else None,
+                "speakers": len({s["speaker"] for s in payload.get("segments") or []}),
+                "segments": len(payload.get("segments") or []),
+            })
 
         # We sent audio and got no speakers back. This is NOT what a monologue
         # looks like — a real single-speaker result is one segment spanning the

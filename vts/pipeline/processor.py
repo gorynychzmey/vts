@@ -77,6 +77,38 @@ class _TaskGone(Exception):
     """
 
 
+def _log_rtf(logger: logging.Logger, aggregates: dict) -> None:
+    """Write the RTF lines a person reads in the task log.
+
+    Both transcription numbers go in because they answer different questions
+    and can differ several-fold: `work` measures the model (comparable across
+    tasks and backends), `wall` is what the user waited for. Printing one alone
+    invites the wrong conclusion — on production the same task read 0.058 and
+    0.028 depending on which was chosen.
+
+    Silent when a stage did not run: a task without diarization must not get a
+    line claiming an RTF of nothing.
+    """
+    audio = aggregates.get("transcribe_audio_s")
+    work = aggregates.get("transcribe_rtf_work")
+    wall = aggregates.get("transcribe_rtf_wall")
+    if audio and work is not None and wall is not None:
+        ratio = aggregates.get("transcribe_work_over_wall")
+        logger.info(
+            "transcription RTF %.3f (wall %.3f, work/wall %.2f) over %.0fs of audio "
+            "— %.1fx faster than real time",
+            work, wall, ratio if ratio is not None else 0.0, audio,
+            (1.0 / wall) if wall > 0 else 0.0,
+        )
+    di_audio = aggregates.get("diarize_audio_s")
+    di_rtf = aggregates.get("diarize_rtf")
+    if di_audio and di_rtf is not None:
+        logger.info(
+            "diarization RTF %.3f over %.0fs of audio — %.1fx faster than real time",
+            di_rtf, di_audio, (1.0 / di_rtf) if di_rtf > 0 else 0.0,
+        )
+
+
 class TaskProcessor:
     def __init__(
         self,
@@ -232,12 +264,18 @@ class TaskProcessor:
                 except Exception:
                     logger.exception("delivery enqueue failed for task %s (task stays completed)", task.id)
                 _task_wall_ms = round((time.monotonic() - _task_wall_t0) * 1000)
+                _aggs = aggregate_task_metrics(emitter.all_events())
                 emitter.emit({
                     "stage": "task.final",
                     "status": "ok",
                     "t_wall_ms": _task_wall_ms,
-                    "aggregates": aggregate_task_metrics(emitter.all_events()),
+                    "aggregates": _aggs,
                 })
+                # RTF into the TASK log, not just the metrics stream: the task
+                # log is what a person reads when asking "why did this take so
+                # long", and the JSONL lives on the host where they cannot.
+                # Whole-task numbers only — per-segment detail stays in metrics.
+                _log_rtf(logger, _aggs)
             except TaskPaused:
                 logger.info("task paused: %s", task.id)
                 await self.bus.clear_pause_request(task.id)
