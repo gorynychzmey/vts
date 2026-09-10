@@ -4335,7 +4335,25 @@ async function removeTask(taskId) {
     return;
   }
   await apiBatchPost("/api/tasks", { task_ids: [taskId] }, "DELETE");
-  await loadTasks();
+  // Drop the one card instead of loadTasks(). loadTasks() is loadFirstPage(),
+  // which blanks the list and re-fetches ONE page: a user standing in the
+  // second twenty lost every card below the first page, including the
+  // neighbourhood of the row they had just acted on (measured: 20 cards gone
+  // for one deletion).
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl) {
+    // Not on screen — nothing to preserve, and the list may genuinely need
+    // rebuilding (e.g. the card was filtered out).
+    await loadTasks();
+    return;
+  }
+  taskEl.remove();
+  // The cursors are derived from the first and last card in the DOM, so they
+  // must be recomputed: deleting the tail would otherwise leave paging asking
+  // for rows after a task that no longer exists.
+  updateHeadTail();
+  updateSentinel();
+  void refreshTasksCount(state.taskPaging.epoch);
 }
 
 function buildMediaFilename(taskId, sourceTitle, serverFilename) {
@@ -4378,6 +4396,14 @@ async function archiveTask(taskId) {
     return;
   }
   await apiBatchPost("/api/tasks/archive", { task_ids: [taskId] });
+  // An archived task STAYS in the list — there is no default status filter, so
+  // the row keeps its position and only its status changes. Rebuilding the
+  // whole list to repaint one badge is what threw away the pages below the
+  // first; refreshing the single card leaves the user where they were.
+  if (findTaskEl(taskId)) {
+    await refreshTaskInPlace(taskId);
+    return;
+  }
   await loadTasks();
 }
 
