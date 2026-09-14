@@ -5657,6 +5657,12 @@ function repaintJsBuiltLabels() {
   if (deliverySelect && deliveryTargetsList().length > 0) {
     renderDeliveryMultiselect(deliverySelect, selectedDeliveryRefs(deliverySelect));
   }
+  // The preset pill: its label comes from presetLabel(), which translates a
+  // SYSTEM preset through `preset.system.<id>`. The key is translated in every
+  // locale, but nothing re-ran it on a switch, so a German UI kept showing the
+  // Russian "По умолчанию". updatePresetSaveBtn() repaints the label (and the
+  // dirty badge) from the CURRENT selection, so this is purely cosmetic.
+  updatePresetSaveBtn();
   // The segmented filter's labels are copied from the select's options, which
   // applyI18nToPage() has just retranslated — copy them across again.
   renderFilterTypeSegments();
@@ -5664,6 +5670,13 @@ function repaintJsBuiltLabels() {
   document.querySelectorAll(".task").forEach((card) => {
     if (card._runtime && card._elements) renderTaskRuntime(card);
   });
+  // The preset pill and the presets manager both name a SYSTEM preset through
+  // presetLabel(), which translates `preset.system.<id>` — the server sends a
+  // fixed English name because the preset has no database row. The pill was
+  // already repainted (updatePresetSaveBtn runs below), but the manager's list
+  // was not, so an open dialog kept showing "Default" in every language.
+  updatePresetSaveBtn();
+  if (presetsDialog?.open) renderPresetsListFromCache();
 }
 
 // ---------------------------------------------------------------------------
