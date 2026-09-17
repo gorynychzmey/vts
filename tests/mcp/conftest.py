@@ -31,6 +31,27 @@ class FakeTask:
 
 
 @dataclass
+class FakeRecording:
+    """Mirrors the subset of vts.db.models.Recording the MCP tools read.
+
+    `source_task_id` defaults to None on purpose: a recording outliving its
+    task is the state these tools exist for, so the cheapest FakeRecording to
+    write is the detached one.
+    """
+    id: uuid.UUID
+    user_id: uuid.UUID
+    source_task_id: uuid.UUID | None = None
+    title: str | None = None
+    artifact_dir: str = "/tmp/vts-test/recording"
+    transcript_path: str | None = None
+    summary_path: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+    duration_sec: float | None = None
+    language: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+@dataclass
 class FakePrompt:
     id: uuid.UUID
     user_id: uuid.UUID
@@ -81,6 +102,7 @@ class FakeRepo:
         # constructing MatchDecision rows.
         self.task_people: dict[uuid.UUID, list[str]] = {}
         self.speakers: dict[uuid.UUID, Any] = {}
+        self.recordings: dict[uuid.UUID, Any] = {}
 
     async def create_task(
         self,
@@ -306,6 +328,14 @@ class FakeRepo:
 
     async def set_user_default_preset(self, user_id: uuid.UUID, ref: dict | None) -> None:
         self.default_presets[user_id] = ref
+
+    async def get_recording_for_user(
+        self, user_id: uuid.UUID, recording_id: uuid.UUID
+    ) -> "FakeRecording | None":
+        r = self.recordings.get(recording_id)
+        if r is None or r.user_id != user_id:
+            return None
+        return r
 
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> FakeTask | None:
         t = self.tasks.get(task_id)

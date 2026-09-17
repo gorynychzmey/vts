@@ -248,7 +248,17 @@ class DeliveryStatusInfo(BaseModel):
 
 
 class PromptResult(BaseModel):
-    task_id: uuid.UUID
+    """One prompt result — a summary, a memo — of a task or of a recording.
+
+    `task_id` is reference material, not the address: a result is identified by
+    the task or recording it was asked of plus its `source:id` ref. It is null
+    when the answer came from a RECORDING whose task has since been deleted —
+    `Recording.source_task_id` is SET NULL, and the results are snapshotted onto
+    the recording precisely so they outlive the job. Declaring it required made
+    `get_recording_prompt_result` raise on the one case it exists for (vts-z09b).
+    """
+
+    task_id: uuid.UUID | None = None
     source: str
     id: str
     content: str

@@ -195,3 +195,92 @@ async def test_recording_prompt_result_reads_the_file_not_a_missing_text_field(t
 
     # A row can outlive its artifact; that reads as empty, not as a crash.
     assert _read_result_file(_Rec(), str(root / "gone.md")) == ""
+
+
+# ---------------------------------------------------------------------------
+# vts-z09b / vts-vp4u: the same tool, called through the front door.
+#
+# Three rounds of fixes to get_recording_prompt_result (vts-dp8d, vts-f0,
+# vts-z09b) were each verified by READING — an AST check on the call site and a
+# unit test on the `_read_result_file` helper, both above. Neither could see
+# round three, and not by accident: that defect is in a VALUE (task_id=None),
+# and a static check of kwarg NAMES cannot express it. No test in the tree
+# invoked the tool itself (`grep -rn get_recording_prompt_result tests/` found
+# only a name in a list and a docstring).
+#
+# So this one goes through the registered tool, over an in-process MCP client,
+# on the state the tool exists for: a recording whose task has been deleted.
+# It would have failed on all three rounds.
+
+@pytest.mark.asyncio
+async def test_calling_the_tool_on_a_detached_recording_returns_its_summary(
+    monkeypatch, tmp_path,
+):
+    """A recording whose task is gone still has to hand over its summary.
+
+    `source_task_id` is SET NULL, so a detached recording carries None — and
+    PromptResult declared `task_id: uuid.UUID`, which rejects it. The tool's
+    own docstring recommends itself for exactly this case ("they survive the
+    deletion of the job that produced them"), so the recommendation led
+    straight into a ValidationError.
+    """
+    from contextlib import asynccontextmanager
+
+    from fastmcp import Client
+
+    from tests.mcp.conftest import FakeRecording, FakeRepo, FakeUser
+    from vts.core.config import Settings
+    import vts.mcp.server as server_mod
+    import vts.mcp.tools_registry.recordings as recordings_mod
+
+    artifact_dir = tmp_path / "recording"
+    (artifact_dir / "summary").mkdir(parents=True)
+    result_file = artifact_dir / "summary" / "final.md"
+    result_file.write_text("## Итог\n\nдоговорились о переносе", encoding="utf-8")
+
+    user = FakeUser(id=str(uuid.uuid4()))
+    repo = FakeRepo()
+    recording = FakeRecording(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(user.id),
+        # The whole point: the job that produced this is deleted.
+        source_task_id=None,
+        artifact_dir=str(artifact_dir),
+        meta={
+            "prompt_results": [
+                {
+                    "source": "system",
+                    "id": "summary",
+                    "name": "Summary",
+                    "path": str(result_file),
+                    "status": "completed",
+                }
+            ]
+        },
+    )
+    repo.recordings[recording.id] = recording
+
+    @asynccontextmanager
+    async def _session_cm():
+        yield object()  # never inspected — Repo is patched too
+
+    async def _authenticate(_session):
+        return user, Settings()
+
+    # Patched on the recordings module, not on vts.mcp.server: that is where
+    # these names resolve now that the tool bodies live in tools_registry.
+    monkeypatch.setattr(recordings_mod, "mcp_authenticate", _authenticate)
+    monkeypatch.setattr(recordings_mod, "get_db_session_factory", lambda: _session_cm)
+    monkeypatch.setattr(recordings_mod, "Repo", lambda _session: repo)
+
+    async with Client(server_mod.build_mcp_server()) as client:
+        result = await client.call_tool(
+            "get_recording_prompt_result", {"recording_id": str(recording.id)}
+        )
+
+    assert result.is_error is False, "the tool failed on the state it exists for"
+    assert result.data.content == "## Итог\n\nдоговорились о переносе"
+    assert result.data.source == "system"
+    assert result.data.id == "summary"
+    # Reference material, and absent by design here — not a reason to refuse.
+    assert result.data.task_id is None
