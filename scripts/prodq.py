@@ -36,12 +36,22 @@ _READ_ONLY_STARTS = frozenset({"select", "with", "table", "values", "explain", "
 
 # Keywords that modify, checked against every statement including the inside of
 # a CTE: Postgres allows data-modifying CTEs, so a leading WITH proves nothing.
-# Functions that WRITE while sitting inside a plain SELECT. Keyword matching
-# cannot see them: `SELECT setval(...)` starts with SELECT and contains no write
-# keyword (vts-p54i). The list is not, and cannot be, complete — the real
-# defence is the read-only TRANSACTION in _run; this exists so the common cases
-# are refused before a connection is even opened, with a message that says why.
-_WRITE_FUNCTIONS = frozenset({
+# Functions with an effect the keyword scan cannot see, called from inside a
+# plain SELECT: `SELECT setval(...)` starts with SELECT and contains no write
+# keyword (vts-p54i). Most of these write. Three do not, and stay anyway,
+# because the criterion is the invisible EFFECT rather than the write (vts-6wvy):
+#
+# * pg_advisory_lock / pg_advisory_unlock — a session-scoped lock, held until
+#   released, which can block the application on the production database.
+#   READ ONLY does not forbid it, so this list is the only thing that does.
+# * query_to_xml — takes the query as a STRING, so the inner statement is
+#   invisible to the word-level scan below. It is the standard way to smuggle
+#   one past such a filter.
+#
+# The list is not, and cannot be, complete — the real defence is the read-only
+# TRANSACTION in _run; this exists so the common cases are refused before a
+# connection is even opened, with a message that says why.
+_REFUSED_FUNCTIONS = frozenset({
     "setval", "nextval",
     "pg_terminate_backend", "pg_cancel_backend",
     "lo_unlink", "lo_import", "lo_export", "lo_create",
@@ -101,10 +111,10 @@ def ensure_read_only(sql: str) -> None:
                     f"refusing to run a statement containing {word.upper()} "
                     f"without --write"
                 )
-            if lowered in _WRITE_FUNCTIONS:
+            if lowered in _REFUSED_FUNCTIONS:
                 raise RefusedWrite(
-                    f"refusing to run {word}(): it modifies the database even "
-                    f"inside a SELECT"
+                    f"refusing to run {word}(): its effect is invisible to a "
+                    f"read-only check of the statement"
                 )
 
 

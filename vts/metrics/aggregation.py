@@ -50,19 +50,32 @@ def _rtf(work_s: float, audio_s: float) -> float | None:
     return round(work_s / audio_s, 4)
 
 
+def _first_not_none(*values: Any) -> Any:
+    """The first value that was actually given, treating 0 as given."""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def aggregate_task_metrics(
     events: list[dict[str, Any]],
     *,
     stage_wall_overrides: dict[str, int] | None = None,
-) -> dict[str, Any]:  # noqa: D417
+) -> dict[str, Any]:
     """Compute task-level aggregates from all emitted metric events.
 
     The ELAPSED time of a stage is normally already in the stream: the
     processor emits one event per step, named after the step
     (`transcribe_segments`), carrying the time it actually took. That differs
     from the sum of the per-segment events when segments run in parallel, and
-    both numbers matter — see the two RTFs below. `stage_wall_overrides` exists
-    for callers that time a stage themselves, and for tests.
+    both numbers matter — see the two RTFs below.
+
+    Args:
+        events: every metric event emitted for the task, in any order.
+        stage_wall_overrides: elapsed time per stage, keyed by STEP name
+            (`transcribe_segments`), for callers that time a stage themselves
+            and for tests. Takes precedence over the step event in the stream.
     """
     # Wall time per stage
     stage_wall_ms: dict[str, int] = {}
@@ -109,11 +122,20 @@ def aggregate_task_metrics(
     )
     tr_work_ms = sum(float(e.get("t_wall_ms") or 0) for e in transcribe_events)
     # The step event, not the segment events: `transcribe_segments` is emitted
-    # once by the processor with the step's real elapsed time.
+    # once by the processor with the step's real elapsed time. The override is
+    # keyed by that same STEP name — it used to be keyed "transcribe.segment",
+    # the name of the per-SEGMENT event, which invited a caller to pass the sum
+    # over segments, i.e. exactly the number the override is meant to replace.
+    #
+    # Explicit None checks rather than `or`: a zero is a value here, and while
+    # a zero wall time happens to be meaningless anyway, falling through on it
+    # hides the difference between "not given" and "given as 0".
     tr_wall_ms = float(
-        overrides.get("transcribe.segment")
-        or stage_wall_ms.get("transcribe_segments")
-        or tr_work_ms
+        _first_not_none(
+            overrides.get("transcribe_segments"),
+            stage_wall_ms.get("transcribe_segments"),
+            tr_work_ms,
+        )
     )
 
     # Successful runs only. A run that returned no segments is emitted with

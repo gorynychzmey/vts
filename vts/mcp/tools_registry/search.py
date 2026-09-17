@@ -25,7 +25,7 @@ from vts.services.corpus_search import search_corpus
 
 
 def _named_speakers(
-    hit: Any, names_by_task: dict[Any, list[str]]
+    hit: Any, names_by_task: dict[Any, dict[str, str]]
 ) -> list[str]:
     """Speaker labels replaced by names, where a name is known.
 

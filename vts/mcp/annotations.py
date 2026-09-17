@@ -4,14 +4,17 @@ Clients group tools by `readOnlyHint`, so a user sees "these only look, those
 change things" instead of one flat list. Without the hints everything lands in
 the same bucket and an assistant cannot tell `delete_prompt` from `list_prompts`.
 
-Three shapes cover this server, and they are shared rather than written out per
+Six shapes cover this server, and they are shared rather than written out per
 tool so the vocabulary cannot drift between domains:
 
 * READ_ONLY — looks, changes nothing.
-* MUTATING — creates or updates. Nothing the user had is lost, so a client need
-  not interrupt them to ask.
+* CREATE — makes something new; calling twice makes two of them.
+* UPDATE — overwrites a specific thing; calling twice leaves the same result.
+  Nothing the user had is lost, so a client need not interrupt them to ask.
 * DESTRUCTIVE — removes something. `destructiveHint` is a client's cue to
   confirm first, which is exactly right for a delete.
+* SUBMIT — starts a pipeline run: reaches the open internet and occupies a GPU.
+* DELIVER — re-sends a configured delivery to an external system.
 
 `idempotentHint` is set where repeating the call is genuinely harmless: an
 update writes the same row twice, a delete of something already gone is a

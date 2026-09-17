@@ -3851,6 +3851,10 @@ dialog:not([open]) {
   align-items: center;
   gap: 0.5rem;
   max-width: 100%;
+  /* Only the "plugin not installed" note may take a second line — it is a
+     sentence, not a column (see .delivery-unavailable below). The other three
+     children stay on one line. */
+  flex-wrap: wrap;
 }
 
 /* The name is the only elastic part: it shrinks and ellipsises so the checkbox
@@ -3864,12 +3868,6 @@ dialog:not([open]) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Only the "plugin not installed" note may take a second line — it is a
-   sentence, not a column. The other three stay on one line. */
-.delivery-row {
-  flex-wrap: wrap;
 }
 
 .delivery-row .delivery-unavailable {

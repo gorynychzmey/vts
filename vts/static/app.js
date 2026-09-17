@@ -2852,8 +2852,13 @@ function updateSentinel() {
   if (!sentinel) return;
   const p = state.taskPaging;
   sentinel.hidden = false;
-  sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
-  sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+  // Optional, like the button below: these three nodes live in the markup of
+  // the sentinel, and a markup edit that drops one should not take the paging
+  // state with it (vts-6wvy).
+  const spinner = sentinel.querySelector(".task-sentinel-spinner");
+  if (spinner) spinner.hidden = !p.loading;
+  const end = sentinel.querySelector(".task-sentinel-end");
+  if (end) end.hidden = !p.exhausted;
   // Shown whenever there IS a next page and we are not already fetching it.
   // Infinite scroll still does the work on a long list; this is what makes the
   // next page reachable when the list is too short to scroll (compact cards
@@ -5155,8 +5160,12 @@ async function refreshAll() {
   // (the one place that called loadDeliveryAdapters), so every other menu
   // showed the raw stored value — "user:<uuid>" for a prompt, and even
   // "redacted" untranslated for a fixed variant.
-  await loadDeliveryAdapters();
-  await loadDeliveryEntities();
+  // Together, not one after the other: the adapters (with the variants) and
+  // the destinations come from different endpoints and neither reads the
+  // other's result, so serialising them only added a round-trip to every
+  // refresh (vts-4kcc). Both swallow their own failures, so neither can reject
+  // this Promise.all and take the other down with it.
+  await Promise.all([loadDeliveryAdapters(), loadDeliveryEntities()]);
   renderDeliverySelectors();
   await loadTasks();
   // After loadTasks(), matching bootstrap's order: loadPresets() applies the
@@ -5683,12 +5692,13 @@ function repaintJsBuiltLabels() {
   document.querySelectorAll(".task").forEach((card) => {
     if (card._runtime && card._elements) renderTaskRuntime(card);
   });
-  // The preset pill and the presets manager both name a SYSTEM preset through
-  // presetLabel(), which translates `preset.system.<id>` — the server sends a
-  // fixed English name because the preset has no database row. The pill was
-  // already repainted (updatePresetSaveBtn runs below), but the manager's list
-  // was not, so an open dialog kept showing "Default" in every language.
-  updatePresetSaveBtn();
+  // The presets MANAGER names a system preset the same way the pill does,
+  // through presetLabel() and `preset.system.<id>` — the server sends a fixed
+  // English name because the preset has no database row. The pill is already
+  // repainted above; an open dialog was not, so it kept showing "Default" in
+  // every language. (There was a second updatePresetSaveBtn() call here whose
+  // comment claimed the pill ran "below" — it ran above, and the call was a
+  // no-op repeat: vts-6rrh.)
   if (presetsDialog?.open) renderPresetsListFromCache();
 }
 
@@ -8234,8 +8244,10 @@ function updateLibrarySentinel() {
   if (!sentinel) return;
   const p = libraryPaging;
   sentinel.hidden = false;
-  sentinel.querySelector(".task-sentinel-spinner").hidden = !p.loading;
-  sentinel.querySelector(".task-sentinel-end").hidden = !p.exhausted;
+  const spinner = sentinel.querySelector(".task-sentinel-spinner");
+  if (spinner) spinner.hidden = !p.loading;
+  const end = sentinel.querySelector(".task-sentinel-end");
+  if (end) end.hidden = !p.exhausted;
   const more = sentinel.querySelector("#library-load-more");
   // The button is the fallback for a list too short to scroll — with compact
   // cards that is ordinary, and then the observer never fires at all.

@@ -45,7 +45,7 @@ router = APIRouter()
 def _serialize(recording: Recording) -> RecordingOut:
     """A recording as the library shows it.
 
-    The three `has_*` flags are probed from disk rather than stored: archiving
+    The four `has_*` flags are probed from disk rather than stored: archiving
     removes the media (and, for an archived task, the transcript stays but the
     rest goes), so a stored flag would go stale the moment a recording is
     archived. What is NOT probed is duration and language — those are columns
@@ -53,8 +53,15 @@ def _serialize(recording: Recording) -> RecordingOut:
     """
     transcript = recording.transcript_path
     summary = recording.summary_path
-    root = Path(recording.artifact_dir or "")
-    redacted = root / "outputs" / "redacted_transcript.txt"
+    # No directory means no artifacts, full stop. `Path("")` is `Path(".")`, so
+    # the probe below used to read ./outputs/... — relative to wherever the
+    # process was started, which is not a property of the recording at all
+    # (same shape as artifacts_removable_for_task, which returns False here).
+    artifact_dir = recording.artifact_dir or ""
+    redacted = (
+        Path(artifact_dir) / "outputs" / "redacted_transcript.txt"
+        if artifact_dir else None
+    )
     meta = recording.meta if isinstance(recording.meta, dict) else {}
     prompt_results = meta.get("prompt_results")
     return RecordingOut(
@@ -67,7 +74,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         language=recording.language,
         tags=list(recording.tags or []),
         has_transcript=bool(transcript and Path(transcript).exists()),
-        has_redacted=redacted.exists(),
+        has_redacted=bool(redacted and redacted.exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
         prompt_results=[r for r in (prompt_results or []) if isinstance(r, dict)],

@@ -117,3 +117,35 @@ def test_the_statement_runs_inside_a_read_only_transaction():
         "the script does not open a read-only transaction; the keyword gate is "
         "the only defence, and it cannot see through function calls"
     )
+
+
+def test_the_refusal_explains_itself_without_claiming_a_write():
+    """vts-6wvy: three entries on the list do not modify data.
+
+    `pg_advisory_lock`, `pg_advisory_unlock` and `query_to_xml` were refused
+    with "it modifies the database even inside a SELECT", which is false for
+    all three — and a false reason is worse than a terse one, because the next
+    reader checks the claim, finds it wrong, and removes the entry.
+
+    They stay refused, and the criterion is not "writes data". It is "has an
+    effect the keyword scan cannot see":
+
+    * an advisory lock is session-scoped and held until released, so it can
+      block the application on the production database — READ ONLY does not
+      forbid it;
+    * `query_to_xml` takes a query as a STRING, so the inner statement is
+      invisible to the scan above; it is the standard way to smuggle one past
+      a word-level filter.
+    """
+    for sql in (
+        "SELECT pg_advisory_lock(1)",
+        "SELECT pg_advisory_unlock(1)",
+        "SELECT query_to_xml('UPDATE tasks SET source_title = 1', true, true, '')",
+    ):
+        with pytest.raises(RefusedWrite) as exc:
+            ensure_read_only(sql)
+        assert "modifies the database" not in str(exc.value), (
+            f"the refusal of {sql!r} claims a write that does not happen"
+        )
+        # It must still say enough to act on.
+        assert "--write" in str(exc.value) or "refusing" in str(exc.value)

@@ -38,7 +38,7 @@ def test_transcribe_rtf_reports_work_and_wall_separately():
         _seg(100.0, 5000),
         {"stage": "task.final", "t_wall_ms": 12000},
     ]
-    agg = aggregate_task_metrics(events, stage_wall_overrides={"transcribe.segment": 5000})
+    agg = aggregate_task_metrics(events, stage_wall_overrides={"transcribe_segments": 5000})
     assert agg["transcribe_audio_s"] == 200.0
     assert agg["transcribe_rtf_work"] == 0.05
     assert agg["transcribe_rtf_wall"] == 0.025
@@ -48,7 +48,7 @@ def test_transcribe_rtf_reports_work_and_wall_separately():
 def test_sequential_step_gives_identical_rtfs():
     """With no parallelism the distinction vanishes, and parallelism is 1."""
     events = [_seg(100.0, 6000), {"stage": "task.final", "t_wall_ms": 9000}]
-    agg = aggregate_task_metrics(events, stage_wall_overrides={"transcribe.segment": 6000})
+    agg = aggregate_task_metrics(events, stage_wall_overrides={"transcribe_segments": 6000})
     assert agg["transcribe_rtf_work"] == agg["transcribe_rtf_wall"] == 0.06
     assert agg["transcribe_work_over_wall"] == 1.0
 

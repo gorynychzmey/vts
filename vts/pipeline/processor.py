@@ -93,11 +93,14 @@ def _log_rtf(logger: logging.Logger, aggregates: dict) -> None:
     work = aggregates.get("transcribe_rtf_work")
     wall = aggregates.get("transcribe_rtf_wall")
     if audio and work is not None and wall is not None:
-        ratio = aggregates.get("transcribe_work_over_wall")
+        # Not guarded for None: work_over_wall is None only when the step's
+        # wall time is 0, and then `wall` is None too and this branch is not
+        # reached. The guard that used to be here could only ever print 0.00.
+        ratio = aggregates["transcribe_work_over_wall"]
         logger.info(
             "transcription RTF %.3f (wall %.3f, work/wall %.2f) over %.0fs of audio "
             "— %.1fx faster than real time",
-            work, wall, ratio if ratio is not None else 0.0, audio,
+            work, wall, ratio, audio,
             (1.0 / wall) if wall > 0 else 0.0,
         )
     di_audio = aggregates.get("diarize_audio_s")
