@@ -4348,6 +4348,19 @@ async function removeTask(taskId) {
     return;
   }
   taskEl.remove();
+  if (!taskList.querySelector(".task")) {
+    // That was the last card on screen. updateHeadTail() would now read an
+    // empty list and null the cursor, and a null tail is what BOTH
+    // #task-load-more (hidden) and loadNextPage() (returns at once) read as
+    // "there is no next page" — so every row below would be unreachable until
+    // something unrelated rebuilt the list. Normally the sentinel observer
+    // refills the list long before it runs dry; the reachable way in is a page
+    // fetch that already failed, after which this is the only card left.
+    // The full path costs one request on a screen that has nothing to preserve
+    // anyway, and it restores the empty-state line that renderTasks() ends on.
+    await loadTasks();
+    return;
+  }
   // The cursors are derived from the first and last card in the DOM, so they
   // must be recomputed: deleting the tail would otherwise leave paging asking
   // for rows after a task that no longer exists.
