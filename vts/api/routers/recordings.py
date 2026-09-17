@@ -162,12 +162,20 @@ async def search_corpus_endpoint(
     the nearest passages. The threshold is echoed back so an empty result can
     be read correctly.
     """
-    hits, effective, total = await search_corpus(
-        session, uuid.UUID(user.id), q, settings,
-        threshold=threshold, limit=limit, offset=offset,
-        recording_id=recording_id, person=person,
-        created_from=created_from, created_to=created_to,
-    )
+    try:
+        hits, effective, total = await search_corpus(
+            session, uuid.UUID(user.id), q, settings,
+            threshold=threshold, limit=limit, offset=offset,
+            recording_id=recording_id, person=person,
+            created_from=created_from, created_to=created_to,
+        )
+    except ValueError as exc:
+        # An unreachable offset is the caller's to fix, and the exception
+        # already says how (narrow the query). Validating `offset` in the
+        # signature instead would need the candidate ceiling duplicated here,
+        # away from the code that enforces it. The MCP tool answers the same
+        # refusal as a ToolError (vts-2c86).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return SearchResultOut(
         query=q,
         threshold=effective,

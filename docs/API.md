@@ -151,6 +151,7 @@ matching passages — not an answer.
 |-----------|---------|---------|
 | `q` | — | the question, in any language |
 | `limit` | 10 | maximum hits |
+| `offset` | 0 | skip this many ranked hits (paging) |
 | `threshold` | server setting (0.45) | minimum cosine similarity |
 | `recording_id` | — | confine the search to one recording |
 
@@ -182,6 +183,12 @@ of the two happened. Do not lower it to manufacture matches.
 
 Retrieval works across languages: an English question finds the passage that
 answers it in another language.
+
+**Paging stops at the candidate ceiling.** Only a bounded number of candidates
+is ranked, so a page starting beyond that comes back empty however many
+passages actually qualify. Rather than return that misleading empty page, the
+endpoint answers `422` with the ceiling and the advice in the message: narrow
+the query (by person, dates or `recording_id`) instead of paging further.
 
 **Following a hit — two routes, different lifetimes.**
 

@@ -284,6 +284,39 @@ async def test_an_empty_query_searches_nothing(authed_app, client):
     assert r.json()["hits"] == []
 
 
+@pytest.mark.asyncio
+async def test_an_unreachable_offset_is_a_client_error_not_a_crash(
+    authed_app, client, monkeypatch
+):
+    """vts-2c86: the HTTP side did not catch the ValueError the MCP side does.
+
+    `_check_offset_reachable` refuses a page that starts past the candidate
+    ceiling, because such a page comes back empty however many results
+    qualify. `search_transcripts` turns that into a ToolError; the endpoint
+    had no `try` at all, so the same request produced a 500 and a traceback
+    instead of the message the exception already carries.
+
+    Asserted on the symptom a caller sees — the status code and the advice in
+    the body — not on where the handler lives.
+    """
+    from vts.services import corpus_search as cs
+
+    class _Stub:
+        def __init__(self, **kw): pass
+        async def embed(self, texts): return [_query() for _ in texts]
+
+    monkeypatch.setattr(cs, "EmbeddingClient", _Stub, raising=False)
+    monkeypatch.setattr("vts.services.embeddings.EmbeddingClient", _Stub)
+
+    # Default limit is 20 and the ceiling is 500, so this page cannot be served.
+    r = await client.get("/api/search?q=что%20обсуждали&offset=600")
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "narrow the query" in detail, (
+        "the refusal must carry the advice, not just a status code"
+    )
+
+
 # --------------------------------------------------------- cross-language
 
 @pytest.mark.asyncio
