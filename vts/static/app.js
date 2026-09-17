@@ -9341,6 +9341,11 @@ async function loadDeliveryAdapters() {
     console.error("Failed to load delivery adapters", err);
     deliveryState.adapters = [];
     deliveryState.incompatible = {};
+    // Cleared with the rest, and for a stronger reason: `variants` is PERSONAL
+    // (it lists this user's prompts), and refreshAll() is the user-switch path.
+    // Keeping it on failure showed the previous account's prompt names, and let
+    // one be picked and saved into a destination (vts-n7fm).
+    deliveryState.variants = [];
   }
 }
 
