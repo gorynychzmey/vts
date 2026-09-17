@@ -221,9 +221,14 @@ export async function run() {
       );
     }
     const afterDelete = await page.$$eval("#task-list .task", (els) => els.length);
-    if (afterDelete < afterArchive - 1) {
+    // EXACT, for the same reason the archive branch above spells out. `<` is
+    // one-sided: it catches a rebuild that leaves FEWER cards (20 instead of
+    // 39) but passes through anything that leaves more — a deletion that also
+    // pulled a page in would satisfy it while the list is no longer the list
+    // the user was looking at.
+    if (afterDelete !== afterArchive - 1) {
       failures.push(
-        `deleting removed ${afterArchive - afterDelete} cards, expected 1 — the list was rebuilt`,
+        `deleting left ${afterDelete} cards, expected ${afterArchive - 1} — the list was rebuilt`,
       );
     }
   } finally {
