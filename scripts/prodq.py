@@ -34,19 +34,13 @@ from pathlib import Path
 # a denylist would keep growing.
 _READ_ONLY_STARTS = frozenset({"select", "with", "table", "values", "explain", "show"})
 
-# Keywords that modify, checked against every statement including the inside of
-# a CTE: Postgres allows data-modifying CTEs, so a leading WITH proves nothing.
 # Functions with an effect the keyword scan cannot see, called from inside a
 # plain SELECT: `SELECT setval(...)` starts with SELECT and contains no write
-# keyword (vts-p54i). Most of these write. Three do not, and stay anyway,
-# because the criterion is the invisible EFFECT rather than the write (vts-6wvy):
-#
-# * pg_advisory_lock / pg_advisory_unlock — a session-scoped lock, held until
-#   released, which can block the application on the production database.
-#   READ ONLY does not forbid it, so this list is the only thing that does.
-# * query_to_xml — takes the query as a STRING, so the inner statement is
-#   invisible to the word-level scan below. It is the standard way to smuggle
-#   one past such a filter.
+# keyword (vts-p54i). Most of these write. `query_to_xml` does not, and stays
+# anyway, because the criterion is the invisible EFFECT rather than the write
+# (vts-6wvy): it takes the query as a STRING, so the inner statement never
+# reaches the word-level scan — the standard way to smuggle one past a filter
+# like this.
 #
 # The list is not, and cannot be, complete — the real defence is the read-only
 # TRANSACTION in _run; this exists so the common cases are refused before a
@@ -58,10 +52,22 @@ _REFUSED_FUNCTIONS = frozenset({
     "pg_drop_replication_slot", "pg_create_physical_replication_slot",
     "pg_create_logical_replication_slot", "pg_replication_origin_create",
     "pg_import_system_collations", "pg_stat_reset", "pg_stat_statements_reset",
-    "pg_switch_wal", "pg_advisory_lock", "pg_advisory_unlock",
+    "pg_switch_wal",
     "dblink_exec", "query_to_xml",
 })
 
+# Advisory locks, as a family. They change no data — they take a session-scoped
+# lock, held until released, which can block the application on the production
+# database, and READ ONLY does not forbid it, so this is the only thing that
+# does. By PREFIX because the members are separate WORDS to the scan below: it
+# reads `pg_advisory_lock_shared` as one name, not as `pg_advisory_lock` plus a
+# suffix, so naming the two plain functions left ten siblings walking through
+# (`pg_try_advisory_lock`, `pg_advisory_xact_lock_shared`,
+# `pg_advisory_unlock_all`, …).
+_REFUSED_FUNCTION_PREFIXES = ("pg_advisory", "pg_try_advisory")
+
+# Keywords that modify, checked against every statement including the inside of
+# a CTE: Postgres allows data-modifying CTEs, so a leading WITH proves nothing.
 _WRITE_KEYWORDS = frozenset({
     "insert", "update", "delete", "drop", "truncate", "alter", "create",
     "grant", "revoke", "vacuum", "reindex", "cluster", "copy", "call", "do",
@@ -111,7 +117,9 @@ def ensure_read_only(sql: str) -> None:
                     f"refusing to run a statement containing {word.upper()} "
                     f"without --write"
                 )
-            if lowered in _REFUSED_FUNCTIONS:
+            if lowered in _REFUSED_FUNCTIONS or lowered.startswith(
+                _REFUSED_FUNCTION_PREFIXES
+            ):
                 raise RefusedWrite(
                     f"refusing to run {word}(): its effect is invisible to a "
                     f"read-only check of the statement"

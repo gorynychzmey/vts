@@ -1551,10 +1551,13 @@ input[type="file"] {
   font-size: 0.82rem;
 }
 
-/* `[hidden]` loses to a later `display` at equal specificity — the trap this
-   file documents for the dialogs, .count-pip and the file-drop zone — and
-   .btn-text sets display:inline-flex, so without this the button would show
-   even when there is no next page. */
+/* `:not([hidden])` here only limits when THESE declarations apply — it does
+   not stop `.btn-text { display: inline-flex }` from applying, so it never
+   hid anything. Hiding is done by `.btn-text[hidden]` further down, and this
+   comment used to claim otherwise, which is why the button stood visible for
+   months while the place looked guarded (vts-ak6z). The guard is kept anyway:
+   it keeps the dashed border and the accent colour off a hidden button, and
+   documents that this button has two states. */
 .task-load-more:not([hidden]) {
   display: inline-flex;
   border: 1px dashed var(--line-strong);
@@ -3127,6 +3130,17 @@ dialog:not([open]) {
    toggling `.hidden` on a text button (e.g. #voice-save-continue) works
    (vts-552). */
 .btn-text.hidden {
+  display: none;
+}
+
+/* The same trap through the ATTRIBUTE, which is how the paging buttons are
+   toggled (`more.hidden = …`): an author `display` outranks the user agent's
+   `[hidden] { display: none }` whatever its specificity, so the rule above —
+   being about the CLASS — left `#task-load-more` standing on screen with
+   `[hidden]` set and offsetHeight 34, for every user with fewer tasks than one
+   page (vts-ak6z). Covered by
+   tests/ui/scenarios/load-more-hidden-when-exhausted.mjs. */
+.btn-text[hidden] {
   display: none;
 }
 

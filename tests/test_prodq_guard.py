@@ -149,3 +149,34 @@ def test_the_refusal_explains_itself_without_claiming_a_write():
         )
         # It must still say enough to act on.
         assert "--write" in str(exc.value) or "refusing" in str(exc.value)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT pg_advisory_lock_shared(1)",
+    "SELECT pg_try_advisory_lock(1)",
+    "SELECT pg_try_advisory_xact_lock(1)",
+    "SELECT pg_advisory_xact_lock_shared(1)",
+    "SELECT pg_advisory_unlock_all()",
+])
+def test_the_whole_advisory_lock_family_is_refused(sql):
+    """The scan matches WHOLE words, so each variant is its own name.
+
+    `re.findall(r"[a-zA-Z_]+", …)` reads `pg_advisory_lock_shared` as one word,
+    which is not `pg_advisory_lock` — so listing the two plain functions left
+    ten siblings walking straight through, all of them able to take a lock that
+    blocks the application and that READ ONLY does not forbid. Matched by
+    prefix now, which is what "the advisory family" actually means.
+    """
+    with pytest.raises(RefusedWrite):
+        ensure_read_only(sql)
+
+
+def test_a_read_that_merely_mentions_advisory_is_still_allowed():
+    """The prefix must apply to a FUNCTION word, not to any text.
+
+    Refusing a legitimate read because a column or a value looks like a lock
+    name would push the user back to hand-rolled boilerplate — the thing this
+    script replaces.
+    """
+    ensure_read_only("SELECT * FROM tasks WHERE source_title = 'pg_advisory_lock'")
+    ensure_read_only("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'")
