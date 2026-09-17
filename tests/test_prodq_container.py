@@ -106,9 +106,26 @@ def test_it_runs_the_repo_copy_of_prodq_inside_the_image(argv_recorder: Path):
     assert result.returncode == 0, result.stderr
     argv = result.stdout.splitlines()
     assert "run" in argv and "--rm" in argv
-    mounts = [a for a in argv if a.startswith(f"{REPO_ROOT}/scripts/prodq.py:")]
-    assert mounts, f"the repo's prodq.py is not mounted: {argv}"
-    assert ":ro" in mounts[0], f"prodq.py is mounted writable: {mounts[0]}"
+
+    # Checked against the FILE ON DISK, not only against a path this test
+    # computed the same way the wrapper does. A test that derives the expected
+    # key by the code's own rule agrees with the code and can disagree with
+    # reality — that exact shape hid a silent bug in rules-changed-notice.sh on
+    # 2026-09-17 (see the feedback memory on self-confirming fixtures).
+    mount_specs = [a for a in argv if ":/app/scripts/prodq.py:" in a]
+    assert mount_specs, f"nothing is mounted at /app/scripts/prodq.py: {argv}"
+    source = Path(mount_specs[0].split(":")[0])
+    assert source.is_file(), (
+        f"the wrapper mounts {source}, which does not exist — the path it builds "
+        f"is wrong, however plausible it looks"
+    )
+    assert source.read_text(encoding="utf-8").startswith("#!"), (
+        f"{source} is not the prodq script"
+    )
+    assert source == REPO_ROOT / "scripts" / "prodq.py", (
+        f"the wrapper mounts {source}, not this checkout's copy"
+    )
+    assert ":ro" in mount_specs[0], f"prodq.py is mounted writable: {mount_specs[0]}"
     assert "example.invalid/app:test" in argv
     assert argv.index("example.invalid/app:test") < argv.index("SELECT 1"), (
         "the statement must come after the image, as an argument to the command"
