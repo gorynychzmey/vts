@@ -116,7 +116,15 @@ def aggregate_task_metrics(
         or tr_work_ms
     )
 
-    diarize_events = [e for e in events if e.get("stage") == "diarize.run"]
+    # Successful runs only. A run that returned no segments is emitted with
+    # status "error" — its timing is real, but averaging it in would undo the
+    # point of marking it, and a broken sidecar returns fast enough to drag the
+    # number down. Absent status reads as ok: rows written before the status
+    # existed are on disk already, and they were successes.
+    diarize_events = [
+        e for e in events
+        if e.get("stage") == "diarize.run" and (e.get("status") or "ok") == "ok"
+    ]
     di_audio = sum(float(e.get("audio_duration_s") or 0) for e in diarize_events)
     di_wall_ms = sum(float(e.get("t_wall_ms") or 0) for e in diarize_events)
 

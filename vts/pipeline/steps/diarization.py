@@ -181,21 +181,34 @@ class DiarizeStep(Step):
             # Probed rather than derived from the segments: the last segment
             # ends at the last speech, which is shorter than the audio whenever
             # a recording ends in silence — that would flatter the RTF.
+            # In a thread, like every other call to it (media.py, and _cut_wav
+            # below): probe_duration is subprocess.run, so calling it here
+            # directly forked ffprobe on the event loop and stalled every other
+            # task in flight — progress reports, heartbeat, SSE. A metric must
+            # not be the reason a step fails, and no more may it be the reason
+            # its neighbours stop (vts-p0mv).
             try:
-                _di_audio_s = probe_duration(audio_path)
+                _di_audio_s = await asyncio.to_thread(probe_duration, audio_path)
             except Exception:  # noqa: BLE001 - a metric must not fail the step
                 _di_audio_s = 0.0
             _di_rtf = (
                 (_di_wall_ms / 1000.0) / _di_audio_s if _di_audio_s > 0 else None
             )
+            _di_segments = payload.get("segments") or []
             _di_emitter.emit({
                 "stage": "diarize.run",
-                "status": "ok",
+                # By fact, not by position. The guard below rejects an empty
+                # result, but this row is already on disk by then (the emitter
+                # writes JSONL synchronously), so a failed run used to be
+                # recorded as a success with a flattering RTF — a broken
+                # sidecar returns fast. The timing is kept: how long a failure
+                # took is real data, it just is not a success (vts-i45s).
+                "status": "ok" if _di_segments else "error",
                 "audio_duration_s": round(_di_audio_s, 3),
                 "t_wall_ms": _di_wall_ms,
                 "rtf": round(_di_rtf, 4) if _di_rtf is not None else None,
-                "speakers": len({s["speaker"] for s in payload.get("segments") or []}),
-                "segments": len(payload.get("segments") or []),
+                "speakers": len({s["speaker"] for s in _di_segments}),
+                "segments": len(_di_segments),
             })
 
         # We sent audio and got no speakers back. This is NOT what a monologue

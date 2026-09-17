@@ -88,6 +88,30 @@ def test_diarization_rtf_is_whole_task_only():
     assert agg["diarize_rtf"] == 0.2
 
 
+def test_a_failed_diarization_run_is_left_out_of_the_rtf():
+    """vts-i45s, aggregation half: the filter was on stage alone.
+
+    A run that returned no segments is now emitted with status "error" (the
+    timing of a failure is still data). Summing it here would put exactly the
+    rows the status was added to mark back into the average — and a broken
+    sidecar returns fast, so it drags the RTF down.
+
+    Absent status counts as ok: rows written before the status existed are
+    already on disk, and they were successful runs.
+    """
+    events = [
+        {"stage": "diarize.run", "status": "ok",
+         "audio_duration_s": 600.0, "t_wall_ms": 120000, "rtf": 0.2},
+        {"stage": "diarize.run", "status": "error",
+         "audio_duration_s": 600.0, "t_wall_ms": 900, "rtf": 0.0015},
+        {"stage": "task.final", "t_wall_ms": 130000},
+    ]
+    agg = aggregate_task_metrics(events)
+    # The successful run alone, not the two averaged (which would give 0.1).
+    assert agg["diarize_audio_s"] == 600.0
+    assert agg["diarize_rtf"] == 0.2
+
+
 def test_missing_data_yields_none_not_zero():
     """A task without diarization must not claim an RTF of 0.
 

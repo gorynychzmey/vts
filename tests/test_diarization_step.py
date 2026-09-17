@@ -315,3 +315,148 @@ async def test_step_cancels_sidecar_when_task_paused(tmp_path: Path) -> None:
 
     assert backend.cancelled == [str(st.task_id)], "the sidecar job must be cancelled"
     assert not (dirs["outputs"] / "diarization.json").exists()
+
+
+# --------------------------------------------------------------- RTF metrics
+#
+# The emitter branch was unreachable in every test above: `_ctx` builds a
+# context without `get_emitter`, so the metric code added by b69a3e8 has never
+# run under test. Both defects below shipped through that gap.
+
+class _RecordingEmitter:
+    """Collects emitted events. The real one writes JSONL synchronously."""
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def emit(self, event: dict) -> None:
+        self.events.append(dict(event))
+
+
+def _ctx_with_emitter(backend, emitter, bus=None) -> SimpleNamespace:
+    ctx = _ctx(backend, bus)
+    ctx.get_emitter = lambda _task_id: emitter
+    return ctx
+
+
+async def test_a_failed_run_is_not_recorded_as_ok(tmp_path: Path) -> None:
+    """vts-i45s: the metric claimed success before the result was checked.
+
+    The event was emitted, and written to disk synchronously, 17 lines above
+    the guard that rejects an empty result. So a diarization that FAILED left
+    `{"stage":"diarize.run","status":"ok","segments":0}` behind — with a
+    plausible RTF, since a broken sidecar returns fast. Whoever later asks
+    "what is our diarization RTF" reads exactly these lines.
+
+    The timing is kept rather than dropped: a failed run's duration is real
+    data. Only the status is honest about what happened.
+    """
+    class _EmptyBackend:
+        async def diarize(self, audio_path: Path, timeout_seconds: int = 1800, **_kw) -> dict:
+            return {"segments": [], "embeddings": {}, "num_speakers": 0}
+
+    dirs = _dirs(tmp_path)
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
+    emitter = _RecordingEmitter()
+
+    with pytest.raises(RuntimeError, match="no speaker segments"):
+        await DiarizeStep().run(
+            _ctx_with_emitter(_EmptyBackend(), emitter),
+            _state(tmp_path, dirs, {"diarize": True}),
+        )
+
+    runs = [e for e in emitter.events if e.get("stage") == "diarize.run"]
+    assert len(runs) == 1, f"expected one diarize.run event, got {emitter.events}"
+    assert runs[0]["status"] == "error"
+    assert runs[0]["segments"] == 0
+    assert runs[0]["speakers"] == 0
+    # The measurement survives: this row is still usable as "how long a failed
+    # run took", which is why the event is not simply suppressed.
+    assert isinstance(runs[0]["t_wall_ms"], int)
+
+
+async def test_a_successful_run_is_recorded_as_ok(tmp_path: Path) -> None:
+    """The counterpart, so "error" cannot be the answer to everything."""
+    dirs = _dirs(tmp_path)
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
+    emitter = _RecordingEmitter()
+
+    await DiarizeStep().run(
+        _ctx_with_emitter(_FakeBackend(), emitter),
+        _state(tmp_path, dirs, {"diarize": True}),
+    )
+
+    runs = [e for e in emitter.events if e.get("stage") == "diarize.run"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "ok"
+    assert runs[0]["segments"] == 1
+    assert runs[0]["speakers"] == 1
+
+
+async def test_the_duration_probe_leaves_the_event_loop_alive(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """vts-p0mv: probe_duration ran synchronously inside an async step.
+
+    It is `subprocess.run` — fork+exec of ffprobe — so for its whole duration
+    the worker's event loop served nothing: not the progress reports of
+    neighbouring tasks, not the heartbeat, not SSE. Everywhere else in the
+    pipeline the same function is called through asyncio.to_thread
+    (media.py:454, and _cut_wav in this very file).
+
+    Proven without a sleep threshold: the fake probe waits on a threading
+    event that only a COROUTINE can set. If the probe holds the loop, that
+    coroutine never runs and the wait times out — which is the defect, stated
+    as a deadlock rather than as a measured delay.
+    """
+    import asyncio
+    import threading
+
+    from vts.pipeline.steps import diarization as diarization_mod
+
+    released = threading.Event()
+    probed: list[Path] = []
+    starved: list[str] = []
+
+    def _fake_probe(path):
+        probed.append(path)
+        if not released.wait(timeout=5.0):
+            # Recorded, not raised: the step wraps this call in `except
+            # Exception` so a metric cannot fail it, and an AssertionError
+            # would be swallowed there — leaving the real reason invisible.
+            starved.append("loop never got a turn")
+            return 0.0
+        return 12.5
+
+    monkeypatch.setattr(diarization_mod, "probe_duration", _fake_probe)
+
+    dirs = _dirs(tmp_path)
+    _write_silent_wav(dirs["media"] / "audio_16k.wav")
+    emitter = _RecordingEmitter()
+
+    async def _release() -> None:
+        # Hand control back until the probe is running, then free it. A loop
+        # that is blocked cannot reach this line.
+        for _ in range(500):
+            if probed:
+                break
+            await asyncio.sleep(0.01)
+        released.set()
+
+    await asyncio.gather(
+        DiarizeStep().run(
+            _ctx_with_emitter(_FakeBackend(), emitter),
+            _state(tmp_path, dirs, {"diarize": True}),
+        ),
+        _release(),
+    )
+
+    assert probed, "probe_duration was never called"
+    assert not starved, (
+        "the event loop served nothing while probe_duration was in flight — "
+        "the probe is running on the loop instead of in a thread"
+    )
+    runs = [e for e in emitter.events if e.get("stage") == "diarize.run"]
+    assert runs[0]["audio_duration_s"] == 12.5, (
+        "the probed duration did not reach the metric"
+    )
