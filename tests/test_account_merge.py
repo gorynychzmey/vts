@@ -22,7 +22,9 @@ from vts.db.models import (
     User,
     UserSession,
 )
+from vts.db.models import PushSubscription
 from vts.services.account_merge import apply_artifact_move, merge_accounts
+from vts.services.push import SubscriptionPayload, upsert_subscription
 from vts.services.storage import user_hash
 
 from _db import make_test_engine
@@ -401,3 +403,109 @@ async def test_artifact_rewrite_counts_only_the_rows_it_actually_repointed(sessi
     )
 
     assert report.paths_rewritten == {"tasks": 1}
+
+
+@pytest.mark.asyncio
+async def test_one_browser_subscribed_under_both_addresses_still_merges(session, tmp_path):
+    """The reported IntegrityError (vts-k3dx) cannot happen, and this pins why.
+
+    The report expected the merge to die on `uq_push_subscriptions_endpoint`
+    when the same browser had subscribed under both addresses. It cannot: that
+    constraint is on `endpoint` ALONE, so the two rows the collision needs can
+    never both exist — and the only writer, `upsert_subscription`, upserts on
+    that key and hands the single row to whoever subscribed last.
+
+    Kept as a regression test rather than deleted with the report: the argument
+    rests entirely on the key being global, and narrowing it to
+    (user_id, endpoint) is exactly what most schemas would do. Measured what
+    that change actually breaks, rather than assuming: the first thing to fail
+    is `upsert_subscription`, whose `ON CONFLICT (endpoint)` then matches no
+    constraint at all (`InvalidColumnReferenceError`) — the merge never gets a
+    chance to collide. Only once someone repaired the upsert would two rows
+    become legal and the merge start failing on a key
+    `_unique_keys_involving()` cannot see, because it holds no user_id. Either
+    way this test is what turns that schema change red here instead of in
+    production.
+    """
+    old = await _user(session, OLD)
+    new = await _user(session, NEW)
+    await session.commit()
+
+    one_browser = SubscriptionPayload(
+        endpoint="https://push.example/one-browser", p256dh="key", auth="auth", user_agent="ua"
+    )
+    await upsert_subscription(session, old.id, one_browser)
+    await upsert_subscription(session, new.id, one_browser)
+
+    # Column selects, not ORM objects: the session is built with
+    # expire_on_commit=False, and the merge moves rows with a Core UPDATE that
+    # does not refresh instances already in the identity map. Reading
+    # `PushSubscription.user_id` off a loaded object would report the value as
+    # it was BEFORE the merge and pass whatever the database now holds.
+    owners = (await session.execute(sa.select(PushSubscription.user_id))).scalars().all()
+    assert owners == [new.id], "one globally unique row, owned by whoever subscribed last"
+
+    report = await merge_accounts(
+        session, old_username=OLD, new_username=NEW, artifacts_root=tmp_path
+    )
+
+    # The survivor here is the OLD account — it is the one that keeps its
+    # history and takes the new address — so the subscription must have been
+    # repointed onto it rather than cascaded away with the absorbed account.
+    owners = (await session.execute(sa.select(PushSubscription.user_id))).scalars().all()
+    assert owners == [report.kept_user_id]
+    assert report.moved.get("push_subscriptions") == 1
+
+
+def test_every_unique_key_without_user_id_has_been_cleared_for_merging():
+    """A tripwire for the gap vts-k3dx pointed at, which is real even though its
+    example was not.
+
+    `_unique_keys_involving()` only considers unique keys that CONTAIN user_id,
+    so the merge's `UPDATE ... SET user_id = keeper` silently assumes that no
+    key without it can ever be held by both accounts at once. That assumption is
+    true of every key below — each was checked by hand, and the reason is
+    recorded here because it is not derivable from the schema:
+
+      api_tokens.token_hash           a token is random; two accounts cannot
+                                      hold the same hash.
+      push_subscriptions.endpoint     globally unique, so the two rows cannot
+                                      coexist to begin with (see the test above).
+      recordings.source_task_id       partial-unique on a task id, and a task
+                                      belongs to exactly one account, so no two
+                                      accounts can point at the same one.
+      transcript_chunks(recording_id, chunk_index)
+                                      the recording travels with the row; there
+                                      is no cross-account overlap.
+      user_sessions.sid_hash          random, and sessions are deleted before
+                                      any row is moved.
+
+    Add a unique key without user_id to a user-owned table and this test fails,
+    which is the point: decide then whether it can collide, and either teach
+    `_unique_keys_involving()` about it or add it here with the reason. Left
+    undecided it surfaces as an IntegrityError during someone's merge.
+    """
+    user_id = User.__table__.c.id
+    found: set[tuple[str, tuple[str, ...]]] = set()
+
+    for table in Base.metadata.tables.values():
+        owner_columns = {
+            column.name
+            for column in table.columns
+            if any(fk.column is user_id for fk in column.foreign_keys)
+        }
+        if not owner_columns:
+            continue
+        keys = [tuple(c.name for c in con.columns)
+                for con in table.constraints if isinstance(con, sa.UniqueConstraint)]
+        keys += [tuple(c.name for c in index.columns)
+                 for index in table.indexes if index.unique]
+        found |= {(table.name, key) for key in keys if not owner_columns & set(key)}
+
+    assert found == {
+        ("api_tokens", ("token_hash",)),
+        ("push_subscriptions", ("endpoint",)),
+        ("recordings", ("source_task_id",)),
+        ("transcript_chunks", ("recording_id", "chunk_index")),
+        ("user_sessions", ("sid_hash",)),
+    }
