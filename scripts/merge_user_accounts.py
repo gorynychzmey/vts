@@ -31,6 +31,15 @@ import asyncio
 import sys
 from pathlib import Path
 
+# Run from anywhere, the same way scripts/prodq.py and gen_ui_inventory.py do.
+# Running a script BY PATH puts the script's own directory on sys.path, not the
+# repo root — and where this script actually runs, inside the application image
+# against the live database, `vts` is a source tree at /app rather than an
+# installed package. Without this line the invocation printed above dies on the
+# next import, before parsing a single argument (two operators hit that during
+# a real rename on 2026-09-24 and each worked around it with PYTHONPATH=/app).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from vts.core.config import get_settings
 from vts.db.session import SessionLocal
 from vts.services.account_merge import MergeReport, apply_artifact_move, merge_accounts
