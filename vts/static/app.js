@@ -1010,8 +1010,13 @@ function shareMimeType(fileName) {
 
 // Share the chosen artifact as a file, falling back to a download where the
 // browser cannot. Returns "shared" | "downloaded" | "" (nothing to share).
-async function shareTabArtifact(taskEl, taskId, option) {
-  const text = await loadShareContent(taskEl, taskId, option);
+async function shareTabArtifact(taskEl, taskId, option, preparedText = null) {
+  // Content is normally prepared while the dialog is open. Keeping all
+  // asynchronous loading before the final click means navigator.share() is
+  // invoked immediately inside that click's transient user activation.
+  const text = preparedText === null
+    ? await loadShareContent(taskEl, taskId, option)
+    : preparedText;
   if (!text) {
     return "";
   }
@@ -8636,6 +8641,22 @@ const shareSubmitBtn = document.getElementById("share-submit-btn");
 let shareTaskEl = null;
 let shareTaskId = null;
 let shareChoices = [];
+let preparedShare = null;
+
+async function prepareShareChoice(key) {
+  const option = shareChoices.find((o) => shareOptionKey(o) === key);
+  preparedShare = null;
+  if (shareSubmitBtn) shareSubmitBtn.disabled = true;
+  if (!option || !shareTaskEl || !shareTaskId) return;
+  const taskEl = shareTaskEl;
+  const taskId = shareTaskId;
+  const text = await loadShareContent(taskEl, taskId, option);
+  // Ignore a result from a selection (or task) that changed while loading.
+  const selected = shareOptionsEl?.querySelector('input[name="share-choice"]:checked');
+  if (shareTaskEl !== taskEl || shareTaskId !== taskId || selected?.value !== key) return;
+  preparedShare = { option, text };
+  if (shareSubmitBtn) shareSubmitBtn.disabled = !text;
+}
 
 function renderShareOptions(options) {
   if (!shareOptionsEl) return;
@@ -8673,6 +8694,8 @@ function openShareDialog(taskEl, taskId) {
   shareTaskId = taskId;
   shareChoices = collectShareOptions(taskEl);
   renderShareOptions(shareChoices);
+  const selected = shareOptionsEl?.querySelector('input[name="share-choice"]:checked');
+  void prepareShareChoice(String(selected?.value || ""));
   // State the fallback up front rather than surprising the user with a download
   // after they pressed "Share".
   if (shareNoteEl) {
@@ -8685,11 +8708,18 @@ function openShareDialog(taskEl, taskId) {
 
 shareCloseBtn?.addEventListener("click", () => shareDialog?.close());
 
+shareOptionsEl?.addEventListener("change", (event) => {
+  const input = event.target;
+  if (input instanceof HTMLInputElement && input.name === "share-choice") {
+    void prepareShareChoice(input.value);
+  }
+});
+
 shareSubmitBtn?.addEventListener("click", async () => {
   const selected = shareOptionsEl?.querySelector('input[name="share-choice"]:checked');
   const key = String(selected?.value || "");
   const option = shareChoices.find((o) => shareOptionKey(o) === key);
-  if (!option || !shareTaskEl || !shareTaskId) {
+  if (!option || !shareTaskEl || !shareTaskId || preparedShare?.option !== option) {
     return;
   }
   const taskEl = shareTaskEl;
@@ -8699,7 +8729,7 @@ shareSubmitBtn?.addEventListener("click", async () => {
   // The dialog closes afterwards, once the system sheet has been handed the
   // file (or the download fallback has run).
   try {
-    await shareTabArtifact(taskEl, taskId, option);
+    await shareTabArtifact(taskEl, taskId, option, preparedShare.text);
   } finally {
     shareDialog?.close();
   }
