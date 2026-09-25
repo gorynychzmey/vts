@@ -34,6 +34,7 @@ def client(monkeypatch) -> TestClient:
         "/static/app.js",
         "/static/styles.css",
         "/static/status-predicates.js",
+        "/static/webmcp.js",
         "/static/icons/icon-192.png",
     ],
 )
