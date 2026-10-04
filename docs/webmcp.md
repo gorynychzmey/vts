@@ -25,7 +25,11 @@ tenant/owner filtering, and HTTP validation remain enforced by the existing
 backend. WebMCP does not receive a separate credential or additional access.
 Transcript and speaker data is marked as untrusted content in tool annotations.
 Mutating tools use the same names as their server-side MCP counterparts and are
-annotated as create/update or consequential destructive operations. Destructive
+annotated as create/update or consequential destructive operations. The same
+name does not promise the same parameters: these tools are thin wrappers over
+the HTTP endpoints, so each one offers what its endpoint accepts. `submit_video`
+takes no `preset` for that reason, while the server-side tool of that name
+does. Destructive
 operations are never disguised as reads, so the browser/agent can require user
 confirmation before execution.
 
