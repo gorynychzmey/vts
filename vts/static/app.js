@@ -4344,7 +4344,16 @@ async function removeTask(taskId) {
   if (!confirmed) {
     return;
   }
-  await apiBatchPost("/api/tasks", { task_ids: [taskId] }, "DELETE");
+  const outcome = await apiBatchPost("/api/tasks", { task_ids: [taskId] }, "DELETE");
+  // The library shows the same recording under its own card, which carries no
+  // data-task-id on purpose (see renderLibraryList), so findTaskEl below never
+  // reaches it: deleting from the library left the card standing until a manual
+  // refresh (reported 2026-10-11). Dropped only on an answer of "deleted" — the
+  // endpoint answers 200 with "not_found" for an id it did not delete, and a
+  // card removed on that would be a lie about the user's data.
+  if (outcome?.results?.[String(taskId)] === "deleted") {
+    dropLibraryCardForTask(taskId);
+  }
   // Drop the one card instead of loadTasks(). loadTasks() is loadFirstPage(),
   // which blanks the list and re-fetches ONE page: a user standing in the
   // second twenty lost every card below the first page, including the
@@ -5173,6 +5182,15 @@ async function refreshAll() {
   await Promise.all([loadDeliveryAdapters(), loadDeliveryEntities()]);
   renderDeliverySelectors();
   await loadTasks();
+  // The library is per-user like everything above, and refreshAll() is the
+  // impersonation path — but it was loaded once, lazily, and never again, so
+  // switching user kept showing the previous user's recordings (reported
+  // 2026-10-11). Reset it, and reload now only if it is on screen; otherwise
+  // the next visit to the tab loads it fresh.
+  resetLibraryState();
+  if (document.getElementById("view-library")?.hidden === false) {
+    await loadLibrary();
+  }
   // After loadTasks(), matching bootstrap's order: loadPresets() applies the
   // default preset to the composer and reads the delivery data loaded above.
   await loadPresets();
@@ -6878,10 +6896,42 @@ const voiceListEmptyEl = document.getElementById("voice-list-empty");
 const voiceSaveBtn = document.getElementById("voice-save");
 const voiceSaveContinueBtn = document.getElementById("voice-save-continue");
 const voiceCancelBtn = document.getElementById("voice-cancel");
+const voiceDialogErrorEl = document.getElementById("voice-dialog-error");
 
 const NEW_PERSON_VALUE = "__new__";
 
 let voiceDialogState = null; // { taskId, rows: [...], dirty }
+
+// True while a save is on the wire. A save embeds every voice's clip through
+// the diarization sidecar and re-renders + re-indexes the transcript before it
+// answers; on prod (2026-10-11) that took ~11 s. With nothing on screen saying
+// so, the button was clicked four more times, every click a whole new save —
+// which is how each voice of that task collected 3–4 identical fragments, and
+// why "Save & continue" looked broken while the dialog closed on the first
+// answer. The server now serialises saves of one task; this makes the wait
+// visible and refuses to start a second one from the same dialog.
+let voiceSaveInFlight = false;
+
+function setVoiceSaveBusy(busy, pressedBtn) {
+  voiceSaveInFlight = busy;
+  [voiceSaveBtn, voiceSaveContinueBtn, voiceCancelBtn].forEach((btn) => {
+    if (btn) btn.disabled = busy;
+  });
+  // The pressed button says what it is doing; the label comes back from its
+  // own i18n key, so a locale change mid-save cannot leave a stale string.
+  if (pressedBtn) {
+    pressedBtn.textContent = busy
+      ? t("voices.dialog.saving")
+      : t(pressedBtn.dataset.i18n);
+  }
+  voiceDialog?.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+function showVoiceDialogError(message) {
+  if (!voiceDialogErrorEl) return;
+  voiceDialogErrorEl.textContent = message || "";
+  voiceDialogErrorEl.classList.toggle("hidden", !message);
+}
 
 // One row's mutable UI state, seeded from speaker_matches.json.
 // ---------------------------------------------------------------------------
@@ -6972,23 +7022,29 @@ function renderSpeakerPanel(taskEl, taskId) {
   }
 }
 
-// One row -> the existing picker. allowNew is false here: creating a person
-// mid-list needs the naming flow the registry dialog owns, and the panel's job
-// is binding to someone who already exists.
+// One row -> the existing picker, including "new person". It used to offer
+// existing people only, on the grounds that naming belonged to the registry
+// dialog; in practice that left a voice nobody had met yet with no way to be
+// named from the card, which is where people go looking (reported 2026-10-11).
+// The person is created by the same save that binds it (`bind_new`), so the
+// server writes person, fragment and decision in one transaction — never a
+// named person with nothing attached when the save fails.
 // Mirrors speaker_match_max_distance_candidate in vts/core/config.py: past this
 // the matcher does not treat it as a candidate at all, so neither should we.
 const SPEAKER_CANDIDATE_MAX_DISTANCE = 0.55;
 
 // Shared by the picker dialog and the similarity chips: both end in the same
 // whole-set resubmit, and two copies of that payload would drift apart.
-async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
+async function bindSpeakerRow(taskEl, taskId, row, speakerId, opts = {}) {
+  // `newName`: bind this row to a person who does not exist yet.
+  const newName = String(opts.newName || "").trim();
   const previous = row.selection;
   const previousNoise = row.noise;
   row.selection = speakerId || NEW_PERSON_VALUE;
   // Binding a person clears noise (the panel's equivalent of what
   // onVoiceRowRebind does for the dialog): "not a person" and "is Anna" cannot
   // both hold, and the resolution below would carry both.
-  if (speakerId) row.noise = false;
+  if (speakerId || newName) row.noise = false;
   const rows = Array.isArray(taskEl._speakerRows) ? taskEl._speakerRows : [row];
   const resolutions = rows.map((r) => {
     const chosen = r.options.find((o) => o.speaker_id === r.selection);
@@ -6998,6 +7054,11 @@ async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
       distance: chosen && typeof chosen.distance === "number" ? chosen.distance : r.matchedDistance,
       is_noise: r.noise,
     };
+    if (r === row && newName) {
+      // A new person is a hand-made binding by definition — the matcher had
+      // nobody to offer — so its clip is exactly the fragment worth keeping.
+      return { ...base, action: "bind_new", new_name: newName, add_fragment: true };
+    }
     if (r.selection === NEW_PERSON_VALUE) {
       return { ...base, action: "leave_anonymous", add_fragment: false };
     }
@@ -7027,7 +7088,7 @@ async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
   // making the user find the dialog just to press Continue. A voice marked as
   // noise counts as decided — it is not a person and never will be.
   const stillUndecided = rows.some(
-    (r) => !r.noise && r.selection === NEW_PERSON_VALUE && !r.hasDecision,
+    (r) => !r.noise && r.selection === NEW_PERSON_VALUE && !r.hasDecision && !(r === row && newName),
   );
   const awaiting = taskEl._runtime?.baseStatus === "awaiting_input";
   const continueTask = awaiting && !stillUndecided;
@@ -7039,9 +7100,12 @@ async function bindSpeakerRow(taskEl, taskId, row, speakerId) {
       body: JSON.stringify({ resolutions, continue_task: continueTask }),
     });
   } catch (err) {
+    // Not the console alone: from the card that read as a chip that does
+    // nothing — the same "it doesn't work" the dialog's silent catch produced.
     console.error("Failed to bind the speaker", err);
     row.selection = previous;
     row.noise = previousNoise;
+    window.alert(t("voices.dialog.save_failed", { error: err?.message || String(err) }));
     return;
   }
   await loadSpeakerPanel(taskEl, taskId);
@@ -7059,9 +7123,17 @@ function openSpeakerPanelPicker(taskEl, taskId, row) {
   openSpeakerPicker({
     title: t("speakers.panel.pick_title", { label: row.displayLabel }),
     candidates,
-    allowNew: false,
+    allowNew: true,
     emptyText: t("speakers.panel.pick_empty"),
     onPick: async (item) => {
+      if (item.isNew) {
+        const name = window.prompt(t("speakers.registry.move_new_name_prompt"));
+        // Cancelled or blank: leave the picker open, nothing was decided.
+        if (!name || !name.trim()) return;
+        closeSpeakerPicker();
+        await bindSpeakerRow(taskEl, taskId, row, null, { newName: name });
+        return;
+      }
       closeSpeakerPicker();
       await bindSpeakerRow(taskEl, taskId, row, item.id);
     },
@@ -7562,7 +7634,7 @@ function taskSummaryStarted(taskId) {
 }
 
 async function submitVoiceResolutions(continueTask) {
-  if (!voiceDialogState) return;
+  if (!voiceDialogState || voiceSaveInFlight) return;
   // Capture before closeVoiceDialog nulls voiceDialogState — used to re-fetch
   // the transcript tab after the save so renamed/noise speakers re-render.
   const voiceTaskId = voiceDialogState.taskId;
@@ -7577,6 +7649,9 @@ async function submitVoiceResolutions(continueTask) {
     if (!window.confirm(t("voices.confirm.edit_after_summary"))) return;
   }
   const resolutions = buildResolutions();
+  const pressedBtn = continueTask ? voiceSaveContinueBtn : voiceSaveBtn;
+  showVoiceDialogError("");
+  setVoiceSaveBusy(true, pressedBtn);
   try {
     await api(`/api/tasks/${encodeURIComponent(voiceDialogState.taskId)}/speakers`, {
       method: "POST",
@@ -7584,9 +7659,14 @@ async function submitVoiceResolutions(continueTask) {
       body: JSON.stringify({ resolutions, continue_task: continueTask }),
     });
   } catch (err) {
+    // It used to end here, in the console only: the dialog simply stayed put,
+    // which reads exactly like a button that does nothing.
     console.error("Failed to save voice resolutions", err);
+    setVoiceSaveBusy(false, pressedBtn);
+    showVoiceDialogError(t("voices.dialog.save_failed", { error: err?.message || String(err) }));
     return;
   }
+  setVoiceSaveBusy(false, pressedBtn);
   // Record what was just saved so a later rebind in the same session (dialog
   // reopened without a page reload) can detect the rollback case, and reset
   // dirty tracking to the just-saved state.
@@ -7617,6 +7697,10 @@ async function submitVoiceResolutions(continueTask) {
 }
 
 function closeVoiceDialog(opts = {}) {
+  // Not while a save is on the wire: closing would null voiceDialogState under
+  // the pending request, and the user would be left not knowing whether it
+  // landed. The save path closes the dialog itself once it has answered.
+  if (voiceSaveInFlight && !opts.skipConfirm) return;
   if (!opts.skipConfirm && isVoiceDialogDirty()) {
     if (!window.confirm(t("voices.confirm.discard"))) return;
   }
@@ -7626,6 +7710,7 @@ function closeVoiceDialog(opts = {}) {
 
 async function openVoiceDialog(taskId, paused) {
   if (!voiceDialog) return;
+  showVoiceDialogError("");
   let matches;
   let speakers;
   try {
@@ -8125,7 +8210,43 @@ const libraryPaging = {
   // showing how many rows were on screen, so it climbed as you scrolled — a
   // paging artefact reported as a number about your library.
   total: 0,
+  // Bumped on every reset. A page requested for the previous user that lands
+  // after a switch must be discarded, not appended to the new user's list —
+  // the same guard the task list keeps.
+  epoch: 0,
 };
+
+function resetLibraryState() {
+  libraryPaging.epoch += 1;
+  libraryPaging.loading = false;
+  libraryPaging.offset = 0;
+  libraryPaging.exhausted = false;
+  libraryPaging.total = 0;
+  libraryItems = [];
+  libraryLoaded = false;
+  if (libraryList) libraryList.textContent = "";
+  updateLibraryCount(libraryItems);
+}
+
+// One recording gone: remove its card in place rather than rebuilding the list,
+// which would collapse whatever the user has open — the reason removeTask stopped
+// reloading the task list (01e2f92).
+function dropLibraryCardForTask(taskId) {
+  const id = String(taskId);
+  const before = libraryItems.length;
+  libraryItems = libraryItems.filter(
+    (r) => String(r.source_task_id || "") !== id && String(r.id) !== id,
+  );
+  const dropped = before - libraryItems.length;
+  if (!dropped) return;
+  const sel = `[data-source-task-id="${CSS.escape(id)}"], [data-recording-id="${CSS.escape(id)}"]`;
+  libraryList?.querySelectorAll(sel).forEach((el) => el.remove());
+  libraryPaging.total = Math.max(0, (libraryPaging.total || 0) - dropped);
+  // Paging is by OFFSET: with a row gone, the next page starts one earlier,
+  // or the first row of that page would be skipped without anyone noticing.
+  libraryPaging.offset = Math.max(0, libraryPaging.offset - dropped);
+  updateLibraryCount(libraryItems);
+}
 
 function showMainView(view) {
   const target = view === "library" ? "library" : "tasks";
@@ -8210,6 +8331,10 @@ function renderLibraryList(items) {
     applyLibraryMeta(root, item);
     libraryList.appendChild(root);
   }
+  updateLibraryCount(items);
+}
+
+function updateLibraryCount(items) {
   if (libraryEmptyState) {
     libraryEmptyState.hidden = items.length > 0;
   }
@@ -8270,6 +8395,7 @@ async function loadLibrary() {
 async function loadLibraryPage() {
   const p = libraryPaging;
   if (p.loading || p.exhausted) return;
+  const myEpoch = p.epoch;
   p.loading = true;
   updateLibrarySentinel();
   try {
@@ -8289,6 +8415,7 @@ async function loadLibraryPage() {
     // made that afternoon must match rather than be cut off at midnight.
     if (to) params.set("created_to", `${to}T23:59:59Z`);
     const payload = await api(`/api/recordings?${params.toString()}`);
+    if (myEpoch !== p.epoch) return; // the user switched while this was in flight
     const items = payload && Array.isArray(payload.items) ? payload.items : [];
     if (payload && Number.isFinite(payload.total)) {
       libraryPaging.total = payload.total;
@@ -8301,14 +8428,18 @@ async function loadLibraryPage() {
     libraryLoaded = true;
     applyLibraryFilter();
   } catch {
+    if (myEpoch !== p.epoch) return; // a failure from before the reset is not news
     // A failed load must not read as "you have nothing".
     if (libraryEmptyState && !libraryItems.length) {
       libraryEmptyState.textContent = t("library.load_failed");
       libraryEmptyState.hidden = false;
     }
   } finally {
-    p.loading = false;
-    updateLibrarySentinel();
+    // A stale call must not clear `loading` for the load that replaced it.
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateLibrarySentinel();
+    }
   }
 }
 
