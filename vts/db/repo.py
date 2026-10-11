@@ -389,12 +389,23 @@ class Repo:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
-    async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Task | None:
+    async def get_task_for_user(
+        self, user_id: uuid.UUID, task_id: uuid.UUID, *, lock: bool = False
+    ) -> Task | None:
+        """The task, if it belongs to `user_id`.
+
+        `lock=True` takes a row lock (`SELECT … FOR UPDATE`) held until this
+        session's next commit, so two requests editing the same task run one
+        after the other instead of interleaving. Only the task row is locked —
+        the eager-loaded steps are read normally.
+        """
         stmt = (
             select(Task)
             .options(selectinload(Task.steps))
             .where(Task.user_id == user_id, Task.id == task_id)
         )
+        if lock:
+            stmt = stmt.with_for_update(of=Task)
         return await self.session.scalar(stmt)
 
     async def get_task_by_id(self, task_id: uuid.UUID) -> Task | None:

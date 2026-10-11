@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 
@@ -349,6 +350,83 @@ async def test_resaving_the_same_speaker_does_not_duplicate_the_fragment(
         # fresh one deleted by an over-eager rollback.
         assert samples[0].id != first_id
         assert samples[0].source_task_id == task_id
+
+
+class _SlowDiarizationBackend(_FakeDiarizationBackend):
+    """Embedding that takes long enough for two saves to overlap.
+
+    The real one is a network call to the diarization sidecar; in prod a whole
+    save took ~11 s, long enough for a user who saw no feedback to click again.
+    """
+
+    async def embed(self, audio_path) -> list[float]:
+        await asyncio.sleep(0.3)
+        return await super().embed(audio_path)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saves_of_one_task_leave_one_fragment_per_voice(
+    client, authed_app, tmp_path
+):
+    """Two saves in flight at once must not both add the fragment (prod, 2026-10-11).
+
+    The re-save rollback above (vts-3ij7) is correct for saves that happen ONE
+    AFTER ANOTHER: each finds the previous save's sample and deletes it. It is
+    not correct for saves that overlap. Both read "the prior sample" before
+    either has committed, so neither sees the other's, and both add their own.
+
+    Measured on prod: a save took ~11 s with no feedback on the button, so it
+    was clicked four times about 2.5 s apart. Every voice of that task ended up
+    with 3–4 byte-identical fragments, and the same pattern (3 copies each) is
+    on a task from 2026-07-20. Duplicates skew matching — one clip counted N
+    times — and are what the user then has to clean by hand.
+
+    Asserted on what the user sees: the number of fragments the speaker holds
+    from this task.
+    """
+    app, factory = authed_app
+    task_id, _clip = await _seed_task_with_preview(factory, tmp_path)
+    _override_diarization_backend(app, _SlowDiarizationBackend())
+
+    created = await client.post("/api/speakers", json={"name": "Диана"})
+    assert created.status_code == 200, created.text
+    speaker_id = created.json()["id"]
+
+    payload = {
+        "resolutions": [
+            {
+                "speaker_label": "SPEAKER_00",
+                "action": "bind_existing",
+                "speaker_id": speaker_id,
+                "add_fragment": True,
+                "outcome": "manual_match",
+            }
+        ],
+        "continue_task": False,
+    }
+    # One save first, as on prod: by the time the extra clicks landed the task
+    # already had its recording and a fragment. Without this the overlap fails
+    # earlier, on creating the recording row, and never reaches the fragment
+    # logic this test is about.
+    settled = await client.post(f"/api/tasks/{task_id}/speakers", json=payload)
+    assert settled.status_code == 200, settled.text
+
+    first, second = await asyncio.gather(
+        client.post(f"/api/tasks/{task_id}/speakers", json=payload),
+        client.post(f"/api/tasks/{task_id}/speakers", json=payload),
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        samples = await Repo(session).list_voice_samples(uuid.UUID(speaker_id))
+    from_this_task = [s for s in samples if s.source_task_id == task_id]
+    assert len(from_this_task) == 1, (
+        f"two overlapping saves left {len(from_this_task)} fragments from one clip; "
+        "the second save must see the first one's sample and replace it"
+    )
 
 
 @pytest.mark.asyncio

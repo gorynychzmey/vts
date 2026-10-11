@@ -385,7 +385,16 @@ async def resolve_task_speakers(
 ) -> BatchResultOut:
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
-    task = await repo.get_task_for_user(user_id, task_id)
+    # Locked, so two saves of the SAME task run one after the other. Everything
+    # below is read-then-write: find the prior decision's fragment and delete
+    # it, then add a new one; upsert the recording row. Interleaved, both saves
+    # read the same "before" and both write — prod 2026-10-11, a save that took
+    # ~11 s with no feedback was clicked four times, and every voice of that
+    # task ended up with 3–4 identical fragments. With an empty recording slot
+    # the same overlap fails outright on uq_recordings_source_task. The lock is
+    # released by the first commit below, by which point the fragments are
+    # written, so the waiting save sees them and replaces rather than adds.
+    task = await repo.get_task_for_user(user_id, task_id, lock=True)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if not can_resolve_speakers_task(task):
