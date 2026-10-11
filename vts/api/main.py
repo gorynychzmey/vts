@@ -17,6 +17,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from redis.asyncio import Redis
+
+from vts.services.redis_client import make_redis
 from sqlalchemy import text
 
 from vts import __version__
@@ -363,7 +365,7 @@ def create_app() -> FastAPI:
         # clients that never disconnect, so the container only died once
         # --timeout-graceful-shutdown expired and SIGKILL arrived (vts-9er).
         app.state.shutting_down = asyncio.Event()
-        app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        app.state.redis = make_redis(settings.redis_url)
         # Setting the flag here in the `finally` is too late to be useful on
         # its own: uvicorn waits for open connections BEFORE running the
         # lifespan, so an idle SSE stream held the stop for the whole

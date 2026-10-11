@@ -13,6 +13,8 @@ from fastapi import HTTPException
 from fastmcp import FastMCP
 from redis.asyncio import Redis
 
+from vts.services.redis_client import make_redis
+
 from vts.core.config import get_settings
 from vts.api._helpers.recordings import (
     artifacts_removable_for_task,
@@ -97,7 +99,7 @@ def register(mcp: FastMCP) -> None:
         async with session_factory() as session:
             user, settings = await mcp_authenticate(session)
             repo = Repo(session)
-            redis = Redis.from_url(settings.redis_url, decode_responses=False)
+            redis = make_redis(settings.redis_url)
             try:
                 bus = RedisBus(redis, settings)
                 result = await submit_video(
@@ -202,7 +204,7 @@ def register(mcp: FastMCP) -> None:
             # out from under a worker that is still running the task. What
             # breaks depends on the stage it reached, which is precisely why
             # the HTTP path cancels first.
-            redis = Redis.from_url(settings.redis_url, decode_responses=False)
+            redis = make_redis(settings.redis_url)
             try:
                 await RedisBus(redis, settings).request_cancel(task.id)
                 await repo.set_task_status(task, TaskStatus.canceled)
@@ -276,7 +278,7 @@ def register(mcp: FastMCP) -> None:
         session_factory = get_db_session_factory()
         async with session_factory() as auth_session:
             user, settings = await mcp_authenticate(auth_session)
-        redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        redis = make_redis(settings.redis_url)
         try:
             async with session_factory() as session:
                 return await wait_for_task(

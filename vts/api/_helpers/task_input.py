@@ -12,6 +12,7 @@ import uuid
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy.orm.attributes import set_committed_value
 
 from vts.api._helpers.serialization import serialize_task
@@ -125,18 +126,41 @@ _QUEUE_POS_TTL_SECONDS = 2
 async def _get_cached_queue_positions(
     redis: Redis, repo: Repo, prefix: str
 ) -> dict[uuid.UUID, int]:
+    """Queue positions, from the 2-second cache when Redis answers.
+
+    Redis is a CACHE here and the database is the source of truth, so a
+    transport failure degrades to the uncached path instead of failing the
+    request. Prod, 2026-10-11: a pooled connection was reset while idle and
+    `redis.get` raised ConnectionError, which turned `GET /api/tasks` into a
+    500 for two users — the list, not the positions on it, is what they came
+    for. The cache write is guarded for the same reason: having computed the
+    answer, failing to memoise it is not a reason to withhold it.
+    """
     cache_key = f"{prefix}{_QUEUE_POS_CACHE_SUFFIX}"
-    cached = await redis.get(cache_key)
+    try:
+        cached = await redis.get(cache_key)
+    except RedisError:
+        logger.warning("queue-position cache unreadable; falling back to the database")
+        cached = None
     if cached is not None:
         raw: dict[str, int] = json.loads(cached)
         return {uuid.UUID(k): v for k, v in raw.items()}
     positions = await repo.get_global_queue_positions()
     serializable = {str(k): v for k, v in positions.items()}
-    await redis.setex(cache_key, _QUEUE_POS_TTL_SECONDS, json.dumps(serializable))
+    try:
+        await redis.setex(cache_key, _QUEUE_POS_TTL_SECONDS, json.dumps(serializable))
+    except RedisError:
+        logger.warning("queue-position cache unwritable; serving uncached")
     return positions
 
 async def _get_lane_positions(redis: Redis, prefix: str) -> dict[uuid.UUID, tuple[str, int]]:
-    raw = await redis.get(f"{prefix}queue:lanes")
+    # Lane positions live only in Redis, so unreachable means "unknown", the
+    # same answer this already gives for malformed JSON below. It decorates a
+    # card; it must not decide whether the card is served at all.
+    try:
+        raw = await redis.get(f"{prefix}queue:lanes")
+    except RedisError:
+        return {}
     if not raw:
         return {}
     try:

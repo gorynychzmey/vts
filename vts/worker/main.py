@@ -10,6 +10,8 @@ import uuid
 from typing import Any
 
 from redis.asyncio import Redis
+
+from vts.services.redis_client import make_redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vts.core.config import get_settings
@@ -397,7 +399,7 @@ class WorkerPool:
 
 async def worker_loop() -> None:
     settings = get_settings()
-    redis = Redis.from_url(settings.redis_url, decode_responses=False)
+    redis = make_redis(settings.redis_url)
     bus = RedisBus(redis, settings)
     lanes = LaneManager(
         settings,
