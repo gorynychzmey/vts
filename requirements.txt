@@ -12,7 +12,14 @@ python-multipart==0.0.32
 PyYAML==6.0.3
 pywebpush==2.3.0
 tokenizers>=0.21.0,<1
-yt-dlp==2026.8.19
+yt-dlp==2026.10.26
+# The CA bundle yt-dlp's downloads trust. Depended on directly only for the
+# floor: yt-dlp 2026.10.21 published a certifi advisory (old bundles leave the
+# download open to a man-in-the-middle) and its `default` extra now requires
+# certifi>=2026.10.19 — but we install plain `yt-dlp`, without that extra, so
+# certifi arrived transitively at whatever was current when the image was
+# built (prod had 2026.07.22). No upper bound: a newer bundle is always wanted.
+certifi>=2026.10.19
 fastmcp>=3.3,<4
 authlib>=1.6,<2
 itsdangerous>=2.2,<3
