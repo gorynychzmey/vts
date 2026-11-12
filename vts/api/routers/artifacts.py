@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vts.api._helpers.artifact_store import _load_player_blocks
+from vts.api._helpers.artifact_store import _load_player_blocks, shown_player_blocks
 from vts.api._helpers.base import _find_media_file
 from vts.api.deps import get_current_user, get_session_dep
 from vts.api.schemas import TextSliceOut
@@ -228,21 +228,8 @@ def _player_page_html(
     # carries the blocks. Escaping <, > and & keeps a sentence like
     # "</script>" from closing the data element: JSON.parse turns the escapes
     # back into the original characters.
-    # Only what the page shows travels: the resolved label and each
-    # sentence's start and text. The raw SPEAKER_NN tag stays on the server —
-    # a client should never have to decode it — and the payload stays small.
-    shown = [
-        {
-            "label": block.get("label") or "",
-            "sentences": [
-                {"start": s.get("start"), "text": s.get("text")}
-                for s in block.get("sentences") or []
-            ],
-        }
-        for block in blocks
-    ]
     blocks_json = (
-        json.dumps(shown, ensure_ascii=False)
+        json.dumps(shown_player_blocks(blocks), ensure_ascii=False)
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")

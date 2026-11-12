@@ -218,15 +218,25 @@ Recordings are also addressable as MCP tools: `list_recordings` and
 `get_recording_transcript` (with `structured` and `around_sec`). The
 task-scoped `get_transcript` remains for asking about a run in progress.
 
+**Interactive view (MCP Apps).** In hosts that implement the MCP Apps
+extension (`io.modelcontextprotocol/ui`), `show_recording(recording_id,
+at_sec?)` opens the recording in a player view inside the chat: the
+transcript with timecodes and speakers, positioned on `at_sec` when given —
+pass a search hit's `recording_id` and `start_sec`. The view is the
+`ui://vts/player` resource; it loads further pages through
+`app_player_blocks`, which is marked `visibility: ["app"]` so hosts keep it
+away from the model. In a host without MCP Apps, `show_recording` simply
+returns a short text summary; no other tool changed for this.
+
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) — so a client can group them instead of showing one flat list:
 
 | | tools | meaning |
 |---|---|---|
-| read-only | 14 | looks, changes nothing |
-| writes | 11 | creates or updates; nothing you had is lost |
-| destructive | 4 | the four `delete_*` tools — a client should confirm first |
+| read-only | 18 | looks, changes nothing |
+| writes | 12 | creates or updates; nothing you had is lost |
+| destructive | 5 | the five `delete_*` tools — a client should confirm first |
 
 `openWorldHint` is set on exactly two: `submit_video` (downloads from the open
 internet and occupies a GPU for the length of the recording) and

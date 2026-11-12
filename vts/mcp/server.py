@@ -7,7 +7,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from vts.core.config import get_settings
-from vts.mcp.tools_registry import delivery, presets, prompts, recordings, search, tasks
+from vts.mcp.tools_registry import apps, delivery, presets, prompts, recordings, search, tasks
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def build_mcp_server() -> FastMCP:
     # Tool bodies live in vts/mcp/tools_registry/, one module per domain.
     # They only ever needed `mcp` from this scope, so registration is just
     # passing it in (docs/plans/main-py-split.md, same shape as the API split).
-    for domain in (tasks, prompts, presets, delivery, search, recordings):
+    for domain in (tasks, prompts, presets, delivery, search, recordings, apps):
         domain.register(mcp)
 
     return mcp

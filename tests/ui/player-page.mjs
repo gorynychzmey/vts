@@ -30,3 +30,13 @@ sys.stdout.write(_player_page_html(**json.load(sys.stdin)))
   if (r.status !== 0) throw new Error(`rendering the player page failed: ${r.stderr}`);
   return r.stdout;
 }
+
+// The MCP Apps player view (`ui://vts/player`) as the server serves it.
+export function renderMcpPlayerView() {
+  const r = spawnSync(python(), ["-c",
+    "import sys; from vts.mcp.ui import player_view_html; sys.stdout.write(player_view_html())"], {
+    cwd: REPO, encoding: "utf8",
+  });
+  if (r.status !== 0) throw new Error(`rendering the MCP player view failed: ${r.stderr}`);
+  return r.stdout;
+}

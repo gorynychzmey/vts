@@ -121,8 +121,9 @@ jobs:
           # itself verified, not just changes to the app it drives. The /player
           # page is not under vts/static/: its assets live in vts/api/_templates/
           # and are assembled by vts/api/routers/artifacts.py, and without these
-          # two a player change skipped the browser suite entirely.
-          if echo "$changed" | grep -qE '^(vts/static/|tests/ui/|vts/api/_templates/|vts/api/routers/artifacts\.py)'; then
+          # two a player change skipped the browser suite entirely. The MCP Apps
+          # views (vts/mcp/ui/) share the player core and are driven there too.
+          if echo "$changed" | grep -qE '^(vts/static/|tests/ui/|vts/api/_templates/|vts/api/routers/artifacts\.py|vts/mcp/ui/)'; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
           else
             echo "ui=false" >> "$GITHUB_OUTPUT"

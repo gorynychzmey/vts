@@ -38,14 +38,22 @@ var VtsPlayerCore = (function() {
   //   media            the video or audio element, or null for a transcript
   //                    without media
   //   autoscrollToggle checkbox driving autoscroll, or null (always follows)
+  //   onSelect         optional; called with {start, text, cue} when the user
+  //                    picks a sentence (click or keyboard)
   function create(opts) {
     var container = opts.container;
     var media = opts.media || null;
     var autoToggle = opts.autoscrollToggle || null;
+    var onSelect = typeof opts.onSelect === "function" ? opts.onSelect : null;
     var list = null;
     var active = null;
     var programmaticScroll = false;
     var programmaticScrollTimer = null;
+    // The cited moment survives a re-render: a transcript that arrives or
+    // grows after the link was followed (a live rebuild on /player, the next
+    // page in the MCP view) must still show the passage the link named.
+    var cited = null;        // {cue, seconds} as last asked for
+    var citedPlaced = false; // its sentence has been found and scrolled to
 
     function cues() {
       return list ? list.querySelectorAll(".cue") : [];
@@ -88,9 +96,13 @@ var VtsPlayerCore = (function() {
       span.setAttribute("tabindex", "0");
       span.title = timecode(sentence.start);
       span.textContent = sentence.text;
-      span.addEventListener("click", function() { seek(sentence.start, true); });
+      var pick = function() {
+        seek(sentence.start, true);
+        if (onSelect) onSelect({ start: sentence.start, text: sentence.text, cue: index });
+      };
+      span.addEventListener("click", pick);
       span.addEventListener("keydown", function(e) {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); seek(sentence.start, true); }
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
       });
       return span;
     }
@@ -109,16 +121,9 @@ var VtsPlayerCore = (function() {
       return list;
     }
 
-    // Replace the transcript. Cues are numbered across the WHOLE transcript,
-    // from 0 on every render: `data-cue` is what a deep link addresses, so it
-    // names a sentence in the recording, not in its block or in a render.
-    // An empty `blocks` leaves the current transcript in place.
-    function render(blocks) {
-      if (!Array.isArray(blocks) || !blocks.length) return;
-      var ol = ensureList();
-      ol.innerHTML = "";
-      active = null;
-      var index = 0;
+    var nextIndex = 0;
+
+    function appendBlocks(ol, blocks) {
       blocks.forEach(function(block) {
         var sentences = usableSentences(block);
         if (!sentences.length) return;
@@ -135,13 +140,35 @@ var VtsPlayerCore = (function() {
         body.className = "block-body";
         sentences.forEach(function(sentence, i) {
           if (i) body.appendChild(document.createTextNode(" "));
-          body.appendChild(buildCue(sentence, index++));
+          body.appendChild(buildCue(sentence, nextIndex++));
         });
         li.appendChild(body);
         ol.appendChild(li);
       });
       // No highlight here: the next timeupdate sets it. Highlighting on render
       // would also autoscroll, jumping the page on first load.
+      if (cited) placeCited(!citedPlaced);
+    }
+
+    // Replace the transcript. Cues are numbered across the WHOLE transcript,
+    // from 0 on every render: `data-cue` is what a deep link addresses, so it
+    // names a sentence in the recording, not in its block or in a render.
+    // An empty `blocks` leaves the current transcript in place.
+    function render(blocks) {
+      if (!Array.isArray(blocks) || !blocks.length) return;
+      var ol = ensureList();
+      ol.innerHTML = "";
+      active = null;
+      nextIndex = 0;
+      appendBlocks(ol, blocks);
+    }
+
+    // Add the next part of a transcript that arrives in pages, numbering on
+    // from where the last part stopped. What is already shown is left alone,
+    // so the reader's scroll position and marks survive.
+    function append(blocks) {
+      if (!Array.isArray(blocks) || !blocks.length) return;
+      appendBlocks(ensureList(), blocks);
     }
 
     // The last cue starting at or before `seconds`: the sentence a moment in
@@ -184,27 +211,51 @@ var VtsPlayerCore = (function() {
       if (cue) cue.classList.add("cited");
     }
 
-    // Arrive at a cited moment: mark the sentence, scroll it into view, and
-    // seek the media there WITHOUT playing — arriving at someone's recording
-    // should not start sound the reader did not ask for.
-    //   target.cue      sentence index (wins: a time can drift on re-render)
-    //   target.seconds  a moment in the recording
-    function showCited(target) {
-      var seconds = target && typeof target.seconds === "number" && !isNaN(target.seconds)
+    // The sentence a cited target names, and the moment to seek to.
+    function resolveCited(target) {
+      var seconds = typeof target.seconds === "number" && !isNaN(target.seconds)
         ? Math.max(0, target.seconds) : null;
       var cue = null;
-      if (target && target.cue !== null && target.cue !== undefined && target.cue !== "" && list) {
+      if (target.cue !== null && target.cue !== undefined && target.cue !== "" && list) {
         cue = list.querySelector('.cue[data-cue="' + String(target.cue).replace(/["\\]/g, "") + '"]');
         if (cue && seconds === null) {
           var cueStart = parseFloat(cue.getAttribute("data-start"));
           if (!isNaN(cueStart)) seconds = cueStart;
         }
       }
-      if (cue === null && seconds === null) return;
-      if (cue === null) cue = cueAt(seconds);
-      if (cue) {
-        markCited(cue);
-        scrollCueToCenter(cue);
+      if (cue === null && seconds !== null) cue = cueAt(seconds);
+      return { cue: cue, seconds: seconds };
+    }
+
+    // Mark the cited sentence; on first placement also scroll to it. Later
+    // re-renders only restore the mark, so a growing transcript does not keep
+    // yanking the reader back.
+    function placeCited(scroll) {
+      var found = resolveCited(cited);
+      markCited(found.cue);
+      if (found.cue) {
+        if (scroll) scrollCueToCenter(found.cue);
+        citedPlaced = true;
+      }
+    }
+
+    // Arrive at a cited moment: mark the sentence, scroll it into view, and
+    // seek the media there WITHOUT playing — arriving at someone's recording
+    // should not start sound the reader did not ask for.
+    //   target.cue      sentence index (wins: a time can drift on re-render)
+    //   target.seconds  a moment in the recording
+    // Remembered, so a transcript rendered later still lands on it.
+    function showCited(target) {
+      if (!target) return;
+      var found = resolveCited(target);
+      if (found.cue === null && found.seconds === null
+          && (target.cue === null || target.cue === undefined || target.cue === "")) return;
+      cited = { cue: target.cue, seconds: target.seconds };
+      citedPlaced = false;
+      placeCited(true);
+      var seconds = found.seconds;
+      if (seconds === null && typeof target.seconds === "number" && !isNaN(target.seconds)) {
+        seconds = Math.max(0, target.seconds);
       }
       if (media && seconds !== null) {
         var go = function() { try { media.currentTime = seconds; } catch (e) {} };
@@ -213,7 +264,7 @@ var VtsPlayerCore = (function() {
       }
     }
 
-    return { render: render, showCited: showCited, cueAt: cueAt };
+    return { render: render, append: append, showCited: showCited, cueAt: cueAt };
   }
 
   return { create: create, timecode: timecode };

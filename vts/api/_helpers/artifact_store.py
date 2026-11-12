@@ -241,6 +241,23 @@ def player_blocks_from_artifacts(
     )
 
 
+def shown_player_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a player renders and nothing more: the resolved label and each
+    sentence's start and text. The raw SPEAKER_NN tag stays on the server — a
+    client should never have to decode it — and the payload stays small. Used
+    by /player and by the MCP player view alike."""
+    return [
+        {
+            "label": block.get("label") or "",
+            "sentences": [
+                {"start": s.get("start"), "text": s.get("text")}
+                for s in block.get("sentences") or []
+            ],
+        }
+        for block in blocks
+    ]
+
+
 async def _load_player_blocks(task: Any, session: AsyncSession) -> list[dict[str, Any]]:
     """Player blocks for a task: its files, its language, its voice names."""
     names = await Repo(session).speaker_names_for_task(task.user_id, task.id)

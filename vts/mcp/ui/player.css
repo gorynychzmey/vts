@@ -1,0 +1,37 @@
+/* The MCP player view. Colours come from the host when it sends them
+   (hostContext.styles.variables), with light/dark fallbacks of our own. */
+:root {
+  --vts-bg: var(--color-background-primary, #ffffff);
+  --vts-fg: var(--color-text-primary, #1f1f1f);
+  --vts-muted: var(--color-text-secondary, #6b6b6b);
+  --vts-hover: var(--color-background-secondary, #f1f1f1);
+  --vts-active: #dbe8f7;
+  --vts-cited: #c98a3e;
+  --vts-label: #9a4b4b;
+  --vts-font: var(--font-sans, system-ui, sans-serif);
+}
+:root[data-theme="dark"] {
+  --vts-bg: var(--color-background-primary, #1b1b1b);
+  --vts-fg: var(--color-text-primary, #e6e6e6);
+  --vts-muted: var(--color-text-secondary, #a0a0a0);
+  --vts-hover: var(--color-background-secondary, #2a2a2a);
+  --vts-active: #2a3d55;
+  --vts-label: #d39a9a;
+}
+html, body { margin: 0; padding: 0; background: var(--vts-bg); color: var(--vts-fg);
+  font-family: var(--vts-font); }
+body { padding: 12px 16px; box-sizing: border-box; }
+.head { margin: 0 0 8px; }
+.title { font-size: 1rem; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.meta { margin: 2px 0 0; color: var(--vts-muted); font-size: 0.85rem; }
+.meta:empty, .title:empty, .status:empty { display: none; }
+.status { color: var(--vts-muted); font-size: 0.9rem; margin: 8px 0; }
+.transcript { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+.block { margin: 0 0 0.7rem; }
+.block-label { color: var(--vts-label); font-weight: 600; margin: 0 0 0.15rem; font-size: 0.85rem; }
+.block-body { margin: 0; line-height: 1.55; }
+.cue { cursor: pointer; border-radius: 3px; padding: 0 0.1rem; }
+.cue:hover { background: var(--vts-hover); }
+.cue.active { background: var(--vts-active); }
+.cue.cited { outline: 2px solid var(--vts-cited); outline-offset: 1px; border-radius: 3px; }
+.cue:focus-visible { outline: 2px solid #7aa; outline-offset: 1px; }

@@ -59,10 +59,14 @@ what the view shows, so it only gains `_meta.ui.resourceUri`.
 
 ### 4.1 Registration
 
-Use `fastmcp.apps.FastMCPApp`, added to the existing server with
-`server.add_provider(app)`. It declares the extension capability, serves the
-`ui://` resources with MIME `text/html;profile=mcp-app`, and wires entry tools
-(`visibility=["model"]`) and backend tools (`visibility=["app"]`).
+Plain FastMCP decorators in `vts/mcp/tools_registry/apps.py`, not
+`FastMCPApp`: `@mcp.resource(uri, mime_type=UI_MIME_TYPE, app=AppConfig(...))`
+for the view and `@mcp.tool(app=AppConfig(resource_uri=...))` /
+`AppConfig(visibility=["app"])` for the tools. FastMCP already announces the
+`io.modelcontextprotocol/ui` extension in the server capabilities. App-only
+tools stay in `tools/list` carrying `visibility: ["app"]`, and the host keeps
+them from the model — which is what the spec asks; `FastMCPApp` instead hides
+its backend tools from the list and renames them with a hash prefix.
 
 Registration does **not** depend on whether the host announced the extension:
 a host without Apps sees the entry tools as ordinary tools and ignores the
@@ -156,7 +160,9 @@ server never trusts the view.
 ### 4.4 Result shape of entry tools
 
 - `content`: short text for the model and for hosts without a view —
-  title, duration, people, and the first lines or the line at `at_sec`.
+  title, duration, people, how many timed sentences, and a pointer to
+  `get_recording_transcript`. No transcript text: the reading tools carry
+  their own redaction choice, and the view shows the text to the user.
 - `structuredContent`: just enough to render the first screen (metadata and
   the first page of player blocks, or the page holding `at_sec`), plus a
   cursor.
@@ -255,8 +261,12 @@ Requirements:
   carries a `resourceUri` that resolves; app-only tools are hidden from
   `tools/list` for the model.
 - Unchanged behaviour: existing tools' results are byte-for-byte the same.
-- E2E: Playwright against the FastMCP apps dev host — render, click a line,
-  media seeks; media missing → fallback shown.
+- E2E: `tests/ui/scenarios/mcp-player-view.mjs` plays the host — loads the
+  real view in a sandboxed iframe, speaks the `ui/*` protocol to it, records
+  what it sends (handshake order, page requests, model context, size).
+  `fastmcp dev apps` was the plan but needs the `prefab-ui` extra and an
+  unauthenticated server; checking in a real host (Claude, ChatGPT) after
+  deploy replaces it.
 
 ## 10. Implementation steps
 
