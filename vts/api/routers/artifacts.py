@@ -17,6 +17,7 @@ from __future__ import annotations
 import html as _html
 import json
 import logging
+import re
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -59,16 +60,6 @@ def _template(name: str) -> str:
     return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
-def _format_timecode(seconds: float) -> str:
-    """Whole-second H:MM:SS / M:SS label for a transcript cue."""
-    total = max(0, int(seconds))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
-
 _PLAYER_MEDIA_UNAVAILABLE_MSG = {
     "en": "This media is no longer available.",
     "ru": "Медиа более не доступно.",
@@ -94,43 +85,6 @@ def _media_unavailable_block_html() -> str:
         f'<p class="media-unavailable" data-media-unavailable '
         f"data-msgs='{msgs}'>{default}</p>"
     )
-
-
-def _player_block_html(
-    block: dict[str, Any], first_cue_index: int = 0
-) -> tuple[str, int]:
-    """One transcript block: its speaker label (when diarized) plus each inner
-    sentence as an individually clickable cue that seeks to its own start.
-    A block with a single sentence renders as one cue — same structure, so the
-    whole block is still clickable when there were no finer timings.
-
-    `first_cue_index` numbers the cues CONSECUTIVELY ACROSS THE PAGE, not within
-    the block: `data-cue` is what a deep link addresses (vts-5yyo), so it has to
-    identify a sentence in the recording rather than in whichever block it
-    happens to sit. Returns (html, next_index) so the caller keeps the count."""
-    label = str(block.get("label") or "").strip()
-    label_html = (
-        f'<div class="block-label">{_html.escape(label)}</div>' if label else ""
-    )
-    cues: list[str] = []
-    for sentence in block.get("sentences") or []:
-        try:
-            start = float(sentence.get("start"))
-        except (TypeError, ValueError):
-            continue
-        text = str(sentence.get("text") or "").strip()
-        if not text:
-            continue
-        cue_index = first_cue_index + len(cues)
-        cues.append(
-            f'<span class="cue" data-start="{start}" data-cue="{cue_index}" '
-            f'role="button" tabindex="0" '
-            f'title="{_format_timecode(start)}">{_html.escape(text)}</span>'
-        )
-    if not cues:
-        return "", first_cue_index
-    html = f'<li class="block">{label_html}<p class="block-body">{" ".join(cues)}</p></li>'
-    return html, first_cue_index + len(cues)
 
 
 def _parse_range_header(value: str, total: int) -> tuple[int, int] | None:
@@ -236,6 +190,9 @@ def _serve_text(
     )
 
 
+_PLAYER_PLACEHOLDER = re.compile(r"__(CSS|JS|MEDIA_BLOCK|AUTOSCROLL|TITLE|BLOCKS)__")
+
+
 def _player_page_html(
     *,
     title: str,
@@ -254,8 +211,8 @@ def _player_page_html(
     None when the media file is gone (TTL / archive / delete) — then a
     localized 'media unavailable' message is shown in its place and the
     transcript is omitted (nothing to seek).
-    Sentence/label text is escaped here; start times drive the seek via
-    data-start.
+    The blocks travel as JSON and player_core.js renders them, so the page and
+    its live rebuild cannot disagree on numbering or on which sentences show.
 
     The shell, CSS and JS live in vts/api/_templates/ and are substituted here
     rather than being one f-string: as an f-string every CSS and JS brace had
@@ -266,14 +223,32 @@ def _player_page_html(
         blocks = []
     else:
         media_block = media_tag
-    rows = []
-    next_cue = 0
-    for block in blocks:
-        html, next_cue = _player_block_html(block, next_cue)
-        if html:
-            rows.append(html)
-    transcript_html = (
-        f'<ol class="transcript">{"".join(rows)}</ol>' if rows else ""
+    # The transcript is rendered client-side by player_core.js, the one
+    # renderer shared with the live rebuild and the MCP view; the page only
+    # carries the blocks. Escaping <, > and & keeps a sentence like
+    # "</script>" from closing the data element: JSON.parse turns the escapes
+    # back into the original characters.
+    # Only what the page shows travels: the resolved label and each
+    # sentence's start and text. The raw SPEAKER_NN tag stays on the server —
+    # a client should never have to decode it — and the payload stays small.
+    shown = [
+        {
+            "label": block.get("label") or "",
+            "sentences": [
+                {"start": s.get("start"), "text": s.get("text")}
+                for s in block.get("sentences") or []
+            ],
+        }
+        for block in blocks
+    ]
+    blocks_json = (
+        json.dumps(shown, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    blocks_html = (
+        f'<script type="application/json" id="vts-player-blocks">{blocks_json}</script>'
     )
     # Autoscroll checkbox: rendered whenever media is present, even if the
     # transcript hasn't arrived yet (task still processing -> blocks=[] on
@@ -307,19 +282,22 @@ def _player_page_html(
             )
         )
 
-    js = _template("player.js").replace("/*__LIVE_SCRIPT__*/", live_script)
-    # Title is the only caller-supplied value in the shell, and it is escaped.
-    # Substituted last, and the replacements above are ordered so that no
-    # inserted text is itself scanned for a later placeholder.
-    return (
-        _template("player.html")
-        .replace("__CSS__", _template("player.css"))
-        .replace("__JS__", js)
-        .replace("__MEDIA_BLOCK__", media_block)
-        .replace("__AUTOSCROLL__", autoscroll_html)
-        .replace("__TRANSCRIPT__", transcript_html)
-        .replace("__TITLE__", _html.escape(title))
+    js = _template("player_core.js") + "\n" + _template("player.js").replace(
+        "/*__LIVE_SCRIPT__*/", live_script
     )
+    # One pass over the shell: inserted text is never scanned again, so a
+    # title or a sentence that happens to contain a placeholder name stays
+    # literal. Chained .replace() calls could not promise that for both the
+    # title and the transcript at once — whichever went first was rescanned.
+    values = {
+        "CSS": _template("player.css"),
+        "JS": js,
+        "MEDIA_BLOCK": media_block,
+        "AUTOSCROLL": autoscroll_html,
+        "TITLE": _html.escape(title),
+        "BLOCKS": blocks_html,
+    }
+    return _PLAYER_PLACEHOLDER.sub(lambda m: values[m.group(1)], _template("player.html"))
 
 
 @router.get(

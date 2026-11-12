@@ -5,36 +5,27 @@
 // positioned, and marking WHICH fragment was cited rather than which one
 // happens to be playing.
 //
-// The player is a standalone page rather than part of the SPA, so this builds
-// the page from the real template assets instead of using the shared stub
-// server. The assets are the real ones: a check that only read the source text
-// would prove the code exists, not that a link works.
-import fs from "node:fs";
+// The player is a standalone page rather than part of the SPA, so this serves
+// the real page, rendered by the function the /player route uses, instead of
+// using the shared stub server. A check that only read the source text would
+// prove the code exists, not that a link works.
 import http from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { launch } from "../harness.mjs";
+import { renderPlayerPage } from "../player-page.mjs";
 
 export const name = "player-deeplink";
 
-const TEMPLATES = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)), "../../../vts/api/_templates",
-);
-
 function pageHtml() {
-  const css = fs.readFileSync(path.join(TEMPLATES, "player.css"), "utf8");
-  // The live-rebuild script is spliced in by the server; not needed here.
-  const js = fs.readFileSync(path.join(TEMPLATES, "player.js"), "utf8")
-    .replace("/*__LIVE_SCRIPT__*/", "");
-  const cues = [[0, 0], [1, 12.5], [2, 30]].map(([i, s]) =>
-    `<span class="cue" data-start="${s}" data-cue="${i}" role="button" tabindex="0">sentence ${i}</span>`
-  ).join(" ");
-  return `<!doctype html><html><head><style>${css}</style></head><body>
-<audio controls></audio>
-<ol class="transcript"><li class="block"><p class="block-body">${cues}</p></li></ol>
-<label><input type="checkbox" id="autoscroll-toggle" checked> auto</label>
-<script>${js}</script></body></html>`;
+  return renderPlayerPage({
+    title: "recording",
+    // No src: nothing loads, so only the addressing is exercised here. The
+    // seek itself is covered by player-behaviour.
+    media_tag: "<audio controls></audio>",
+    blocks: [{ sentences: [[0, 0], [1, 12.5], [2, 30]].map(([i, s]) => ({ start: s, text: `sentence ${i}` })) }],
+    task_id: null,
+    as_user: null,
+  });
 }
 
 export async function run() {

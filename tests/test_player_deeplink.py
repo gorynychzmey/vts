@@ -21,12 +21,16 @@ from vts.api._templates import __name__ as _templates_pkg  # noqa: F401
 
 
 def _player_js() -> str:
+    """The player's script as the page carries it: the shared core (rendering,
+    seeking, citing) followed by the /player adapter (URL, language)."""
     from pathlib import Path
 
     import vts.api.routers.artifacts as artifacts
 
-    return (Path(artifacts.__file__).resolve().parent.parent / "_templates" / "player.js").read_text(
-        encoding="utf-8"
+    templates = Path(artifacts.__file__).resolve().parent.parent / "_templates"
+    return "\n".join(
+        (templates / name).read_text(encoding="utf-8")
+        for name in ("player_core.js", "player.js")
     )
 
 
@@ -68,61 +72,7 @@ def test_a_missing_or_malformed_time_is_ignored_rather_than_seeking_to_zero():
     assert "isNaN" in js
 
 
-def test_cues_are_numbered_consecutively_across_blocks():
-    """`data-cue` names a sentence in the RECORDING, not in its block.
-
-    Numbering per block would make ?cue=2 ambiguous — every block has one — so
-    a citation would land on the wrong passage as soon as a recording had more
-    than one speaker turn.
-    """
-    from vts.api.routers.artifacts import _player_block_html
-
-    blocks = [
-        {"label": "Анна", "sentences": [
-            {"start": 0.0, "end": 2.0, "text": "первое"},
-            {"start": 2.0, "end": 4.0, "text": "второе"},
-        ]},
-        {"label": "Борис", "sentences": [
-            {"start": 4.0, "end": 6.0, "text": "третье"},
-        ]},
-    ]
-    html_parts, next_index = [], 0
-    for block in blocks:
-        html, next_index = _player_block_html(block, next_index)
-        html_parts.append(html)
-    rendered = "".join(html_parts)
-
-    assert 'data-cue="0"' in rendered
-    assert 'data-cue="1"' in rendered
-    assert 'data-cue="2"' in rendered, "the second block restarted the numbering"
-    assert next_index == 3
-
-
-def test_an_empty_block_does_not_consume_a_cue_number():
-    # A block that renders nothing must not create a gap: the numbers have to
-    # match what the live rebuild produces, and that skips empty blocks too.
-    from vts.api.routers.artifacts import _player_block_html
-
-    html, next_index = _player_block_html({"sentences": []}, 5)
-    assert html == ""
-    assert next_index == 5
-
-
-def test_the_live_rebuild_numbers_cues_the_same_way():
-    """The two render paths must agree, or a citation breaks on rebuild.
-
-    The server renders the page; player_live.js rebuilds the list when the
-    transcript changes. If only one of them numbered cues, a link followed
-    before the rebuild would point at nothing after it.
-    """
-    from pathlib import Path
-
-    import vts.api.routers.artifacts as artifacts
-
-    live = (
-        Path(artifacts.__file__).resolve().parent.parent / "_templates" / "player_live.js"
-    ).read_text(encoding="utf-8")
-    assert "data-cue" in live, "the live rebuild drops the cue addressing"
-    # Counted across the transcript, and reset when the list is rebuilt.
-    assert "cueCounter" in live
-    assert "cueCounter = 0" in live
+# Cue numbering (consecutive across blocks, empty blocks and unusable sentences
+# take no number, the same numbers after a live rebuild) is rendered in the
+# browser by player_core.js, the page's only renderer. It is checked there, in
+# tests/ui/scenarios/player-rebuild-numbering.mjs and player-behaviour.mjs.

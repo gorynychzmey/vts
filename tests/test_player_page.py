@@ -13,12 +13,24 @@ Two layers are tested:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 
 import pytest
 
 from tests.conftest import _TEST_USER_ID
 from vts.api.routers.artifacts import _player_page_html
+
+
+def _embedded_blocks(html: str) -> list:
+    """The transcript the page carries for player_core.js to render."""
+    m = re.search(
+        r'<script type="application/json" id="vts-player-blocks">(.*?)</script>',
+        html,
+        re.S,
+    )
+    assert m, "the page carries no transcript data"
+    return json.loads(m.group(1))
 
 
 # --------------------------------------------------------------- pure renderer
@@ -37,14 +49,13 @@ def test_player_html_renders_clickable_entries_with_start_times():
     )
     # The media element is present.
     assert "<video" in html
-    # Both phrases render as text.
-    assert "First phrase" in html
-    assert "Second phrase" in html
-    # Each phrase carries its start time in a data attribute the seek script reads.
-    assert 'data-start="0.0"' in html or 'data-start="0"' in html
-    assert 'data-start="2.5"' in html
-    # A seek script wires clicks to currentTime.
-    assert "currentTime" in html
+    # Each phrase travels with the start time a click seeks to. Rendering and
+    # seeking happen in the browser (player_core.js); the browser scenarios
+    # player-behaviour and player-deeplink cover that part.
+    assert _embedded_blocks(html) == [
+        {"label": "", "sentences": [{"start": 0.0, "text": "First phrase"}]},
+        {"label": "", "sentences": [{"start": 2.5, "text": "Second phrase"}]},
+    ]
 
 
 def test_player_html_escapes_entry_text():
@@ -55,8 +66,20 @@ def test_player_html_escapes_entry_text():
         media_tag="<audio></audio>",
         blocks=blocks,
     )
-    assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
+    # The text cannot close the data element or open a tag on the page...
+    assert "<script>alert(1)" not in html
+    assert "</script>" not in html.split('id="vts-player-blocks">', 1)[1].split("</script>", 1)[0]
+    # ...and still arrives intact, to be set as textContent, never as HTML.
+    assert _embedded_blocks(html)[0]["sentences"][0]["text"] == "<script>alert(1)</script>"
+
+
+def test_player_html_placeholder_names_in_values_stay_literal():
+    # The shell is filled in one pass: a title or a sentence that contains a
+    # placeholder name must not pull another value into its place.
+    blocks = [{"label": "", "sentences": [{"start": 0.0, "text": "__TITLE__ __CSS__"}]}]
+    html = _player_page_html(title="__BLOCKS__", media_tag="<audio></audio>", blocks=blocks)
+    assert "<title>__BLOCKS__</title>" in html
+    assert _embedded_blocks(html)[0]["sentences"][0]["text"] == "__TITLE__ __CSS__"
 
 
 def test_player_html_block_label_uses_resolved_name():
@@ -66,7 +89,7 @@ def test_player_html_block_label_uses_resolved_name():
                "label": "Alice",
                "sentences": [{"start": 0.0, "end": 5.0, "text": "hi"}]}]
     html = _player_page_html(title="t", media_tag="<audio></audio>", blocks=blocks)
-    assert "Alice" in html
+    assert _embedded_blocks(html)[0]["label"] == "Alice"
     assert "SPEAKER_00" not in html
 
 
@@ -150,18 +173,6 @@ def test_player_html_autoscroll_checkbox_present_when_media_present_no_transcrip
     assert 'id="autoscroll-toggle"' in html
 
 
-def test_player_html_rebuild_reattaches_autoscroll_wiring():
-    # vts-eho: rebuildTranscript (SSE path) must (re)acquire .transcript and
-    # (re)attach the scroll listener, guarded so it isn't double-bound.
-    blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
-               "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
-    html = _player_page_html(
-        title="t", media_tag='<video src="/m"></video>', blocks=blocks, task_id="x"
-    )
-    assert "_autoscrollWired" in html
-    assert "wireAutoscroll" in html or "attachAutoscrollScrollListener" in html
-
-
 def test_player_html_localizes_autoscroll_label_client_side():
     blocks = [{"start": 0.0, "end": 1.0, "text": "hi", "label": "",
                "sentences": [{"start": 0.0, "end": 1.0, "text": "hi"}]}]
@@ -238,11 +249,15 @@ async def test_player_endpoint_includes_transcript(authed_app, client, tmp_path)
 
     r = await client.get(f"/player/{task_id}")
     assert r.status_code == 200, r.text
-    body = r.text
-    assert "Hello there" in body
-    assert "world" in body
-    assert 'data-start="1.5"' in body
-    assert "currentTime" in body
+    sentences = [
+        sentence
+        for block in _embedded_blocks(r.text)
+        for sentence in block["sentences"]
+    ]
+    assert [(x["start"], x["text"]) for x in sentences] == [
+        (0.0, "Hello there"),
+        (1.5, "world"),
+    ]
 
 
 @pytest.mark.asyncio
