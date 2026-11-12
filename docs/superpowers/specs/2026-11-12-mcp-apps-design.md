@@ -35,7 +35,7 @@ sees today; no existing tool changes its `content` or its result schema.
 
 | # | View (`ui://` resource) | Entry tool (model-visible) | Data source |
 |---|---|---|---|
-| 1 | `ui://vts/player` — media + transcript, click-to-seek, current line highlighted, text filter | **new** `show_recording(recording_id, at_sec?)` | `get_recording_transcript(structured=true)` pages + signed media URL |
+| 1 | `ui://vts/player` — media + transcript, click-to-seek, current line highlighted | **new** `show_recording(recording_id, at_sec?)` | `get_recording_transcript(structured=true)` pages + signed media URL |
 | 2 | `ui://vts/search` — hits list, open hit in the player at `start_sec` | `search_transcripts` (existing; only `_meta.ui` added) | existing `SearchResult` |
 | 3 | `ui://vts/summary` — rendered summary, regenerate with another prompt | **new** `show_summary(recording_id, ref?)` | `get_recording_prompt_result` |
 | 4 | `ui://vts/speakers` — map labels to people, listen to a voice sample | later, depends on the speaker registry tools | to be designed |
@@ -102,21 +102,25 @@ against `fastmcp dev apps`, an independent host implementation.
 
 ### 4.2.2 Shared player core (decided)
 
-Click-to-seek, current-line highlight, autoscroll and the text filter move out
-of `vts/api/_templates/player.js` into a core that knows nothing about where
-data comes from. Two thin adapters feed it:
+Click-to-seek, current-line highlight, autoscroll and positioning on a cited
+moment moved out of `vts/api/_templates/player.js` into
+`player_core.js`, which knows nothing about where data comes from. (The web
+player has no text filter; one would be a new feature of the core, not part
+of the move.) Two thin adapters feed it:
 
 - web player (`/player/{task_id}`): `fetch` + the existing SSE live updates;
 - MCP view (`ui://vts/player`): the bridge (`tool-result`, `tools/call`).
 
-So the two players cannot drift apart in behaviour. Extracting the core is
-its own step, done first. The safety net is thin today: `tests/ui` has one
-player scenario (`player-deeplink.mjs`) and `tests/test_player_page.py` checks
-the page assembly, not behaviour. So before moving code, add browser
-scenarios pinning the current behaviour — click seeks, the playing line is
-highlighted, autoscroll follows and pauses on manual scroll, the filter hides
-non-matching lines — and prove each fails against a deliberately broken
-player. They must then stay green, unchanged, across the extraction.
+So the two players cannot drift apart in behaviour.
+
+Done (vts-vtma.1). `tests/ui/scenarios/player-behaviour.mjs` pinned the
+behaviour first — click and keyboard seek, highlight, autoscroll and its
+pause, deep link, live rebuild, unavailable state, localised label — each
+check proven against a broken player, and stayed unchanged and green across
+the move. The core is also the page's only renderer now: the server embeds
+the blocks as JSON. The two renderers it replaced disagreed on which
+sentences to skip, so a live rebuild renumbered `data-cue` under a deep link
+(`player-rebuild-numbering.mjs` fails on the old code).
 
 ### 4.2.3 Transcript shape (decided)
 
@@ -125,9 +129,9 @@ The view uses the same blocks as the web player: `_load_player_blocks()`
 sentences with their own timecodes). One shape for both players is what makes
 the shared core possible.
 
-It is task-scoped today (`task.artifact_dir`, `task.options` for the language,
-`speaker_names_for_task(task)`). The view addresses recordings, so the loader
-is split into a core taking `(artifact_dir, language, names)`:
+The view addresses recordings, so the loader is split (done, vts-vtma.1) into
+`player_blocks_from_artifacts(artifact_dir, language, names)` and two
+callers, `_load_player_blocks(task)` and `load_recording_player_blocks()`:
 
 - task caller: as now;
 - recording caller: `recording.artifact_dir`, `recording.language`, names via
