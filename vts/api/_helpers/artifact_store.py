@@ -212,28 +212,65 @@ def _load_raw_segments(artifact_dir: str | None) -> list[dict[str, Any]]:
         return []
     return [s for s in segments if isinstance(s, dict)]
 
-async def _load_player_blocks(task: Any, session: AsyncSession) -> list[dict[str, Any]]:
-    """Two-level transcript for /player: existing blocks (ASR segment / speaker
-    turn) with clickable sentences inside, and a resolved speaker label instead
-    of the raw SPEAKER_NN tag (vts-u6w). All derived on the fly from the stored
-    artifacts + registry names — transcript.json itself is never rewritten."""
+def player_blocks_from_artifacts(
+    artifact_dir: str | None,
+    *,
+    language: str | None,
+    names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Two-level transcript for a player: existing blocks (ASR segment /
+    speaker turn) with clickable sentences inside, and a resolved speaker label
+    instead of the raw SPEAKER_NN tag (vts-u6w). Derived on the fly from the
+    stored artifacts — transcript.json itself is never rewritten.
+
+    Knows nothing about tasks or recordings: the callers below resolve where
+    the files are, which language labels the voices, and which voices have
+    names. Both players (/player and the MCP view) render exactly this shape.
+    """
     from vts.services.diarization.merge import speaker_label_word
     from vts.services.player_transcript import build_player_blocks
 
-    entries = _load_transcript_entries(task.artifact_dir)
+    entries = _load_transcript_entries(artifact_dir)
     if not entries:
         return []
-    raw_segments = _load_raw_segments(task.artifact_dir)
+    return build_player_blocks(
+        entries,
+        _load_raw_segments(artifact_dir),
+        names=names,
+        label_word=speaker_label_word(language),
+    )
 
-    repo = Repo(session)
-    names = await repo.speaker_names_for_task(task.user_id, task.id)
+
+async def _load_player_blocks(task: Any, session: AsyncSession) -> list[dict[str, Any]]:
+    """Player blocks for a task: its files, its language, its voice names."""
+    names = await Repo(session).speaker_names_for_task(task.user_id, task.id)
     language = effective_language(
         task.options if isinstance(task.options, dict) else {},
         {"outputs": Path(task.artifact_dir) / "outputs"},
     )
-    return build_player_blocks(
-        entries,
-        raw_segments,
-        names=names,
-        label_word=speaker_label_word(language),
+    return player_blocks_from_artifacts(task.artifact_dir, language=language, names=names)
+
+
+async def load_recording_player_blocks(
+    recording: Any, session: AsyncSession
+) -> list[dict[str, Any]]:
+    """Player blocks for a recording (vts-vtma.1), which outlives its task.
+
+    Voice identification belongs to the task that produced the recording, so
+    names come through `source_task_id` and are empty once that task is gone —
+    labels then fall back to the plain speaker word, never the raw tag. The
+    same rule as `RecordingInfo.people`.
+    """
+    names: dict[str, str] = {}
+    if recording.source_task_id is not None:
+        names = await Repo(session).speaker_names_for_task(
+            recording.user_id, recording.source_task_id
+        )
+    # The recording keeps the language it was transcribed in; the detection
+    # marker in its own outputs is the fallback, as it is for a task.
+    language = recording.language or effective_language(
+        {}, {"outputs": Path(recording.artifact_dir) / "outputs"}
+    )
+    return player_blocks_from_artifacts(
+        recording.artifact_dir, language=language, names=names
     )
