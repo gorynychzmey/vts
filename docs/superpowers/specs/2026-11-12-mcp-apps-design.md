@@ -70,8 +70,11 @@ resources.
 
 ### 4.2 Resources
 
-- One self-contained HTML file per view (JS and CSS inlined, single-file
-  bundle), no external CDN, fonts or libraries.
+- One self-contained HTML file per view, no external CDN, fonts or
+  libraries. Built the way the web player already is: real `.html` / `.css` /
+  `.js` files inlined into one page when the resource is read (see
+  `_template()` in `vts/api/routers/artifacts.py`). No JS bundler, no
+  `package.json` in the build.
 - Static template: data arrives over the bridge, never baked into the HTML,
   so hosts can cache and pre-check it.
 - `_meta.ui.csp`:
@@ -80,14 +83,66 @@ resources.
   - `connectDomains`: empty — all data goes through tools.
 - `prefersBorder: true`.
 
-Open choice (§8): hand-written HTML bundle vs FastMCP's `@app.ui()` with
-server-side components.
+### 4.2.1 View technology (decided)
+
+Vanilla JS, assembled like the web player (option C). Rejected:
+
+- **Vite/esbuild bundle + `@modelcontextprotocol/ext-apps`** — adds a JS
+  toolchain (node in `build.sh` and CI, a built artefact to embed) to a Python
+  repo for the sake of a small bridge.
+- **FastMCP `@app.ui()` (Prefab components)** — needs the extra `prefab-ui`
+  dependency, and a media player synced to timecodes does not fit a generic
+  component set.
+
+The `ui/*` bridge (JSON-RPC over `postMessage`: `ui/initialize`,
+`ui/notifications/tool-input`, `ui/notifications/tool-result`, `tools/call`,
+`ui/update-model-context`) is written by hand, in one file shared by all
+views. The risk that it drifts from the spec is covered by the E2E test
+against `fastmcp dev apps`, an independent host implementation.
+
+### 4.2.2 Shared player core (decided)
+
+Click-to-seek, current-line highlight, autoscroll and the text filter move out
+of `vts/api/_templates/player.js` into a core that knows nothing about where
+data comes from. Two thin adapters feed it:
+
+- web player (`/player/{task_id}`): `fetch` + the existing SSE live updates;
+- MCP view (`ui://vts/player`): the bridge (`tool-result`, `tools/call`).
+
+So the two players cannot drift apart in behaviour. Extracting the core is
+its own step, done first. The safety net is thin today: `tests/ui` has one
+player scenario (`player-deeplink.mjs`) and `tests/test_player_page.py` checks
+the page assembly, not behaviour. So before moving code, add browser
+scenarios pinning the current behaviour — click seeks, the playing line is
+highlighted, autoscroll follows and pauses on manual scroll, the filter hides
+non-matching lines — and prove each fails against a deliberately broken
+player. They must then stay green, unchanged, across the extraction.
+
+### 4.2.3 Transcript shape (decided)
+
+The view uses the same blocks as the web player: `_load_player_blocks()`
+(blocks per ASR segment / speaker turn, a resolved speaker label, clickable
+sentences with their own timecodes). One shape for both players is what makes
+the shared core possible.
+
+It is task-scoped today (`task.artifact_dir`, `task.options` for the language,
+`speaker_names_for_task(task)`). The view addresses recordings, so the loader
+is split into a core taking `(artifact_dir, language, names)`:
+
+- task caller: as now;
+- recording caller: `recording.artifact_dir`, `recording.language`, names via
+  `recording.source_task_id` — empty once the task is deleted (voice
+  identification belongs to the task; same rule as `RecordingInfo.people`),
+  in which case labels fall back to the plain speaker word.
+
+The player shows the raw transcript, like the web player does; `variant`
+applies to the model-facing `content` only (§7).
 
 ### 4.3 Backend (app-only) tools
 
 | Tool | Purpose |
 |---|---|
-| `app_transcript_page(recording_id, cursor?, variant?)` | next page of `entries` for the player |
+| `app_player_blocks(recording_id, cursor?)` | next page of player blocks (§4.2.3) |
 | `app_media_url(recording_id)` | issue a short-lived signed media URL |
 | `app_prompt_result(recording_id, ref)` | summary for another prompt (regenerate view) |
 
@@ -99,12 +154,13 @@ server never trusts the view.
 - `content`: short text for the model and for hosts without a view —
   title, duration, people, and the first lines or the line at `at_sec`.
 - `structuredContent`: just enough to render the first screen (metadata and
-  the first page of entries, or the window around `at_sec`), plus a cursor.
+  the first page of player blocks, or the page holding `at_sec`), plus a
+  cursor.
 
 Do not put a whole transcript in `structuredContent`. Whether a host shows
 `structuredContent` to the model varies by host; a 600-line transcript there
 could flood the context. Large data is fetched by the view through
-`app_transcript_page`. **To verify on Claude and ChatGPT before release.**
+`app_player_blocks`. **To verify on Claude and ChatGPT before release.**
 
 ## 5. Media
 
@@ -128,8 +184,24 @@ Needed:
    origin → the player hides itself and the transcript stays usable.
 
 No private network or tunnel is assumed: the media origin is the same public
-origin the MCP endpoint is already served from. A deployment without a public
-origin simply gets the transcript-only fallback.
+origin the MCP endpoint is already served from.
+
+**Deployments without `public_base_url` (checked against the code).** The MCP
+server is HTTP-only (mounted into the FastAPI app, no stdio transport).
+`public_base_url` is mandatory only with `oauth_enabled`
+(`build_mcp_server()` refuses to start without it). Without OAuth, a personal
+API token (`Bearer vts_…`) authenticates MCP calls, so a local install with no
+public origin is possible — e.g. Claude Desktop or VS Code pointed at
+`http://localhost:…/mcp`. The hosted surfaces (claude.ai web/mobile, ChatGPT)
+cannot reach such an install at all, so for them the question does not arise.
+
+Decision: media URLs are built from `public_base_url` only; when it is unset,
+`app_media_url` returns nothing and the player runs transcript-only. No
+"media over MCP" (base64 chunks) mode: it would serve only the local-install
+case, where the web player at the same address already plays the media.
+Deriving the origin from the incoming request instead is rejected: behind a
+proxy it yields an internal host, and the CSP would then differ per request,
+defeating a static, cacheable resource.
 
 ## 6. View behaviour
 
@@ -155,25 +227,21 @@ Requirements:
   calling user like any tool call.
 - Media URLs: signed, short-lived, bound to recording and user, issued only by
   an app-only tool.
-- PII: entry tools default to `variant="redacted"` for `content` when
-  redaction is enabled for the recording; raw text only in the view and only
-  on explicit request.
+- PII: entry tools use `variant="redacted"` for the model-facing `content`
+  when a redacted transcript exists for the recording. The view, like the web
+  player, shows the raw transcript to its owner.
 - Destructive actions are not part of the first views. If added, they reuse
   `annotations.DESTRUCTIVE` and confirm in the view.
 - Prompt injection: transcripts are data; nothing in them is executed.
 
-## 8. Open questions
+## 8. Decisions taken (2026-11-12)
 
-1. View technology: hand-written single-file HTML bundles (full control,
-   needs a JS build step in a Python repo) vs FastMCP `@app.ui()` components
-   (no JS build, less control over a media player).
-2. Where the view sources and their build live (`vts/mcp/ui/` with a small
-   bundler step in `build.sh`, or prebuilt artefacts committed).
-3. Does the player reuse `_load_player_blocks` (richer: blocks + sentences)
-   or the simpler `TranscriptEntry` list? The former matches the web player;
-   it is task-scoped today and would need a recording-scoped variant.
-4. Is media through MCP (base64 chunks) worth it for deployments without a
-   public origin, or is the transcript-only fallback enough?
+1. View technology: vanilla JS assembled like the web player (§4.2.1).
+2. View sources: `vts/mcp/ui/` (per-view `.html` / `.css` / `.js`, plus the
+   shared bridge); the shared player core lives where both the web player and
+   the MCP resource can inline it (§4.2.2).
+3. Transcript shape: `_load_player_blocks()`, split for recordings (§4.2.3).
+4. No media over MCP; no `public_base_url` → transcript-only (§5).
 
 ## 9. Testing
 
@@ -188,7 +256,10 @@ Requirements:
 
 ## 10. Implementation steps
 
-1. `FastMCPApp` + `ui://vts/player` + `show_recording`, transcript only.
+0. Pin the web player's behaviour with `tests/ui` scenarios, then extract
+   the shared core with those scenarios unchanged and green. Split `_load_player_blocks()` for recordings.
+1. `FastMCPApp` + bridge + `ui://vts/player` + `show_recording`, transcript
+   only.
 2. Recording-scoped media route + signed URLs + player sync.
 3. `ui://vts/search` on `search_transcripts`, opening hits in the player.
 4. `ui://vts/summary` + `show_summary` + regenerate.
