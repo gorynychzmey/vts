@@ -118,8 +118,11 @@ jobs:
           echo "$changed" | sed 's/^/  /'
 
           # tests/ui/** is included so a change to the harness or a scenario is
-          # itself verified, not just changes to the app it drives.
-          if echo "$changed" | grep -qE '^(vts/static/|tests/ui/)'; then
+          # itself verified, not just changes to the app it drives. The /player
+          # page is not under vts/static/: its assets live in vts/api/_templates/
+          # and are assembled by vts/api/routers/artifacts.py, and without these
+          # two a player change skipped the browser suite entirely.
+          if echo "$changed" | grep -qE '^(vts/static/|tests/ui/|vts/api/_templates/|vts/api/routers/artifacts\.py)'; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
           else
             echo "ui=false" >> "$GITHUB_OUTPUT"
@@ -144,6 +147,23 @@ jobs:
       - name: Install dependencies
         working-directory: tests/ui
         run: npm ci
+
+      # The player scenario renders the real /player page through the same
+      # Python function the route uses, so the app's dependencies are needed
+      # here too. Same cache key as the tests job, so this is a cache hit.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       # harness.mjs calls chromium.launch() with no channel, so Playwright uses
       # the headless shell (~262MB) rather than full Chrome (~379MB). Installing
