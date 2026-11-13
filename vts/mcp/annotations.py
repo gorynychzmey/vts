@@ -76,3 +76,15 @@ DELIVER = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=True,
 )
+
+# Re-runs a recording's prompts with a new set (vts-vtma.8). Destructive: the
+# previous results are cleared before the new ones exist, exactly as in the
+# web UI's "restart the final summary" — so a client should confirm, as for
+# a delete. Not open-world: the prompts run on this deployment's own LLM.
+RERUN_PROMPTS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+

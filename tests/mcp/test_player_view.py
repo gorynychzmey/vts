@@ -50,6 +50,9 @@ class _Repo:
     async def speaker_names_for_tasks(self, user_id, task_ids):
         return {task_ids[0]: ["Вася"]}
 
+    async def get_task_for_user(self, user_id, task_id):
+        return None  # the producing task is gone unless a test says otherwise
+
 
 def _blocks(n):
     return [
@@ -340,6 +343,23 @@ async def test_show_summary_returns_the_result_and_the_switcher(client_for, tmp_
     text = result.content[0].text
     assert "Summary, Memo" in text and "get_recording_prompt_result" in text
     assert "пункт" not in text
+    # Its task is gone here, so the view must not offer to re-run.
+    assert data["regenerate"]["available"] is False
+    assert data["regenerate"]["reason"] == "task_deleted"
+
+
+def test_regenerate_is_offered_only_for_a_finished_task():
+    from types import SimpleNamespace
+
+    from vts.db.models import TaskStatus
+    from vts.mcp.tools_registry.apps import regenerate_state
+
+    prompts = {"prompts": [{"source": "system", "id": "summary"}, {"source": "user", "id": "m1"}]}
+    running = SimpleNamespace(status=TaskStatus.running, options=prompts, steps=[])
+    state = regenerate_state(running)
+    assert state["available"] is False and state["reason"] == "task_running"
+    # The current set is what the view preselects, as the web dialog does.
+    assert state["current"] == ["system:summary", "user:m1"]
 
 
 async def test_show_summary_can_open_on_another_result(client_for, tmp_path):

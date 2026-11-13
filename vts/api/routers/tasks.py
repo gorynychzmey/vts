@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
-from vts.api._helpers.artifact_store import _archive_task_artifacts, _rebuild_finalize_tail, _reset_final_summary_artifacts, _reset_final_summary_step
+from vts.api._helpers.artifact_store import _archive_task_artifacts, _reset_final_summary_artifacts, _reset_final_summary_step
 from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording, rename_recording_for_task
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
@@ -449,18 +449,14 @@ async def restart_summary_task(
                 detail=f"cannot_restart_final:{task.status.value}",
             )
         if request.prompts is not None:
-            # New-set restart: swap options.prompts, clear all finalize
-            # results, rebuild the finalize tail, re-queue.
-            from vts.services.prompt_results import clear_all_finalize_results
+            # New-set restart: every prompt re-run at once. Shared with the
+            # MCP summary view's regenerate (vts-vtma.8).
+            from vts.services.summary_restart import restart_final_with_prompts
 
-            new_refs = [
-                {"source": p.source, "id": p.id} for p in request.prompts
-            ]
-            clear_all_finalize_results(task)  # files, prompt_results, summary_path
-            new_options = dict(task.options or {})
-            new_options["prompts"] = new_refs
-            task.options = new_options
-            await _rebuild_finalize_tail(repo, task, new_options)
+            status = await restart_final_with_prompts(
+                repo, task, [{"source": p.source, "id": p.id} for p in request.prompts], bus
+            )
+            return MessageOut(status=status)
         else:
             _reset_final_summary_step(task)
             downgrade_system_summary_entry(task)

@@ -243,8 +243,12 @@ result itself is unchanged — only its `_meta.ui` is new.
 `show_summary(recording_id, ref?)` opens a recording's summary in the
 `ui://vts/summary` view, with a switcher to the recording's other finished
 prompt results; switching reads them through `get_recording_prompt_result`.
-The view only reads: regenerating a result would restart the task's prompt
-step, which is not something a view does on a click.
+Its "Regenerate…" button re-runs the recording's prompts with a chosen set,
+all at once — the same restart as "restart the final summary" in the web UI,
+through the `regenerate_summary(recording_id, prompts)` tool. The previous
+results are cleared first, so the view asks before running and the tool is
+annotated `destructiveHint`. It needs the task that produced the recording;
+for a recording whose task was deleted the button is not offered.
 
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
@@ -252,9 +256,9 @@ step, which is not something a view does on a click.
 
 | | tools | meaning |
 |---|---|---|
-| read-only | 18 | looks, changes nothing |
+| read-only | 20 | looks, changes nothing |
 | writes | 12 | creates or updates; nothing you had is lost |
-| destructive | 5 | the five `delete_*` tools — a client should confirm first |
+| destructive | 6 | the five `delete_*` tools and `regenerate_summary` — a client should confirm first |
 
 `openWorldHint` is set on exactly two: `submit_video` (downloads from the open
 internet and occupies a GPU for the length of the recording) and

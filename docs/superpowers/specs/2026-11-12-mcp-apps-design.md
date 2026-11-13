@@ -62,11 +62,13 @@ tool. A late answer for a passage the user already left is dropped.
 
 Done in part (vts-vtma.5): `show_summary` + `ui://vts/summary`, read-only,
 with a switcher between the recording's finished prompt results and a small
-DOM-building markdown renderer (no innerHTML). **Regeneration is not built**:
-the only way to run a prompt again is the task's `restart_summary`, which
-needs the task (gone for a detached recording) and, with a new prompt set,
-clears ALL the task's existing prompt results before re-running. Offering
-that behind a button is a product decision, left open.
+DOM-building markdown renderer (no innerHTML). Regeneration (vts-vtma.8,
+decided 2026-11-13: "as in the web UI, all prompts at once"):
+`regenerate_summary` calls the same service as the web UI's "restart the final
+summary" with a new set (`restart_final_with_prompts`), which clears all
+existing results first. The view preselects the task's current set, confirms
+with a warning, polls `get_status` and reloads `show_summary` when the task
+completes. Not offered when the recording's task was deleted.
 
 ## 4. Server side
 

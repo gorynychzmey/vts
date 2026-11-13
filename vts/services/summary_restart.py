@@ -14,6 +14,7 @@ worker has no business importing the API layer to reach it.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from vts.api._helpers.artifact_store import _reset_summary_artifacts, _reset_summary_steps
 from vts.db.models import Task, TaskStatus
@@ -62,3 +63,43 @@ async def reset_task_for_summary_restart(repo: Repo, task: Task) -> None:
     # mid-deletion leaves stale files for the next run to overwrite rather
     # than a completed task whose artefacts are gone.
     await asyncio.to_thread(_reset_summary_artifacts, task)
+
+
+class SummaryRestartRefused(Exception):
+    """The task is in a state that cannot restart its final summary."""
+
+
+async def restart_final_with_prompts(
+    repo: Repo, task: Task, prompts: list[dict[str, str]], bus: Any
+) -> str:
+    """Re-run every prompt of ``task`` with the given set, all at once.
+
+    What the web UI's "restart the final summary" dialog does, and what the
+    MCP summary view's regenerate does (vts-vtma.8): swap ``options.prompts``,
+    clear ALL existing finalize results, rebuild the finalize tail and queue
+    the task. Returns "queued". Raises SummaryRestartRefused for a task that
+    cannot restart its final summary (still running, failed before the
+    summary, ...).
+
+    ``prompts`` are refs: [{"source": "system"|"user", "id": ...}], non-empty.
+    """
+    from vts.api._helpers.artifact_store import _rebuild_finalize_tail
+    from vts.api._helpers.serialization import can_restart_final_summary_task
+    from vts.services.prompt_results import clear_all_finalize_results
+
+    if not prompts:
+        raise ValueError("prompts must not be empty")
+    if not can_restart_final_summary_task(task):
+        raise SummaryRestartRefused(f"cannot_restart_final:{task.status.value}")
+    new_refs = [{"source": p["source"], "id": p["id"]} for p in prompts]
+    clear_all_finalize_results(task)  # files, prompt_results, summary_path
+    new_options = dict(task.options or {})
+    new_options["prompts"] = new_refs
+    task.options = new_options
+    await _rebuild_finalize_tail(repo, task, new_options)
+    task.summary_path = None
+    await repo.set_task_summary_progress(task, 0, 0)
+    await repo.set_task_status(task, TaskStatus.queued)
+    await repo.session.commit()
+    await bus.notify_queued()
+    return "queued"

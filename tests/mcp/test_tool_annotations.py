@@ -33,6 +33,8 @@ DESTRUCTIVE = {
     "delete_task",
     "delete_prompt", "delete_preset",
     "delete_delivery_credential", "delete_delivery_target",
+    # Re-runs a recording's prompts, clearing the previous results first.
+    "regenerate_summary",
 }
 
 # Writes that create or update. Not destructive: nothing the user had is lost.

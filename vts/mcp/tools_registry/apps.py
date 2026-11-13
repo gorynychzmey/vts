@@ -9,9 +9,11 @@ no existing tool changed its result for this.
   opens the same player inside it. `search_transcripts` itself only gains
   `_meta.ui` (registered in search.py); its result is unchanged.
 * `ui://vts/summary` + `show_summary` — a recording's summary and its other
-  prompt results, switchable in the view. Read-only: regenerating would
-  restart the task's prompt step and drop its other results, which is not a
-  view's decision to make.
+  prompt results, switchable in the view.
+* `regenerate_summary` — re-run a recording's prompts with a chosen set, all
+  at once, as the web UI's "restart the final summary" does. The previous
+  results are cleared first, so it is marked destructive and the view asks
+  before calling it.
 * `show_recording` — model-visible entry tool: "the user wants to look at this
   recording". Its result carries the first page of player blocks.
 * `app_player_blocks` — app-only (`visibility: ["app"]`): further pages, for
@@ -40,7 +42,7 @@ from vts.api._helpers.artifact_store import (
 from vts.core.config import get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
-from vts.mcp.annotations import READ_ONLY
+from vts.mcp.annotations import READ_ONLY, RERUN_PROMPTS
 from vts.mcp.auth import mcp_authenticate
 from vts.mcp.ui import player_view_html, search_view_html, summary_view_html
 
@@ -123,6 +125,32 @@ def prompt_results_index(recording: Any) -> list[dict[str, str]]:
     if "system:summary" not in seen and summary and Path(summary).exists():
         out.insert(0, {"ref": "system:summary", "name": "Summary"})
     return out
+
+
+# How often the summary view asks how a regeneration is going.
+REGENERATE_POLL_SEC = 5
+
+
+def regenerate_state(task: Any) -> dict[str, Any]:
+    """Whether the view may offer to re-run the prompts, and with which set
+    preselected. A recording whose task was deleted cannot re-run; a task
+    still being processed cannot yet."""
+    from vts.api._helpers.serialization import can_restart_final_summary_task
+
+    if task is None:
+        return {"available": False, "reason": "task_deleted", "current": [], "poll_sec": REGENERATE_POLL_SEC}
+    current = [
+        f"{p.get('source', '')}:{p.get('id', '')}"
+        for p in (task.options or {}).get("prompts") or []
+        if isinstance(p, dict)
+    ]
+    available = can_restart_final_summary_task(task)
+    return {
+        "available": available,
+        "reason": None if available else f"task_{task.status.value}",
+        "current": current,
+        "poll_sec": REGENERATE_POLL_SEC,
+    }
 
 
 def media_origin(public_base_url: str | None) -> str | None:
@@ -307,11 +335,14 @@ def register(mcp: FastMCP) -> None:
         factory = get_db_session_factory()
         async with factory() as session:
             user, _settings = await mcp_authenticate(session)
-            recording = await Repo(session).get_recording_for_user(
-                uuid.UUID(user.id), recording_id
-            )
+            repo = Repo(session)
+            recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
             if recording is None:
                 raise HTTPException(status_code=404, detail="Recording not found")
+            task = None
+            if recording.source_task_id is not None:
+                task = await repo.get_task_for_user(uuid.UUID(user.id), recording.source_task_id)
+        regenerate = regenerate_state(task)
         index = prompt_results_index(recording)
         result = recording_prompt_result(recording, ref)
         wanted = f"{result.source}:{result.id}"
@@ -329,5 +360,100 @@ def register(mcp: FastMCP) -> None:
                 "ref": wanted,
                 "markdown": result.content,
                 "results": index,
+                "regenerate": regenerate,
             },
         )
+
+    @mcp.tool(name="regenerate_summary", annotations=RERUN_PROMPTS)
+    async def _regenerate_summary(recording_id: uuid.UUID, prompts: list[str]) -> ToolResult:
+        """Re-run a recording's prompts (summary, memos, custom prompts) with
+        the set given, all at once — the same as "restart the final summary"
+        in the VTS web UI.
+
+        `prompts` are refs: "system:summary", "user:<prompt-uuid>" (see
+        `list_prompts`). ALL current prompt results of the recording are
+        cleared before the new ones are produced, so ask the user first. The
+        work is queued and takes minutes; follow it with `get_status` on the
+        returned `task_id`, then read the results with
+        `get_recording_prompt_result` or `show_summary`.
+
+        Needs the task that produced the recording; a recording whose task was
+        deleted keeps its results but cannot re-run them.
+        """
+        from vts.services.prompt_registry import parse_ref, system_prompt_keys
+        from vts.services.redis_bus import RedisBus
+        from vts.services.redis_client import make_redis
+        from vts.services.summary_restart import (
+            SummaryRestartRefused,
+            restart_final_with_prompts,
+        )
+
+        refs: list[dict[str, str]] = []
+        for raw in prompts or []:
+            try:
+                source, ident = parse_ref(raw)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from None
+            ref = {"source": source, "id": ident}
+            if ref not in refs:
+                refs.append(ref)
+        if not refs:
+            raise ToolError("prompts must name at least one prompt")
+
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, settings = await mcp_authenticate(session)
+            user_id = uuid.UUID(user.id)
+            repo = Repo(session)
+            recording = await repo.get_recording_for_user(user_id, recording_id)
+            if recording is None:
+                raise HTTPException(status_code=404, detail="Recording not found")
+            if recording.source_task_id is None:
+                raise ToolError(
+                    "The task that produced this recording was deleted; its "
+                    "prompt results remain, but they cannot be re-run."
+                )
+            for ref in refs:
+                if ref["source"] == "system" and ref["id"] not in system_prompt_keys():
+                    raise ToolError(f"unknown system prompt: {ref['id']}")
+                if ref["source"] == "user":
+                    try:
+                        prompt_id = uuid.UUID(ref["id"])
+                    except ValueError:
+                        raise ToolError(f"invalid prompt id: {ref['id']}") from None
+                    if await repo.get_prompt(user_id, prompt_id) is None:
+                        raise ToolError(f"unknown prompt: user:{ref['id']}")
+            # Locked: two regenerate clicks must run one after the other, not
+            # interleave their clear-and-rebuild of the same task.
+            task = await repo.get_task_for_user(user_id, recording.source_task_id, lock=True)
+            if task is None:
+                raise ToolError(
+                    "The task that produced this recording was deleted; its "
+                    "prompt results remain, but they cannot be re-run."
+                )
+            redis = make_redis(settings.redis_url)
+            try:
+                status = await restart_final_with_prompts(
+                    repo, task, refs, RedisBus(redis, settings)
+                )
+            except SummaryRestartRefused:
+                raise ToolError(
+                    f"The task is {task.status.value}; its prompts can be re-run "
+                    "once it has finished."
+                ) from None
+            finally:
+                await redis.aclose()
+        names = ", ".join(f"{r['source']}:{r['id']}" for r in refs)
+        return ToolResult(
+            content=(
+                f"Re-running {len(refs)} prompt(s) ({names}) for «{recording.title or 'Untitled recording'}». "
+                f"The previous results were cleared; new ones appear when task "
+                f"{task.id} finishes — follow it with get_status."
+            ),
+            structured_content={
+                "task_id": str(task.id),
+                "status": status,
+                "prompts": [f"{r['source']}:{r['id']}" for r in refs],
+            },
+        )
+

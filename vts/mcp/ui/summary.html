@@ -12,7 +12,16 @@ __CSS__
 <header class="head">
   <h1 class="title" data-title></h1>
   <div class="switcher" data-switcher hidden></div>
+  <button type="button" class="more" data-regen hidden></button>
 </header>
+<section class="regen" data-regen-panel hidden>
+  <p class="regen-warning" data-regen-warning></p>
+  <div class="regen-prompts" data-regen-prompts></div>
+  <div class="regen-actions">
+    <button type="button" class="more" data-regen-run></button>
+    <button type="button" class="more" data-regen-cancel></button>
+  </div>
+</section>
 <p class="status" data-status></p>
 <article class="md" data-markdown></article>
 <script>

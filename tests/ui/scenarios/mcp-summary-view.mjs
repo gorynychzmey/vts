@@ -54,6 +54,20 @@ window.__start = function(config) {
         reply({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "r" }],
           structuredContent: { task_id: null, source: "user", id: "x", content: r.content } } });
       }, r.delay || 0);
+    } else if (msg.method === "tools/call" && msg.params.name === "list_prompts") {
+      reply({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: { result: config.prompts || [] } } });
+    } else if (msg.method === "tools/call" && msg.params.name === "regenerate_summary") {
+      if (config.regenError) {
+        reply({ jsonrpc: "2.0", id: msg.id, result: { isError: true, content: [{ type: "text", text: config.regenError }] } });
+      } else {
+        reply({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: {
+          task_id: "t-1", status: "queued", prompts: msg.params.arguments.prompts } } });
+      }
+    } else if (msg.method === "tools/call" && msg.params.name === "get_status") {
+      var st = config.statuses.shift() || config.finalStatus || "completed";
+      reply({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: { task_id: "t-1", status: st } } });
+    } else if (msg.method === "tools/call" && msg.params.name === "show_summary") {
+      reply({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: config.after } });
     } else if (msg.id !== undefined) {
       reply({ jsonrpc: "2.0", id: msg.id, result: {} });
     }
@@ -89,8 +103,16 @@ export async function run() {
     return { page, frame, errors };
   }
   const results = [{ ref: "system:summary", name: "Summary" }, { ref: "user:m1", name: "Memo" }, { ref: "user:m2", name: "Risks" }];
-  const result = (ref, markdown, list) => ({ content: [{ type: "text", text: "s" }], structuredContent: {
-    recording_id: REC, title: "Weekly call", ref, markdown, results: list } });
+  // Regeneration polls fast here: the server says 5 s, the stub 50 ms.
+  const regenOk = { available: true, reason: null, current: ["system:summary", "user:m1"], poll_sec: 0.05 };
+  const result = (ref, markdown, list, regenerate = { available: false, reason: "task_deleted", current: [], poll_sec: 5 }) => ({
+    content: [{ type: "text", text: "s" }], structuredContent: {
+      recording_id: REC, title: "Weekly call", ref, markdown, results: list, regenerate } });
+  const prompts = [
+    { source: "system", id: "summary", name: "Summary", editable: false },
+    { source: "user", id: "m1", name: "Memo", editable: true },
+    { source: "user", id: "m2", name: "Risks", editable: true },
+  ];
 
   try {
     // --- Rendering, switcher, a switch ---
@@ -170,7 +192,99 @@ export async function run() {
       await page.close();
     }
 
-    // --- One result: no switcher. An error result: its text ---
+    // --- Regenerate: confirm, re-run all at once, wait, show the new results ---
+    {
+      const { page, frame, errors } = await start({
+        result: result("system:summary", "Old summary", results, regenOk),
+        results: {}, prompts, statuses: ["queued", "running", "running"],
+        after: { recording_id: REC, title: "Weekly call", ref: "system:summary", markdown: "New **summary**",
+          results: results.slice(0, 2), regenerate: regenOk },
+        hostContext: { locale: "ru" },
+      });
+      if (await frame.evaluate(() => document.querySelector("[data-regen]").hidden)) {
+        fail("regenerate should be offered for a recording whose task can re-run");
+      }
+      await frame.click("[data-regen]");
+      await frame.waitForFunction(() => document.querySelectorAll("[data-regen-prompts] input").length === 3, null,
+        { timeout: 3000 }).catch(() => {});
+      const panel = await frame.evaluate(() => ({
+        warning: document.querySelector("[data-regen-warning]").textContent,
+        boxes: Array.from(document.querySelectorAll("[data-regen-prompts] label")).map((l) =>
+          [l.querySelector("input").value, l.querySelector("input").checked, l.textContent]),
+      }));
+      if (!panel.warning.includes("будут заменены")) fail(`the panel should warn that results are replaced: ${JSON.stringify(panel.warning)}`);
+      // The current set is preselected, as in the web UI's dialog.
+      if (JSON.stringify(panel.boxes) !== JSON.stringify([
+        ["system:summary", true, "Саммари"], ["user:m1", true, "Memo"], ["user:m2", false, "Risks"]])) {
+        fail(`prompt choices: ${JSON.stringify(panel.boxes)}`);
+      }
+      // Nothing chosen, nothing to run.
+      await frame.click('[data-regen-prompts] input[value="system:summary"]');
+      await frame.click('[data-regen-prompts] input[value="user:m1"]');
+      if (!(await frame.evaluate(() => document.querySelector("[data-regen-run]").disabled))) {
+        fail("with no prompt chosen, the run button should be disabled");
+      }
+      if ((await page.evaluate(() => window.__log.filter((m) => m.params?.name === "regenerate_summary").length)) !== 0) {
+        fail("nothing may run before the user confirms");
+      }
+      await frame.click('[data-regen-prompts] input[value="system:summary"]');
+      await frame.click('[data-regen-prompts] input[value="user:m2"]');
+      await frame.click("[data-regen-run]");
+      await frame.waitForFunction(() => document.querySelector("[data-markdown] strong")?.textContent === "summary", null,
+        { timeout: 5000 }).catch(() => {});
+      const log = await page.evaluate(() => window.__log);
+      const regen = log.filter((m) => m.params?.name === "regenerate_summary").map((m) => m.params.arguments);
+      if (JSON.stringify(regen) !== JSON.stringify([{ recording_id: REC, prompts: ["system:summary", "user:m2"] }])) {
+        fail(`regenerate_summary should get the chosen set: ${JSON.stringify(regen)}`);
+      }
+      const polls = log.filter((m) => m.params?.name === "get_status").length;
+      if (polls !== 4) fail(`the view should poll until completed (3 unfinished + 1 completed), polled ${polls}`);
+      const shown = await frame.evaluate(() => ({
+        text: document.querySelector("[data-markdown]").textContent,
+        status: document.querySelector("[data-status]").textContent,
+      }));
+      if (shown.text !== "New summary" || shown.status !== "") fail(`after regeneration: ${JSON.stringify(shown)}`);
+      const ctx = log.filter((m) => m.method === "ui/update-model-context").map((m) => m.params.content[0].text).join(" | ");
+      if (!ctx.includes("re-ran") || !ctx.includes("user:m2")) fail(`the model should hear about the re-run: ${JSON.stringify(ctx)}`);
+      if (errors.length) fail(`regenerate: JS errors ${JSON.stringify(errors)}`);
+      await page.close();
+    }
+    {
+      // While it runs the old text is gone; a failed run says so.
+      const { page, frame } = await start({
+        result: result("system:summary", "Old summary", results, regenOk),
+        results: {}, prompts, statuses: ["running"], finalStatus: "failed", after: null,
+      });
+      await frame.click("[data-regen]");
+      await frame.waitForFunction(() => document.querySelectorAll("[data-regen-prompts] input").length === 3, null, { timeout: 3000 });
+      await frame.click("[data-regen-run]", { timeout: 3000 }).catch(() => fail("the run button could not be clicked"));
+      await frame.waitForFunction(() => document.querySelector("[data-status]").textContent === "Re-running the prompts failed.",
+        null, { timeout: 3000 }).catch(() => {});
+      const st = await frame.evaluate(() => ({
+        status: document.querySelector("[data-status]").textContent,
+        md: document.querySelector("[data-markdown]").textContent,
+      }));
+      if (st.status !== "Re-running the prompts failed.") fail(`a failed run: ${JSON.stringify(st.status)}`);
+      if (st.md !== "") fail(`the cleared results must not linger on screen: ${JSON.stringify(st.md)}`);
+      await page.close();
+    }
+    {
+      // A refusal from the server is shown, not swallowed.
+      const { page, frame } = await start({
+        result: result("system:summary", "Old summary", results, regenOk),
+        results: {}, prompts, statuses: [], regenError: "The task is running; its prompts can be re-run once it has finished.",
+      });
+      await frame.click("[data-regen]");
+      await frame.waitForFunction(() => document.querySelectorAll("[data-regen-prompts] input").length === 3, null, { timeout: 3000 });
+      await frame.click("[data-regen-run]", { timeout: 3000 }).catch(() => fail("the run button could not be clicked"));
+      await frame.waitForFunction(() => document.querySelector("[data-status]").textContent.startsWith("The task is running"),
+        null, { timeout: 3000 }).catch(() => {});
+      const status = await frame.evaluate(() => document.querySelector("[data-status]").textContent);
+      if (!status.startsWith("The task is running")) fail(`a refused re-run: ${JSON.stringify(status)}`);
+      await page.close();
+    }
+
+    // --- One result: no switcher, no regenerate for a lost task. An error result: its text ---
     {
       const { page, frame } = await start({
         result: result("system:summary", "Only one", [results[0]]),
@@ -178,6 +292,9 @@ export async function run() {
       });
       if (!(await frame.evaluate(() => document.querySelector("[data-switcher]").hidden))) {
         fail("a single result needs no switcher");
+      }
+      if (!(await frame.evaluate(() => document.querySelector("[data-regen]").hidden))) {
+        fail("a recording whose task was deleted must not offer regenerate");
       }
       await page.close();
     }

@@ -137,7 +137,10 @@ def load_mcp_tools() -> list[str]:
     names: list[str] = []
     for domain in domains:
         src = (registry / f"{domain}.py").read_text(encoding="utf-8")
-        names += re.findall(r'@mcp\.tool\(name="([a-z_]+)"', src)
+        # `\s*`: a decorator with several arguments is split over lines
+        # (`@mcp.tool(\n    name="...",`), and a single-line pattern silently
+        # dropped those tools from the inventory.
+        names += re.findall(r'@mcp\.tool\(\s*name="([a-z_]+)"', src)
     if not names:
         raise SystemExit("ui-inventory: found no MCP tools — has the registry moved?")
     return names
