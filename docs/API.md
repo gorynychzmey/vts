@@ -228,6 +228,13 @@ pass a search hit's `recording_id` and `start_sec`. The view is the
 away from the model. In a host without MCP Apps, `show_recording` simply
 returns a short text summary; no other tool changed for this.
 
+When `VTS_PUBLIC_BASE_URL` is set and the recording still has its media, the
+view also plays it: `app_media_url` (app-only) issues a link signed for that
+recording and user, valid for 10 minutes, and the view renews it when it
+expires. Clicking a sentence seeks the media, and the playing sentence is
+highlighted. The view's CSP allows media from the public origin only. Without
+a public base URL the view shows the transcript alone.
+
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) — so a client can group them instead of showing one flat list:

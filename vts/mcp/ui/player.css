@@ -35,3 +35,9 @@ body { padding: 12px 16px; box-sizing: border-box; }
 .cue.active { background: var(--vts-active); }
 .cue.cited { outline: 2px solid var(--vts-cited); outline-offset: 1px; border-radius: 3px; }
 .cue:focus-visible { outline: 2px solid #7aa; outline-offset: 1px; }
+.media-host video, .media-host audio { display: block; width: 100%; margin: 0 0 8px; }
+.media-host video { max-height: 50vh; background: #000; }
+.media-host:empty { display: none; }
+.autoscroll-toggle { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 8px;
+  color: var(--vts-muted); font-size: 0.85rem; cursor: pointer; }
+.autoscroll-toggle input { cursor: pointer; }

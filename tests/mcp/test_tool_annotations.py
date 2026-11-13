@@ -24,7 +24,7 @@ READ_ONLY = {
     "list_people", "get_recording_transcript",
     "get_recording_prompt_result",
     # MCP Apps (vts-vtma): open the player view, and page it.
-    "show_recording", "app_player_blocks",
+    "show_recording", "app_player_blocks", "app_media_url",
 }
 
 # Writes that a user would not want to lose without being asked.

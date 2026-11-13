@@ -9,6 +9,8 @@ no existing tool changed its result for this.
   recording". Its result carries the first page of player blocks.
 * `app_player_blocks` — app-only (`visibility: ["app"]`): further pages, for
   the view to fetch without passing a whole transcript through the model.
+* `app_media_url` — app-only: a short-lived signed link to the media, which
+  the view plays from the host's iframe (no cookie, no bearer there).
 
 Spec: docs/superpowers/specs/2026-11-12-mcp-apps-design.md.
 """
@@ -16,10 +18,11 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from fastmcp import FastMCP
-from fastmcp.apps.config import UI_MIME_TYPE, AppConfig
+from fastmcp.apps.config import UI_MIME_TYPE, AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.base import ToolResult
 
@@ -27,6 +30,7 @@ from vts.api._helpers.artifact_store import (
     load_recording_player_blocks,
     shown_player_blocks,
 )
+from vts.core.config import get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.annotations import READ_ONLY
@@ -89,15 +93,34 @@ def _summary_text(recording: Any, people: list[str], blocks: list[dict[str, Any]
     return " ".join(parts)
 
 
+def media_origin(public_base_url: str | None) -> str | None:
+    """The origin media links point at: scheme and host of the public base
+    URL, nothing else. None without one — then there is no media in the view,
+    only the transcript (spec §5)."""
+    if not public_base_url:
+        return None
+    parts = urlsplit(public_base_url.strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def player_app_config(public_base_url: str | None) -> AppConfig:
+    """The view's CSP. No connectDomains: every byte of data goes through
+    tools. resourceDomains is the media origin only — the host turns it into
+    media-src, which is what lets <video> load a signed link."""
+    origin = media_origin(public_base_url)
+    csp = ResourceCSP(resource_domains=[origin]) if origin else None
+    return AppConfig(prefers_border=True, csp=csp)
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.resource(
         PLAYER_URI,
         name="vts_player",
         description="VTS player: a recording's transcript with timecodes and speakers.",
         mime_type=UI_MIME_TYPE,
-        # No connectDomains: every byte of data goes through tools. Media,
-        # and with it resourceDomains, comes in a later step.
-        app=AppConfig(prefers_border=True),
+        app=player_app_config(get_settings().public_base_url),
     )
     def _player_view() -> str:
         return player_view_html()
@@ -167,4 +190,46 @@ def register(mcp: FastMCP) -> None:
         return ToolResult(
             content=f"{len(page)} blocks",
             structured_content={"blocks": page, "next_cursor": next_cursor},
+        )
+
+    @mcp.tool(
+        name="app_media_url",
+        annotations=READ_ONLY,
+        app=AppConfig(visibility=["app"]),
+    )
+    async def _app_media_url(recording_id: uuid.UUID) -> ToolResult:
+        """A short-lived signed link to a recording's media, for the VTS player
+        view. Called by the view, not by the model."""
+        from vts.api._helpers.base import _find_media_file
+        from vts.services.media_kind import media_kind
+        from vts.services.media_urls import media_signing_key, signed_media_path
+
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, settings = await mcp_authenticate(session)
+            recording = await Repo(session).get_recording_for_user(
+                uuid.UUID(user.id), recording_id
+            )
+            if recording is None:
+                raise HTTPException(status_code=404, detail="Recording not found")
+        origin = media_origin(settings.public_base_url)
+        media_file = _find_media_file(recording.artifact_dir)
+        if origin is None or media_file is None:
+            # Not an error: the view shows the transcript without a player.
+            reason = "no public address configured" if origin is None else "no media"
+            return ToolResult(
+                content=f"No media: {reason}.",
+                structured_content={"url": None, "kind": None, "expires_at": None, "reason": reason},
+            )
+        path, exp = signed_media_path(
+            media_signing_key(settings), recording.id, uuid.UUID(user.id)
+        )
+        return ToolResult(
+            content="Signed media link issued.",
+            structured_content={
+                "url": origin + path,
+                "kind": media_kind(media_file),
+                "expires_at": exp,
+                "reason": None,
+            },
         )

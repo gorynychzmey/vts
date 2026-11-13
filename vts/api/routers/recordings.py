@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,7 @@ from vts.api.schemas import (
     SearchResultOut,
     TranscriptEntryOut,
 )
+from vts.core.config import Settings
 from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
@@ -124,6 +126,47 @@ async def get_recording(
     if recording is None:
         raise HTTPException(status_code=404, detail="Recording not found")
     return _serialize(recording)
+
+
+@router.get("/api/recordings/{recording_id}/media", include_in_schema=False)
+async def get_recording_media(
+    recording_id: uuid.UUID,
+    u: uuid.UUID,
+    exp: int,
+    sig: str,
+    session: AsyncSession = Depends(get_session_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> FileResponse:
+    """A recording's media through a signed link (vts-vtma.3).
+
+    No session: the MCP player view plays this from the host's sandboxed
+    iframe, which carries neither our cookie nor a bearer token. The link
+    authorises itself instead — signed for this recording and user, valid for
+    minutes, issued only by the app_media_url tool after the normal per-user
+    check. Ownership is still checked here against `u`, so a link is useless
+    for another user's recording even with a valid signature.
+
+    Every refusal is the same 404, so a probe cannot tell a bad signature from
+    a missing recording.
+    """
+    from vts.services.media_kind import media_content_type
+    from vts.services.media_urls import media_signing_key, verify_media_signature
+
+    not_found = HTTPException(status_code=404, detail="Media not available")
+    if not verify_media_signature(media_signing_key(settings), recording_id, u, exp, sig):
+        raise not_found
+    recording = await Repo(session).get_recording_for_user(u, recording_id)
+    if recording is None:
+        raise not_found
+    media_file = _find_media_file(recording.artifact_dir)
+    if media_file is None:
+        raise not_found
+    return FileResponse(
+        path=str(media_file),
+        media_type=media_content_type(media_file),
+        # The link is personal and short-lived; nothing in between should keep it.
+        headers={"Cache-Control": "private, max-age=600"},
+    )
 
 
 @router.patch("/api/recordings/{recording_id}", response_model=RecordingOut)

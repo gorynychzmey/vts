@@ -193,6 +193,13 @@ Needed:
 3. **Fallback.** No media (`has_media=false`), expired link or unreachable
    origin → the player hides itself and the transcript stays usable.
 
+Done (vts-vtma.3): `GET /api/recordings/{id}/media?u=&exp=&sig=` with no
+session; the key is HMAC(session secret, "vts media url v1"), so no new
+secret to configure; an `exp` further out than one TTL is refused even when
+correctly signed; every refusal is the same 404. The view renews an expired
+link each time it expires, and gives up (player removed, transcript kept)
+only when a just-renewed link fails before loading — no renew loop.
+
 No private network or tunnel is assumed: the media origin is the same public
 origin the MCP endpoint is already served from.
 

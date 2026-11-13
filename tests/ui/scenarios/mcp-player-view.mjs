@@ -111,7 +111,9 @@ export async function run() {
       if (order.indexOf("ui/notifications/initialized") < order.indexOf("ui/initialize")) {
         fail(`initialized must follow the initialize reply: ${JSON.stringify(order.slice(0, 4))}`);
       }
-      const calls = msgs.filter((m) => m.method === "tools/call").map((m) => [m.params.name, m.params.arguments.cursor]);
+      // Media has its own tool (covered by mcp-player-media); here, the pages.
+      const calls = msgs.filter((m) => m.method === "tools/call" && m.params.name === "app_player_blocks")
+        .map((m) => [m.params.name, m.params.arguments.cursor]);
       if (JSON.stringify(calls) !== JSON.stringify([["app_player_blocks", "100"], ["app_player_blocks", "200"]])) {
         fail(`the view should fetch exactly the two remaining pages: ${JSON.stringify(calls)}`);
       }

@@ -34,6 +34,7 @@ class _Recording:
     title: str | None = "Weekly call"
     duration_sec: float | None = 1800.0
     source_task_id: uuid.UUID | None = field(default_factory=uuid.uuid4)
+    artifact_dir: str = "/nonexistent"
 
 
 class _Repo:
@@ -66,9 +67,9 @@ def client_for(monkeypatch):
     import vts.mcp.tools_registry.apps as apps_mod
     from vts.mcp.server import build_mcp_server
 
-    def make(recordings, blocks):
+    def make(recordings, blocks, settings=None):
         async def _auth(_session):
-            return _User(), Settings()
+            return _User(), settings or Settings()
 
         async def _load(recording, _session):
             return blocks
@@ -217,3 +218,73 @@ def test_the_last_page_has_no_cursor():
     page, nxt = page_of_blocks(_blocks(8), "4", size=4)
     assert [b["sentences"][0]["text"] for b in page] == ["sentence 4", "sentence 5", "sentence 6", "sentence 7"]
     assert nxt is None
+
+
+# ------------------------------------------------------------ media (vts-vtma.3)
+
+def _settings(public_base_url):
+    return Settings(public_base_url=public_base_url, session_secret="test-session-secret")
+
+
+def test_the_csp_allows_media_from_the_public_origin_only():
+    from vts.mcp.tools_registry.apps import player_app_config
+
+    meta = player_app_config("https://vts.example.org/some/path").model_dump(by_alias=True, exclude_none=True)
+    assert meta["csp"] == {"resourceDomains": ["https://vts.example.org"]}
+    assert "connectDomains" not in meta["csp"]
+
+
+def test_without_a_public_address_the_csp_declares_nothing():
+    from vts.mcp.tools_registry.apps import player_app_config
+
+    meta = player_app_config(None).model_dump(by_alias=True, exclude_none=True)
+    assert "csp" not in meta
+
+
+async def test_a_media_link_is_signed_for_this_recording_and_user(client_for, monkeypatch, tmp_path):
+    import vts.api._helpers.base as base
+    from vts.services.media_urls import media_signing_key, verify_media_signature
+
+    media = tmp_path / "video.mkv"
+    media.write_bytes(b"x")
+    monkeypatch.setattr(base, "_find_media_file", lambda _d: media)
+    rec = _Recording(id=uuid.uuid4())
+    settings = _settings("https://vts.example.org")
+    async with client_for([rec], [], settings) as client:
+        data = (await client.call_tool("app_media_url", {"recording_id": str(rec.id)})).structured_content
+    assert data["kind"] == "video"
+    url = data["url"]
+    assert url.startswith(f"https://vts.example.org/api/recordings/{rec.id}/media?u={_OWNER}&exp=")
+    sig = url.rsplit("sig=", 1)[1]
+    assert verify_media_signature(media_signing_key(settings), rec.id, _OWNER, data["expires_at"], sig)
+
+
+@pytest.mark.parametrize("public, has_media, reason", [
+    (None, True, "no public address configured"),
+    ("https://vts.example.org", False, "no media"),
+])
+async def test_no_link_when_there_is_nothing_to_link(client_for, monkeypatch, tmp_path, public, has_media, reason):
+    import vts.api._helpers.base as base
+
+    media = tmp_path / "a.mp3"
+    media.write_bytes(b"x")
+    monkeypatch.setattr(base, "_find_media_file", lambda _d: media if has_media else None)
+    rec = _Recording(id=uuid.uuid4())
+    async with client_for([rec], [], _settings(public)) as client:
+        data = (await client.call_tool("app_media_url", {"recording_id": str(rec.id)})).structured_content
+    assert data == {"url": None, "kind": None, "expires_at": None, "reason": reason}
+
+
+async def test_no_link_for_someone_elses_recording(client_for):
+    rec = _Recording(id=uuid.uuid4(), user_id=uuid.uuid4())
+    async with client_for([rec], [], _settings("https://vts.example.org")) as client:
+        result = await client.call_tool("app_media_url", {"recording_id": str(rec.id)}, raise_on_error=False)
+    assert result.is_error
+
+
+async def test_the_media_tool_is_app_only():
+    from vts.mcp.server import build_mcp_server
+
+    async with Client(build_mcp_server()) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    assert tools["app_media_url"].meta["ui"]["visibility"] == ["app"]

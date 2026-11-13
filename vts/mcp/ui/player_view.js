@@ -9,6 +9,8 @@
       failed: "The transcript could not be loaded.",
       cancelled: "Cancelled.",
       people: "People",
+      autoscroll: "Autoscroll",
+      mediaGone: "The media cannot be played here; the transcript is still available.",
     },
     ru: {
       loading: "Загружаю транскрипт…",
@@ -16,6 +18,8 @@
       failed: "Не удалось загрузить транскрипт.",
       cancelled: "Отменено.",
       people: "Участники",
+      autoscroll: "Автопрокрутка",
+      mediaGone: "Медиа здесь не воспроизводится; транскрипт доступен.",
     },
     de: {
       loading: "Transkript wird geladen…",
@@ -23,6 +27,8 @@
       failed: "Das Transkript konnte nicht geladen werden.",
       cancelled: "Abgebrochen.",
       people: "Personen",
+      autoscroll: "Auto-Scrollen",
+      mediaGone: "Das Medium kann hier nicht abgespielt werden; das Transkript ist verfügbar.",
     },
   };
 
@@ -67,12 +73,76 @@
   }
   if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.body);
 
+  // The media, through a short-lived signed link from app_media_url. No link
+  // (no media, no public address, a failed call) means a transcript without a
+  // player — never an error. A link that stops working (it expired while the
+  // view stayed open) is renewed, keeping the position — every time it
+  // expires, since a view can stay open for hours. Only a renewed link that
+  // fails before it loaded gives up: then the player goes, the transcript
+  // stays, and there is no renew loop.
+  async function mediaLink(recordingId) {
+    try {
+      var res = await bridge.callTool("app_media_url", { recording_id: recordingId });
+      var link = res.structuredContent || {};
+      return link.url ? link : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function loadMedia(recordingId) {
+    var link = await mediaLink(recordingId);
+    if (!link) return null;
+    var host = $("data-media-host");
+    var el = document.createElement(link.kind === "video" ? "video" : "audio");
+    el.controls = true;
+    el.preload = "metadata";
+    el.src = link.url;
+    host.appendChild(el);
+    var label = document.createElement("label");
+    label.className = "autoscroll-toggle";
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.setAttribute("data-autoscroll", "");
+    var text = document.createElement("span");
+    text.textContent = msgs.autoscroll;
+    label.appendChild(box);
+    label.appendChild(text);
+    host.appendChild(label);
+
+    var renewing = false;
+    el.addEventListener("loadedmetadata", function() { renewing = false; });
+    el.addEventListener("error", async function() {
+      if (!renewing) {
+        renewing = true;
+        var at = el.currentTime || 0;
+        var fresh = await mediaLink(recordingId);
+        if (fresh) {
+          el.addEventListener("loadedmetadata", function() {
+            try { el.currentTime = at; } catch (e) {}
+          }, { once: true });
+          el.src = fresh.url;
+          return;
+        }
+      }
+      host.innerHTML = "";
+      var note = document.createElement("p");
+      note.className = "status";
+      note.setAttribute("data-media-gone", "");
+      note.textContent = msgs.mediaGone;
+      host.appendChild(note);
+    });
+    return { media: el, toggle: box };
+  }
+
   async function show(data) {
     renderHead(data);
+    var media = await loadMedia(data.recording_id);
     player = VtsPlayerCore.create({
       container: $("data-transcript-host"),
-      media: null,
-      autoscrollToggle: null,
+      media: media ? media.media : null,
+      autoscrollToggle: media ? media.toggle : null,
       onSelect: function(sentence) {
         bridge.updateModelContext(
           SELECTED + " " + VtsPlayerCore.timecode(sentence.start)
