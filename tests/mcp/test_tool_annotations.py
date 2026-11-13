@@ -25,6 +25,7 @@ READ_ONLY = {
     "get_recording_prompt_result",
     # MCP Apps (vts-vtma): open the player view, and page it.
     "show_recording", "app_player_blocks", "app_media_url", "show_summary",
+    "show_speakers", "app_speaker_preview_url",
 }
 
 # Writes that a user would not want to lose without being asked.
@@ -47,6 +48,8 @@ MUTATING = {
     "create_delivery_credential", "update_delivery_credential",
     "create_delivery_target", "update_delivery_target",
     "retry_delivery",
+    # Saves who a recording's voices are (MCP speakers view).
+    "app_resolve_speakers",
     "rename_recording",
 }
 

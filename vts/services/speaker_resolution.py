@@ -223,3 +223,122 @@ async def resolve_task_speakers(
         await bus.notify_queued()
 
     return results
+
+
+async def speaker_matches_view(
+    repo: Repo, user_id: uuid.UUID, task: Any
+) -> dict[str, Any] | None:
+    """The task's speaker_matches.json as the speaker dialogs show it, or None
+    when there is none.
+
+    Shared by GET /api/tasks/{task_id}/speaker-matches and the MCP speaker
+    view, so both show the same decisions, display labels and current names.
+    """
+    from vts.api._helpers.serialization import _speaker_ordering_entries
+
+    outputs = Path(task.artifact_dir) / "outputs"
+    path = outputs / "speaker_matches.json"
+    if not path.exists():
+        return None
+    try:
+        matches = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(matches, dict):
+        return None
+
+    # Enrich each match with (a) the operator's LATEST saved decision, so a
+    # reopened dialog shows the real binding rather than the stale auto-match
+    # (bug #1), and (b) a display_label numbered exactly like the transcript
+    # ("Голос N" by first appearance over the FULL diarization, incl. noise),
+    # so the dialog and the transcript agree (bug #2). Both are additive —
+    # existing fields are untouched.
+    from vts.services.diarization.merge import label_map, speaker_label_word
+
+    decisions = await repo.decisions_for_task(user_id, task.id)
+
+    # Display labels: number by first appearance across the diarization
+    # segments (every speaker, including noise), so a speaker excluded from
+    # the transcript text still has a stable "Голос N". Fall back to the
+    # transcript entries, then to the matches keys, if diarization.json is
+    # unreadable.
+    language = effective_language(
+        task.options if isinstance(task.options, dict) else {},
+        {"outputs": outputs},
+    )
+    ordering_entries = _speaker_ordering_entries(outputs, matches)
+    display = label_map(ordering_entries, speaker_label_word(language))
+
+    # Candidate names were frozen into speaker_matches.json at match time, so
+    # a person renamed since then would render under the stale name. Reconcile
+    # each candidate against the live registry (as decided_name already is),
+    # so the dialog always shows the current name. A candidate whose person
+    # was deleted is dropped from the live map and keeps its stored name.
+    live_names = {
+        str(speaker.id): speaker.name
+        for speaker in await repo.list_speakers(user_id)
+    }
+
+    for label, entry in matches.items():
+        if not isinstance(entry, dict):
+            continue
+        for candidate in entry.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            current = live_names.get(str(candidate.get("speaker_id")))
+            if current is not None:
+                candidate["name"] = current
+        decision = decisions.get(label)
+        entry["decided_speaker_id"] = decision["speaker_id"] if decision else None
+        entry["decided_name"] = decision["name"] if decision else None
+        entry["decided_is_noise"] = decision["is_noise"] if decision else None
+        entry["display_label"] = display.get(label, label)
+
+    return matches
+
+
+def preview_clip_path(artifact_dir: str | None, speaker_label: str, index: int) -> Path | None:
+    """The `index`-th preview clip of a voice, or None.
+
+    SECURITY: the path comes out of speaker_previews.json, so it is checked to
+    resolve inside this artifact directory's outputs before anything serves
+    it — a defence against a tampered json or traversal through the label or
+    index. Shared by the task route (web dialog) and the signed recording
+    route (MCP speaker view).
+    """
+    if not artifact_dir:
+        return None
+    outputs_dir = Path(artifact_dir) / "outputs"
+    previews_path = outputs_dir / "speaker_previews.json"
+    try:
+        previews = json.loads(previews_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(previews, dict):
+        return None
+    clips = previews.get(speaker_label)
+    if not isinstance(clips, list) or index < 0 or index >= len(clips):
+        return None
+    raw = clips[index].get("path") if isinstance(clips[index], dict) else None
+    if not raw:
+        return None
+    resolved = Path(raw).resolve()
+    if not resolved.is_relative_to(outputs_dir.resolve()) or not resolved.is_file():
+        return None
+    return resolved
+
+
+def preview_counts(artifact_dir: str | None) -> dict[str, int]:
+    """How many preview clips each voice has, for a view to offer them."""
+    if not artifact_dir:
+        return {}
+    try:
+        previews = json.loads(
+            (Path(artifact_dir) / "outputs" / "speaker_previews.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(previews, dict):
+        return {}
+    return {str(k): len(v) for k, v in previews.items() if isinstance(v, list)}
+

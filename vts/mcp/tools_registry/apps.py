@@ -10,6 +10,10 @@ no existing tool changed its result for this.
   `_meta.ui` (registered in search.py); its result is unchanged.
 * `ui://vts/summary` + `show_summary` — a recording's summary and its other
   prompt results, switchable in the view.
+* `ui://vts/speakers` + `show_speakers` — who each voice of a recording is:
+  listen to a voice, bind it to a person, create one, leave it anonymous or
+  mark it noise. Saved by `app_resolve_speakers` through the same service as
+  the web UI's speaker dialog; clips play through `app_speaker_preview_url`.
 * `regenerate_summary` — re-run a recording's prompts with a chosen set, all
   at once, as the web UI's "restart the final summary" does. The previous
   results are cleared first, so it is marked destructive and the view asks
@@ -42,13 +46,14 @@ from vts.api._helpers.artifact_store import (
 from vts.core.config import get_settings
 from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
-from vts.mcp.annotations import READ_ONLY, RERUN_PROMPTS
+from vts.mcp.annotations import READ_ONLY, RERUN_PROMPTS, UPDATE
 from vts.mcp.auth import mcp_authenticate
-from vts.mcp.ui import player_view_html, search_view_html, summary_view_html
+from vts.mcp.ui import player_view_html, search_view_html, speakers_view_html, summary_view_html
 
 PLAYER_URI = "ui://vts/player"
 SEARCH_URI = "ui://vts/search"
 SUMMARY_URI = "ui://vts/summary"
+SPEAKERS_URI = "ui://vts/speakers"
 
 # Blocks per page. A block is one ASR segment or speaker turn, so a two-hour
 # recording is a handful of pages, and no single result carries the whole
@@ -125,6 +130,76 @@ def prompt_results_index(recording: Any) -> list[dict[str, str]]:
     if "system:summary" not in seen and summary and Path(summary).exists():
         out.insert(0, {"ref": "system:summary", "name": "Summary"})
     return out
+
+
+_MATCH_OUTCOMES = ("auto", "grey", "miss")
+
+
+def voice_options(match: dict[str, Any], people: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """The people a voice can be bound to, in the web dialog's order: the
+    matcher's candidates by distance, then everyone else by name (no distance
+    to compare — not "infinitely far")."""
+    candidates = [c for c in match.get("candidates") or [] if isinstance(c, dict)]
+    ranked = sorted(candidates, key=lambda c: float(c.get("distance") or 0))
+    ids = {str(c.get("speaker_id")) for c in ranked}
+    rest = sorted((p for p in people if str(p["id"]) not in ids), key=lambda p: str(p["name"]))
+    return [
+        {"speaker_id": str(c.get("speaker_id")), "name": c.get("name"), "distance": c.get("distance")}
+        for c in ranked
+    ] + [{"speaker_id": str(p["id"]), "name": p["name"], "distance": None} for p in rest]
+
+
+def resolution_for_choice(
+    label: str, match: dict[str, Any], choice: dict[str, Any], people: list[dict[str, str]]
+) -> dict[str, Any]:
+    """Turn a view's plain choice for one voice into the resolution the save
+    service takes — the same mapping as the web dialog's buildResolutions /
+    resolveOutcomeCode (vts/static/app.js), so the calibration data stays
+    meaningful whichever UI saved it.
+
+    choice: {"kind": "person", "speaker_id"} | {"kind": "new", "new_name"} |
+            {"kind": "anonymous"}, plus optional "is_noise", "add_fragment".
+    """
+    outcome = match.get("outcome") if match.get("outcome") in _MATCH_OUTCOMES else "miss"
+    options = voice_options(match, people)
+    matched = str(match["speaker_id"]) if match.get("speaker_id") else None
+    kind = choice.get("kind")
+    selection = str(choice.get("speaker_id") or "") if kind == "person" else None
+    if kind == "person" and not selection:
+        raise ToolError(f"{label}: a person needs speaker_id")
+    if kind not in ("person", "new", "anonymous"):
+        raise ToolError(f"{label}: unknown choice {kind!r}")
+    bound = kind == "person"
+    if outcome == "miss":
+        code = "manual_match" if bound else "left_anonymous"
+    elif outcome == "auto":
+        code = "auto_accepted" if bound and selection == matched else "auto_overridden"
+    else:  # grey
+        if not bound:
+            code = "left_anonymous"
+        else:
+            code = "confirmed" if options and selection == options[0]["speaker_id"] else "rejected"
+    picked = next((o for o in options if o["speaker_id"] == selection), None)
+    distance = picked["distance"] if picked and isinstance(picked["distance"], (int, float)) else (
+        match.get("distance") if isinstance(match.get("distance"), (int, float)) else None
+    )
+    base = {
+        "speaker_label": label,
+        "outcome": code,
+        "distance": distance,
+        "is_noise": bool(choice.get("is_noise")),
+    }
+    add_fragment = bool(choice.get("add_fragment", outcome != "miss"))
+    if kind == "new":
+        name = str(choice.get("new_name") or "").strip()
+        if name:
+            return {**base, "action": "bind_new", "new_name": name, "add_fragment": True}
+        return {**base, "action": "leave_anonymous", "add_fragment": False}
+    if kind == "anonymous":
+        return {**base, "action": "leave_anonymous", "add_fragment": False}
+    if outcome == "auto" and selection == matched:
+        return {**base, "action": "accept_auto", "speaker_id": selection, "add_fragment": add_fragment}
+    return {**base, "action": "bind_existing", "speaker_id": selection, "add_fragment": add_fragment}
 
 
 # How often the summary view asks how a regeneration is going.
@@ -205,6 +280,17 @@ def register(mcp: FastMCP) -> None:
     )
     def _summary_view() -> str:
         return summary_view_html()
+
+    @mcp.resource(
+        SPEAKERS_URI,
+        name="vts_speakers",
+        description="VTS speakers: who each voice of a recording is.",
+        mime_type=UI_MIME_TYPE,
+        # Plays voice clips from the public origin, like the player's media.
+        app=player_app_config(get_settings().public_base_url),
+    )
+    def _speakers_view() -> str:
+        return speakers_view_html()
 
     async def _recording_blocks(recording_id: uuid.UUID) -> tuple[Any, list[dict[str, Any]], list[str]]:
         factory = get_db_session_factory()
@@ -455,5 +541,177 @@ def register(mcp: FastMCP) -> None:
                 "status": status,
                 "prompts": [f"{r['source']}:{r['id']}" for r in refs],
             },
+        )
+
+    async def _speakers_context(session: Any, user_id: uuid.UUID, recording_id: uuid.UUID):
+        """The recording, its task (or None), the enriched matches (or None)
+        and the user's people."""
+        from vts.services.speaker_resolution import speaker_matches_view
+
+        repo = Repo(session)
+        recording = await repo.get_recording_for_user(user_id, recording_id)
+        if recording is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        task = None
+        if recording.source_task_id is not None:
+            task = await repo.get_task_for_user(user_id, recording.source_task_id)
+        matches = await speaker_matches_view(repo, user_id, task) if task is not None else None
+        people = [{"id": str(sp.id), "name": sp.name} for sp in await repo.list_speakers(user_id)]
+        return recording, task, matches, people
+
+    @mcp.tool(
+        name="show_speakers",
+        annotations=READ_ONLY,
+        app=AppConfig(resource_uri=SPEAKERS_URI),
+    )
+    async def _show_speakers(recording_id: uuid.UUID) -> ToolResult:
+        """Show the voices of a recording to the user in the VTS speakers view,
+        where they can listen to each voice and say who it is — bind it to a
+        person, create a new one, leave it anonymous or mark it noise.
+
+        The text answer lists the voices and who they are bound to now. The
+        view saves through the same code as the VTS web UI's speaker dialog.
+        """
+        from vts.api._helpers.serialization import can_resolve_speakers_task
+        from vts.services.speaker_resolution import preview_counts
+
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            recording, task, matches, people = await _speakers_context(
+                session, uuid.UUID(user.id), recording_id
+            )
+        title = recording.title or "Untitled recording"
+        if task is None or matches is None:
+            reason = "task_deleted" if task is None else "not_diarized"
+            return ToolResult(
+                content=(
+                    f"«{title}» has no voices to show: "
+                    + ("the task that produced it was deleted." if task is None
+                       else "it was not processed with speaker separation.")
+                ),
+                structured_content={"recording_id": str(recording.id), "title": recording.title,
+                                    "voices": [], "people": people, "editable": False,
+                                    "reason": reason, "awaiting_input": False},
+            )
+        counts = preview_counts(task.artifact_dir)
+        voices = []
+        # In the matcher's order (SPEAKER_00, 01, ...), as the web dialog lists them.
+        for label, match in matches.items():
+            if not isinstance(match, dict):
+                continue
+            voices.append({
+                "label": label,
+                "display_label": match.get("display_label") or label,
+                "outcome": match.get("outcome") if match.get("outcome") in _MATCH_OUTCOMES else "miss",
+                "matched_speaker_id": str(match["speaker_id"]) if match.get("speaker_id") else None,
+                "decided_speaker_id": match.get("decided_speaker_id"),
+                "decided_name": match.get("decided_name"),
+                "decided_is_noise": match.get("decided_is_noise"),
+                "options": voice_options(match, people),
+                "clips": counts.get(label, 0),
+            })
+        editable = can_resolve_speakers_task(task)
+        awaiting = getattr(task.status, "value", str(task.status)) == "awaiting_input"
+        lines = []
+        for v in voices:
+            who = "noise" if v["decided_is_noise"] else (v["decided_name"] or "not identified")
+            lines.append(f"{v['display_label']}: {who}")
+        return ToolResult(
+            content=f"Showing the voices of «{title}» in the VTS speakers view. " + "; ".join(lines) + ".",
+            structured_content={"recording_id": str(recording.id), "title": recording.title,
+                                "voices": voices, "people": people, "editable": editable,
+                                "reason": None if editable else f"task_{task.status.value}",
+                                "awaiting_input": awaiting},
+        )
+
+    @mcp.tool(
+        name="app_speaker_preview_url",
+        annotations=READ_ONLY,
+        app=AppConfig(visibility=["app"]),
+    )
+    async def _app_speaker_preview_url(recording_id: uuid.UUID, label: str, index: int = 0) -> ToolResult:
+        """A short-lived signed link to one preview clip of a voice, for the
+        VTS speakers view. Called by the view, not by the model."""
+        from urllib.parse import quote
+
+        from vts.services.media_urls import media_signing_key, signed_path
+        from vts.services.speaker_resolution import preview_clip_path
+
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, settings = await mcp_authenticate(session)
+            recording = await Repo(session).get_recording_for_user(uuid.UUID(user.id), recording_id)
+            if recording is None:
+                raise HTTPException(status_code=404, detail="Recording not found")
+        origin = media_origin(settings.public_base_url)
+        if origin is None or preview_clip_path(recording.artifact_dir, label, index) is None:
+            reason = "no public address configured" if origin is None else "no clip"
+            return ToolResult(content=f"No clip: {reason}.",
+                              structured_content={"url": None, "expires_at": None, "reason": reason})
+        path = f"/api/recordings/{recording.id}/speaker-previews/{quote(label, safe='')}/{int(index)}/audio"
+        signed, exp = signed_path(media_signing_key(settings), path, uuid.UUID(user.id))
+        return ToolResult(content="Signed clip link issued.",
+                          structured_content={"url": origin + signed, "expires_at": exp, "reason": None})
+
+    @mcp.tool(
+        name="app_resolve_speakers",
+        annotations=UPDATE,
+        app=AppConfig(visibility=["app"]),
+    )
+    async def _app_resolve_speakers(
+        recording_id: uuid.UUID,
+        voices: dict[str, dict[str, Any]],
+        continue_task: bool = False,
+    ) -> ToolResult:
+        """Save who each voice of a recording is, from the VTS speakers view.
+        `voices` maps a voice label to {"kind": "person"|"new"|"anonymous",
+        "speaker_id"?, "new_name"?, "is_noise"?, "add_fragment"?}. Called by
+        the view, not by the model."""
+        from types import SimpleNamespace
+
+        from vts.services.diarization import create_diarization_backend
+        from vts.services.redis_client import make_redis
+        from vts.services.speaker_resolution import resolve_task_speakers
+
+        if not voices:
+            raise ToolError("nothing to save")
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, settings = await mcp_authenticate(session)
+            user_id = uuid.UUID(user.id)
+            recording, task, matches, people = await _speakers_context(session, user_id, recording_id)
+            if task is None:
+                raise ToolError("The task that produced this recording was deleted; its voices cannot be changed.")
+            if matches is None:
+                raise ToolError("This recording was not processed with speaker separation.")
+            resolutions = []
+            for label, choice in voices.items():
+                if label not in matches or not isinstance(matches[label], dict):
+                    raise ToolError(f"unknown voice: {label}")
+                # The fields the save service reads, with the web request's
+                # defaults for the ones a choice does not set.
+                fields = {"speaker_id": None, "new_name": None, "voice_sample_id": None}
+                fields.update(resolution_for_choice(label, matches[label], choice or {}, people))
+                resolutions.append(SimpleNamespace(**fields))
+            redis = make_redis(settings.redis_url)
+            try:
+                results = await resolve_task_speakers(
+                    session,
+                    user_id=user_id,
+                    task_id=task.id,
+                    resolutions=resolutions,
+                    continue_task=bool(continue_task),
+                    redis=redis,
+                    settings=settings,
+                    diarization=create_diarization_backend(
+                        settings.diarization_url, settings.diarization_backend
+                    ),
+                )
+            finally:
+                await redis.aclose()
+        return ToolResult(
+            content=f"Saved {len(results)} voice(s).",
+            structured_content={"results": results, "continued": bool(continue_task)},
         )
 

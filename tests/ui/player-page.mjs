@@ -60,3 +60,13 @@ export function renderMcpSummaryView() {
   if (r.status !== 0) throw new Error(`rendering the MCP summary view failed: ${r.stderr}`);
   return r.stdout;
 }
+
+// The MCP Apps speakers view (`ui://vts/speakers`) as the server serves it.
+export function renderMcpSpeakersView() {
+  const r = spawnSync(python(), ["-c",
+    "import sys; from vts.mcp.ui import speakers_view_html; sys.stdout.write(speakers_view_html())"], {
+    cwd: REPO, encoding: "utf8",
+  });
+  if (r.status !== 0) throw new Error(`rendering the MCP speakers view failed: ${r.stderr}`);
+  return r.stdout;
+}

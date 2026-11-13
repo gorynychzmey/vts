@@ -250,14 +250,23 @@ results are cleared first, so the view asks before running and the tool is
 annotated `destructiveHint`. It needs the task that produced the recording;
 for a recording whose task was deleted the button is not offered.
 
+`show_speakers(recording_id)` opens the `ui://vts/speakers` view: each voice of
+the recording with a short clip to listen to, bound to a person, a new
+person, anonymous, or marked noise. Saving goes through the same code as the
+web UI's speaker dialog (registry fragment, transcript re-render, re-index);
+the view sends plain choices and the server maps them to the same decision
+codes the web dialog writes. Clips play through short-lived signed links,
+like the player's media. A recording whose task was deleted is shown
+read-only.
+
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) — so a client can group them instead of showing one flat list:
 
 | | tools | meaning |
 |---|---|---|
-| read-only | 20 | looks, changes nothing |
-| writes | 12 | creates or updates; nothing you had is lost |
+| read-only | 22 | looks, changes nothing |
+| writes | 13 | creates or updates; nothing you had is lost |
 | destructive | 6 | the five `delete_*` tools and `regenerate_summary` — a client should confirm first |
 
 `openWorldHint` is set on exactly two: `submit_video` (downloads from the open

@@ -73,3 +73,44 @@ def verify_media_signature(
         return False
     expected = _signature(key, recording_id, user_id, exp)
     return hmac.compare_digest(expected, str(sig))
+
+
+# --- Any other per-recording file, signed by its path (vts-vtma.6) ---
+#
+# A voice preview clip is addressed by recording, label and clip index, so the
+# signature covers the whole path rather than just the recording id: a link
+# for one clip must not open another clip, or the media, of the same recording.
+
+def _path_signature(key: bytes, path: str, user_id: uuid.UUID, exp: int) -> str:
+    message = f"path\n{path}\n{user_id}\n{exp}".encode("utf-8")
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def signed_path(
+    key: bytes,
+    path: str,
+    user_id: uuid.UUID,
+    *,
+    now: float | None = None,
+    ttl: int = TTL_SECONDS,
+) -> tuple[str, int]:
+    """`path` with u/exp/sig appended, and its expiry (epoch seconds)."""
+    exp = int(now if now is not None else time.time()) + ttl
+    sig = _path_signature(key, path, user_id, exp)
+    return f"{path}?u={user_id}&exp={exp}&sig={sig}", exp
+
+
+def verify_path_signature(
+    key: bytes,
+    path: str,
+    user_id: uuid.UUID,
+    exp: int,
+    sig: str,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Same rules as verify_media_signature, for a link made by signed_path."""
+    current = int(now if now is not None else time.time())
+    if exp < current or exp > current + TTL_SECONDS + 60:
+        return False
+    return hmac.compare_digest(_path_signature(key, path, user_id, exp), str(sig))

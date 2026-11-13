@@ -14,7 +14,7 @@ from datetime import datetime
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -167,6 +167,39 @@ async def get_recording_media(
         # The link is personal and short-lived; nothing in between should keep it.
         headers={"Cache-Control": "private, max-age=600"},
     )
+
+
+@router.get("/api/recordings/{recording_id}/speaker-previews/{speaker_label}/{index}/audio", include_in_schema=False)
+async def get_recording_speaker_preview(
+    recording_id: uuid.UUID,
+    speaker_label: str,
+    index: int,
+    u: uuid.UUID,
+    exp: int,
+    sig: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> FileResponse:
+    """A voice's preview clip through a signed link (vts-vtma.6), for the MCP
+    speaker view — same reasoning as get_recording_media: the host's iframe
+    carries no session. The signature covers this exact path, so a link opens
+    one clip of one voice and nothing else; every refusal is the same 404.
+    """
+    from vts.services.media_urls import media_signing_key, verify_path_signature
+    from vts.services.speaker_resolution import preview_clip_path
+
+    not_found = HTTPException(status_code=404, detail="Clip not available")
+    if not verify_path_signature(media_signing_key(settings), request.url.path, u, exp, sig):
+        raise not_found
+    recording = await Repo(session).get_recording_for_user(u, recording_id)
+    if recording is None:
+        raise not_found
+    clip = preview_clip_path(recording.artifact_dir, speaker_label, index)
+    if clip is None:
+        raise not_found
+    return FileResponse(path=str(clip), media_type="audio/wav",
+                        headers={"Cache-Control": "private, max-age=600"})
 
 
 @router.patch("/api/recordings/{recording_id}", response_model=RecordingOut)

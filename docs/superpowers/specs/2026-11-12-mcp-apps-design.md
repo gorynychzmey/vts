@@ -70,6 +70,15 @@ existing results first. The view preselects the task's current set, confirms
 with a warning, polls `get_status` and reloads `show_summary` when the task
 completes. Not offered when the recording's task was deleted.
 
+Done (vts-vtma.6, option "full editing in chat", decided 2026-11-13): the web
+endpoint's save moved into `vts/services/speaker_resolution.py` (also the
+matches enrichment and the preview-clip lookup), and `app_resolve_speakers`
+calls it. The view sends plain choices ({kind: person|new|anonymous, ...});
+`resolution_for_choice` maps them server-side with the web dialog's
+`resolveOutcomeCode` table, pinned by a parity test, so matcher calibration
+data does not depend on which UI saved. Clips: `signed_path` signs the exact
+clip path, so a link opens one clip of one voice and nothing else.
+
 ## 4. Server side
 
 ### 4.1 Registration

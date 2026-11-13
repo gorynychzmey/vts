@@ -64,3 +64,12 @@ def summary_view_html() -> str:
     values = {"CSS": _read(_HERE / "player.css"), "JS": js}
     return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "summary.html"))
 
+
+@lru_cache(maxsize=1)
+def speakers_view_html() -> str:
+    """The `ui://vts/speakers` document: a recording's voices, to listen to
+    and say who each one is."""
+    js = "\n".join(_read(p) for p in (_HERE / "bridge.js", _HERE / "speakers_main.js"))
+    values = {"CSS": _read(_HERE / "player.css"), "JS": js}
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "speakers.html"))
+

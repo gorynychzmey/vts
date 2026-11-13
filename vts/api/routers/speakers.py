@@ -31,7 +31,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vts.api._helpers.serialization import _speaker_ordering_entries
 from vts.api.deps import (
     get_current_user,
     get_diarization_backend_dep,
@@ -52,7 +51,6 @@ from vts.api.schemas import (
 )
 from vts.core.config import Settings, get_settings
 from vts.db.repo import Repo
-from vts.pipeline.steps.transcription import effective_language
 from vts.services.auth import AuthenticatedUser
 
 logger = logging.getLogger(__name__)
@@ -261,64 +259,11 @@ async def get_speaker_matches(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    outputs = Path(task.artifact_dir) / "outputs"
-    path = outputs / "speaker_matches.json"
-    if not path.exists():
+    from vts.services.speaker_resolution import speaker_matches_view
+
+    matches = await speaker_matches_view(repo, uuid.UUID(user.id), task)
+    if matches is None:
         raise HTTPException(status_code=404, detail="Speaker matches not found")
-    try:
-        matches = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raise HTTPException(status_code=404, detail="Speaker matches not found")
-    if not isinstance(matches, dict):
-        raise HTTPException(status_code=404, detail="Speaker matches not found")
-
-    # Enrich each match with (a) the operator's LATEST saved decision, so a
-    # reopened dialog shows the real binding rather than the stale auto-match
-    # (bug #1), and (b) a display_label numbered exactly like the transcript
-    # ("Голос N" by first appearance over the FULL diarization, incl. noise),
-    # so the dialog and the transcript agree (bug #2). Both are additive —
-    # existing fields are untouched.
-    from vts.services.diarization.merge import label_map, speaker_label_word
-
-    decisions = await repo.decisions_for_task(uuid.UUID(user.id), task_id)
-
-    # Display labels: number by first appearance across the diarization
-    # segments (every speaker, including noise), so a speaker excluded from
-    # the transcript text still has a stable "Голос N". Fall back to the
-    # transcript entries, then to the matches keys, if diarization.json is
-    # unreadable.
-    language = effective_language(
-        task.options if isinstance(task.options, dict) else {},
-        {"outputs": outputs},
-    )
-    ordering_entries = _speaker_ordering_entries(outputs, matches)
-    display = label_map(ordering_entries, speaker_label_word(language))
-
-    # Candidate names were frozen into speaker_matches.json at match time, so
-    # a person renamed since then would render under the stale name. Reconcile
-    # each candidate against the live registry (as decided_name already is),
-    # so the dialog always shows the current name. A candidate whose person
-    # was deleted is dropped from the live map and keeps its stored name.
-    live_names = {
-        str(speaker.id): speaker.name
-        for speaker in await repo.list_speakers(uuid.UUID(user.id))
-    }
-
-    for label, entry in matches.items():
-        if not isinstance(entry, dict):
-            continue
-        for candidate in entry.get("candidates") or []:
-            if not isinstance(candidate, dict):
-                continue
-            current = live_names.get(str(candidate.get("speaker_id")))
-            if current is not None:
-                candidate["name"] = current
-        decision = decisions.get(label)
-        entry["decided_speaker_id"] = decision["speaker_id"] if decision else None
-        entry["decided_name"] = decision["name"] if decision else None
-        entry["decided_is_noise"] = decision["is_noise"] if decision else None
-        entry["display_label"] = display.get(label, label)
-
     return JSONResponse(matches)
 
 
@@ -335,38 +280,12 @@ async def get_speaker_preview_audio(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    outputs_dir = Path(task.artifact_dir) / "outputs"
-    previews_path = outputs_dir / "speaker_previews.json"
-    if not previews_path.exists():
-        raise HTTPException(status_code=404, detail="Speaker previews not found")
+    from vts.services.speaker_resolution import preview_clip_path
 
-    try:
-        previews = json.loads(previews_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raise HTTPException(status_code=404, detail="Speaker previews not found")
-    if not isinstance(previews, dict):
-        raise HTTPException(status_code=404, detail="Speaker previews not found")
-
-    clips = previews.get(speaker_label)
-    if not isinstance(clips, list) or index < 0 or index >= len(clips):
+    clip = preview_clip_path(task.artifact_dir, speaker_label, index)
+    if clip is None:
         raise HTTPException(status_code=404, detail="Preview clip not found")
-
-    clip_path_str = clips[index].get("path") if isinstance(clips[index], dict) else None
-    if not clip_path_str:
-        raise HTTPException(status_code=404, detail="Preview clip not found")
-
-    # SECURITY: never trust the resolved path just because it came out of
-    # the json. Confirm it actually resolves to somewhere inside this
-    # task's outputs dir before serving it — defense against a tampered
-    # speaker_previews.json or path-traversal via speaker_label/index.
-    resolved_outputs_dir = outputs_dir.resolve()
-    resolved_clip_path = Path(clip_path_str).resolve()
-    if not resolved_clip_path.is_relative_to(resolved_outputs_dir):
-        raise HTTPException(status_code=404, detail="Preview clip not found")
-    if not resolved_clip_path.is_file():
-        raise HTTPException(status_code=404, detail="Preview clip not found")
-
-    return FileResponse(path=str(resolved_clip_path), media_type="audio/wav")
+    return FileResponse(path=str(clip), media_type="audio/wav")
 
 
 @router.post("/api/tasks/{task_id}/speakers", response_model=BatchResultOut)
