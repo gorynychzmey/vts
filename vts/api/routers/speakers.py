@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vts.api._helpers.serialization import _speaker_ordering_entries, can_resolve_speakers_task
+from vts.api._helpers.serialization import _speaker_ordering_entries
 from vts.api.deps import (
     get_current_user,
     get_diarization_backend_dep,
@@ -51,13 +51,9 @@ from vts.api.schemas import (
     VoiceSampleOut,
 )
 from vts.core.config import Settings, get_settings
-from vts.db.models import TaskStatus
 from vts.db.repo import Repo
-from vts.pipeline.rerender import rerender_transcript
-from vts.services.indexing import reindex_task
 from vts.pipeline.steps.transcription import effective_language
 from vts.services.auth import AuthenticatedUser
-from vts.services.redis_bus import RedisBus
 
 logger = logging.getLogger(__name__)
 
@@ -383,182 +379,16 @@ async def resolve_task_speakers(
     settings: Settings = Depends(get_settings_dep),
     diarization=Depends(get_diarization_backend_dep),
 ) -> BatchResultOut:
-    repo = Repo(session)
-    user_id = uuid.UUID(user.id)
-    # Locked, so two saves of the SAME task run one after the other. Everything
-    # below is read-then-write: find the prior decision's fragment and delete
-    # it, then add a new one; upsert the recording row. Interleaved, both saves
-    # read the same "before" and both write — prod 2026-10-11, a save that took
-    # ~11 s with no feedback was clicked four times, and every voice of that
-    # task ended up with 3–4 identical fragments. With an empty recording slot
-    # the same overlap fails outright on uq_recordings_source_task. The lock is
-    # released by the first commit below, by which point the fragments are
-    # written, so the waiting save sees them and replaces rather than adds.
-    task = await repo.get_task_for_user(user_id, task_id, lock=True)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if not can_resolve_speakers_task(task):
-        raise HTTPException(status_code=409, detail="cannot_resolve_speakers")
+    from vts.services.speaker_resolution import resolve_task_speakers as _resolve
 
-    artifact_dir = Path(task.artifact_dir)
-    diar_path = artifact_dir / "outputs" / "diarization.json"
-    embedding_model = ""
-    if diar_path.exists():
-        diar = json.loads(diar_path.read_text(encoding="utf-8"))
-        embedding_model = diar.get("embedding_model", "") or ""
-
-    previews_path = artifact_dir / "outputs" / "speaker_previews.json"
-    previews: dict[str, list[dict]] = {}
-    if previews_path.exists():
-        previews = json.loads(previews_path.read_text(encoding="utf-8"))
-
-    # Everything below runs on the ONE request-scoped `session` and is
-    # committed exactly once at the end (or not at all, on error) — a
-    # partial write here would leave the registry with a speaker missing
-    # its fragment, or a fragment attributed to the wrong voice.
-    results: dict[str, str] = {}
-    for res in payload.resolutions:
-        speaker_id: uuid.UUID | None = None
-
-        if res.action == "bind_new":
-            if not res.new_name or not res.new_name.strip():
-                raise HTTPException(status_code=422, detail="new_name is required for bind_new")
-            sp = await repo.create_speaker(user_id, res.new_name.strip())
-            speaker_id = sp.id
-        elif res.action == "bind_existing":
-            if not res.speaker_id:
-                raise HTTPException(status_code=422, detail="speaker_id is required for bind_existing")
-            sp = await repo.get_speaker(user_id, uuid.UUID(res.speaker_id))
-            if sp is None:
-                raise HTTPException(status_code=404, detail=f"Speaker not found: {res.speaker_id}")
-            speaker_id = sp.id
-        elif res.action == "accept_auto":
-            if not res.speaker_id:
-                raise HTTPException(status_code=422, detail="speaker_id is required for accept_auto")
-            sp = await repo.get_speaker(user_id, uuid.UUID(res.speaker_id))
-            if sp is None:
-                raise HTTPException(status_code=404, detail=f"Speaker not found: {res.speaker_id}")
-            speaker_id = sp.id
-        elif res.action == "leave_anonymous":
-            speaker_id = None
-        else:
-            raise HTTPException(status_code=422, detail=f"Unknown action: {res.action}")
-
-        voice_sample_id: uuid.UUID | None = (
-            uuid.UUID(res.voice_sample_id) if res.voice_sample_id else None
-        )
-
-        # Rollback: if this label was previously resolved (in an earlier
-        # save of this same awaiting_input dialog) and that decision added a
-        # fragment, drop it before this save adds its own. Only ever touches
-        # a fragment this same task added (source_task_id == task_id is
-        # implicit: record_decision below always writes this task_id as
-        # source_task_id, so any voice_sample_id on a decision scoped to
-        # this task_id was added by this task). Fragments predating this
-        # task are never looked at here.
-        #
-        # Deliberately NOT conditioned on the speaker having changed
-        # (vts-3ij7). The SPA resubmits the whole resolutions set, so
-        # re-saving the dialog after editing some OTHER label replays this
-        # one unchanged — same speaker, add_fragment still true. Rolling
-        # back only on a rebind left the previous sample in place and added
-        # a second one from the same clip: the speaker accumulates a
-        # duplicate fragment per re-save, and the older one is orphaned
-        # (no decision row references it any more, so a later rebind cannot
-        # clean it up either). Both branches want the prior sample gone: on
-        # a rebind it is attributed to the wrong voice, on a re-save it is
-        # about to be superseded by an identical one.
-        prior = await repo.find_prior_decision_sample(user_id, task_id, res.speaker_label)
-        if prior is not None:
-            _prior_speaker_id, prior_voice_sample_id = prior
-            # Never delete a sample this save is going to keep referencing:
-            # a client that echoes back the voice_sample_id from a previous
-            # save (rather than asking for a new fragment) is pointing at a
-            # row that must survive.
-            if prior_voice_sample_id is not None and prior_voice_sample_id != voice_sample_id:
-                await repo.delete_voice_sample(user_id, prior_voice_sample_id)
-
-        if res.add_fragment and speaker_id is not None:
-            if not embedding_model:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        "cannot add voice fragment: task has no embedding model "
-                        "(diarization.json missing or incomplete)"
-                    ),
-                )
-            clips = previews.get(res.speaker_label) or []
-            if not clips:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"No preview fragment available for speaker_label {res.speaker_label!r}",
-                )
-            clip_path = Path(clips[0]["path"])
-            if not clip_path.exists():
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Preview fragment file missing: {clip_path}",
-                )
-            embedding = await diarization.embed(clip_path)
-            duration_sec = float(clips[0]["end"]) - float(clips[0]["start"])
-            sample = await repo.add_voice_sample(
-                speaker_id=speaker_id,
-                embedding=embedding,
-                embedding_model=embedding_model,
-                audio=clip_path.read_bytes(),
-                audio_format="wav",
-                duration_sec=duration_sec,
-                source_task_id=task_id,
-            )
-            voice_sample_id = sample.id
-
-        await repo.record_decision(
-            user_id=user_id,
-            source_task_id=task_id,
-            speaker_label=res.speaker_label,
-            speaker_id=speaker_id,
-            voice_sample_id=voice_sample_id,
-            distance=res.distance,
-            embedding_model=embedding_model,
-            outcome=res.outcome,
-            is_noise=res.is_noise,
-        )
-        results[res.speaker_label] = "resolved"
-
-    language = effective_language(
-        task.options if isinstance(task.options, dict) else {},
-        {"outputs": Path(task.artifact_dir) / "outputs"},
+    results = await _resolve(
+        session,
+        user_id=uuid.UUID(user.id),
+        task_id=task_id,
+        resolutions=payload.resolutions,
+        continue_task=payload.continue_task,
+        redis=redis,
+        settings=settings,
+        diarization=diarization,
     )
-    await rerender_transcript(task, session, language=language)
-
-    # The transcript just changed, so the corpus index describes text that is no
-    # longer there (vts-twe7). Re-indexing here rather than on the event keeps
-    # it in the same transaction as the rename — the alternative is a window
-    # where a search cites a speaker name the user has already corrected.
-    await reindex_task(session, task, settings)
-    await session.commit()
-
-    bus = RedisBus(redis, settings)
-    # Universal "transcript is whole again" signal (vts-at8): resolve/save
-    # re-rendered the transcript with new speaker names / noise flags, so
-    # the /player page and any other SPA tab re-fetch it live. Mirrors the
-    # event MergeTranscriptStep fires on first assembly.
-    await bus.publish_event(
-        user_id=str(user_id),
-        task_id=str(task_id),
-        event="transcript_updated",
-        data={"task_id": str(task_id)},
-    )
-    if payload.continue_task:
-        # Symmetric with /api/tasks/resume (vts-80i): clear any stale
-        # pause request before requeuing, so a leftover pause flag can't
-        # survive a resume through this path either.
-        await bus.clear_pause_request(task_id)
-        await repo.set_task_status(task, TaskStatus.queued)
-
-    await session.commit()
-
-    if payload.continue_task:
-        await bus.notify_queued()
-
     return BatchResultOut(results=results)
