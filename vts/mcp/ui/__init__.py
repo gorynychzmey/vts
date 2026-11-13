@@ -55,3 +55,12 @@ def search_view_html() -> str:
     values = {"CSS": _read(_HERE / "player.css"), "JS": js}
     return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "search.html"))
 
+
+@lru_cache(maxsize=1)
+def summary_view_html() -> str:
+    """The `ui://vts/summary` document: a recording's prompt results,
+    rendered from markdown in the view."""
+    js = "\n".join(_read(p) for p in (_HERE / "bridge.js", _HERE / "markdown.js", _HERE / "summary_main.js"))
+    values = {"CSS": _read(_HERE / "player.css"), "JS": js}
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "summary.html"))
+

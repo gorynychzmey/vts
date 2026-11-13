@@ -240,6 +240,12 @@ hosts: the passages found, "show more" while `total` says there are more, and
 each passage opening the player on its moment inside the view. The tool's
 result itself is unchanged — only its `_meta.ui` is new.
 
+`show_summary(recording_id, ref?)` opens a recording's summary in the
+`ui://vts/summary` view, with a switcher to the recording's other finished
+prompt results; switching reads them through `get_recording_prompt_result`.
+The view only reads: regenerating a result would restart the task's prompt
+step, which is not something a view does on a click.
+
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) — so a client can group them instead of showing one flat list:

@@ -35,6 +35,8 @@ class _Recording:
     duration_sec: float | None = 1800.0
     source_task_id: uuid.UUID | None = field(default_factory=uuid.uuid4)
     artifact_dir: str = "/nonexistent"
+    meta: dict = field(default_factory=dict)
+    summary_path: str | None = None
 
 
 class _Repo:
@@ -304,3 +306,67 @@ async def test_the_media_tool_is_app_only():
     async with Client(build_mcp_server()) as client:
         tools = {t.name: t for t in await client.list_tools()}
     assert tools["app_media_url"].meta["ui"]["visibility"] == ["app"]
+
+
+# ------------------------------------------------------------ summary (vts-vtma.5)
+
+def _with_results(tmp_path):
+    out = tmp_path / "outputs"
+    out.mkdir()
+    (out / "summary.md").write_text("# Итог\n\n- пункт", encoding="utf-8")
+    (out / "memo.md").write_text("Memo text", encoding="utf-8")
+    return _Recording(
+        id=uuid.uuid4(), artifact_dir=str(tmp_path), summary_path=str(out / "summary.md"),
+        meta={"prompt_results": [
+            {"source": "system", "id": "summary", "name": "Summary", "path": str(out / "summary.md"), "status": "completed"},
+            {"source": "user", "id": "m1", "name": "Memo", "path": str(out / "memo.md"), "status": "completed"},
+            {"source": "user", "id": "p2", "name": "Pending one", "path": str(out / "x.md"), "status": "pending"},
+        ]},
+    )
+
+
+async def test_show_summary_returns_the_result_and_the_switcher(client_for, tmp_path):
+    rec = _with_results(tmp_path)
+    async with client_for([rec], []) as client:
+        result = await client.call_tool("show_summary", {"recording_id": str(rec.id)})
+    data = result.structured_content
+    assert data["ref"] == "system:summary"
+    assert data["markdown"] == "# Итог\n\n- пункт"
+    # Only finished results can be switched to: a pending one has no text.
+    assert data["results"] == [
+        {"ref": "system:summary", "name": "Summary"},
+        {"ref": "user:m1", "name": "Memo"},
+    ]
+    text = result.content[0].text
+    assert "Summary, Memo" in text and "get_recording_prompt_result" in text
+    assert "пункт" not in text
+
+
+async def test_show_summary_can_open_on_another_result(client_for, tmp_path):
+    rec = _with_results(tmp_path)
+    async with client_for([rec], []) as client:
+        data = (await client.call_tool("show_summary", {"recording_id": str(rec.id), "ref": "user:m1"})).structured_content
+    assert data["ref"] == "user:m1"
+    assert data["markdown"] == "Memo text"
+
+
+async def test_show_summary_names_what_exists_when_asked_for_what_does_not(client_for, tmp_path):
+    rec = _with_results(tmp_path)
+    async with client_for([rec], []) as client:
+        result = await client.call_tool(
+            "show_summary", {"recording_id": str(rec.id), "ref": "user:nope"}, raise_on_error=False
+        )
+    assert result.is_error
+    assert "user:m1" in result.content[0].text
+
+
+async def test_the_summary_view_is_registered_and_self_contained():
+    from vts.mcp.server import build_mcp_server
+    from vts.mcp.tools_registry.apps import SUMMARY_URI
+
+    async with Client(build_mcp_server()) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        assert tools["show_summary"].meta["ui"] == {"resourceUri": SUMMARY_URI}
+        html = (await client.read_resource(SUMMARY_URI))[0].text
+    assert "VtsMarkdown" in html and "VtsAppBridge" in html
+    assert not re.search(r'<(script|link|img)[^>]+(src|href)=', html)

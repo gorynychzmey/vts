@@ -94,6 +94,60 @@ def _read_result_file(recording: Recording, raw_path: str) -> str:
         return ""
 
 
+def recording_prompt_result(recording: Recording, ref: str) -> PromptResult:
+    """One prompt result of a recording (a summary, a memo), by "source:id".
+
+    Shared by `get_recording_prompt_result` and the MCP Apps summary view
+    (vts-vtma.5). Raises 404 naming the refs that do exist.
+    """
+    results = (recording.meta or {}).get("prompt_results") or []
+    wanted = (ref or "").strip() or "system:summary"
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        entry_ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
+        if entry_ref == wanted or entry.get("ref") == wanted:
+            source, _, ident = wanted.partition(":")
+            # The entry stores a PATH, not the text: real rows look
+            # like {"source","id","name","path","status"}. Reading a
+            # "text" key that does not exist returned 200 with empty
+            # content — worse than the crash it replaced, because a
+            # caller cannot tell an empty summary from a broken reader.
+            content = entry.get("text") or entry.get("result") or ""
+            if not content and entry.get("path"):
+                content = _read_result_file(recording, entry["path"])
+            return PromptResult(
+                task_id=recording.source_task_id,
+                source=source,
+                id=ident,
+                content=content,
+            )
+    # Falling back to the summary artifact: the oldest recordings were
+    # created before results were snapshotted into meta, and for them
+    # the file on disk is the only copy.
+    if wanted == "system:summary":
+        try:
+            return PromptResult(
+                task_id=recording.source_task_id,
+                source="system",
+                id="summary",
+                content=read_recording_transcript(recording, "summary"),
+            )
+        except RecordingArtifactMissing:
+            pass
+    available = [
+        f"{e.get('source', '')}:{e.get('id', '')}"
+        for e in results if isinstance(e, dict)
+    ]
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"No prompt result {wanted!r} for this recording"
+            + (f"; available: {', '.join(available)}" if available else "")
+        ),
+    )
+
+
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
 
@@ -238,52 +292,7 @@ def register(mcp: FastMCP) -> None:
             )
             if recording is None:
                 raise HTTPException(status_code=404, detail="Recording not found")
-            results = (recording.meta or {}).get("prompt_results") or []
-            wanted = (ref or "").strip() or "system:summary"
-            for entry in results:
-                if not isinstance(entry, dict):
-                    continue
-                entry_ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
-                if entry_ref == wanted or entry.get("ref") == wanted:
-                    source, _, ident = wanted.partition(":")
-                    # The entry stores a PATH, not the text: real rows look
-                    # like {"source","id","name","path","status"}. Reading a
-                    # "text" key that does not exist returned 200 with empty
-                    # content — worse than the crash it replaced, because a
-                    # caller cannot tell an empty summary from a broken reader.
-                    content = entry.get("text") or entry.get("result") or ""
-                    if not content and entry.get("path"):
-                        content = _read_result_file(recording, entry["path"])
-                    return PromptResult(
-                        task_id=recording.source_task_id,
-                        source=source,
-                        id=ident,
-                        content=content,
-                    )
-            # Falling back to the summary artifact: the oldest recordings were
-            # created before results were snapshotted into meta, and for them
-            # the file on disk is the only copy.
-            if wanted == "system:summary":
-                try:
-                    return PromptResult(
-                        task_id=recording.source_task_id,
-                        source="system",
-                        id="summary",
-                        content=read_recording_transcript(recording, "summary"),
-                    )
-                except RecordingArtifactMissing:
-                    pass
-            available = [
-                f"{e.get('source', '')}:{e.get('id', '')}"
-                for e in results if isinstance(e, dict)
-            ]
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"No prompt result {wanted!r} for this recording"
-                    + (f"; available: {', '.join(available)}" if available else "")
-                ),
-            )
+            return recording_prompt_result(recording, ref)
 
     @mcp.tool(name="rename_recording", annotations=UPDATE)
     async def _rename_recording(recording_id: uuid.UUID, title: str) -> RecordingInfo:

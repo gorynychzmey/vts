@@ -60,6 +60,14 @@ view — it calls `show_recording` itself through the bridge and mounts the same
 `VtsPlayerView` as `ui://vts/player` — rather than asking the model to call a
 tool. A late answer for a passage the user already left is dropped.
 
+Done in part (vts-vtma.5): `show_summary` + `ui://vts/summary`, read-only,
+with a switcher between the recording's finished prompt results and a small
+DOM-building markdown renderer (no innerHTML). **Regeneration is not built**:
+the only way to run a prompt again is the task's `restart_summary`, which
+needs the task (gone for a detached recording) and, with a new prompt set,
+clears ALL the task's existing prompt results before re-running. Offering
+that behind a button is a product decision, left open.
+
 ## 4. Server side
 
 ### 4.1 Registration

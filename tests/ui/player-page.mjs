@@ -50,3 +50,13 @@ export function renderMcpSearchView() {
   if (r.status !== 0) throw new Error(`rendering the MCP search view failed: ${r.stderr}`);
   return r.stdout;
 }
+
+// The MCP Apps summary view (`ui://vts/summary`) as the server serves it.
+export function renderMcpSummaryView() {
+  const r = spawnSync(python(), ["-c",
+    "import sys; from vts.mcp.ui import summary_view_html; sys.stdout.write(summary_view_html())"], {
+    cwd: REPO, encoding: "utf8",
+  });
+  if (r.status !== 0) throw new Error(`rendering the MCP summary view failed: ${r.stderr}`);
+  return r.stdout;
+}

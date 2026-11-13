@@ -8,6 +8,10 @@ no existing tool changed its result for this.
 * `ui://vts/search` — the view on a `search_transcripts` result; a passage
   opens the same player inside it. `search_transcripts` itself only gains
   `_meta.ui` (registered in search.py); its result is unchanged.
+* `ui://vts/summary` + `show_summary` — a recording's summary and its other
+  prompt results, switchable in the view. Read-only: regenerating would
+  restart the task's prompt step and drop its other results, which is not a
+  view's decision to make.
 * `show_recording` — model-visible entry tool: "the user wants to look at this
   recording". Its result carries the first page of player blocks.
 * `app_player_blocks` — app-only (`visibility: ["app"]`): further pages, for
@@ -38,10 +42,11 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.annotations import READ_ONLY
 from vts.mcp.auth import mcp_authenticate
-from vts.mcp.ui import player_view_html, search_view_html
+from vts.mcp.ui import player_view_html, search_view_html, summary_view_html
 
 PLAYER_URI = "ui://vts/player"
 SEARCH_URI = "ui://vts/search"
+SUMMARY_URI = "ui://vts/summary"
 
 # Blocks per page. A block is one ASR segment or speaker turn, so a two-hour
 # recording is a handful of pages, and no single result carries the whole
@@ -97,6 +102,29 @@ def _summary_text(recording: Any, people: list[str], blocks: list[dict[str, Any]
     return " ".join(parts)
 
 
+def prompt_results_index(recording: Any) -> list[dict[str, str]]:
+    """The prompt results a recording has, as [{ref, name}], for the view's
+    switcher. Only completed ones: a pending entry has no text to show. The
+    summary file of an old recording (before results were snapshotted into
+    meta) counts as "system:summary"."""
+    from pathlib import Path
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in (getattr(recording, "meta", None) or {}).get("prompt_results") or []:
+        if not isinstance(entry, dict) or entry.get("status") not in (None, "completed"):
+            continue
+        ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
+        if ref in seen or ref == ":":
+            continue
+        seen.add(ref)
+        out.append({"ref": ref, "name": str(entry.get("name") or ref)})
+    summary = getattr(recording, "summary_path", None)
+    if "system:summary" not in seen and summary and Path(summary).exists():
+        out.insert(0, {"ref": "system:summary", "name": "Summary"})
+    return out
+
+
 def media_origin(public_base_url: str | None) -> str | None:
     """The origin media links point at: scheme and host of the public base
     URL, nothing else. None without one — then there is no media in the view,
@@ -139,6 +167,16 @@ def register(mcp: FastMCP) -> None:
     )
     def _search_view() -> str:
         return search_view_html()
+
+    @mcp.resource(
+        SUMMARY_URI,
+        name="vts_summary",
+        description="VTS summary: a recording's summary and other prompt results.",
+        mime_type=UI_MIME_TYPE,
+        app=AppConfig(prefers_border=True),
+    )
+    def _summary_view() -> str:
+        return summary_view_html()
 
     async def _recording_blocks(recording_id: uuid.UUID) -> tuple[Any, list[dict[str, Any]], list[str]]:
         factory = get_db_session_factory()
@@ -246,5 +284,50 @@ def register(mcp: FastMCP) -> None:
                 "kind": media_kind(media_file),
                 "expires_at": exp,
                 "reason": None,
+            },
+        )
+
+    @mcp.tool(
+        name="show_summary",
+        annotations=READ_ONLY,
+        app=AppConfig(resource_uri=SUMMARY_URI),
+    )
+    async def _show_summary(recording_id: uuid.UUID, ref: str = "system:summary") -> ToolResult:
+        """Show a recording's summary to the user in the VTS summary view,
+        with a switcher to the recording's other prompt results (memos, custom
+        prompts).
+
+        `ref` picks the result shown first: "system:summary" (default) or
+        "user:<prompt-uuid>". The text answer names the recording and the
+        results it has, not their text; to read or quote a result yourself,
+        use `get_recording_prompt_result`.
+        """
+        from vts.mcp.tools_registry.recordings import recording_prompt_result
+
+        factory = get_db_session_factory()
+        async with factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            recording = await Repo(session).get_recording_for_user(
+                uuid.UUID(user.id), recording_id
+            )
+            if recording is None:
+                raise HTTPException(status_code=404, detail="Recording not found")
+        index = prompt_results_index(recording)
+        result = recording_prompt_result(recording, ref)
+        wanted = f"{result.source}:{result.id}"
+        title = recording.title or "Untitled recording"
+        names = ", ".join(r["name"] for r in index) or "none"
+        return ToolResult(
+            content=(
+                f"Showing «{title}» ({wanted}) in the VTS summary view. "
+                f"Results available: {names}. To read or quote one, call "
+                f"get_recording_prompt_result with recording_id={recording.id}."
+            ),
+            structured_content={
+                "recording_id": str(recording.id),
+                "title": recording.title,
+                "ref": wanted,
+                "markdown": result.content,
+                "results": index,
             },
         )
