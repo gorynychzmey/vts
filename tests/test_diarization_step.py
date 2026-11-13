@@ -152,6 +152,32 @@ async def test_step_diarizes_trimmed_audio_when_present(tmp_path: Path) -> None:
     assert backend.calls == [dirs["media"] / "audio_16k_trimmed.wav"]
 
 
+async def test_speaker_times_are_on_the_source_timeline(tmp_path: Path) -> None:
+    """The sidecar answers in the trimmed audio's time; the player seeks in
+    the untrimmed media. The artifact must carry the source time, or every
+    speaker turn starts as early as the silence was long (vts-kb4z)."""
+    dirs = _dirs(tmp_path)
+    _write_silent_wav(dirs["media"] / "audio_16k_trimmed.wav", seconds=6.0)
+    (dirs["outputs"] / "audio_preprocess.json").write_text(
+        json.dumps({"trimmed_seconds": 2.5}), encoding="utf-8"
+    )
+
+    await DiarizeStep().run(_ctx(_FakeBackend()), _state(tmp_path, dirs, {"diarize": True}))
+
+    payload = json.loads((dirs["outputs"] / "diarization.json").read_text(encoding="utf-8"))
+    assert payload["segments"] == [{"start": 2.5, "end": 7.5, "speaker": "SPEAKER_00"}]
+    # The preview clip is still cut from the trimmed audio at the sidecar's own
+    # times: 5 s of a 6 s file. Cut at the shifted times it would run past the
+    # end and come out short.
+    clip = dirs["outputs"] / "preview_SPEAKER_00_0.wav"
+    duration = float(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(clip)],
+        check=True, capture_output=True, text=True,
+    ).stdout)
+    assert duration == pytest.approx(5.0, abs=0.05)
+
+
 async def test_step_already_done_when_artifact_exists(tmp_path: Path) -> None:
     dirs = _dirs(tmp_path)
     (dirs["outputs"] / "diarization.json").write_text("{}", encoding="utf-8")

@@ -314,3 +314,86 @@ async def test_player_endpoint_media_gone_returns_200_message(authed_app, client
     assert r.status_code == 200, r.text
     assert "data-media-unavailable" in r.text
     assert "<video" not in r.text and "<audio" not in r.text
+
+
+async def _seed_titled_task(factory, tmp_path, *, source_url, source_title=None):
+    from vts.db.repo import Repo
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir(exist_ok=True)
+    (media_dir / "audio.original.mp3").write_bytes(b"\x00\x00")
+    task_id = uuid.uuid4()
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url=source_url,
+            options={"transcript": True},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+            source_title=source_title,
+        )
+        await session.flush()
+        await repo.upsert_recording_for_task(task)
+        await session.commit()
+    return task_id
+
+
+def _heading(html: str) -> str:
+    match = re.search(r"<h1>(.*?)</h1>", html, re.S)
+    assert match, html[:500]
+    return match.group(1)
+
+
+_ON24 = (
+    "https://event.on24.com/eventRegistration/console/apollox/"
+    "mainEvent?simulive=y&eventid=5433815&sessionid=1&key=334551E715C9E8DA"
+)
+
+
+@pytest.mark.asyncio
+async def test_player_heading_is_the_recordings_name_not_the_url_tail(authed_app, client, tmp_path):
+    """The heading used to be the last path segment of source_url, so a
+    webinar link showed "mainEvent?simulive=y&eventid=…" above the video
+    while the recording had a perfectly good title (vts-kb4z)."""
+    _app, factory = authed_app
+    task_id = await _seed_titled_task(
+        factory, tmp_path, source_url=_ON24,
+        source_title="Lay the Foundation for Scaling AI Agents",
+    )
+
+    r = await client.get(f"/player/{task_id}")
+
+    assert r.status_code == 200, r.text
+    assert _heading(r.text) == "Lay the Foundation for Scaling AI Agents"
+    assert "<title>Lay the Foundation for Scaling AI Agents</title>" in r.text
+
+
+@pytest.mark.asyncio
+async def test_player_heading_follows_a_renamed_recording(authed_app, client, tmp_path):
+    """The library lets the user rename the recording itself; the player is
+    the same recording and carries the same name."""
+    _app, factory = authed_app
+    task_id = await _seed_titled_task(factory, tmp_path, source_url=_ON24, source_title="Original")
+    from vts.api._helpers.recordings import rename_recording
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        recording = await repo.upsert_recording_for_task(await repo.get_task_by_id(task_id))
+        await rename_recording(session, recording, "My name for it")
+        await session.commit()
+
+    r = await client.get(f"/player/{task_id}")
+
+    assert _heading(r.text) == "My name for it"
+
+
+@pytest.mark.asyncio
+async def test_player_heading_of_an_upload_is_its_file_name(authed_app, client, tmp_path):
+    _app, factory = authed_app
+    task_id = await _seed_titled_task(factory, tmp_path, source_url="file://meeting%202026.m4a")
+
+    r = await client.get(f"/player/{task_id}")
+
+    assert _heading(r.text) == "meeting 2026.m4a"

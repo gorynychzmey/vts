@@ -26,15 +26,18 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api._helpers.artifact_store import _load_player_blocks, shown_player_blocks
 from vts.api._helpers.base import _find_media_file
 from vts.api.deps import get_current_user, get_session_dep
 from vts.api.schemas import TextSliceOut
+from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.media_kind import media_content_type, media_kind
+from vts.services.recording_meta import recording_display_name
 from vts.services.subtitles import render_webvtt
 
 logger = logging.getLogger(__name__)
@@ -556,11 +559,16 @@ async def media_player(
     # Propagate admin impersonation through the page: the media <src>, the
     # SSE entries re-fetch, all must resolve as the same acting user.
     acting_as = request.query_params.get("as_user")
-    # source_url is "file://<name>" for uploads, an http URL otherwise;
-    # in either case the last path segment is a sensible display name.
-    title = (task.source_url or "").rsplit("/", 1)[-1] or (
-        media_file.name if media_file else "player"
+    # The recording's name, as the library shows it. The last path segment of
+    # source_url used to stand in for it, which put "mainEvent?simulive=y&…"
+    # above a webinar while the recording had a proper title (vts-kb4z).
+    recording = await session.scalar(
+        select(Recording).where(Recording.source_task_id == task.id)
     )
+    title = recording_display_name(
+        recording.title if recording is not None else task.source_title,
+        task.source_url,
+    ) or (media_file.name if media_file else "player")
     if media_file is None:
         # Media gone (TTL / archive / delete). Render a human-readable
         # "unavailable" page (200), not a raw 404 (vts-at8). No player,

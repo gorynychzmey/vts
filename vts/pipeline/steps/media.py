@@ -21,6 +21,7 @@ from vts.services.media import (
     probe_duration,
     trim_initial_silence,
 )
+from vts.services.source_timeline import source_offset
 from vts.services.storage import write_json
 from vts.pipeline.steps.base import Step, StepState
 
@@ -505,12 +506,16 @@ class SegmentAudioStep(Step):
         async with ctx.session_factory() as session:
             repo = Repo(session)
             await repo.clear_asr_for_task(st.task_id)
+            # The placeholders carry the source media's time, like the rows
+            # transcription writes over them (vts-kb4z); the manifest keeps
+            # the trimmed audio's, which is where the chunks were cut.
+            offset = source_offset(st.dirs["outputs"])
             for spec in specs:
                 await repo.upsert_asr_segment_payload(
                     task_id=st.task_id,
                     segment_index=int(spec["segment_index"]),
-                    start_sec=float(spec["start"]),
-                    end_sec=float(spec["end"]),
+                    start_sec=float(spec["start"]) + offset,
+                    end_sec=float(spec["end"]) + offset,
                     text="",
                     raw_json={},
                 )

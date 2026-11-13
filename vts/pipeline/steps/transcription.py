@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from vts.db.repo import Repo
 from vts.services.asr_payload import segment_raw_payload
 from vts.services.indexing import reindex_task
+from vts.services.source_timeline import source_offset
 from vts.services.diarization.merge import (
     SENTENCE_SPLIT_RE,
     drop_marginal_speakers,
@@ -431,6 +432,10 @@ class TranscribeSegmentsStep(Step):
         }
         transcript_txt = st.dirs["outputs"] / "transcript.txt"
         _need_set_transcript_path = not transcript_txt.exists()
+        # Chunks are cut from the trimmed audio, so the manifest's times start
+        # where the speech starts; the row carries the source media's time,
+        # which is what the player and search seek in (vts-kb4z).
+        timeline_offset = source_offset(st.dirs["outputs"])
         for spec in missing:
             await ctx.check_paused(st.task_id)
             idx = int(spec["segment_index"])
@@ -522,8 +527,8 @@ class TranscribeSegmentsStep(Step):
                 seg = await repo.upsert_asr_segment_payload(
                     task_id=st.task_id,
                     segment_index=idx,
-                    start_sec=start,
-                    end_sec=end,
+                    start_sec=start + timeline_offset,
+                    end_sec=end + timeline_offset,
                     text=text,
                     raw_json=raw,
                 )

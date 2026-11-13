@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from vts.pipeline.steps.base import Step, StepState
 from vts.services.media import probe_duration, run_ffmpeg
+from vts.services.source_timeline import shift_spans, source_offset
 from vts.services.storage import write_json
 
 if TYPE_CHECKING:
@@ -224,7 +225,12 @@ class DiarizeStep(Step):
                 "empty artifact that would silently render as a monologue"
             )
 
-        write_json(output, payload)
+        # The sidecar answered in the trimmed audio's time; the artifact is
+        # read against the untrimmed media, so it carries the source time
+        # (vts-kb4z). `payload` keeps the working-audio times for cutting the
+        # preview clips below, which come out of that same trimmed file.
+        offset = source_offset(st.dirs["outputs"])
+        write_json(output, {**payload, "segments": shift_spans(payload["segments"], offset)})
         st.logger.info("diarization finished: speakers=%s", payload.get("num_speakers"))
 
         # Cut representative preview clips per speaker, so a human can later
