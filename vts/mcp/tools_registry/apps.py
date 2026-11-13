@@ -4,7 +4,10 @@ Tools stay primary. A host without MCP Apps support sees `show_recording` as
 an ordinary tool with a short text answer, and ignores the `ui://` resource;
 no existing tool changed its result for this.
 
-* `ui://vts/player` — the player view (transcript now, media in a later step).
+* `ui://vts/player` — the player view: transcript and media.
+* `ui://vts/search` — the view on a `search_transcripts` result; a passage
+  opens the same player inside it. `search_transcripts` itself only gains
+  `_meta.ui` (registered in search.py); its result is unchanged.
 * `show_recording` — model-visible entry tool: "the user wants to look at this
   recording". Its result carries the first page of player blocks.
 * `app_player_blocks` — app-only (`visibility: ["app"]`): further pages, for
@@ -35,9 +38,10 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.annotations import READ_ONLY
 from vts.mcp.auth import mcp_authenticate
-from vts.mcp.ui import player_view_html
+from vts.mcp.ui import player_view_html, search_view_html
 
 PLAYER_URI = "ui://vts/player"
+SEARCH_URI = "ui://vts/search"
 
 # Blocks per page. A block is one ASR segment or speaker turn, so a two-hour
 # recording is a handful of pages, and no single result carries the whole
@@ -124,6 +128,17 @@ def register(mcp: FastMCP) -> None:
     )
     def _player_view() -> str:
         return player_view_html()
+
+    @mcp.resource(
+        SEARCH_URI,
+        name="vts_search",
+        description="VTS search results: passages that open the player on their moment.",
+        mime_type=UI_MIME_TYPE,
+        # Same CSP as the player: the view plays media once a passage is open.
+        app=player_app_config(get_settings().public_base_url),
+    )
+    def _search_view() -> str:
+        return search_view_html()
 
     async def _recording_blocks(recording_id: uuid.UUID) -> tuple[Any, list[dict[str, Any]], list[str]]:
         factory = get_db_session_factory()

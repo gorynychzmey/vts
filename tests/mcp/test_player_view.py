@@ -134,8 +134,24 @@ async def test_existing_tools_carry_no_view():
 
     async with Client(build_mcp_server()) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    for name in ("get_transcript", "get_recording_transcript", "search_transcripts"):
+    for name in ("get_transcript", "get_recording_transcript"):
         assert "ui" not in (tools[name].meta or {}), name
+
+
+async def test_search_results_open_in_the_search_view():
+    # search_transcripts gains only _meta.ui; its result schema is the one
+    # clients already parse (vts-vtma.4).
+    from vts.mcp.server import build_mcp_server
+    from vts.mcp.tools_registry.apps import SEARCH_URI
+
+    async with Client(build_mcp_server()) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        search = tools["search_transcripts"]
+        assert search.meta["ui"] == {"resourceUri": SEARCH_URI}
+        assert set(search.outputSchema["properties"]) >= {"query", "threshold", "total", "hits"}
+        html = (await client.read_resource(SEARCH_URI))[0].text
+    assert "VtsPlayerView" in html and "VtsAppBridge" in html
+    assert not re.search(r'<(script|link|img)[^>]+(src|href)=', html)
 
 
 # ------------------------------------------------------------ the entry tool

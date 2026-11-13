@@ -235,6 +235,11 @@ expires. Clicking a sentence seeks the media, and the playing sentence is
 highlighted. The view's CSP allows media from the public origin only. Without
 a public base URL the view shows the transcript alone.
 
+`search_transcripts` results open in the `ui://vts/search` view in the same
+hosts: the passages found, "show more" while `total` says there are more, and
+each passage opening the player on its moment inside the view. The tool's
+result itself is unchanged — only its `_meta.ui` is new.
+
 **Every MCP tool declares whether it reads or writes**, through the standard
 `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`) — so a client can group them instead of showing one flat list:

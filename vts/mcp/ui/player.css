@@ -41,3 +41,17 @@ body { padding: 12px 16px; box-sizing: border-box; }
 .autoscroll-toggle { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 8px;
   color: var(--vts-muted); font-size: 0.85rem; cursor: pointer; }
 .autoscroll-toggle input { cursor: pointer; }
+/* Search view (ui://vts/search): the list of passages, and the way back
+   from the player to it. */
+.hits { list-style: none; margin: 0; padding: 0; }
+.hit { padding: 8px 6px; border-radius: 6px; cursor: pointer; }
+.hit + .hit { border-top: 1px solid var(--vts-hover); }
+.hit:hover { background: var(--vts-hover); }
+.hit:focus-visible { outline: 2px solid #7aa; outline-offset: 1px; }
+.hit-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; font-size: 0.85rem; }
+.hit-title { font-weight: 600; overflow-wrap: anywhere; }
+.hit-when, .hit-who { color: var(--vts-muted); }
+.hit-text { margin: 2px 0 0; line-height: 1.5; }
+.more, .back { font: inherit; font-size: 0.85rem; color: var(--vts-fg); background: var(--vts-hover);
+  border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; margin: 8px 0; }
+[hidden] { display: none !important; }

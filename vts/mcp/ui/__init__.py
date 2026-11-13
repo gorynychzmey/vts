@@ -28,7 +28,30 @@ def player_view_html() -> str:
     never baked in, so a host can cache and pre-check it."""
     js = "\n".join(
         _read(p)
-        for p in (_PLAYER_CORE, _HERE / "bridge.js", _HERE / "player_view.js")
+        for p in (
+            _PLAYER_CORE,
+            _HERE / "bridge.js",
+            _HERE / "player_view.js",
+            _HERE / "player_main.js",
+        )
     )
     values = {"CSS": _read(_HERE / "player.css"), "JS": js}
     return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "player.html"))
+
+
+@lru_cache(maxsize=1)
+def search_view_html() -> str:
+    """The `ui://vts/search` document: search results, each opening the same
+    player as `ui://vts/player` inside the view."""
+    js = "\n".join(
+        _read(p)
+        for p in (
+            _PLAYER_CORE,
+            _HERE / "bridge.js",
+            _HERE / "player_view.js",
+            _HERE / "search_main.js",
+        )
+    )
+    values = {"CSS": _read(_HERE / "player.css"), "JS": js}
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _read(_HERE / "search.html"))
+

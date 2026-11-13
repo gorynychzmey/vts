@@ -55,6 +55,11 @@ look at this", returns a short text summary for the model, and leaves the read
 tools untouched. `search_transcripts` is the exception: its result already is
 what the view shows, so it only gains `_meta.ui.resourceUri`.
 
+Done (vts-vtma.4): the search view opens a passage in the player INSIDE the
+view — it calls `show_recording` itself through the bridge and mounts the same
+`VtsPlayerView` as `ui://vts/player` — rather than asking the model to call a
+tool. A late answer for a passage the user already left is dropped.
+
 ## 4. Server side
 
 ### 4.1 Registration

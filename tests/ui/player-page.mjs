@@ -40,3 +40,13 @@ export function renderMcpPlayerView() {
   if (r.status !== 0) throw new Error(`rendering the MCP player view failed: ${r.stderr}`);
   return r.stdout;
 }
+
+// The MCP Apps search view (`ui://vts/search`) as the server serves it.
+export function renderMcpSearchView() {
+  const r = spawnSync(python(), ["-c",
+    "import sys; from vts.mcp.ui import search_view_html; sys.stdout.write(search_view_html())"], {
+    cwd: REPO, encoding: "utf8",
+  });
+  if (r.status !== 0) throw new Error(`rendering the MCP search view failed: ${r.stderr}`);
+  return r.stdout;
+}

@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.apps.config import AppConfig
 from fastmcp.exceptions import ToolError
 
 from vts.db.session import get_db_session_factory
@@ -77,7 +78,13 @@ def hit_links(
 def register(mcp: FastMCP) -> None:
     """Register this domain's tools on `mcp`."""
 
-    @mcp.tool(name="search_transcripts", annotations=READ_ONLY)
+    # The result is shown in the ui://vts/search view by MCP Apps hosts
+    # (vts-vtma.4); other hosts get exactly the result they always did.
+    @mcp.tool(
+        name="search_transcripts",
+        annotations=READ_ONLY,
+        app=AppConfig(resource_uri="ui://vts/search"),
+    )
     async def _search_transcripts(
         query: str,
         limit: int = 20,
