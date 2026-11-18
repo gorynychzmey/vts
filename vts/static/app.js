@@ -1228,9 +1228,23 @@ function estimateFinalSummaryWeight(runtime) {
   return Number.isFinite(serverFinalFallback) ? serverFinalFallback : FINAL_SUMMARY_WEIGHT_FALLBACK_SECONDS;
 }
 
+// Diarization runs over the same audio as transcription and takes about as
+// long: on production tasks that diarized, 0.65-2.2x, median ~1.0. It has no
+// median of its own to read, because on every task that does not ask for it
+// the step completes in 0 s and drags that median to nothing — which left a
+// 1-second placeholder against ~240 s of transcription, and a diarized task at
+// 100% the moment transcription ended.
+const DIARIZE_TO_TRANSCRIBE = 1.0;
+
 function getStepWeight(runtime, stepName) {
   if (stepName === "summarize_final" || stepName.startsWith("finalize:")) {
     return estimateFinalSummaryWeight(runtime);
+  }
+  if (stepName === "diarize") {
+    // Not asked for: the step is empty, so it must not hold back the bar.
+    return runtime && runtime.diarizeEnabled
+      ? getStepWeight(runtime, "transcribe_segments") * DIARIZE_TO_TRANSCRIBE
+      : 0;
   }
   const serverVal = serverStepWeights ? Number(serverStepWeights[stepName]) : NaN;
   if (Number.isFinite(serverVal) && serverVal > 0) {
@@ -1894,6 +1908,7 @@ function createRuntime(task) {
     queuePosition: parseQueuePosition(task.queue_position),
     queue: task.queue || null,
     capabilities: task.capabilities || {},
+    diarizeEnabled: Boolean(task.options && task.options.diarize),
     enabledSteps,
     stepStatusByName,
     transcriptReady: Boolean(task.transcript_path),
@@ -1941,7 +1956,8 @@ function createRuntime(task) {
     diarize: {
       step: "",
       current: 0,
-      total: 0
+      total: 0,
+      peak: 0
     },
     summary: {
       current: summaryProgress.current,
@@ -2058,6 +2074,12 @@ function computeActiveStepLocalProgress(runtime, active) {
       const current = Math.max(0, Math.min(runtime.diarize.current, runtime.diarize.total));
       value = normalizeProgress(current / runtime.diarize.total);
       textOverride = `${current}/${runtime.diarize.total}`;
+    } else if (runtime.diarize.peak > 0) {
+      // A phase after the embeddings pass (clustering) carries no total
+      // either. Holding what embeddings reached keeps the bar from falling
+      // back — with diarization now weighted like transcription, that fall
+      // was half the overall bar.
+      value = runtime.diarize.peak;
     } else {
       indeterminate = true;
     }
@@ -4891,6 +4913,10 @@ function patchDiarizeProgress(taskId, step, current, total) {
   runtime.diarize.step = String(step || "");
   runtime.diarize.current = Number(current) || 0;
   runtime.diarize.total = Number(total) || 0;
+  if (runtime.diarize.step === "embeddings" && runtime.diarize.total > 0) {
+    const reached = Math.min(1, runtime.diarize.current / runtime.diarize.total);
+    runtime.diarize.peak = Math.max(runtime.diarize.peak || 0, reached);
+  }
   renderTaskRuntime(taskEl);
 }
 
