@@ -4256,6 +4256,7 @@ async function createTask(event) {
     }
     updateHeadTail();
     forgetOwnTask(created.id);
+    void reconcileCreatedTask(String(created.id));
     void refreshQueuePositions();
   } else {
     await loadFirstPage();
@@ -4556,6 +4557,59 @@ async function refreshTaskInPlace(taskId) {
     runtime.promptResults = task.options.prompt_results;
   }
   renderTaskRuntime(taskEl);
+}
+
+// Catch a card this tab just created up with what happened before it existed.
+// The server publishes task_status before answering the create/finalize
+// request, and a free worker claims the task and publishes "running" in that
+// same window. Those events find no card and are dropped, and the card is then
+// rendered from the response — a snapshot from creation time. Nothing re-sends
+// "running", so the card said "queue #1" for the whole run. Read the task once
+// the card is in the DOM: any event published after that reaches the card
+// itself, so between them nothing is lost.
+async function reconcileCreatedTask(taskId) {
+  const taskEl = findTaskEl(taskId);
+  if (!taskEl || !taskEl._runtime) return;
+  const runtime = taskEl._runtime;
+  const statusBefore = runtime.baseStatus;
+  let task;
+  try {
+    task = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+  } catch {
+    return;
+  }
+  if (taskEl._runtime !== runtime || !task) return;
+  // Fill only steps no event has reported: an event that arrived during the
+  // fetch is newer than the response.
+  (Array.isArray(task.steps) ? task.steps : []).forEach((step) => {
+    const stepName = String((step && step.name) || "");
+    if (stepName && !(stepName in runtime.stepStatusByName)) {
+      runtime.stepStatusByName[stepName] = String(step.status || "");
+    }
+  });
+  if (!runtime.currentStepName) {
+    const runningStep = findStep(task, "running");
+    if (runningStep) {
+      runtime.currentStepName = runningStep.name;
+      runtime.currentStepStartedAt = parseIsoMs(runningStep.started_at);
+    }
+  }
+  if (!runtime.taskStartedAt) runtime.taskStartedAt = computeTaskStartedAt(task);
+  if (!runtime.completedStepMs) runtime.completedStepMs = computeCompletedStepMs(task);
+  // Same reasoning for the status: if an event moved it while the request was
+  // in flight, the response may predate that event and must not undo it.
+  if (runtime.baseStatus === statusBefore && String(task.status || "") !== statusBefore) {
+    patchTaskStatus(
+      taskId,
+      task.status,
+      task.error || "",
+      task.failure_code || "",
+      task.queue,
+      typeof task.awaiting_step === "string" ? task.awaiting_step : undefined,
+    );
+  } else {
+    renderTaskRuntime(taskEl);
+  }
 }
 
 function patchTaskStatus(taskId, status, errorMessage = "", failureCode = "", queue = undefined, awaitingStep = undefined) {
