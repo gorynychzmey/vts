@@ -102,6 +102,46 @@ def test_hallucination_leaves_ordinary_speech_alone() -> None:
     assert is_probable_asr_hallucination(text) is False
 
 
+_ROLLING_PHRASES = [
+    "wir haben den plan für das nächste quartal",
+    "besprochen und uns darauf geeinigt mit",
+    "der prüfung der infrastruktur zu beginnen",
+    "danach ziehen wir die dienste schrittweise um",
+    "und am ende schauen wir uns die kosten an",
+    "falls etwas schiefgeht gibt es einen rückweg",
+    "die details klären wir in der nächsten woche",
+    "bis dahin sammelt jeder seine offenen fragen",
+]
+
+
+def _rolling_loop(repeats: int) -> str:
+    # The shape whisper.cpp produced in production (2026-11-18): lowercase, no
+    # punctuation, and each short line emitted `repeats` times before the
+    # decoder moves on to the next one.
+    return " ".join(" ".join([phrase] * repeats) for phrase in _ROLLING_PHRASES)
+
+
+def test_hallucination_flags_a_rolling_phrase_loop() -> None:
+    """Every line said three times: no single word dominates and there is no
+    sentence punctuation, so neither the token-frequency nor the repeated-edge
+    signal fires. Only n-gram repetition sees it. In production such a segment
+    reached the transcript because the retry never ran."""
+    assert is_probable_asr_hallucination(_rolling_loop(3)) is True
+
+
+def test_hallucination_leaves_the_same_text_without_the_loop_alone() -> None:
+    """Same words, same missing punctuation, said once: unpunctuated lowercase
+    output is a whisper.cpp output mode, not a symptom."""
+    assert is_probable_asr_hallucination(_rolling_loop(1)) is False
+
+
+def test_hallucination_tolerates_a_phrase_said_twice_in_long_speech() -> None:
+    # Speakers restate a point; one phrase repeated once in a long stretch of
+    # speech stays well under the n-gram threshold.
+    text = " ".join(_ROLLING_PHRASES[:5]) + " " + _ROLLING_PHRASES[2] + " " + " ".join(_ROLLING_PHRASES[5:])
+    assert is_probable_asr_hallucination(text) is False
+
+
 def test_hallucination_tolerates_natural_repetition() -> None:
     """One frequent word is not enough — two of three signals are required."""
     text = (
