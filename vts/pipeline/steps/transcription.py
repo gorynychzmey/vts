@@ -78,15 +78,32 @@ def normalize_token(value: str) -> str:
 _NGRAM_SIZE = 6
 _NGRAM_MIN_TOKENS = 30
 _NGRAM_REPEAT_RATIO = 0.15
+# A loop in one place of an otherwise clean segment is diluted by the ratio
+# above ("how do we get access to it" 14 times scored 0.134). Count the most
+# repeated n-gram as well: in the same 1473 segments no clean one repeats an
+# n-gram more than 7 times, none repeats one exactly 8 times, and from 9 up it
+# is a loop.
+_NGRAM_MAX_REPEATS = 9
+
+
+def _ngram_counts(tokens: list[str], n: int) -> Counter[tuple[str, ...]]:
+    return Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
 
 
 def repeated_ngram_ratio(tokens: list[str], n: int = _NGRAM_SIZE) -> float:
     """Share of the text's n-grams that occur more than once."""
     if len(tokens) < n:
         return 0.0
-    counts = Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+    counts = _ngram_counts(tokens, n)
     total = len(tokens) - n + 1
     return sum(count for count in counts.values() if count > 1) / float(total)
+
+
+def max_ngram_repeats(tokens: list[str], n: int = _NGRAM_SIZE) -> int:
+    """How many times the most frequent n-gram of the text occurs."""
+    if len(tokens) < n:
+        return 0
+    return max(_ngram_counts(tokens, n).values())
 
 
 def is_probable_asr_hallucination(text: str) -> bool:
@@ -100,7 +117,10 @@ def is_probable_asr_hallucination(text: str) -> bool:
     # A loop of whole phrases is decisive on its own: segments like that
     # often keep a healthy word variety, so the two-of-three vote below misses
     # them.
-    if len(tokens) >= _NGRAM_MIN_TOKENS and repeated_ngram_ratio(tokens) > _NGRAM_REPEAT_RATIO:
+    if len(tokens) >= _NGRAM_MIN_TOKENS and (
+        repeated_ngram_ratio(tokens) > _NGRAM_REPEAT_RATIO
+        or max_ngram_repeats(tokens) >= _NGRAM_MAX_REPEATS
+    ):
         return True
 
     token_counts = Counter(tokens)

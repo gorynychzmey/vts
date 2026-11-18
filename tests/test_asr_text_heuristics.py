@@ -15,6 +15,7 @@ import pytest
 from vts.pipeline.steps.transcription import (
     is_probable_asr_hallucination,
     normalize_token,
+    repeated_ngram_ratio,
     tail_prompt,
     transcript_quality_score,
     trim_repetitive_edges,
@@ -139,6 +140,27 @@ def test_hallucination_tolerates_a_phrase_said_twice_in_long_speech() -> None:
     # Speakers restate a point; one phrase repeated once in a long stretch of
     # speech stays well under the n-gram threshold.
     text = " ".join(_ROLLING_PHRASES[:5]) + " " + _ROLLING_PHRASES[2] + " " + " ".join(_ROLLING_PHRASES[5:])
+    assert is_probable_asr_hallucination(text) is False
+
+
+def test_hallucination_flags_a_local_loop_in_a_long_clean_segment() -> None:
+    """A loop in one place is diluted by the ratio over the whole segment;
+    nine occurrences of one phrase are a loop wherever they sit."""
+    loop = " ".join(["wie kommen wir an die daten"] * 9)
+    speech = " ".join(f"wort{i}" for i in range(600))
+    text = " ".join(_ROLLING_PHRASES) + " " + loop + " " + speech
+    # Guard the premise: the ratio alone must not catch this.
+    tokens = [normalize_token(t) for t in text.split()]
+    assert repeated_ngram_ratio(tokens) < 0.1
+    assert is_probable_asr_hallucination(text) is True
+
+
+def test_hallucination_tolerates_a_phrase_repeated_a_few_times() -> None:
+    # A lecturer's catchphrase said several times over five minutes: under
+    # nine occurrences it is speech, not a loop.
+    phrase = "am ende des tages zählt das ergebnis"
+    filler = [" ".join(f"wort{j}{i}" for i in range(60)) for j in range(7)]
+    text = " ".join(f"{phrase} {chunk}" for chunk in filler)
     assert is_probable_asr_hallucination(text) is False
 
 
