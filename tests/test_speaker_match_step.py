@@ -83,10 +83,29 @@ class _FakeRepo:
         key = tuple(embedding)
         return self._ranked_by_label.get(key, [])
 
+    # Recording decisions when no human is needed.
+    decisions: list[dict]
+    has_decisions = False
+
+    async def has_decisions_for_task(self, user_id, task_id):
+        return self.has_decisions
+
+    async def record_decision(self, **kwargs):
+        self.__dict__.setdefault("decisions", []).append(kwargs)
+
+    async def get_task_by_id(self, task_id):
+        return None
+
+    async def commit(self):
+        return None
+
 
 class _FakeSession:
     async def __aenter__(self):
         return self
+
+    async def commit(self):
+        return None
 
     async def __aexit__(self, *exc):
         return False
@@ -410,3 +429,53 @@ async def test_run_flags_speaker_without_transcript_entries_as_noise(tmp_path: P
     matches = json.loads((dirs["outputs"] / "speaker_matches.json").read_text(encoding="utf-8"))
     assert matches["SPEAKER_SILENT"]["noise"] is True
     assert matches["SPEAKER_00"]["noise"] is False
+
+
+async def test_run_records_decisions_when_every_voice_matched(tmp_path: Path) -> None:
+    """Names in the transcript come from saved decisions; a task whose voices
+    all matched must not finish as "Speaker 1/2" until someone presses Save."""
+    dirs = _dirs(tmp_path)
+    diar = {"embedding_model": "ecapa", "embeddings": {"SPEAKER_00": [0.0, 0.0], "SPEAKER_01": [1.0, 1.0]}}
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(diar), encoding="utf-8")
+    alice, bob = _FakeSpeaker(uuid.uuid4(), "Alice"), _FakeSpeaker(uuid.uuid4(), "Bob")
+    repo = _FakeRepo({(0.0, 0.0): [(alice, 0.1)], (1.0, 1.0): [(bob, 0.12)]})
+    ctx = _ctx(repo)
+    _wire_repo_override(ctx, repo)
+
+    assert await MatchSpeakersStep().run(ctx, _state(dirs, {"diarize": True})) is True
+
+    by_label = {d["speaker_label"]: d for d in repo.decisions}
+    assert by_label["SPEAKER_00"]["speaker_id"] == alice.id
+    assert by_label["SPEAKER_01"]["speaker_id"] == bob.id
+    assert {d["outcome"] for d in repo.decisions} == {"auto_matched"}
+    assert all(d["voice_sample_id"] is None for d in repo.decisions)
+
+
+async def test_run_records_nothing_while_a_voice_waits_for_a_human(tmp_path: Path) -> None:
+    """The dialog tells "decided: anonymous" from "not decided" by whether a
+    decision exists, so an unmatched voice must have none."""
+    dirs = _dirs(tmp_path)
+    diar = {"embedding_model": "ecapa", "embeddings": {"SPEAKER_00": [0.0, 0.0], "SPEAKER_01": [1.0, 1.0]}}
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(diar), encoding="utf-8")
+    alice = _FakeSpeaker(uuid.uuid4(), "Alice")
+    repo = _FakeRepo({(0.0, 0.0): [(alice, 0.1)], (1.0, 1.0): [(alice, 0.4)]})
+    ctx = _ctx(repo)
+    _wire_repo_override(ctx, repo)
+
+    # speaker_no_manual_stop: the task does not pause, yet SPEAKER_01 is unresolved.
+    assert await MatchSpeakersStep().run(ctx, _state(dirs, {"diarize": True, "speaker_no_manual_stop": True})) is True
+    assert getattr(repo, "decisions", []) == []
+
+
+async def test_a_rerun_keeps_what_the_user_saved(tmp_path: Path) -> None:
+    dirs = _dirs(tmp_path)
+    diar = {"embedding_model": "ecapa", "embeddings": {"SPEAKER_00": [0.0, 0.0]}}
+    (dirs["outputs"] / "diarization.json").write_text(json.dumps(diar), encoding="utf-8")
+    alice = _FakeSpeaker(uuid.uuid4(), "Alice")
+    repo = _FakeRepo({(0.0, 0.0): [(alice, 0.1)]})
+    repo.has_decisions = True
+    ctx = _ctx(repo)
+    _wire_repo_override(ctx, repo)
+
+    assert await MatchSpeakersStep().run(ctx, _state(dirs, {"diarize": True})) is True
+    assert getattr(repo, "decisions", []) == []

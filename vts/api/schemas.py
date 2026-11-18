@@ -769,6 +769,7 @@ class VoiceResolution(BaseModel):
     distance: float | None = None
     voice_sample_id: str | None = None  # winning fragment for the decision
     outcome: str  # confirmed | rejected | manual_match | auto_accepted | auto_overridden | left_anonymous
+    # (the pipeline itself records auto_matched / auto_noise when no human is needed)
     is_noise: bool = False
 
 

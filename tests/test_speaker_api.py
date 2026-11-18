@@ -740,8 +740,10 @@ async def test_rebinding_speaker_label_deletes_prior_fragment_from_same_task(
             artifact_dir=str(tmp_path / "other_task"),
         )
         other_task_id = other_task.id
+        # A different direction from the clip the fake backend embeds: a
+        # constant vector of any size is the SAME fragment by cosine distance.
         old_sample = await repo.add_voice_sample(
-            speaker_id=person_a.id, embedding=[0.05] * 256, embedding_model="ecapa",
+            speaker_id=person_a.id, embedding=[1.0] + [0.0] * 255, embedding_model="ecapa",
             audio=b"OLD_AUDIO_A", audio_format="wav", duration_sec=2.0,
             source_task_id=other_task_id,
         )
@@ -1290,3 +1292,108 @@ async def test_voice_samples_endpoint_returns_newest_first(client, authed_app):
     assert [s["duration_sec"] for s in body] == [3.0, 2.0, 1.0], body
     stamps = [s["created_at"] for s in body]
     assert stamps == sorted(stamps, reverse=True), stamps
+
+
+async def _bind_existing(client, task_id, speaker_id):
+    return await client.post(
+        f"/api/tasks/{task_id}/speakers",
+        json={
+            "resolutions": [
+                {
+                    "speaker_label": "SPEAKER_00",
+                    "action": "bind_existing",
+                    "speaker_id": speaker_id,
+                    "add_fragment": True,
+                    "outcome": "manual_match",
+                }
+            ],
+            "continue_task": False,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_same_fragment_from_another_task_is_not_added_again(client, authed_app, tmp_path):
+    """Deleting a task and running the same file again cut the same clip and
+    added it a second time (2026-11-18): the per-task rollback only knows the
+    fragments of the task being saved, and the deleted task's decisions no
+    longer point at it. The person's fragment list then held one clip twice,
+    counted twice by every later match."""
+    app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        sp = await Repo(session).create_speaker(uuid.UUID(_TEST_USER_ID), "Вася")
+        await session.commit()
+        speaker_id = str(sp.id)
+
+    _override_diarization_backend(app, _FakeDiarizationBackend([0.2] * 256))
+    first_task, _ = await _seed_task_with_preview(factory, tmp_path / "first")
+    second_task, _ = await _seed_task_with_preview(factory, tmp_path / "second")
+
+    assert (await _bind_existing(client, first_task, speaker_id)).status_code == 200
+    r = await _bind_existing(client, second_task, speaker_id)
+    assert r.status_code == 200, r.text
+
+    async with factory() as session:
+        repo = Repo(session)
+        samples = await repo.list_voice_samples(uuid.UUID(speaker_id))
+        assert len(samples) == 1
+        kept = samples[0].id
+        # The second task's decision still names the fragment it matched.
+        prior = await repo.find_prior_decision_sample(uuid.UUID(_TEST_USER_ID), second_task, "SPEAKER_00")
+        assert prior == (uuid.UUID(speaker_id), kept)
+
+
+@pytest.mark.asyncio
+async def test_a_different_fragment_of_the_same_person_is_still_added(client, authed_app, tmp_path):
+    app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        sp = await Repo(session).create_speaker(uuid.UUID(_TEST_USER_ID), "Вася")
+        await session.commit()
+        speaker_id = str(sp.id)
+
+    first_task, _ = await _seed_task_with_preview(factory, tmp_path / "first")
+    second_task, _ = await _seed_task_with_preview(factory, tmp_path / "second")
+
+    _override_diarization_backend(app, _FakeDiarizationBackend([1.0] + [0.0] * 255))
+    assert (await _bind_existing(client, first_task, speaker_id)).status_code == 200
+    # Another recording of the same voice: close, but not the same clip (the
+    # nearest pair of distinct fragments in production sits at 0.17).
+    _override_diarization_backend(app, _FakeDiarizationBackend([1.0, 0.5] + [0.0] * 254))
+    assert (await _bind_existing(client, second_task, speaker_id)).status_code == 200
+
+    async with factory() as session:
+        assert len(await Repo(session).list_voice_samples(uuid.UUID(speaker_id))) == 2
+
+
+@pytest.mark.asyncio
+async def test_rebinding_never_deletes_a_fragment_another_task_contributed(client, authed_app, tmp_path):
+    """A decision can now point at a fragment another recording added. Saving
+    that task's dialog again rolls back "its" previous fragment — which must
+    not take the other recording's fragment with it."""
+    app, factory = authed_app
+    from vts.db.repo import Repo
+
+    async with factory() as session:
+        repo = Repo(session)
+        a = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "A")
+        b = await repo.create_speaker(uuid.UUID(_TEST_USER_ID), "B")
+        await session.commit()
+        a_id, b_id = str(a.id), str(b.id)
+
+    _override_diarization_backend(app, _FakeDiarizationBackend([0.2] * 256))
+    first_task, _ = await _seed_task_with_preview(factory, tmp_path / "first")
+    second_task, _ = await _seed_task_with_preview(factory, tmp_path / "second")
+    assert (await _bind_existing(client, first_task, a_id)).status_code == 200
+    assert (await _bind_existing(client, second_task, a_id)).status_code == 200
+    # The second task changes its mind.
+    assert (await _bind_existing(client, second_task, b_id)).status_code == 200
+
+    async with factory() as session:
+        repo = Repo(session)
+        kept = await repo.list_voice_samples(uuid.UUID(a_id))
+        assert [s.source_task_id for s in kept] == [first_task]
+        assert len(await repo.list_voice_samples(uuid.UUID(b_id))) == 1

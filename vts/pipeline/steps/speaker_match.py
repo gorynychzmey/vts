@@ -5,9 +5,12 @@ import uuid
 from typing import TYPE_CHECKING
 
 from vts.db.repo import Repo
+from vts.pipeline.rerender import rerender_transcript
 from vts.pipeline.steps.base import Step, StepState
 from vts.pipeline.steps.diarization import diarize_enabled
+from vts.pipeline.steps.transcription import effective_language
 from vts.services.diarization.merge import auto_noise_labels, speaker_seconds, speaker_shares
+from vts.services.indexing import reindex_task
 from vts.services.speaker_registry import MatchOutcome, bucket
 from vts.services.storage import write_json
 
@@ -131,6 +134,9 @@ class MatchSpeakersStep(Step):
 
         write_json(st.dirs["outputs"] / "speaker_matches.json", matches)
 
+        if not decide_pause(matches, no_stop=False):
+            await self._record_automatic_decisions(ctx, st, matches, model)
+
         no_stop = ctx.task_flag(st.task_options, "speaker_no_manual_stop", default=False)
         if decide_pause(matches, no_stop):
             # Imported lazily: vts.pipeline.processor imports the step registry
@@ -141,3 +147,56 @@ class MatchSpeakersStep(Step):
 
             raise TaskAwaitingInput("match_speakers")
         return True
+
+    async def _record_automatic_decisions(
+        self, ctx: "PipelineContext", st: StepState, matches: dict, model: str
+    ) -> None:
+        """Save what matching decided when no human is needed, and show it.
+
+        Names in a transcript come from saved decisions, and nothing saved one
+        when every voice matched: the task completed with "Speaker 1/2" although
+        both voices were recognised, and the names appeared only once the user
+        opened the voice dialog and pressed Save (2026-11-18).
+
+        Only when EVERY label is matched or noise. A label left for a human
+        must have no decision at all — the dialog tells "decided: anonymous"
+        from "not decided" by one — and once any decision exists the noise marks
+        come from decisions alone, so the noise labels are recorded too.
+
+        No fragment is added: the voice was recognised by the fragments the
+        person already has.
+        """
+        task_id = st.task_id if isinstance(st.task_id, uuid.UUID) else uuid.UUID(str(st.task_id))
+        user_id = uuid.UUID(str(st.user_id))
+        async with ctx.session_factory() as session:
+            repo = Repo(session)
+            # A rerun of this step must not bury what the user saved since.
+            if await repo.has_decisions_for_task(user_id, task_id):
+                return
+            for label, match in matches.items():
+                matched = match["outcome"] == MatchOutcome.auto and match.get("speaker_id")
+                await repo.record_decision(
+                    user_id=user_id,
+                    source_task_id=task_id,
+                    speaker_label=label,
+                    speaker_id=uuid.UUID(match["speaker_id"]) if matched else None,
+                    voice_sample_id=None,
+                    distance=match.get("distance"),
+                    embedding_model=model,
+                    outcome="auto_matched" if matched else "auto_noise",
+                    is_noise=bool(match.get("noise", False)),
+                )
+            task = await repo.get_task_by_id(task_id)
+            if task is not None:
+                language = effective_language(st.task_options, st.dirs)
+                await rerender_transcript(task, session, language=language)
+                await reindex_task(session, task, ctx.settings)
+            await session.commit()
+        bus = getattr(ctx, "bus", None)
+        if bus is not None:
+            await bus.publish_event(
+                user_id=str(user_id),
+                task_id=str(task_id),
+                event="transcript_updated",
+                data={"task_id": str(task_id)},
+            )

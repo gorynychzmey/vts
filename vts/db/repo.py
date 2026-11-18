@@ -1258,6 +1258,24 @@ class Repo:
         await self.session.flush()
         return sample
 
+    async def nearest_voice_sample(
+        self, speaker_id: uuid.UUID, embedding: list[float], embedding_model: str,
+    ) -> tuple[VoiceSample, float] | None:
+        """The speaker's fragment closest to `embedding`, with its cosine distance.
+
+        Only fragments of the same embedding model compare; None when the
+        speaker has none.
+        """
+        dist = VoiceSample.embedding.cosine_distance(embedding).label("dist")
+        stmt = (
+            select(VoiceSample, dist)
+            .where(VoiceSample.speaker_id == speaker_id, VoiceSample.embedding_model == embedding_model)
+            .order_by(dist.asc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        return (row[0], float(row[1])) if row is not None else None
+
     async def list_voice_samples(self, speaker_id: uuid.UUID) -> list[VoiceSample]:
         # audio stays deferred — never loaded here.
         #

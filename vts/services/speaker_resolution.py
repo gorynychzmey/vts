@@ -32,6 +32,12 @@ from vts.services.indexing import reindex_task
 from vts.services.redis_bus import RedisBus
 
 
+# A fragment this close to one the person already has is that same fragment.
+# Distinct fragments of one person never came closer than 0.17 in production
+# (39 fragments, 12 people, 2026-11-18); re-embedding one clip lands near 0.
+SAME_FRAGMENT_MAX_DISTANCE = 0.05
+
+
 async def resolve_task_speakers(
     session: AsyncSession,
     *,
@@ -137,7 +143,12 @@ async def resolve_task_speakers(
             # save (rather than asking for a new fragment) is pointing at a
             # row that must survive.
             if prior_voice_sample_id is not None and prior_voice_sample_id != voice_sample_id:
-                await repo.delete_voice_sample(user_id, prior_voice_sample_id)
+                # Only a fragment this task added is this task's to roll back:
+                # a decision can also point at a fragment another recording
+                # contributed (see the duplicate check below).
+                prior_sample = await repo.get_voice_sample(user_id, prior_voice_sample_id)
+                if prior_sample is not None and prior_sample.source_task_id == task_id:
+                    await repo.delete_voice_sample(user_id, prior_voice_sample_id)
 
         if res.add_fragment and speaker_id is not None:
             if not embedding_model:
@@ -161,17 +172,25 @@ async def resolve_task_speakers(
                     detail=f"Preview fragment file missing: {clip_path}",
                 )
             embedding = await diarization.embed(clip_path)
-            duration_sec = float(clips[0]["end"]) - float(clips[0]["start"])
-            sample = await repo.add_voice_sample(
-                speaker_id=speaker_id,
-                embedding=embedding,
-                embedding_model=embedding_model,
-                audio=clip_path.read_bytes(),
-                audio_format="wav",
-                duration_sec=duration_sec,
-                source_task_id=task_id,
-            )
-            voice_sample_id = sample.id
+            # The same clip again — the same file run as a new task, typically
+            # after the old one was deleted — is the fragment this person
+            # already has: point the decision at it instead of storing a copy
+            # every later match would count twice.
+            existing = await repo.nearest_voice_sample(speaker_id, embedding, embedding_model)
+            if existing is not None and existing[1] <= SAME_FRAGMENT_MAX_DISTANCE:
+                voice_sample_id = existing[0].id
+            else:
+                duration_sec = float(clips[0]["end"]) - float(clips[0]["start"])
+                sample = await repo.add_voice_sample(
+                    speaker_id=speaker_id,
+                    embedding=embedding,
+                    embedding_model=embedding_model,
+                    audio=clip_path.read_bytes(),
+                    audio_format="wav",
+                    duration_sec=duration_sec,
+                    source_task_id=task_id,
+                )
+                voice_sample_id = sample.id
 
         await repo.record_decision(
             user_id=user_id,
