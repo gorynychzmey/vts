@@ -11,8 +11,9 @@
 // 404 text instead of the content. Three cards cover the boundary:
 //   * an attached recording — content from the recording; task-scoped actions
 //     (speakers) still go to its source task;
-//   * a detached recording (task deleted) — content shows, no speaker or
-//     restart controls, and not a single request goes to /api/tasks/{rid}/…;
+//   * a detached recording (task deleted, media gone) — content shows, the
+//     title still opens the player, no speaker or restart controls, and not a
+//     single request goes to /api/tasks/{rid}/…;
 //   * a task card in the Tasks view — unchanged, reads /api/tasks/{id}/….
 import fs from "node:fs";
 import http from "node:http";
@@ -117,7 +118,12 @@ export async function run() {
         "/api/status-config": { status_flags: {}, tasks_page_size: 20 },
         "/api/tasks": [TASK_ROW],
         "/api/recordings": {
-          items: [recording(ATTACHED, SOURCE_TASK, "Attached"), recording(DETACHED, null, "Detached")],
+          // The detached one has no media left (its task is gone): its title
+          // must still open the player, which then shows the transcript alone.
+          items: [
+            recording(ATTACHED, SOURCE_TASK, "Attached"),
+            { ...recording(DETACHED, null, "Detached"), has_media: false },
+          ],
           total: 2,
         },
         "/api/version": { version: "verify" },
@@ -216,7 +222,7 @@ export async function run() {
       await page.click(`${sel} .tab-share-btn`);
       await page.waitForSelector("#share-dialog[open]", { timeout: 3000 }).catch(() => {});
       for (const value of ["transcript", "transcript:subtitles"]) {
-        await page.check(`#share-dialog input[name="share-choice"][value="${value}"]`).catch(() => {});
+        await page.check(`#share-dialog input[name="share-choice"][value="${value}"]`, { timeout: 2000 }).catch(() => {});
       }
       const wanted = [`/api/recordings/${rid}/text/raw`, `/api/recordings/${rid}/subtitles`];
       let shareOk = false;

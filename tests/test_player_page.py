@@ -397,3 +397,72 @@ async def test_player_heading_of_an_upload_is_its_file_name(authed_app, client, 
     r = await client.get(f"/player/{task_id}")
 
     assert _heading(r.text) == "meeting 2026.m4a"
+
+
+async def _seed_archived_task(factory, tmp_path):
+    """A task with media, transcript and recording, then archived for real:
+    `_archive_task_artifacts` removes the media and keeps what the recording
+    owns (vts-lzad)."""
+    from vts.api._helpers.artifact_store import _archive_task_artifacts
+    from vts.db.repo import Repo
+
+    (tmp_path / "media").mkdir()
+    (tmp_path / "media" / "audio.original.mp3").write_bytes(b"\x00\x00")
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "transcript.json").write_text(
+        json.dumps({
+            "entries": [
+                {"start": 0.0, "end": 12.0, "text": "Opening words.", "speaker": "SPEAKER_00"},
+                {"start": 28.0, "end": 40.0, "text": "The cited sentence.", "speaker": "SPEAKER_00"},
+            ]
+        }),
+        encoding="utf-8",
+    )
+    task_id = uuid.uuid4()
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.create_task(
+            user_id=uuid.UUID(_TEST_USER_ID),
+            source_url="https://example.com/v",
+            options={"transcript": True},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        await session.flush()
+        recording = await repo.upsert_recording_for_task(task)
+        recording_id = recording.id
+        await session.commit()
+        _archive_task_artifacts(task)
+    assert not (tmp_path / "media").exists(), "archiving should remove the media"
+    return task_id, recording_id
+
+
+@pytest.mark.asyncio
+async def test_archived_tasks_player_shows_the_kept_transcript(authed_app, client, tmp_path):
+    """Archiving keeps the recording's transcript, so the player of an archived
+    task shows it — with the live wiring still on — instead of an empty
+    "media unavailable" page. A citation into it still lands (?t=30)."""
+    _app, factory = authed_app
+    task_id, _recording_id = await _seed_archived_task(factory, tmp_path)
+
+    r = await client.get(f"/player/{task_id}?t=30")
+    assert r.status_code == 200, r.text
+    texts = [s["text"] for b in _embedded_blocks(r.text) for s in b["sentences"]]
+    assert texts == ["Opening words.", "The cited sentence."]
+    assert "data-transcript-only" in r.text
+    assert "<video" not in r.text and "<audio" not in r.text
+    # Still the task's page: a later status change keeps it in sync.
+    assert "EventSource" in r.text and str(task_id) in r.text
+
+
+@pytest.mark.asyncio
+async def test_archived_recordings_player_shows_the_kept_transcript(authed_app, client, tmp_path):
+    _app, factory = authed_app
+    task_id, recording_id = await _seed_archived_task(factory, tmp_path)
+
+    r = await client.get(f"/player/{recording_id}?t=30")
+    assert r.status_code == 200, r.text
+    texts = [s["text"] for b in _embedded_blocks(r.text) for s in b["sentences"]]
+    assert texts == ["Opening words.", "The cited sentence."]
+    assert "data-transcript-only" in r.text
+    assert str(task_id) in r.text

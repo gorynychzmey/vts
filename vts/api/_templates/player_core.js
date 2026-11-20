@@ -5,7 +5,7 @@
 //
 // It knows nothing about where its data comes from — no fetch, no SSE, no URL,
 // no i18n. Each page brings those through a thin adapter and hands the core
-// blocks in the shape `_load_player_blocks()` returns:
+// blocks in the shape `load_recording_player_blocks()` returns:
 //   [{label?: string, sentences: [{start: number, text: string}, ...]}, ...]
 //
 // It is the ONLY renderer of the transcript. There used to be two (Python on
@@ -264,7 +264,21 @@ var VtsPlayerCore = (function() {
       }
     }
 
-    return { render: render, append: append, showCited: showCited, cueAt: cueAt };
+    // The media went away (archived, canceled, failed to load) while the
+    // transcript stays: sentences remain readable and citable, but no longer
+    // seek or play — and no longer follow a media element that is gone.
+    function detachMedia() {
+      if (!media) return;
+      media.removeEventListener("timeupdate", highlight);
+      media = null;
+      if (active) active.classList.remove("active");
+      active = null;
+    }
+
+    return {
+      render: render, append: append, showCited: showCited, cueAt: cueAt,
+      detachMedia: detachMedia,
+    };
   }
 
   return { create: create, timecode: timecode };

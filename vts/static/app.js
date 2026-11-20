@@ -1958,6 +1958,9 @@ function createRuntime(task) {
     promptRefs: selectedPromptRefs((task.options || {})),
     redactedReady: Boolean(task.redacted_path),
     mediaReady: Boolean(task.media_path),
+    // Set only on a library card: whether /player has anything to show. A task
+    // card leaves it unset and follows mediaReady (vts-lzad).
+    playerReady: typeof task.player_ready === "boolean" ? task.player_ready : undefined,
     // Set only on a library card: the recording it shows, which addresses its
     // content and its player (vts-lzad). A task card has none.
     recordingId: String(task.recording_id || ""),
@@ -2332,6 +2335,9 @@ function renderTaskTitle(taskEl) {
   // gone (TTL / archive / not-yet-downloaded), there's nothing to play — the
   // name goes unclickable + "expired", matching what uploads already did.
   const mediaReady = Boolean(runtime.mediaReady);
+  // A library card's player also opens without media: the page then shows the
+  // recording's transcript, which archiving keeps (vts-lzad).
+  const playerReady = typeof runtime.playerReady === "boolean" ? runtime.playerReady : mediaReady;
   // A library card opens the player by its recording, which /player/{id}
   // accepts and which outlives the task (vts-lzad).
   const playerHref = buildPath(`/player/${encodeURIComponent(cardRecordingId(taskEl) || runtime.id)}`);
@@ -2342,7 +2348,7 @@ function renderTaskTitle(taskEl) {
   const linkTextEl = elements.linkEl.querySelector(".task-link-text");
   if (linkTextEl) linkTextEl.textContent = linkLabel;
   else elements.linkEl.textContent = linkLabel;
-  if (mediaReady) {
+  if (playerReady) {
     elements.linkEl.href = playerHref;
     elements.linkEl.target = "_blank";
     elements.linkEl.rel = "noopener";
@@ -2366,7 +2372,7 @@ function renderTaskTitle(taskEl) {
   // menu, where it gets a readable label instead of a bare glyph — the same
   // trade the other five actions made.
   if (elements.playerBtn) {
-    if (mediaReady) {
+    if (playerReady) {
       elements.playerBtn.href = playerHref;
       elements.playerBtn.classList.remove("hidden");
     } else {
@@ -2377,7 +2383,7 @@ function renderTaskTitle(taskEl) {
 
   // The glyph inside the title marks the name as playable — shown on exactly the
   // same condition that makes the name a link at all.
-  elements.linkEl.querySelector(".player-glyph")?.classList.toggle("hidden", !mediaReady);
+  elements.linkEl.querySelector(".player-glyph")?.classList.toggle("hidden", !playerReady);
 
   if (elements.expiredEl) {
     // "Media deleted" only for a task that FINISHED and no longer has its file.
@@ -8445,8 +8451,10 @@ function recordingAsTask(recording) {
     // this the tab sat disabled even for recordings that have one.
     redacted_path: recording.has_redacted ? "present" : null,
     summary_path: recording.has_summary ? "present" : null,
-    // Makes the title a player link; the player is addressed by the recording.
     media_path: recording.has_media ? "present" : null,
+    // Makes the title a player link; the player is addressed by the recording
+    // and shows the transcript alone once the media is gone.
+    player_ready: Boolean(recording.has_media || recording.has_transcript),
     // A user prompt's result ("Memo") is a tab too. These are snapshotted onto
     // the recording, so they are here even when the task is long gone.
     options: {

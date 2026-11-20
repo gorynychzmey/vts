@@ -165,7 +165,8 @@ def _player_page_html(
     # page opens the shared SSE stream and reacts to this task's events:
     #   transcript_updated -> re-fetch /transcript-entries and rebuild the list
     #                         (covers first assembly AND rerender after resolve)
-    #   task_status canceled/deleted -> swap into the media-unavailable state
+    #   task_status canceled/archived -> drop the media, keep the transcript
+    #   task_status deleted -> swap into the media-unavailable state
     # Plus a <video>/<audio> error handler for media that vanishes mid-session.
     live_script = ""
     if task_id:
@@ -410,7 +411,8 @@ async def media_player(
 
     The transcript comes from the recording; the media and the live wiring
     come from the task, because both are the task runtime's. A recording whose
-    task is gone therefore gets a transcript-only page.
+    task is gone, or whose media was archived away, therefore gets a
+    transcript-only page.
     """
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
@@ -454,15 +456,17 @@ async def media_player(
     ) or (media_file.name if media_file else "player")
     if media_file is None:
         # Media gone (TTL / archive / delete). Render a human-readable
-        # "unavailable" page (200), not a raw 404 (vts-at8). No player,
-        # no transcript — nothing to seek against. Still wires SSE so a
-        # later task_status keeps the page in sync.
+        # "unavailable" page (200), not a raw 404 (vts-at8). Archiving keeps
+        # the recording's transcript (vts-lzad), so the page shows it — a
+        # citation still lands on its sentence. Still wires SSE so a later
+        # task_status keeps the page in sync.
         html = _player_page_html(
             title=title,
             media_tag=None,
-            blocks=[],
+            blocks=blocks,
             task_id=str(task_id),
             as_user=acting_as,
+            transcript_only=True,
         )
         return HTMLResponse(html)
     kind = media_kind(media_file)

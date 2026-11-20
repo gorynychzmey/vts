@@ -10,7 +10,8 @@
 //
 // Covered: click and keyboard seek, the playing-line highlight, autoscroll and
 // its pause on a manual scroll, a deep link seeking without playing, the live
-// rebuild from transcript_updated, the media-unavailable state, and the
+// rebuild from transcript_updated, the media-unavailable state (an archived
+// task keeps its transcript, a deleted one does not), and the
 // localised autoscroll label.
 import fs from "node:fs";
 import http from "node:http";
@@ -372,10 +373,54 @@ export async function run() {
       const { page, errors } = await open();
       await page.evaluate(() => { document.querySelector("audio").src = "/missing.wav"; });
       await page.waitForSelector("[data-media-unavailable]", { timeout: 3000 }).catch(() => {});
-      const shown = await page.evaluate(() => !!document.querySelector("[data-media-unavailable]")
-        && !document.querySelector("audio, video"));
-      if (!shown) fail("media that fails to load should switch the page to the unavailable state");
+      const state = await page.evaluate(() => ({
+        shown: !!document.querySelector("[data-media-unavailable]"),
+        media: !!document.querySelector("audio, video"),
+        cues: document.querySelectorAll(".cue").length,
+      }));
+      if (!state.shown || state.media) fail(`media that fails to load should switch the page to the unavailable state ${JSON.stringify(state)}`);
+      // The transcript is the recording's, not the media's: it stays readable.
+      if (state.cues !== 40) fail(`media error: transcript should stay (40 cues), got ${state.cues}`);
       if (errors.length) fail(`media error: JS errors ${JSON.stringify(errors)}`);
+      await page.close();
+    }
+
+    // --- Archived / canceled task: the media goes, the transcript stays ---
+    // Archiving keeps the recording's transcript (vts-lzad), so the page must
+    // not throw it away with the media.
+    for (const status of ["archived", "canceled"]) {
+      const { page, errors } = await open();
+      for (let i = 0; i < 40 && stub.clients() === 0; i++) await page.waitForTimeout(50);
+      await page.evaluate(() => { window.__removedMedia = document.querySelector("audio"); });
+      stub.push("task_status", { task_id: TASK_ID, data: { status } });
+      await page.waitForSelector("[data-media-unavailable]", { timeout: 3000 }).catch(() => {});
+      const state = await page.evaluate(() => ({
+        msg: document.querySelector("[data-media-unavailable]")?.textContent ?? null,
+        media: !!document.querySelector("audio, video"),
+        cues: document.querySelectorAll(".cue").length,
+      }));
+      if (state.msg !== "This media is no longer available.") fail(`${status} task: unavailable message ${JSON.stringify(state.msg)}`);
+      if (state.media) fail(`${status} task: the media element is still shown`);
+      if (state.cues !== 40) fail(`${status} task: transcript should stay (40 cues), got ${state.cues}`);
+      // A live rebuild still reaches the kept transcript.
+      stub.setEntries(blocks("kept"));
+      stub.push("transcript_updated", { task_id: TASK_ID });
+      try {
+        await page.waitForFunction(() => document.querySelector(".cue")?.textContent === "kept 0",
+          null, { timeout: 3000 });
+      } catch { fail(`${status} task: transcript_updated no longer rebuilds the kept transcript`); }
+      // Clicking a sentence must not start the detached media.
+      if (await page.locator(".cue").count()) {
+        await page.locator('.cue[data-cue="3"]').click({ timeout: 2000 });
+        // A negative check: give a play() the click might have started a
+        // bounded moment to show, and fail only if it does.
+        const played = await page.waitForFunction(
+          () => window.__removedMedia && !window.__removedMedia.paused, null, { timeout: 1000 },
+        ).then(() => true, () => false);
+        if (played) fail(`${status} task: clicking a sentence started the removed media`);
+      }
+      if (errors.length) fail(`${status} task: JS errors ${JSON.stringify(errors)}`);
+      stub.setEntries(blocks());
       await page.close();
     }
 

@@ -4,18 +4,35 @@
   var AS_USER = __AS_USER__;
   var MEDIA_MSGS = __MEDIA_MSGS__;
 
-  function showMediaUnavailable() {
+  // The media is the task's and goes away with it (archive, cancel, a file
+  // that fails to load); the transcript is the recording's and stays, so the
+  // page keeps showing it and keeps rebuilding it on transcript_updated
+  // (vts-lzad). Only `dropTranscript` (the task was deleted) clears it too.
+  function showMediaUnavailable(dropTranscript) {
     var m = document.querySelector("video, audio");
+    var anchor = m;
+    if (m) {
+      try { m.pause(); } catch (e) {}
+    }
+    // A click on a sentence must not seek or play a detached element.
+    if (player) player.detachMedia();
+    var toggle = document.querySelector(".autoscroll-toggle");
+    if (toggle) toggle.remove();
+    if (dropTranscript) {
+      var ol = document.querySelector(".transcript");
+      if (ol) ol.remove();
+      player = null;
+    }
+    if (!document.querySelector("[data-media-unavailable]")) {
+      var p = document.createElement("p");
+      p.className = "media-unavailable";
+      p.setAttribute("data-media-unavailable", "");
+      p.textContent = localizedMsg(MEDIA_MSGS);
+      // In the media's place, above the transcript it leaves behind.
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(p, anchor);
+      else document.body.appendChild(p);
+    }
     if (m) m.remove();
-    var ol = document.querySelector(".transcript");
-    if (ol) ol.remove();
-    player = null;
-    if (document.querySelector("[data-media-unavailable]")) return;
-    var p = document.createElement("p");
-    p.className = "media-unavailable";
-    p.setAttribute("data-media-unavailable", "");
-    p.textContent = localizedMsg(MEDIA_MSGS);
-    document.body.appendChild(p);
   }
 
   function refetchEntries() {
@@ -41,13 +58,12 @@
         var p = JSON.parse(ev.data);
         if (String(p.task_id) !== TASK_ID) return;
         var status = String((p.data && p.data.status) || "");
-        if (status === "canceled" || status === "archived" || status === "deleted") {
-          showMediaUnavailable();
-        }
+        if (status === "canceled" || status === "archived") showMediaUnavailable(false);
+        else if (status === "deleted") showMediaUnavailable(true);
       } catch (e) {}
     });
   } catch (e) { /* no SSE: page still works statically */ }
 
   if (media) {
-    media.addEventListener("error", function() { showMediaUnavailable(); });
+    media.addEventListener("error", function() { showMediaUnavailable(false); });
   }
