@@ -64,10 +64,9 @@ def test_both_entry_points_call_the_same_search_function() -> None:
 async def test_the_tool_explains_how_to_cite_a_hit() -> None:
     """A client that cannot build the link will paraphrase instead of citing.
 
-    The player is addressed by TASK while the stable identifier is the
-    RECORDING, so the URL shape is not guessable from the field names — it has
-    to be stated. And a null source_task_id (deleted task) must be described,
-    or a client will happily emit /player/None?t=12.
+    Both links are addressed by the RECORDING (vts-lzad), but what the player
+    shows depends on whether the producing task still exists, so the
+    description has to say what a deleted task means for the player link.
     """
     from vts.mcp.server import build_mcp_server
 
@@ -83,9 +82,9 @@ async def test_the_tool_explains_how_to_cite_a_hit() -> None:
         "the tool does not point at the recording-scoped follow-up"
     )
     assert "around_sec" in description
-    assert "null" in description.lower(), (
+    assert "transcript only" in description.lower(), (
         "the description does not say what a missing task means"
     )
-    # And it must discourage assembling the player URL by hand, since only the
-    # server knows whether the task still exists.
+    # And it must discourage assembling the player URL by hand: the server
+    # owns the URL shape.
     assert "do not construct it yourself" in description.lower()

@@ -73,6 +73,18 @@ What gets exposed (everything under `/api/tasks`, `/api/recordings`,
   tasks. The MCP tool `list_recordings` takes the same parameters
   (`task_ids` for the task filter).
 - `GET /api/recordings/{id}` — one recording
+- `GET /api/recordings/{id}/text/{variant}` — the recording's text:
+  `raw` (transcript), `redacted` (processed transcript) or `summary`, with the
+  paginated modes described below
+- `GET /api/recordings/{id}/subtitles` — the transcript as a WebVTT track
+- `GET /api/recordings/{id}/results/{source}/{ref}` — one prompt result's
+  text, as listed in the recording's `prompt_results`
+
+The recording owns its content. The task content routes
+(`/api/tasks/{id}/transcript|summary|redacted|subtitles|results/...`) are kept
+and answer exactly what the recording routes answer for the task's recording;
+a task with no recording answers `404`. Recording content routes keep working
+after the task is deleted.
 - `GET /api/search` — semantic search across the corpus (see below)
 - `GET /api/me` — who am I (acting_as, is_admin)
 - `GET /api/admin/users` — admin only
@@ -205,24 +217,24 @@ the query (by person, dates or `recording_id`) instead of paging further.
 | | addressed by | survives task deletion |
 |---|---|---|
 | `GET /api/recordings/{id}/transcript?around_sec=` | recording | **yes** |
-| `/player/{source_task_id}?t=` | task | no |
+| `/player/{recording_id}?t=` | recording | **yes** (transcript only once the task is gone) |
 
 Read a passage through the RECORDING: it owns its artifacts, so the transcript
 answers whether or not the job that produced it still exists. `around_sec`
 returns just the passage around that second — showing one quote in context
 should not mean loading a two-hour transcript.
 
-The player link is for a person to WATCH the moment, and it is the one that
-expires: `source_task_id` is `null` once that task has been deleted, and the
-URL 404s. Offer it when present; never assemble it for a hit that does not
-carry the id.
+The player link is for a person to WATCH the moment. `/player/{id}` takes a
+recording id or a task id. The media and the live updates belong to the task,
+so once the task is deleted the page shows the transcript alone, with the
+cited sentence marked. `/player/{task_id}?t=` links keep working.
 
 `recording_id` is the identifier to store — it outlives the task.
 
 The same search is available as the MCP tool `search_transcripts`, with the
 same threshold and rules. There each hit carries both links ready-made
-(`transcript_url`, `player_url`), the second being `null` when the task is
-gone — so a client never has to work out which kind of URL it is holding.
+(`transcript_url`, `player_url`), both addressed by the recording — so a
+client never has to assemble one.
 
 Recordings are also addressable as MCP tools: `list_recordings` and
 `get_recording_transcript` (with `structured` and `around_sec`). The
@@ -291,7 +303,8 @@ clients treat unknown as safe.
 
 ## Paginated reads of large text artifacts
 
-`/api/tasks/{id}/transcript`, `/summary`, `/redacted`, and `/log` can
+`/api/tasks/{id}/transcript`, `/summary`, `/redacted`, `/log` and
+`/api/recordings/{id}/text/{variant}` can
 exceed the response budget of constrained clients (ChatGPT Custom
 Actions cap at ~30KB). Three modes are available:
 

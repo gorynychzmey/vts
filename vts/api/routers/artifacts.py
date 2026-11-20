@@ -1,12 +1,13 @@
 """Serving a task's produced artifacts: transcript, summary, log, media, player.
 
-Read-only endpoints over what the pipeline wrote to a task's artifact
-directory. Grouped together because they share `_serve_text()` — the
-plain/JSON/Range content negotiation every text artifact uses.
+The content routes (transcript, summary, redacted, entries, subtitles) are
+adapters since vts-lzad: the recording owns the content, so each resolves the
+task's recording and calls the responder in `_helpers/recording_content.py`
+that `/api/recordings/{id}/...` uses too. The task-only routes (log, media)
+read the task's directory as before. `_serve_text` lives with the responders
+and is imported back for the log.
 
 Split out of `vts.api.main.create_app()` — see docs/plans/main-py-split.md.
-Handler bodies are unchanged; `_serve_text`, `_parse_range_header` and
-`_player_page_html` came along because nothing outside this module used them.
 
 No `tags=` on the router: `_install_custom_openapi()` in `vts.api.main`
 derives the OpenAPI tag from the URL prefix, and an explicit tag overrides it.
@@ -25,27 +26,29 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from sqlalchemy import select
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vts.api._helpers.artifact_store import _load_player_blocks, shown_player_blocks
+from vts.api._helpers.artifact_store import load_recording_player_blocks, shown_player_blocks
 from vts.api._helpers.base import _find_media_file
+from vts.api._helpers.recording_content import (  # noqa: F401 — re-exported
+    _MAX_TEXT_SLICE_CHARS,
+    _parse_range_header,
+    _serve_text,
+    recording_entries,
+    recording_for_task_or_404,
+    recording_subtitles,
+    serve_recording_text,
+)
 from vts.api.deps import get_current_user, get_session_dep
-from vts.api.schemas import TextSliceOut
-from vts.db.models import Recording
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.media_kind import media_content_type, media_kind
 from vts.services.recording_meta import recording_display_name
-from vts.services.subtitles import render_webvtt
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-_MAX_TEXT_SLICE_CHARS = 200_000  # safety cap for JSON-mode slice length
 
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "_templates"
@@ -76,120 +79,20 @@ _PLAYER_AUTOSCROLL_MSG = {
 }
 
 
-def _media_unavailable_block_html() -> str:
+def _media_unavailable_block_html(*, transcript_only: bool = False) -> str:
     """The 'media is gone' state: a human-readable message (localized client-
     side) in place of the player. Marked with data-media-unavailable so the
-    live SSE handler can swap the page into this state too."""
+    live SSE handler can swap the page into this state too. With
+    `transcript_only` it also carries data-transcript-only, which tells
+    player.js to render the transcript without a media element."""
     import json as _json
 
     msgs = _json.dumps(_PLAYER_MEDIA_UNAVAILABLE_MSG, ensure_ascii=False)
     default = _html.escape(_PLAYER_MEDIA_UNAVAILABLE_MSG["en"])
+    marker = " data-transcript-only" if transcript_only else ""
     return (
-        f'<p class="media-unavailable" data-media-unavailable '
+        f'<p class="media-unavailable" data-media-unavailable{marker} '
         f"data-msgs='{msgs}'>{default}</p>"
-    )
-
-
-def _parse_range_header(value: str, total: int) -> tuple[int, int] | None:
-    """Parse a `Range: bytes=START-END` header into (offset, length) char-pair.
-
-    We use character offsets (not bytes) since the underlying artifacts are
-    UTF-8 text and we want predictable slicing. Returns None for malformed
-    or unsatisfiable ranges; the caller falls back to a full response.
-    """
-    if not value:
-        return None
-    value = value.strip().lower()
-    if not value.startswith("bytes="):
-        return None
-    spec = value[len("bytes="):]
-    if "," in spec:
-        return None  # multipart ranges — not supported
-    if "-" not in spec:
-        return None
-    start_str, end_str = spec.split("-", 1)
-    # We deliberately do not support suffix-range (`bytes=-N`, "last N
-    # bytes") — start_str must be present. Callers wanting the tail can
-    # compute the offset from total_length.
-    if not start_str:
-        return None
-    try:
-        start = int(start_str)
-        end = int(end_str) if end_str else total - 1
-    except ValueError:
-        return None
-    if start < 0 or end < start or start >= total:
-        return None
-    end = min(end, total - 1)
-    return start, (end - start + 1)
-
-
-def _serve_text(
-    text: str,
-    plain_media_type: str,
-    *,
-    request: Request,
-    offset: int | None,
-    limit: int | None,
-) -> Response:
-    """Serve a text artifact with three modes:
-
-    1. Default (Accept: text/plain or */*; no slicing) → full body, original
-       media-type (text/plain or text/markdown). Unchanged behaviour.
-    2. Range header (`bytes=START-END`) → 206 Partial Content, plain text
-       slice. Standard HTTP, works for curl/wget/anything HTTP-literate.
-    3. Accept: application/json (+ optional ?offset/?limit) → JSON
-       TextSliceOut with metadata. Works around 30KB client caps
-       (notably ChatGPT Custom Actions). Slicing applied if requested,
-       else full text wrapped in JSON.
-    """
-    total = len(text)
-
-    range_header = request.headers.get("range")
-    if range_header:
-        parsed = _parse_range_header(range_header, total)
-        if parsed is not None:
-            start, length = parsed
-            chunk = text[start:start + length]
-            return Response(
-                content=chunk,
-                status_code=206,
-                media_type=plain_media_type,
-                headers={
-                    "Content-Range": f"bytes {start}-{start + length - 1}/{total}",
-                    "Accept-Ranges": "bytes",
-                    "Cache-Control": "no-cache",
-                },
-            )
-
-    accept = (request.headers.get("accept") or "").lower()
-    wants_json = "application/json" in accept and "text/plain" not in accept
-    has_slice_query = offset is not None or limit is not None
-
-    if wants_json or has_slice_query:
-        off = max(0, offset or 0)
-        if off > total:
-            off = total
-        lim = limit if limit is not None else _MAX_TEXT_SLICE_CHARS
-        lim = max(0, min(lim, _MAX_TEXT_SLICE_CHARS))
-        slice_text = text[off:off + lim]
-        payload = TextSliceOut(
-            text=slice_text,
-            offset=off,
-            length=len(slice_text),
-            total_length=total,
-            is_end=(off + len(slice_text)) >= total,
-        )
-        return JSONResponse(
-            payload.model_dump(),
-            headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"},
-        )
-
-    # Default: full plain text, as before.
-    return Response(
-        content=text,
-        media_type=plain_media_type,
-        headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"},
     )
 
 
@@ -203,6 +106,7 @@ def _player_page_html(
     blocks: list[dict[str, Any]],
     task_id: str | None = None,
     as_user: str | None = None,
+    transcript_only: bool = False,
 ) -> str:
     """Self-contained /player page: the media element plus a two-level clickable
     transcript (vts-at8 / VOS-111, vts-u6w). The transcript keeps its block
@@ -213,7 +117,9 @@ def _player_page_html(
     `media_tag` is a pre-built, already-escaped <video>/<audio> element, or
     None when the media file is gone (TTL / archive / delete) — then a
     localized 'media unavailable' message is shown in its place and the
-    transcript is omitted (nothing to seek).
+    transcript is omitted (nothing to seek) — unless `transcript_only`: a
+    recording whose task is gone has no media to play but still has its
+    transcript, so the page keeps the blocks (a deep link marks its sentence).
     The blocks travel as JSON and player_core.js renders them, so the page and
     its live rebuild cannot disagree on numbering or on which sentences show.
 
@@ -222,8 +128,9 @@ def _player_page_html(
     to be doubled (125 of them), which no editor or linter could check.
     """
     if media_tag is None:
-        media_block = _media_unavailable_block_html()
-        blocks = []
+        media_block = _media_unavailable_block_html(transcript_only=transcript_only)
+        if not transcript_only:
+            blocks = []
     else:
         media_block = media_tag
     # The transcript is rendered client-side by player_core.js, the one
@@ -317,23 +224,8 @@ async def get_transcript(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> Response:
-    repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if not task.transcript_path:
-        raise HTTPException(status_code=404, detail="Transcript is not ready")
-    path = Path(task.transcript_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Transcript file missing")
-    plain_mt = "text/plain; charset=utf-8" if path.suffix == ".txt" else "application/json"
-    return _serve_text(
-        path.read_text(encoding="utf-8"),
-        plain_mt,
-        request=request,
-        offset=offset,
-        limit=limit,
-    )
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return serve_recording_text(recording, "raw", request=request, offset=offset, limit=limit)
 
 
 @router.get(
@@ -351,11 +243,8 @@ async def get_transcript_entries(
     Returns {"blocks": []} (200, not 404) when the transcript isn't ready
     yet, so the page can poll on transcript_updated without special-casing
     the not-ready state."""
-    repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {"blocks": await _load_player_blocks(task, session)}
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return await recording_entries(recording, session)
 
 
 @router.get(
@@ -387,15 +276,8 @@ async def get_subtitles(
     # Not-ready yields 200 with an empty track, not 404, so a caller can show an
     # empty subtitle view without special-casing it — matching how
     # /transcript-entries returns an empty block list.
-    repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    blocks = await _load_player_blocks(task, session)
-    return Response(
-        content=render_webvtt(blocks),
-        media_type="text/vtt; charset=utf-8",
-    )
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return await recording_subtitles(recording, session)
 
 
 @router.get(
@@ -424,23 +306,8 @@ async def get_summary(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> Response:
-    repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if not task.summary_path:
-        raise HTTPException(status_code=404, detail="Summary is not ready")
-    path = Path(task.summary_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Summary file missing")
-    plain_mt = "text/markdown; charset=utf-8" if path.suffix in {".md", ".markdown"} else "application/json"
-    return _serve_text(
-        path.read_text(encoding="utf-8"),
-        plain_mt,
-        request=request,
-        offset=offset,
-        limit=limit,
-    )
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return serve_recording_text(recording, "summary", request=request, offset=offset, limit=limit)
 
 
 @router.get(
@@ -468,20 +335,8 @@ async def get_redacted_transcript(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> Response:
-    repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
-    return _serve_text(
-        path.read_text(encoding="utf-8"),
-        "text/plain; charset=utf-8",
-        request=request,
-        offset=offset,
-        limit=limit,
-    )
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return serve_recording_text(recording, "redacted", request=request, offset=offset, limit=limit)
 
 
 @router.get(
@@ -544,17 +399,48 @@ async def get_media(
     )
 
 
-@router.get("/player/{task_id}", include_in_schema=False, response_class=HTMLResponse)
+@router.get("/player/{item_id}", include_in_schema=False, response_class=HTMLResponse)
 async def media_player(
-    task_id: uuid.UUID,
+    item_id: uuid.UUID,
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> HTMLResponse:
+    """The player, addressed by a task id or a recording id (vts-lzad).
+
+    The transcript comes from the recording; the media and the live wiring
+    come from the task, because both are the task runtime's. A recording whose
+    task is gone therefore gets a transcript-only page.
+    """
     repo = Repo(session)
-    task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
+    user_id = uuid.UUID(user.id)
+    # A task id first: deep links from before the split (VOS-134) name tasks.
+    task = await repo.get_task_for_user(user_id, item_id)
+    if task is not None:
+        recording = await repo.recording_for_task(task.id)
+    else:
+        recording = await repo.get_recording_for_user(user_id, item_id)
+        if recording is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if recording.source_task_id is not None:
+            task = await repo.get_task_for_user(user_id, recording.source_task_id)
+    blocks = (
+        await load_recording_player_blocks(recording, session)
+        if recording is not None
+        else []
+    )
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        # No task, no media and no task events to follow: the transcript alone,
+        # which is still what a citation needs (?t= marks its sentence).
+        html = _player_page_html(
+            title=recording_display_name(recording.title, recording.source_url) or "player",
+            media_tag=None,
+            blocks=blocks,
+            transcript_only=True,
+        )
+        return HTMLResponse(html)
+
+    task_id = task.id
     media_file = _find_media_file(task.artifact_dir)
     # Propagate admin impersonation through the page: the media <src>, the
     # SSE entries re-fetch, all must resolve as the same acting user.
@@ -562,9 +448,6 @@ async def media_player(
     # The recording's name, as the library shows it. The last path segment of
     # source_url used to stand in for it, which put "mainEvent?simulive=y&…"
     # above a webinar while the recording had a proper title (vts-kb4z).
-    recording = await session.scalar(
-        select(Recording).where(Recording.source_task_id == task.id)
-    )
     title = recording_display_name(
         recording.title if recording is not None else task.source_title,
         task.source_url,
@@ -594,7 +477,6 @@ async def media_player(
         if kind == "video"
         else f'<audio controls autoplay src="{_html.escape(src, quote=True)}"></audio>'
     )
-    blocks = await _load_player_blocks(task, session)
     html = _player_page_html(
         title=title,
         media_tag=tag,

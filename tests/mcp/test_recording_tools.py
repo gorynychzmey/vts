@@ -59,20 +59,17 @@ async def test_the_task_tools_are_still_there() -> None:
 
 # ---------------------------------------------------- links a client can follow
 
-def test_a_hit_offers_both_links_with_their_different_lifetimes():
-    """Two links, and the difference between them stated.
+def test_a_hit_offers_both_links_by_recording():
+    """Two links, both addressed by the recording (vts-lzad).
 
-    Both are useful: the player opens the moment in the media for a person to
-    watch, and the transcript reads the passage for the assistant. But they do
-    not last equally — /player/{task} dies with the task, while the recording
-    link does not. A client handed one URL cannot know which kind it holds, so
-    both are returned, and the player one is simply absent when it would 404.
+    The player opens the moment for a person to watch, and the transcript reads
+    the passage for the assistant. Since the player accepts a recording id,
+    neither link dies with the task that produced the recording.
     """
     from vts.mcp.tools_registry.search import hit_links
 
     live = hit_links(
         recording_id="11111111-1111-1111-1111-111111111111",
-        source_task_id="22222222-2222-2222-2222-222222222222",
         start_sec=754.0,
         base_url="https://vts.example",
     )
@@ -81,21 +78,8 @@ def test_a_hit_offers_both_links_with_their_different_lifetimes():
         "/transcript?around_sec=754&window_sec=60"
     )
     assert live["player_url"] == (
-        "https://vts.example/player/22222222-2222-2222-2222-222222222222?t=754"
+        "https://vts.example/player/11111111-1111-1111-1111-111111111111?t=754"
     )
-
-
-def test_a_hit_from_a_deleted_task_keeps_the_transcript_link_only():
-    from vts.mcp.tools_registry.search import hit_links
-
-    orphan = hit_links(
-        recording_id="11111111-1111-1111-1111-111111111111",
-        source_task_id=None,
-        start_sec=12.0,
-        base_url="https://vts.example",
-    )
-    assert orphan["player_url"] is None, "a dead player link was offered"
-    assert orphan["transcript_url"], "the passage became unreachable"
 
 
 def test_links_are_relative_when_no_base_url_is_configured():
@@ -105,11 +89,10 @@ def test_links_are_relative_when_no_base_url_is_configured():
 
     links = hit_links(
         recording_id="11111111-1111-1111-1111-111111111111",
-        source_task_id="22222222-2222-2222-2222-222222222222",
         start_sec=5.0,
         base_url=None,
     )
-    assert links["player_url"].startswith("/player/")
+    assert links["player_url"] == "/player/11111111-1111-1111-1111-111111111111?t=5"
     assert links["transcript_url"].startswith("/api/recordings/")
 
 

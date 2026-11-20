@@ -177,7 +177,8 @@ async def test_transcript_endpoint_sends_no_cache(authed_app, client, tmp_path):
             artifact_dir=str(tmp_path),
             task_id=task_id,
         )
-        task.transcript_path = str(transcript_file)
+        # Through the setter, which writes the recording the route reads.
+        await repo.set_task_content(task, transcript_path=str(transcript_file))
         await session.commit()
 
     r = await client.get(f"/api/tasks/{task_id}/transcript")

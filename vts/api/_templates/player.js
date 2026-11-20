@@ -48,8 +48,10 @@
 
   var media = document.querySelector("video, audio");
   // No media, no transcript: with nothing to seek against the page shows only
-  // the unavailable message.
-  var player = media ? VtsPlayerCore.create({
+  // the unavailable message — except for a recording whose task is gone
+  // (data-transcript-only), which keeps its transcript and its cited sentence.
+  var transcriptOnly = !media && !!document.querySelector("[data-transcript-only]");
+  var player = (media || transcriptOnly) ? VtsPlayerCore.create({
     container: document.body,
     media: media,
     autoscrollToggle: document.getElementById("autoscroll-toggle"),

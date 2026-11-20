@@ -164,9 +164,8 @@ class SearchHit(BaseModel):
     """
 
     recording_id: uuid.UUID
-    # Present so a client can open /player/{task}?t=<start_sec>; null once the
-    # task is gone, in which case the passage is still citable but no longer
-    # has a player page.
+    # The task that produced the recording; null once that task is gone (the
+    # passage stays citable, and the player then shows the transcript only).
     source_task_id: uuid.UUID | None = None
     title: str | None = None
     text: str
@@ -176,7 +175,8 @@ class SearchHit(BaseModel):
     score: float
     # Read the passage — via the RECORDING, so it survives the task's deletion.
     transcript_url: str | None = None
-    # Watch the moment — via the TASK, so it is null once that task is gone.
+    # Open the moment on the player — by recording id too (vts-lzad): media
+    # while the task exists, the transcript alone after.
     player_url: str | None = None
 
 

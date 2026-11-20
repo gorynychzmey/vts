@@ -14,12 +14,22 @@ from datetime import datetime
 import uuid
 from pathlib import Path
 
+from typing import Any
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api._helpers.base import _find_media_file
+from vts.api._helpers.recording_content import (
+    TextVariant,
+    recording_entries,
+    recording_for_user_or_404,
+    recording_result,
+    recording_subtitles,
+    serve_recording_text,
+)
 from vts.api._helpers.recordings import rename_recording
 from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
 from vts.api.schemas import (
@@ -353,3 +363,94 @@ async def get_recording_transcript_endpoint(
         )
     except RecordingArtifactMissing as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------ content
+#
+# The recording's content in the shapes the task routes have always served
+# (vts-lzad). Both sets call the same responders in _helpers/recording_content,
+# so a task route and its recording twin answer identically.
+
+
+@router.get(
+    "/api/recordings/{recording_id}/text/{variant}",
+    responses={
+        200: {
+            "description": (
+                "Text body. With Accept: application/json or ?offset/limit, a "
+                "TextSliceOut JSON; with a Range header, 206 Partial Content."
+            ),
+            "content": {
+                "text/plain": {"schema": {"type": "string"}},
+                "text/markdown": {"schema": {"type": "string"}},
+                "application/json": {"schema": {"$ref": "#/components/schemas/TextSliceOut"}},
+            },
+        },
+        206: {"description": "Partial text (Range request)"},
+        404: {"description": "Recording not found, or the text is not ready"},
+    },
+)
+async def get_recording_text(
+    recording_id: uuid.UUID,
+    variant: TextVariant,
+    request: Request,
+    offset: int | None = None,
+    limit: int | None = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> Response:
+    """A recording's raw transcript, processed transcript (`redacted`) or
+    summary as text, sliceable like the task routes. Works after the
+    originating task has been deleted."""
+    recording = await recording_for_user_or_404(Repo(session), uuid.UUID(user.id), recording_id)
+    return serve_recording_text(recording, variant, request=request, offset=offset, limit=limit)
+
+
+@router.get("/api/recordings/{recording_id}/entries", include_in_schema=False)
+async def get_recording_entries(
+    recording_id: uuid.UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict[str, Any]:
+    """The player's two-level transcript (blocks with clickable sentences)."""
+    recording = await recording_for_user_or_404(Repo(session), uuid.UUID(user.id), recording_id)
+    return await recording_entries(recording, session)
+
+
+@router.get(
+    "/api/recordings/{recording_id}/subtitles",
+    responses={
+        200: {
+            "description": "The transcript as a WebVTT track, speakers as voice tags.",
+            "content": {"text/vtt": {"schema": {"type": "string"}}},
+        },
+        404: {"description": "Recording not found"},
+    },
+)
+async def get_recording_subtitles(
+    recording_id: uuid.UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> Response:
+    """The transcript as WebVTT subtitles with resolved speaker names; a
+    header-only track when there is no transcript."""
+    recording = await recording_for_user_or_404(Repo(session), uuid.UUID(user.id), recording_id)
+    return await recording_subtitles(recording, session)
+
+
+@router.get(
+    "/api/recordings/{recording_id}/results/{source}/{ref}",
+    response_class=PlainTextResponse,
+    responses={404: {"description": "Recording or result not found"}},
+)
+async def get_recording_result(
+    recording_id: uuid.UUID,
+    source: str,
+    ref: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> PlainTextResponse:
+    """The text of one prompt result, e.g. `system/summary` or `user/<id>`,
+    as listed in the recording's `prompt_results`."""
+    recording = await recording_for_user_or_404(Repo(session), uuid.UUID(user.id), recording_id)
+    return recording_result(recording, source, ref)

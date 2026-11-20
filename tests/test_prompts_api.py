@@ -265,7 +265,7 @@ async def test_upload_task_stores_prompts_in_options(authed_app, client, tmp_pat
 
 @pytest.mark.asyncio
 async def test_get_prompt_result_from_index(authed_app, client, tmp_path):
-    """A result registered in options['prompt_results'] is read back as text."""
+    """A registered prompt result is read back as text."""
     _app, factory = authed_app
     from vts.db.repo import Repo
 
@@ -275,17 +275,16 @@ async def test_get_prompt_result_from_index(authed_app, client, tmp_path):
     task_id = uuid.uuid4()
     async with factory() as session:
         repo = Repo(session)
-        await repo.create_task(
+        task = await repo.create_task(
             user_id=uuid.UUID(_TEST_USER_ID),
             source_url="https://example.com/v",
-            options={
-                "prompts": [{"source": "user", "id": "p1"}],
-                "prompt_results": [
-                    {"source": "user", "id": "p1", "path": str(result_file)},
-                ],
-            },
+            options={"prompts": [{"source": "user", "id": "p1"}]},
             artifact_dir=str(tmp_path),
             task_id=task_id,
+        )
+        # Through the setter, which writes the recording the route reads.
+        await repo.set_task_prompt_results(
+            task, [{"source": "user", "id": "p1", "path": str(result_file)}]
         )
         await session.commit()
 
@@ -296,7 +295,7 @@ async def test_get_prompt_result_from_index(authed_app, client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_get_prompt_result_system_summary_fallback(authed_app, client, tmp_path):
-    """system/summary falls back to task.summary_path when not in the index."""
+    """system/summary falls back to the summary path when not in the index."""
     _app, factory = authed_app
     from vts.db.models import Task
     from vts.db.repo import Repo
@@ -314,7 +313,7 @@ async def test_get_prompt_result_system_summary_fallback(authed_app, client, tmp
             artifact_dir=str(tmp_path),
             task_id=task_id,
         )
-        task.summary_path = str(summary_file)
+        await repo.set_task_content(task, summary_path=str(summary_file))
         await session.commit()
 
     resp = await client.get(f"/api/tasks/{task_id}/results/system/summary")

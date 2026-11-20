@@ -46,6 +46,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from vts import __version__
 from vts.api._helpers.artifact_store import _archive_task_artifacts, _reset_final_summary_artifacts, _reset_final_summary_step
+from vts.api._helpers.recording_content import recording_for_task_or_404, recording_result
 from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording, rename_recording_for_task
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
 from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
@@ -142,15 +143,9 @@ async def get_prompt_result(
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> PlainTextResponse:
-    repo = Repo(session)
-    task = await repo.get_task_by_id(task_id)
-    if task is None or str(task.user_id) != user.id:
-        raise HTTPException(status_code=404, detail="Task not found")
-    from vts.services.prompt_results import resolve_result_path
-    path = resolve_result_path(task, source, ref)
-    if path is None or not Path(path).exists():
-        raise HTTPException(status_code=404, detail="Result not found")
-    return PlainTextResponse(Path(path).read_text(encoding="utf-8"))
+    # An adapter since vts-lzad: the recording owns the results.
+    recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
+    return recording_result(recording, source, ref)
 
 
 @router.post("/api/tasks/upload", response_model=TaskOut)

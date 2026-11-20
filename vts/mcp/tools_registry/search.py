@@ -48,22 +48,16 @@ def _named_speakers(
 def hit_links(
     *,
     recording_id: Any,
-    source_task_id: Any,
     start_sec: float,
     base_url: str | None,
 ) -> dict[str, str | None]:
-    """The two ways to follow a hit, and they do not last equally.
+    """The two ways to follow a hit, both addressed by the recording.
 
-    * `transcript_url` reads the passage from the RECORDING. It keeps working
-      after the job that produced it is deleted, because a recording owns its
-      artifacts — this is the one to use for reading.
-    * `player_url` opens that second in the media for a person to watch. It is
-      addressed by TASK, so it 404s once the task is gone, and is therefore
-      None in that case rather than handed over as a dead link.
-
-    Returning both, with the missing one explicitly null, means a client never
-    has to guess which kind of URL it is holding — or assemble one itself and
-    get the lifetime wrong.
+    * `transcript_url` reads the passage as JSON — the one for an assistant.
+    * `player_url` opens that second on the player page for a person. Since
+      vts-lzad the player takes a recording id, so the link lasts as long as
+      the recording: while its task exists the page plays the media, and once
+      the task is gone it shows the transcript with the cited sentence marked.
     """
     root = (base_url or "").rstrip("/")
     at = int(float(start_sec or 0))
@@ -71,7 +65,7 @@ def hit_links(
         f"{root}/api/recordings/{recording_id}/transcript"
         f"?around_sec={at}&window_sec=60"
     )
-    player = f"{root}/player/{source_task_id}?t={at}" if source_task_id else None
+    player = f"{root}/player/{recording_id}?t={at}"
     return {"transcript_url": transcript, "player_url": player}
 
 
@@ -112,9 +106,10 @@ def register(mcp: FastMCP) -> None:
           expand a quote, or call `get_recording_transcript` with the hit's
           `recording_id` and `around_sec`. It keeps working after the job that
           produced the recording has been deleted.
-        * `player_url` opens that second in the media for a person to watch.
-          It is addressed by task, so it is null once the task is gone — offer
-          it when present, and do not construct it yourself.
+        * `player_url` opens that second on the player page for a person. It
+          plays the media while the producing task exists; after that the
+          page shows the transcript only, never a dead link. Offer it as
+          given — do not construct it yourself.
 
         Narrow WHERE to look before relevance is judged:
 
@@ -181,7 +176,6 @@ def register(mcp: FastMCP) -> None:
                         score=h.score,
                         **hit_links(
                             recording_id=h.recording_id,
-                            source_task_id=h.source_task_id,
                             start_sec=h.start_sec,
                             base_url=base_url,
                         ),

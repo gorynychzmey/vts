@@ -285,13 +285,12 @@ def shown_player_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def _load_player_blocks(task: Any, session: AsyncSession) -> list[dict[str, Any]]:
-    """Player blocks for a task: its files, its language, its voice names."""
-    names = await Repo(session).speaker_names_for_task(task.user_id, task.id)
-    language = effective_language(
-        task.options if isinstance(task.options, dict) else {},
-        {"outputs": Path(task.artifact_dir) / "outputs"},
-    )
-    return player_blocks_from_artifacts(task.artifact_dir, language=language, names=names)
+    """Player blocks for a task: its recording's (vts-lzad), which owns the
+    transcript. A task without a recording (a legacy row) has none."""
+    recording = await Repo(session).recording_for_task(task.id)
+    if recording is None:
+        return []
+    return await load_recording_player_blocks(recording, session)
 
 
 async def load_recording_player_blocks(
