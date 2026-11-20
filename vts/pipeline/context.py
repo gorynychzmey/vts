@@ -16,6 +16,7 @@ from vts.pipeline.token_budget import TokenBudgetConfig
 from vts.services.llm_backends import discover_n_ctx
 from vts.services.prompt_results import upsert_result_entry
 from vts.services.push import notify_user as push_notify_user
+from vts.services.recording_meta import recording_display_name
 
 
 class PipelineContext:
@@ -187,6 +188,12 @@ class PipelineContext:
                 # was queued) — the discovered media title must not clobber it.
                 return
             task.source_title = title
+            # The recording is listed from the first transcribed segment, so
+            # it must not keep the URL-derived title it was created with. Same
+            # rule as upsert_recording_for_task (vts-lzad).
+            recording = await repo.recording_for_task(task_id)
+            if recording is not None and not recording.title_is_custom:
+                recording.title = recording_display_name(title, task.source_url)
             await session.commit()
 
     def task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:

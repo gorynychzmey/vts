@@ -31,6 +31,18 @@ from vts.services.recording_state import initial_state
 REDACTED_RELATIVE = Path("outputs") / "redacted_transcript.txt"
 
 
+def _reachable(path: Path, kind: str) -> bool:
+    """is_file / is_dir that treats an unreadable path as absent.
+
+    The migration runs in the init container, where an exception (say a
+    PermissionError on a mount) would block startup (vts-lzad).
+    """
+    try:
+        return path.is_dir() if kind == "dir" else path.is_file()
+    except OSError:
+        return False
+
+
 def artifacts_available(conn: Any, artifacts_root: Path) -> bool:
     """Whether the artifacts volume looks mounted where this runs; used for a warning.
 
@@ -39,12 +51,12 @@ def artifacts_available(conn: Any, artifacts_root: Path) -> bool:
     check: tasks exist, yet none of their directories does. With no tasks at
     all there is nothing to read, and saying "available" costs nothing.
     """
-    if not artifacts_root.is_dir():
+    if not _reachable(artifacts_root, "dir"):
         return False
     dirs = conn.execute(text("SELECT artifact_dir FROM tasks")).scalars().all()
     if not dirs:
         return True
-    return any(d and Path(d).is_dir() for d in dirs)
+    return any(d and _reachable(Path(d), "dir") for d in dirs)
 
 
 def _existing_prompt_results(results: Any) -> list[dict]:
@@ -58,7 +70,7 @@ def _existing_prompt_results(results: Any) -> list[dict]:
         if not isinstance(entry, dict):
             continue
         path = entry.get("path")
-        if isinstance(path, str) and path and Path(path).is_file():
+        if isinstance(path, str) and path and _reachable(Path(path), "file"):
             kept.append(dict(entry))
     return kept
 
@@ -138,7 +150,7 @@ def _fill_content(conn: Any) -> tuple[int, int]:
     for row in rows:
         if row["redacted_path"] is None and row["artifact_dir"]:
             path = Path(row["artifact_dir"]) / REDACTED_RELATIVE
-            if path.is_file():
+            if _reachable(path, "file"):
                 conn.execute(
                     text("UPDATE recordings SET redacted_path = :path WHERE id = :id"),
                     {"path": str(path), "id": row["id"]},

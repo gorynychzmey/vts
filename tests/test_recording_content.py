@@ -221,3 +221,39 @@ async def test_restart_final_with_prompts_empties_recording_results(factory):
         await restart_final_with_prompts(repo, task, [{"source": "system", "id": "summary"}], _Bus())
         assert rec.prompt_results == []
         assert rec.summary_path is None
+
+
+async def test_source_title_discovery_updates_the_early_recording_title(factory):
+    from vts.db.models import Recording
+    from vts.db.repo import Repo
+
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v",
+            options={}, artifact_dir="/tmp/early",
+        )
+        await s.commit()
+        task_id = task.id
+    await _pipeline_ctx(factory).save_task_source_title(task_id, "Found title")
+    async with factory() as s:
+        rec = await Repo(s).recording_for_task(task_id)
+        assert rec.title == "Found title"
+
+
+async def test_source_title_discovery_keeps_a_custom_recording_title(factory):
+    from vts.db.repo import Repo
+
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v",
+            options={}, artifact_dir="/tmp/early2",
+        )
+        rec = await Repo(s).recording_for_task(task.id)
+        rec.title = "Mine"
+        rec.title_is_custom = True
+        await s.commit()
+        task_id = task.id
+    await _pipeline_ctx(factory).save_task_source_title(task_id, "Found title")
+    async with factory() as s:
+        rec = await Repo(s).recording_for_task(task_id)
+        assert rec.title == "Mine"

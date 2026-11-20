@@ -364,3 +364,76 @@ async def test_clone_fills_the_clone_recording_with_requested_content(
         assert [r.id for r in listed] == [rec.id]
     assert reindexed == [task_id]
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clone_sets_recording_derived_fields_without_indexing(tmp_path) -> None:
+    """The clone must not rely on reindex_task for the recording's derived fields.
+
+    reindex_task returns early when embeddings are off, so the clone has to call
+    upsert_recording_for_task itself: title from the donor, duration from the
+    cloned segments, prompt results from the kept entries (vts-lzad).
+    """
+    from tests._db import ensure_pgvector
+    from vts.db.models import AsrSegment
+    from vts.db.repo import Repo
+
+    engine = make_test_engine()
+    await ensure_pgvector(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    donor_user, clone_user = uuid.uuid4(), uuid.uuid4()
+    donor_dir = tmp_path / "donor"
+    clone_dir = tmp_path / "clone"
+    (donor_dir / "outputs").mkdir(parents=True)
+    (donor_dir / "outputs" / "transcript.txt").write_text("hello")
+    (donor_dir / "outputs" / "wanted.md").write_text("w")
+    wanted = {"source": "user", "id": "p-wanted", "name": "Wanted",
+              "path": str(donor_dir / "outputs" / "wanted.md"), "status": "done"}
+
+    async with session_factory() as session:
+        session.add(User(id=donor_user, username="donor"))
+        session.add(User(id=clone_user, username="clone"))
+        await session.commit()
+        repo = Repo(session)
+        donor = await repo.create_task(
+            user_id=donor_user, source_url="http://x/v", options={},
+            artifact_dir=str(donor_dir), source_title="Donor title",
+        )
+        donor.transcript_path = str(donor_dir / "outputs" / "transcript.txt")
+        await repo.set_task_prompt_results(donor, [wanted])
+        session.add_all([
+            AsrSegment(task_id=donor.id, segment_index=0, start_sec=0.0, end_sec=10.0, text="a"),
+            AsrSegment(task_id=donor.id, segment_index=1, start_sec=10.0, end_sec=42.5, text="b"),
+        ])
+        await repo.set_task_status(donor, TaskStatus.completed)
+        clone = await repo.create_task(
+            user_id=clone_user, source_url="http://x/v",
+            options={"prompts": [{"source": "user", "id": "p-wanted"}]},
+            artifact_dir=str(clone_dir),
+        )
+        await session.commit()
+        task_id, donor_id = clone.id, donor.id
+
+    # _settings() has no embedding_model, so the real reindex_task is a no-op.
+    proc = _make_processor(session_factory, _CapturingBus())
+    async with session_factory() as session:
+        repo = Repo(session)
+        task = await session.get(Task, task_id)
+        donor_row = await session.get(Task, donor_id)
+        await session.refresh(donor_row, attribute_names=["steps"])
+        await proc._clone_from_donor(session, repo, task, donor_row)
+        await session.commit()
+
+    async with session_factory() as session:
+        rec = await Repo(session).recording_for_task(task_id)
+        assert rec is not None
+        assert rec.title == "Donor title"
+        assert rec.duration_sec == 42.5
+        assert rec.meta["prompt_results"] == [
+            {**wanted, "path": str(clone_dir / "outputs" / "wanted.md")}
+        ]
+    await engine.dispose()

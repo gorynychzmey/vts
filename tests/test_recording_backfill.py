@@ -291,3 +291,31 @@ async def test_artifacts_available_detects_a_missing_or_empty_volume(factory, tm
     assert await check(root) is False  # empty mount point: no task directory exists
     (root / "task").mkdir()
     assert await check(root) is True
+
+
+@pytest.mark.asyncio
+async def test_unreadable_path_counts_as_missing(factory, tmp_path, monkeypatch):
+    # PermissionError from a stat must not abort the migration (it runs in the
+    # init container, where an exception blocks startup).
+    adir = tmp_path / "p"
+    memo = _write(adir / "outputs" / "prompt_memo.md")
+    results = [{"source": "user", "id": "memo", "status": "completed", "path": memo}]
+    async with factory() as s:
+        s.add(Task(
+            user_id=_USER, source_url="https://example.com/p", source_title="perm",
+            status=TaskStatus.completed, artifact_dir=str(adir), transcript_path="/t",
+            options={"prompt_results": results},
+        ))
+        await s.commit()
+
+    def _boom(self, *a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "is_file", _boom)
+    monkeypatch.setattr(Path, "is_dir", _boom)
+
+    counts = await _run(factory)
+
+    rec = (await _recordings(factory))["perm"]
+    assert counts["redacted"] == 0 and counts["prompt_results"] == 0
+    assert rec.prompt_results == []

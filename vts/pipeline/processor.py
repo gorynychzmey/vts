@@ -769,6 +769,11 @@ class TaskProcessor:
         # Copy ASR segments
         await repo.clone_asr_segments(donor.id, task.id)
 
+        # The recording's derived fields (title, duration from the cloned
+        # segments, language, prompt-result snapshot). reindex_task would do
+        # this too, but it returns early when embeddings are off (vts-lzad).
+        await repo.upsert_recording_for_task(task)
+
         # Mark task as completed. Through the repo rather than by hand: this
         # used to set the same three fields inline and so missed the
         # awaiting_step cleanup that set_task_status does (vts-47w6).
