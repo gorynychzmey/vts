@@ -25,7 +25,7 @@ The model we want gives each object one role:
   summary windows, probes).
 - **Recording** is the result. It is created when the task is created and is
   filled while the task runs — raw transcript first, then the processed one,
-  the summary, prompt results, speaker naming. The task keeps showing those
+  the summary, prompt results. The task keeps showing those
   texts, but as the recording's objects, not its own.
 
 The immediate reason is the tags feature (`vts-qwcj`): with this split, tags
@@ -39,8 +39,8 @@ settings, `vts-y1g8`) can build on.
   (all creation paths: URL form, file/multi-file upload, MCP/WebMCP
   `submit_video`, donor clone).
 - The recording is the single owner of content results: transcript paths,
-  processed transcript, summary, prompt results, language, duration, speaker
-  naming decisions.
+  processed transcript, summary, prompt results, language, duration.
+  Speaker naming is the one deliberate exception (see below).
 - Every reader of content (HTTP, UI, MCP, delivery, indexing) reads it from
   the recording.
 - Archiving removes only task runtime data; everything the recording owns
@@ -87,7 +87,7 @@ settings, `vts-y1g8`) can build on.
 | prompt results (`summary/results/*`) | recording (new `prompt_results` column) | `Task.options.prompt_results`, snapshot in `Recording.meta` |
 | detected language | recording (`language`) | `Task.options.detected_language`, copied |
 | duration | recording (`duration_sec`) | copied from `asr_segments` |
-| speaker naming (`match_decisions`), voice samples' origin (`voice_samples`) | recording (`recording_id` FK) | `source_task_id` FK |
+| speaker naming (`match_decisions`), voice samples' origin (`voice_samples`) | **task** — deliberate exception, see below | task (`source_task_id`) |
 | `outputs/speaker_matches.json`, `speaker_previews.json`, preview wavs | task (inputs of the naming dialog, see below) | task |
 | delivery attempts | **task** (see below) | task |
 
@@ -101,10 +101,23 @@ was listed among the FKs to move.)
 rebuilding the transcript, then the summary and prompts — runtime work, and an
 archived task no longer has a runtime. So the naming dialog's inputs
 (`diarization.json`, `speaker_matches.json`, previews) stay task runtime and
-archiving deletes them; the *outcome* of naming (`match_decisions`, the
-re-rendered transcript) belongs to the recording and survives. The
-recording-side naming endpoints keep today's gate: no resolve once the task is
-archived or gone (`can_resolve_speakers_task`).
+archiving deletes them. The re-rendered transcript belongs to the recording
+like any transcript. The recording-side naming endpoints keep today's gate: no
+resolve once the task is archived or gone (`can_resolve_speakers_task`).
+
+**Speaker naming decisions stay on the task — a deliberate exception**
+(Victor). `match_decisions` and `voice_samples` keep their `source_task_id`
+FK; nothing moves to `recording_id`. Reason: naming is produced and changed
+only by the task's runtime (diarization, the naming dialog), and only while the
+task is live and not archived. After that the decisions are only *read* —
+speaker names in the player and subtitles (resolved live, so a rename in the
+registry shows everywhere), the person/diarized filters, `show_speakers` — and
+every reader reaches them through `recordings.source_task_id`, a link that
+cannot break: an archived task stays in the database, and a task disappears
+only by deletion, which deletes its recording too. Moving the FK would cost a
+two-table data migration and ~10 repo methods and change no behaviour. Do not
+"fix" this. Revisit only if a recording ever outlives its task (e.g. a future
+"delete the task, keep the recording").
 
 **The 1:1 link stays where it is:** `recordings.source_task_id`, with its
 partial unique index. It already exists, all
@@ -157,7 +170,7 @@ runtime endpoints (`/log`, `/media`, status, steps) are unchanged.
 - **B. Staged, each stage its own release.** *(Chosen by Victor.)* Small
   steps, each verified on prod before the next; both current defects closed
   along the way. Costs more total time and temporary double-writing in stages
-  1–3.
+  1–2.
 - **C. Facade only.** Keep storage, make recording endpoints read through the
   task. Rejected: looks clean from outside, but the task stays the owner — the
   opposite of the goal, and tags would still hinge on the task.
@@ -201,19 +214,7 @@ task start, and the library would fill with empty entries (anti-goal #1).
   one-off script, not as a pure SQL migration. Readers must treat a missing
   file as "not available" (404 / absent tab), never a 500.
 
-### Stage 2 — speaker naming belongs to the recording
-
-- `match_decisions` and `voice_samples` get `recording_id`; migration fills
-  it through `recordings.source_task_id`. Keep `source_task_id` readable
-  until stage 4.
-- Repo speaker methods (`speaker_names_for_task(s)`, `decisions_for_task`,
-  `noise_labels_from_decisions`, `has_decisions_for_task`,
-  `diarized_task_ids`, `tasks_featuring_speaker`, …) get recording-keyed
-  equivalents; the person/diarized filters in corpus search and
-  `list_recordings` stop hopping through `source_task_id`.
-- Speaker resolution writes `recording_id`.
-
-### Stage 3 — readers move to the recording
+### Stage 2 — readers move to the recording
 
 - Recording endpoints get the full content set: transcript, processed,
   summary, subtitles, transcript entries, prompt results, speaker
@@ -225,14 +226,13 @@ task start, and the library would fill with empty entries (anti-goal #1).
 - `TaskOut` content fields (`transcript_path`, `summary_path`,
   `redacted_path`, `prompt_results`) are served from the recording.
 
-### Stage 4 — cleanup
+### Stage 3 — cleanup
 
 - Archiving deletes only task runtime data (the ownership table above);
   recording-owned files are kept.
 - Remove dual-writes; drop `Task.transcript_path`, `Task.summary_path`,
   `options.prompt_results` / `detected_language` reads,
-  `Recording.meta.prompt_results`, `match_decisions.source_task_id` /
-  `voice_samples.source_task_id` once nothing reads them.
+  `Recording.meta.prompt_results` once nothing reads them.
 
 ## Constraints
 
