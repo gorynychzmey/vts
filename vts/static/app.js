@@ -8444,6 +8444,8 @@ function applyLibraryMeta(root, item) {
     parts.push(formatDuration(item.duration_sec));
   }
   if (item.language) parts.push(String(item.language).toUpperCase());
+  if (item.state === "processing") parts.push(t("library.state_processing"));
+  else if (item.state === "incomplete") parts.push(t("library.state_incomplete"));
   if (!item.source_task_id) parts.push(t("library.detached"));
   meta.textContent = parts.join(" · ");
   if (parts.length) holder.appendChild(meta);

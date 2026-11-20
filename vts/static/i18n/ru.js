@@ -313,6 +313,8 @@ window.__VTS_I18N.ru = {
 "library.hint": "Обработанные записи. Они остаются здесь и после удаления задачи.",
 "library.empty": "Пока пусто.",
 "library.detached": "задача удалена",
+"library.state_processing": "обрабатывается",
+"library.state_incomplete": "неполная",
 "library.load_failed": "Не удалось загрузить библиотеку.",
 "action.share": "Поделиться результатом",
 "share.title": "Поделиться",

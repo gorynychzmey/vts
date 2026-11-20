@@ -313,6 +313,8 @@ window.__VTS_I18N.de = {
 "library.hint": "Verarbeitete Aufnahmen. Sie bleiben erhalten, auch wenn die Aufgabe gelöscht wurde.",
 "library.empty": "Noch nichts vorhanden.",
 "library.detached": "Aufgabe gelöscht",
+"library.state_processing": "wird verarbeitet",
+"library.state_incomplete": "unvollständig",
 "library.load_failed": "Bibliothek konnte nicht geladen werden.",
 "action.share": "Ergebnis teilen",
 "share.title": "Teilen",

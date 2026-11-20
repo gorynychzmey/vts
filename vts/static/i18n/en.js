@@ -313,6 +313,8 @@ window.__VTS_I18N.en = {
 "library.hint": "Processed recordings. These stay here after their task is gone.",
 "library.empty": "Nothing here yet.",
 "library.detached": "task deleted",
+"library.state_processing": "processing",
+"library.state_incomplete": "incomplete",
 "library.load_failed": "Could not load the library.",
 "action.share": "Share a result",
 "share.title": "Share",
