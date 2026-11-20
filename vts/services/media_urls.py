@@ -27,9 +27,9 @@ _PURPOSE = b"vts media url v1"
 
 def media_signing_key(settings: Any) -> bytes:
     """The HMAC key for media links, from the session secret."""
-    from vts.api.main import _resolve_session_secret
+    from vts.core.session_secret import resolve_session_secret
 
-    secret = _resolve_session_secret(
+    secret = resolve_session_secret(
         env_secret=settings.session_secret,
         secret_file=settings.session_secret_file,
     )
