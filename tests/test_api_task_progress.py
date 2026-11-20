@@ -229,6 +229,8 @@ def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> 
     (logs_dir / "task.log").write_text("old log", encoding="utf-8")
     (media_dir / "video.mkv").write_text("video", encoding="utf-8")
     (outputs_dir / "segments_manifest.json").write_text("{}", encoding="utf-8")
+    # The recording shares this directory, so its player data must survive too.
+    (outputs_dir / "transcript.json").write_text("{}", encoding="utf-8")
 
     task = SimpleNamespace(
         artifact_dir=str(tmp_path),
@@ -242,6 +244,7 @@ def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> 
     assert summary_path.exists()
     assert not (media_dir / "video.mkv").exists()
     assert not (outputs_dir / "segments_manifest.json").exists()
+    assert (outputs_dir / "transcript.json").exists()
     assert (logs_dir / "task.log").read_text(encoding="utf-8").strip() == ARCHIVED_LOG_MESSAGE
 
 

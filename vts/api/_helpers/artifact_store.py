@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 ARCHIVED_LOG_MESSAGE = "__VTS_LOG_ARCHIVED__"
 
+# A task and its recording share one artifact directory. Archiving ends the
+# task's job, not the recording's life, so everything the recording reads
+# (player, processed transcript, prompt results) must outlive it (vts-lzad).
+RECORDING_OWNED_RELPATHS: tuple[str, ...] = (
+    "outputs/transcript.txt",
+    "outputs/transcript.json",
+    "asr/segments_raw.json",
+    "outputs/redacted_transcript.txt",
+    "outputs/summary.md",
+    "outputs/summary.json",
+    "summary/final.md",
+    "summary/final.json",
+)
+# Every file under this directory is a prompt result and is kept as well.
+RECORDING_OWNED_DIR = "summary/results"
+
 def _archive_task_artifacts(task: Task) -> None:
     artifact_root = Path(task.artifact_dir)
     if not artifact_root.exists():
@@ -40,6 +56,16 @@ def _archive_task_artifacts(task: Task) -> None:
             continue
         if _is_path_within(root_resolved, path):
             keep_files.add(path.resolve())
+
+    for rel in RECORDING_OWNED_RELPATHS:
+        path = artifact_root / rel
+        if path.is_file() and _is_path_within(root_resolved, path):
+            keep_files.add(path.resolve())
+    results_dir = artifact_root / RECORDING_OWNED_DIR
+    if results_dir.is_dir():
+        for path in results_dir.rglob("*"):
+            if path.is_file() and _is_path_within(root_resolved, path):
+                keep_files.add(path.resolve())
 
     log_path = artifact_root / "logs" / "task.log"
     try:
