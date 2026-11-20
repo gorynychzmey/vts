@@ -294,8 +294,7 @@ async def test_clone_fills_the_clone_recording_with_requested_content(
     donor_user, clone_user = uuid.uuid4(), uuid.uuid4()
     donor_dir = tmp_path / "donor"
     clone_dir = tmp_path / "clone"
-    for sub in ("outputs",):
-        (donor_dir / sub).mkdir(parents=True)
+    (donor_dir / "outputs").mkdir(parents=True)
     (donor_dir / "outputs" / "transcript.txt").write_text("hello")
     (donor_dir / "outputs" / "summary.md").write_text("sum")
     (donor_dir / "outputs" / "wanted.md").write_text("w")
@@ -306,6 +305,9 @@ async def test_clone_fills_the_clone_recording_with_requested_content(
               "path": str(donor_dir / "outputs" / "wanted.md"), "status": "done"}
     unwanted = {"source": "user", "id": "p-unwanted", "name": "Unwanted",
                 "path": str(donor_dir / "outputs" / "unwanted.md"), "status": "done"}
+    # Requested by the clone, but the donor never produced its file.
+    missing = {"source": "user", "id": "p-missing", "name": "Missing",
+               "path": str(donor_dir / "outputs" / "missing.md"), "status": "done"}
 
     async with session_factory() as session:
         session.add(User(id=donor_user, username="donor"))
@@ -318,11 +320,12 @@ async def test_clone_fills_the_clone_recording_with_requested_content(
         )
         donor.transcript_path = str(donor_dir / "outputs" / "transcript.txt")
         donor.summary_path = str(donor_dir / "outputs" / "summary.md")
-        await repo.set_task_prompt_results(donor, [wanted, unwanted])
+        await repo.set_task_prompt_results(donor, [wanted, unwanted, missing])
         await repo.set_task_status(donor, TaskStatus.completed)
         clone = await repo.create_task(
             user_id=clone_user, source_url="http://x/v",
-            options={"prompts": [{"source": "user", "id": "p-wanted"}]},
+            options={"prompts": [{"source": "user", "id": "p-wanted"},
+                                 {"source": "user", "id": "p-missing"}]},
             artifact_dir=str(clone_dir),
         )
         await session.commit()
