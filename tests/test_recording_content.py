@@ -78,6 +78,9 @@ async def test_setters_without_recording_do_not_raise(factory):
             user_id=_USER, source_url="https://example.com/v",
             options={}, artifact_dir="/tmp/none",
         )
+        # create_task makes the recording; drop it to model a deleted one.
+        await s.delete(await repo.recording_for_task(task.id))
+        await s.flush()
         await repo.set_task_content(task, transcript_path="/t", redacted_path="/r")
         await repo.set_task_prompt_results(task, [{"id": "x"}])
         await repo.set_detected_language(task, "russian", 0.5)
@@ -85,3 +88,50 @@ async def test_setters_without_recording_do_not_raise(factory):
         assert task.transcript_path == "/t"
         assert task.options["detected_language"] == "russian"
         assert await repo.recording_for_task(task.id) is None
+
+
+async def test_create_task_creates_its_recording(factory):
+    from vts.db.models import RecordingState
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v", options={}, artifact_dir="/a",
+            source_title="Team sync",
+        )
+        rec = await Repo(s).recording_for_task(task.id)
+        assert rec is not None
+        assert (rec.state, rec.artifact_dir, rec.transcript_path) == (RecordingState.processing, "/a", None)
+        assert rec.user_id == _USER
+        assert rec.title == "Team sync"
+        assert rec.source_url == "https://example.com/v"
+        assert rec.recorded_at == task.created_at
+
+
+async def test_new_recording_is_not_in_the_library_until_it_has_text(factory):
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v", options={}, artifact_dir="/a",
+        )
+        await s.commit()
+        assert await Repo(s).count_recordings(_USER) == 0
+        await Repo(s).set_task_content(task, transcript_path="/a/t.txt")
+        await s.commit()
+        assert await Repo(s).count_recordings(_USER) == 1
+
+
+async def test_deleting_a_running_task_then_writing_content_is_a_noop(factory):
+    from vts.api._helpers.recordings import delete_task_with_recording
+    from sqlalchemy import select
+    from vts.db.models import Recording, Task
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v", options={}, artifact_dir="/a",
+        )
+        await s.commit()
+    async with factory() as s:
+        live = await s.get(Task, task.id)
+        await delete_task_with_recording(s, live)
+        await s.commit()
+    async with factory() as s:
+        await Repo(s).set_task_content(task, transcript_path="/x")  # stale object: no raise
+        await s.commit()
+        assert (await s.scalars(select(Recording))).all() == []

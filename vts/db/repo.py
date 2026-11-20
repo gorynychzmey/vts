@@ -117,6 +117,22 @@ class Repo:
             status=TaskStatus.queued,
         )
         self.session.add(task)
+        # Flushed first: created_at is a server default and the recording takes it.
+        await self.session.flush()
+        # The recording exists from the moment the task does, so its state can
+        # follow the pipeline (vts-lzad). It stays out of the library until it
+        # has text.
+        self.session.add(
+            Recording(
+                user_id=user_id,
+                source_task_id=task.id,
+                artifact_dir=artifact_dir,
+                title=recording_display_name(source_title, source_url),
+                source_url=source_url,
+                recorded_at=task.created_at,
+                state=RecordingState.processing,
+            )
+        )
         await self.session.flush()
         return task
 

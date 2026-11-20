@@ -382,3 +382,20 @@ async def test_prompts_list_does_not_make_a_second_copy(client):
     assert second_system[0]["id"] == first_system[0]["id"], (
         "the copy must be committed, not recreated per request"
     )
+
+
+@pytest.mark.asyncio
+async def test_post_api_tasks_creates_its_recording(authed_app, client, tmp_path, monkeypatch):
+    from sqlalchemy import select
+    from vts.db.models import Recording, RecordingState
+    monkeypatch.setenv("VTS_ARTIFACTS_ROOT", str(tmp_path))
+    from vts.core.config import get_settings
+    get_settings.cache_clear()
+    app, factory = authed_app
+    app.state.redis = _FakeRedis()
+    resp = await client.post("/api/tasks", json={"url": "https://example.com/v"})
+    assert resp.status_code == 200, resp.text
+    task_id = uuid.UUID(resp.json()["id"])
+    async with factory() as s:
+        rows = (await s.scalars(select(Recording).where(Recording.source_task_id == task_id))).all()
+    assert [r.state for r in rows] == [RecordingState.processing]
