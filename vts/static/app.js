@@ -639,6 +639,35 @@ async function toggleSubtitlesView(taskEl, taskId) {
   await loadTabContent(taskEl, taskId, "transcript");
 }
 
+// Where a card reads its content from (vts-lzad). A library card shows a
+// RECORDING, which outlives the task that produced it, so its tabs read the
+// recording's own routes; a task card keeps the task routes. One mapping for
+// every reader (tabs, subtitles, share) so the two kinds cannot drift apart.
+// `variant` is a task-route suffix: transcript | subtitles | redacted |
+// summary | results/{source}/{id}.
+const RECORDING_CONTENT_PATHS = {
+  transcript: "text/raw",
+  subtitles: "subtitles",
+  redacted: "text/redacted",
+  summary: "text/summary",
+};
+
+function cardRecordingId(taskEl) {
+  if (!taskEl || taskEl.dataset.cardKind !== "recording") {
+    return "";
+  }
+  return String((taskEl._runtime && taskEl._runtime.recordingId) || "");
+}
+
+function cardContentUrl(taskEl, taskId, variant) {
+  const recordingId = cardRecordingId(taskEl);
+  if (!recordingId) {
+    return `/api/tasks/${taskId}/${variant}`;
+  }
+  const suffix = variant.startsWith("results/") ? variant : RECORDING_CONTENT_PATHS[variant];
+  return `/api/recordings/${encodeURIComponent(recordingId)}/${suffix}`;
+}
+
 async function loadTabContent(taskEl, taskId, tabName) {
   if (tabName === "log") {
     const panel = getTabPanel(taskEl, "log");
@@ -693,7 +722,7 @@ async function loadTabContent(taskEl, taskId, tabName) {
   if (!endpoint) {
     return "";
   }
-  const text = await api(`/api/tasks/${taskId}/${endpoint}`).catch((err) => err.message);
+  const text = await api(cardContentUrl(taskEl, taskId, endpoint)).catch((err) => err.message);
   const value = String(text || "");
   const panel = getTabPanel(taskEl, tabName);
   if (panel) {
@@ -873,11 +902,11 @@ async function loadPromptResult(taskEl, taskId, ref, tabName) {
   const known = promptResultStatus(taskEl, { source, id }) !== "";
   let text;
   if (source === "system" && id === "summary" && !known) {
-    text = await api(`/api/tasks/${taskId}/summary`).catch((err) => err.message);
+    text = await api(cardContentUrl(taskEl, taskId, "summary")).catch((err) => err.message);
   } else {
-    text = await api(
-      `/api/tasks/${taskId}/results/${encodeURIComponent(source)}/${encodeURIComponent(id)}`
-    ).catch((err) => err.message);
+    text = await api(cardContentUrl(
+      taskEl, taskId, `results/${encodeURIComponent(source)}/${encodeURIComponent(id)}`
+    )).catch((err) => err.message);
   }
   const out = String(text || "");
   if (panel) {
@@ -971,14 +1000,14 @@ function canShareFiles() {
 // load it — so sharing never invents a second path to the same artifact.
 async function loadShareContent(taskEl, taskId, option) {
   if (option.view === "subtitles") {
-    const text = await api(`/api/tasks/${taskId}/subtitles`).catch((err) => err.message);
+    const text = await api(cardContentUrl(taskEl, taskId, "subtitles")).catch((err) => err.message);
     return String(text || "");
   }
   const wasSubtitles = isSubtitlesView(taskEl);
   if (option.tab === "transcript" && wasSubtitles) {
     // The tab is currently showing subtitles; the plain transcript is wanted
     // here, so read it directly rather than disturbing the visible view.
-    const text = await api(`/api/tasks/${taskId}/transcript`).catch((err) => err.message);
+    const text = await api(cardContentUrl(taskEl, taskId, "transcript")).catch((err) => err.message);
     return String(text || "");
   }
   const panel = getTabPanel(taskEl, option.tab);
@@ -1929,6 +1958,9 @@ function createRuntime(task) {
     promptRefs: selectedPromptRefs((task.options || {})),
     redactedReady: Boolean(task.redacted_path),
     mediaReady: Boolean(task.media_path),
+    // Set only on a library card: the recording it shows, which addresses its
+    // content and its player (vts-lzad). A task card has none.
+    recordingId: String(task.recording_id || ""),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
@@ -2300,7 +2332,9 @@ function renderTaskTitle(taskEl) {
   // gone (TTL / archive / not-yet-downloaded), there's nothing to play — the
   // name goes unclickable + "expired", matching what uploads already did.
   const mediaReady = Boolean(runtime.mediaReady);
-  const playerHref = buildPath(`/player/${encodeURIComponent(runtime.id)}`);
+  // A library card opens the player by its recording, which /player/{id}
+  // accepts and which outlives the task (vts-lzad).
+  const playerHref = buildPath(`/player/${encodeURIComponent(cardRecordingId(taskEl) || runtime.id)}`);
 
   const linkLabel = hasName ? runtime.displayName : (isUpload ? uploadName : runtime.sourceUrl);
   // Into the inner span, NOT the anchor: the anchor also holds the player glyph,
@@ -2645,8 +2679,14 @@ function renderTaskCard(task, options = {}) {
       // never opened. An EMPTY result does not count as loaded — a card expanded
       // while diarization is still running gets [] and must retry later, or the
       // panel would stay empty for the life of the page.
-      if (!root._speakerRows || !root._speakerRows.length) void loadSpeakerPanel(root, task.id);
-      else renderSpeakerPanel(root, task.id);
+      // Speakers belong to the task. A detached library card has none to ask:
+      // its task.id is the recording's, and the request would only 404.
+      const hasTask = root.dataset.cardKind !== "recording" || Boolean(root.dataset.sourceTaskId);
+      if (hasTask && (!root._speakerRows || !root._speakerRows.length)) {
+        void loadSpeakerPanel(root, task.id);
+      } else if (hasTask) {
+        renderSpeakerPanel(root, task.id);
+      }
     } else {
       stopLogPolling(root);
     }
@@ -8268,10 +8308,11 @@ presetDuplicateBtn?.addEventListener("click", () => {
 // at once; two views let each show only what applies.
 //
 // The Library reuses renderTaskCard rather than growing a second card
-// implementation. A recording's artifacts live at the same /api/tasks/{id}/…
-// paths, so the card is fed the recording's source_task_id and marked
-// `data-card-kind="library"`; what belongs to a job (progress, status, log,
-// restart, diarize) is hidden by that marker instead of being reimplemented.
+// implementation. The card is marked `data-card-kind="recording"` and reads
+// its content from /api/recordings/{id}/… (cardContentUrl), so it works after
+// its task is gone; task-addressed actions use the recording's source_task_id.
+// What belongs to a job (progress, status, log, restart, diarize) is hidden by
+// that marker instead of being reimplemented.
 
 const mainTabs = document.querySelectorAll(".main-tab");
 const libraryList = document.getElementById("library-list");
@@ -8386,7 +8427,10 @@ mainTabs.forEach((tab) => {
 // running.
 function recordingAsTask(recording) {
   return {
+    // Task-addressed actions go through this id, the task's when there is
+    // one; content and the player go through recording_id (vts-lzad).
     id: recording.source_task_id || recording.id,
+    recording_id: recording.id,
     source_url: recording.source_url || "",
     source_title: displayNameFor(recording.title, recording.source_url),
     status: "completed",
@@ -8401,6 +8445,8 @@ function recordingAsTask(recording) {
     // this the tab sat disabled even for recordings that have one.
     redacted_path: recording.has_redacted ? "present" : null,
     summary_path: recording.has_summary ? "present" : null,
+    // Makes the title a player link; the player is addressed by the recording.
+    media_path: recording.has_media ? "present" : null,
     // A user prompt's result ("Memo") is a tab too. These are snapshotted onto
     // the recording, so they are here even when the task is long gone.
     options: {
@@ -8428,8 +8474,8 @@ function buildLibraryCard(item) {
   }
   root.removeAttribute("data-task-id");
   if (!item.source_task_id) {
-    // The task is gone, and its artifacts may be too. Say so rather than
-    // offering tabs that will 404.
+    // The task is gone. The content stays readable through the recording, but
+    // nothing that acts on the task is offered.
     root.dataset.detached = "1";
   }
   applyLibraryMeta(root, item);
@@ -8928,11 +8974,11 @@ function renderLibraryHits(query, hits) {
     text.textContent = hit.text || "";
     row.append(text);
 
-    // Expand the passage IN PLACE, from the recording. Linking to
-    // /player/{task}?t= was the obvious move and the wrong one: the player is
-    // addressed by TASK, so the link 404s once the task is deleted — it made a
-    // library result depend on a job that may be long gone. The transcript
-    // belongs to the recording, so that is where it is read from.
+    // Expand the passage IN PLACE, from the recording. Linking only to
+    // /player/{task}?t= was the obvious move and the wrong one: it 404'd once
+    // the task was deleted, which made a library result depend on a job that
+    // may be long gone. The transcript belongs to the recording, so that is
+    // where it is read from.
     // Icon buttons rather than two differently-shaped text links: they are two
     // ways of following the same hit, so they belong in one row of equals.
     const actions = document.createElement("div");
@@ -8975,15 +9021,15 @@ function renderLibraryHits(query, hits) {
       }
     });
     actions.append(expand);
-    // Watching the moment is genuinely useful — it just must not be the ONLY
-    // way to follow a hit, because the player is addressed by task and dies
-    // with it. So it sits beside the expander and is simply absent when the
-    // task is gone.
-    if (hit.source_task_id) {
+    // Watching the moment sits beside the expander. The player is opened by
+    // the RECORDING (vts-lzad): /player/{id} takes a recording id, plays the
+    // media while the task has it, and falls back to the transcript with the
+    // cited sentence marked once the task is gone — so the link never dies.
+    if (hit.recording_id) {
       const link = document.createElement("a");
       link.className = "icon-btn ghost library-hit-link";
       link.href = buildPath(
-        `/player/${encodeURIComponent(hit.source_task_id)}?t=${encodeURIComponent(
+        `/player/${encodeURIComponent(hit.recording_id)}?t=${encodeURIComponent(
           String(Math.floor(hit.start_sec || 0))
         )}`
       );

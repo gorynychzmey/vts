@@ -2187,9 +2187,10 @@ input[type="file"] {
    controls post to task endpoints — on a recording they would either fail or
    quietly edit something the card is not showing. */
 .task[data-card-kind="recording"] .speaker-box,
-/* Opening the player and downloading media go through the TASK, which may be
-   gone — and archiving means "free the space this JOB used", which a recording
-   has no equivalent of. */
+/* Downloading media goes through the TASK, which may be gone — and archiving
+   means "free the space this JOB used", which a recording has no equivalent
+   of. The player is reached from the card's title, which opens it by the
+   recording (vts-lzad); the menu entry stays out of the recording's menu. */
 .task[data-card-kind="recording"] .task-player-btn,
 .task[data-card-kind="recording"] .download-media-btn,
 .task[data-card-kind="recording"] .archive-btn {

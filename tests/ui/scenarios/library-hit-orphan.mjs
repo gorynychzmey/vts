@@ -1,10 +1,11 @@
 // A search hit whose task has been deleted (vts-lib3).
 //
 // This is the case that motivated reading passages through the RECORDING. The
-// player is addressed by task and 404s once the task is gone, so a hit that
-// offered only that link would be a dead end for exactly the recordings the
-// library exists to keep. The expander must still work, and no player link may
-// be offered.
+// player used to be addressed by task and 404'd once the task was gone, so a
+// hit that offered only that link was a dead end for exactly the recordings the
+// library exists to keep. The expander must still work, and the player link
+// must address the RECORDING — /player/{id} takes a recording id and serves a
+// transcript-only page when the task is gone (vts-lzad).
 import { startStubServer, launch, openPage } from "../harness.mjs";
 
 export const name = "library-hit-orphan";
@@ -67,7 +68,7 @@ export async function run() {
       const el = document.querySelector("#library-hits-list .library-hit");
       if (!el) return null;
       return {
-        playerLink: Boolean(el.querySelector("a[href*='/player/']")),
+        playerHref: el.querySelector("a[href*='/player/']")?.getAttribute("href") || "",
         hasExpand: Boolean(el.querySelector(".library-hit-expand")),
       };
     });
@@ -76,8 +77,11 @@ export async function run() {
       failures.push("the search produced no hit at all");
       return failures;
     }
-    if (shape.playerLink) {
-      failures.push("a dead player link was offered for a deleted task");
+    if (!shape.playerHref.endsWith(`/player/${REC_ID}?t=120`)) {
+      failures.push(
+        `the player link is ${JSON.stringify(shape.playerHref)}, expected /player/${REC_ID}?t=120 — ` +
+        `a hit whose task is gone still has its recording`
+      );
     }
     if (!shape.hasExpand) {
       failures.push("no way to read the passage — the hit is a dead end");

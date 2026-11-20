@@ -364,6 +364,18 @@ CAPABILITIES: list[Cap] = [
     },
     {
         "entity": "Recording",
+        "action": "Read a recording's tabs",
+        "label": "tab.transcript",
+        "endpoints": [
+            "GET /api/recordings/{recording_id}/text/{variant}",
+            "GET /api/recordings/{recording_id}/subtitles",
+            "GET /api/recordings/{recording_id}/results/{source}/{ref}",
+        ],
+        "screen": "Library tab — recording card tabs (transcript, processed, summary, prompt results), subtitles toggle and share",
+        "states": "read from the recording, so they work after the originating task is deleted",
+    },
+    {
+        "entity": "Recording",
         "action": "Rename a recording",
         "label": "library.rename",
         "endpoints": ["PATCH /api/recordings/{recording_id}"],
@@ -446,8 +458,8 @@ CAPABILITIES: list[Cap] = [
         "entity": "Task artefact",
         "action": "Play media alongside transcript",
         "label": "tasks.open_player",
-        "endpoints": ["GET /player/{task_id}", "GET /api/tasks/{task_id}/transcript-entries"],
-        "screen": "Standalone player page opened from the task card",
+        "endpoints": ["GET /player/{item_id}", "GET /api/tasks/{task_id}/transcript-entries"],
+        "screen": "Standalone player page opened from the task card, a library card or a search hit (task or recording id)",
         "states": "media + transcript present",
     },
     {

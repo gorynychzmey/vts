@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 59 capabilities · 109 routes (80 in the OpenAPI schema, 29 hidden) · 41 MCP tools · 444 English UI strings.
+**Counts:** 60 capabilities · 113 routes (83 in the OpenAPI schema, 30 hidden) · 41 MCP tools · 444 English UI strings.
 
 ## Capabilities by entity
 
@@ -38,7 +38,7 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Read task log | Log | any | `GET /api/tasks/{task_id}/log` | Task card — Log tab |
 | Copy / download open tab | Download the open tab's content as a file | tab has content | — | Tab toolbar (`.tab-copy-btn`, `.tab-save-btn`) — client-side, no endpoint |
 | Download original media | Download the original media file | media present | `GET /api/tasks/{task_id}/media` | Task card toolbar; hidden once the retention policy expires the file (`tasks.media_expired_badge`) |
-| Play media alongside transcript | Open player with transcript | media + transcript present | `GET /player/{task_id}`<br>`GET /api/tasks/{task_id}/transcript-entries` | Standalone player page opened from the task card |
+| Play media alongside transcript | Open player with transcript | media + transcript present | `GET /player/{item_id}`<br>`GET /api/tasks/{task_id}/transcript-entries` | Standalone player page opened from the task card, a library card or a search hit (task or recording id) |
 | Fetch a single prompt result | — | result exists | `GET /api/tasks/{task_id}/results/{source}/{ref}` | Backing endpoint for the Summary tab result selector — not a screen of its own |
 
 ### Recording
@@ -47,6 +47,7 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | --- | --- | --- | --- | --- |
 | Browse the library | Library | one recording per task, outliving it; a detached one says so | `GET /api/recordings` | Library tab on the main screen: same cards as Tasks, minus progress/status/log/restart |
 | Read a recording's transcript | Show in transcript | works after the originating task is deleted; windowed with around_sec | `GET /api/recordings/{recording_id}/transcript` | Library tab — 'Show in transcript' on a search hit |
+| Read a recording's tabs | Raw transcript | read from the recording, so they work after the originating task is deleted | `GET /api/recordings/{recording_id}/text/{variant}`<br>`GET /api/recordings/{recording_id}/subtitles`<br>`GET /api/recordings/{recording_id}/results/{source}/{ref}` | Library tab — recording card tabs (transcript, processed, summary, prompt results), subtitles toggle and share |
 | Rename a recording | Rename recording | a chosen name stops following the task; clearing it resumes | `PATCH /api/recordings/{recording_id}` | Library tab — recording card menu |
 | Search the corpus | — | returns nothing below the relevance threshold, never the nearest passages | `GET /api/search` | API and the search_transcripts MCP tool (no page yet) |
 | Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library tab — recording card |
@@ -245,6 +246,7 @@ Machine-facing routes — the OAuth authorisation-server endpoints that MCP clie
 
 Routes not claimed by any capability above (each is a documentation gap):
 
+- `GET /api/recordings/{recording_id}/entries`
 - `GET /api/recordings/{recording_id}/media`
 - `GET /api/recordings/{recording_id}/speaker-previews/{speaker_label}/{index}/audio`
 - `GET /api/tasks/count`

@@ -241,6 +241,7 @@ export async function run() {
         // A citation must not depend on the TASK: /player/{task} 404s once the
         // task is deleted, and a library result is about the recording.
         playerLink: Boolean(el.querySelector("a[href*='/player/']")),
+        playerHref: el.querySelector("a[href*='/player/']")?.getAttribute("href") || "",
         hasExpand: Boolean(el.querySelector(".library-hit-expand")),
         // Two ways to follow one hit, so they read as a pair of equals.
         bothAreIcons: Boolean(el.querySelector(".library-hit-actions .icon-btn.library-hit-expand"))
@@ -260,6 +261,10 @@ export async function run() {
       // passage — and only the second survives the task's deletion.
       if (!hit.playerLink) {
         failures.push("no player link on a hit whose task is alive");
+      } else if (!hit.playerHref.endsWith(`/player/${REC_ID}?t=754`)) {
+        // By recording even while the task is alive (vts-lzad): the link
+        // must not change meaning, or die, when the task is deleted.
+        failures.push(`the player link is ${JSON.stringify(hit.playerHref)}, expected /player/${REC_ID}?t=754`);
       }
       if (!hit.hasExpand) failures.push("no way to see the passage in its transcript");
       if (!hit.bothAreIcons) {
