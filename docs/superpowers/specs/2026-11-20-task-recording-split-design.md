@@ -77,7 +77,8 @@ settings, `vts-y1g8`) can build on.
 | Item | Owner after the refactor | Today |
 |---|---|---|
 | media, `audio_16k*.wav`, probes, `segments_manifest.json`, `language_detection.json` | task | task |
-| `asr/segments_raw.json`, `asr_segments` table | task (intermediate) | task |
+| `asr_segments` table | task (intermediate) | task |
+| `asr/segments_raw.json` | recording — the player's sentence splits read it (amended in stage 2) | task |
 | `outputs/diarization.json`, summary windows/chunks/notes, `*_prompt.md` | task | task |
 | `logs/task.log`, steps, `summary_progress`, `awaiting_step` | task | task |
 | `options` as the *request* (language asked, diarize, prompts, delivery, source files) | task | task |
@@ -243,25 +244,56 @@ task start, and the library would fill with empty entries (anti-goal #1).
   one-off script, not as a pure SQL migration. Readers must treat a missing
   file as "not available" (404 / absent tab), never a 500.
 
-### Stage 2 — readers move to the recording
+### Stage 2 — archiving keeps results, readers move to the recording
 
-- Recording endpoints get the full content set: transcript, processed,
-  summary, subtitles, transcript entries, prompt results, speaker
-  matches/previews/resolve (gated on a live, non-archived task, as above),
-  summary restart; a web player addressed by recording.
-- Web UI (`app.js`, ~12 call sites) and MCP content tools switch to them;
-  task-addressed endpoints and tools become the adapters described above.
-- Delivery's `resolve_variant` reads from the recording.
+(Amended 2026-11-20 after stage 1 shipped; inventory of readers taken from the
+code at b00c09f.)
+
+- **First, archiving keeps what the recording owns** — before any reader
+  depends on the recording's own fields: the raw transcript (`.txt` and
+  `transcript.json`), `asr/segments_raw.json` (the player's sentence splits,
+  so in practice a result), the processed transcript, the summary
+  (`summary/final.*`, `outputs/summary.*`) and prompt results
+  (`summary/results/*`). Archiving still deletes media, the other
+  intermediates, the speaker-naming inputs, and empties the log.
+- **One read layer on the recording** (`vts/services/recording_artifacts.py`):
+  the processed transcript via `Recording.redacted_path`, prompt results via
+  the `Recording.prompt_results` column (not `meta`), with the system summary
+  falling back to `summary_path`. Every reader goes through it.
+- **HTTP.** Recording endpoints get the content set the task side has:
+  plain text with the same slicing (raw, processed, summary), transcript
+  entries, subtitles with resolved names, prompt result by ref. The task
+  endpoints for content become adapters: task → its recording → the same code.
+  `/player/{id}` accepts a task or a recording id; its blocks come from the
+  recording, its media from the task.
+- **Speaker naming, summary restart and deliveries stay task-addressed.** They
+  are actions of the task runtime (naming freezes at archive; a restart runs
+  the task; a delivery attempt is a processing event). A library card reaches
+  them through its `source_task_id`.
+- Web UI: library cards read their tabs through the recording endpoints; task
+  cards keep the task endpoints (now adapters). Search hits link the player by
+  recording id.
+- MCP: task content tools (`get_transcript`, `get_prompt_result`,
+  `wait_for_task`) read through the recording; recording tools and MCP Apps
+  read the `prompt_results` column, not `meta`.
+- Delivery's `resolve_variant` reads from the recording, and takes duration
+  from `Recording.duration_sec`.
 - `TaskOut` content fields (`transcript_path`, `summary_path`,
-  `redacted_path`, `prompt_results`) are served from the recording.
+  `redacted_path`, `options.prompt_results`, character stats) are served from
+  the recording.
 
 ### Stage 3 — cleanup
 
-- Archiving deletes only task runtime data (the ownership table above);
-  recording-owned files are kept.
-- Remove dual-writes; drop `Task.transcript_path`, `Task.summary_path`,
-  `options.prompt_results` / `detected_language` reads,
-  `Recording.meta.prompt_results` once nothing reads them.
+- Writers write the recording only: the setters stop writing
+  `Task.transcript_path` / `summary_path` / `options.prompt_results`;
+  `upsert_recording_for_task` stops copying content from the task; the
+  pipeline's own checks read the recording.
+- `options.detected_language` stays: it is the pipeline's runtime input for
+  later steps (task-owned); `Recording.language` is the result.
+- A migration drops `tasks.transcript_path`, `tasks.summary_path` and
+  `options.prompt_results`, and `Recording.meta.prompt_results`. Its
+  downgrade re-adds the columns and refills them from the recordings, so the
+  previous image can run again.
 
 ## Constraints
 
