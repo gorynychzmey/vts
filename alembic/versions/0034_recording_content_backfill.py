@@ -5,8 +5,9 @@ and `prompt_results` on recordings that still have their task, from the files
 on disk. See vts/services/recording_backfill.py.
 
 The files live on the data volume, so the content half needs it mounted where
-migrations run, as the pod's migrate container has it. Where it is not, only
-the recordings are created and a notice is printed.
+migrations run, as the pod's migrate container has it. Each file is checked on
+its own path; when the artifacts root looks missing a warning is printed, but
+the fill still runs, filling only what it can reach.
 
 Revision ID: 0034_recording_content_backfill
 Revises: 0033_recording_content

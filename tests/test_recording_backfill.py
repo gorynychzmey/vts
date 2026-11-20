@@ -207,28 +207,30 @@ async def test_detached_recording_is_left_alone(factory, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_without_artifacts_only_creates(factory, tmp_path, capsys):
+async def test_root_check_missing_still_fills_reachable_files(factory, tmp_path, capsys):
+    # The root check can be wrong (configured artifacts_root differs from the
+    # mount), and the migration runs once: a skipped fill would be lost for
+    # good. Each file is checked on its own, so the check only warns.
     adir = tmp_path / "n"
-    _write(adir / "outputs" / "redacted_transcript.txt")
+    redacted = _write(adir / "outputs" / "redacted_transcript.txt")
     memo = _write(adir / "outputs" / "prompt_memo.md")
+    results = [{"source": "user", "id": "memo", "status": "completed", "path": memo}]
     async with factory() as s:
         s.add(Task(
             user_id=_USER, source_url="https://example.com/n", source_title="no volume",
             status=TaskStatus.running, artifact_dir=str(adir),
-            options={"prompt_results": [
-                {"source": "user", "id": "memo", "status": "completed", "path": memo},
-            ]},
+            options={"prompt_results": results},
         ))
         await s.commit()
 
     counts = await _run(factory, available=False)
 
     rec = (await _recordings(factory))["no volume"]
-    assert counts == {"created": 1, "redacted": 0, "prompt_results": 0}
+    assert counts == {"created": 1, "redacted": 1, "prompt_results": 1}
     assert rec.state is RecordingState.processing
-    assert rec.redacted_path is None
-    assert rec.prompt_results == []
-    assert "artifacts" in capsys.readouterr().out
+    assert rec.redacted_path == redacted
+    assert rec.prompt_results == results
+    assert "artifacts root not found" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

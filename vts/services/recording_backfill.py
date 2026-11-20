@@ -32,7 +32,7 @@ REDACTED_RELATIVE = Path("outputs") / "redacted_transcript.txt"
 
 
 def artifacts_available(conn: Any, artifacts_root: Path) -> bool:
-    """Whether the artifacts volume is mounted where this runs.
+    """Whether the artifacts volume looks mounted where this runs; used for a warning.
 
     The image does not create the artifacts root, so a missing directory means
     the volume is not there. An empty mount point is caught by the second
@@ -164,17 +164,19 @@ def backfill_recording_content(conn: Any, *, artifacts_available: bool) -> dict[
     """Data migration: create missing recordings and fill their content fields.
 
     `conn` is a synchronous SQLAlchemy connection inside the migration's
-    transaction. Returns how many rows each part changed. Without the
-    artifacts volume only the recordings are created: deciding which files
-    exist is impossible there, and filling nothing would look the same as
-    "nothing to fill".
+    transaction. Returns how many rows each part changed.
+
+    `artifacts_available` only decides whether a warning is printed. The fill
+    always runs: it checks every file on its own absolute path, so without the
+    volume it writes nothing anyway, while a root check that is wrong (the
+    configured artifacts_root differing from where the volume is mounted)
+    would otherwise skip the fill for good, since this migration runs once.
     """
-    created = _create_missing(conn)
     if not artifacts_available:
         print(
-            "recording content: artifacts volume not available, skipped "
-            "redacted_path and prompt_results"
+            "recording content: artifacts root not found; content fields filled "
+            "only where files are reachable"
         )
-        return {"created": created, "redacted": 0, "prompt_results": 0}
+    created = _create_missing(conn)
     redacted, prompt_results = _fill_content(conn)
     return {"created": created, "redacted": redacted, "prompt_results": prompt_results}
