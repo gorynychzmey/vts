@@ -188,3 +188,25 @@ async def test_list_recordings_offers_cursors_and_task_filter() -> None:
         assert name in props, f"list_recordings does not accept {name}"
     for name in ("limit", "offset"):
         assert name in props
+
+
+async def test_list_recordings_rejects_half_cursor_pairs_and_bad_order() -> None:
+    """Rejected before any database access, so no fixtures are needed."""
+    import uuid
+
+    from fastmcp import Client
+
+    from vts.mcp.server import build_mcp_server
+
+    async with Client(build_mcp_server()) as client:
+        for args in (
+            {"before_ts": "2026-01-01T00:00:00Z"},
+            {"before_id": str(uuid.uuid4())},
+            {"after_ts": "2026-01-01T00:00:00Z"},
+            {"after_id": str(uuid.uuid4())},
+            {"order": "sideways"},
+        ):
+            result = await client.call_tool(
+                "list_recordings", args, raise_on_error=False
+            )
+            assert result.is_error is True, f"{args} was accepted"

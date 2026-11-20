@@ -116,6 +116,43 @@ async def test_cursor_pages_do_not_overlap_after_insert_on_top(factory):
 
 
 @pytest.mark.asyncio
+async def test_cursor_pages_with_equal_listed_at_do_not_overlap_or_skip(factory):
+    stamp = utcnow()
+    async with factory() as session:
+        recs = []
+        for i in range(3):
+            rec = Recording(
+                id=uuid.uuid4(), user_id=_USER, title=str(i),
+                artifact_dir=f"/tmp/tie-{i}", transcript_path=f"/tmp/tie-{i}/t.txt",
+                listed_at=stamp,
+            )
+            session.add(rec)
+            recs.append(rec)
+        await session.flush()
+        repo = Repo(session)
+        expected_desc = sorted((r.id for r in recs), reverse=True)
+
+        seen = []
+        cursor = None
+        for _ in range(3):
+            page = await repo.list_recordings(_USER, limit=1, before=cursor)
+            assert len(page) == 1
+            seen.append(page[0].id)
+            cursor = (page[0].listed_at, page[0].id)
+        assert seen == expected_desc
+        assert await repo.list_recordings(_USER, limit=1, before=cursor) == []
+
+        seen_asc = []
+        cursor = (stamp - timedelta(seconds=1), uuid.UUID(int=0))
+        for _ in range(3):
+            page = await repo.list_recordings(_USER, limit=1, after=cursor, order="asc")
+            assert len(page) == 1
+            seen_asc.append(page[0].id)
+            cursor = (page[0].listed_at, page[0].id)
+        assert seen_asc == sorted(expected_desc)
+
+
+@pytest.mark.asyncio
 async def test_task_ids_filter_returns_that_tasks_recording(authed_app, client):
     from tests.conftest import _TEST_USER_ID
 
@@ -169,13 +206,16 @@ async def test_http_cursor_pages(authed_app, client):
 
     page1 = (await client.get("/api/recordings", params={"limit": 2})).json()["items"]
     assert len(page1) == 2
+    all_ids = {i["id"] for i in (await client.get("/api/recordings")).json()["items"]}
     tail = page1[-1]
     page2 = await client.get(
         "/api/recordings",
         params={"limit": 2, "before_ts": tail["listed_at"], "before_id": tail["id"]},
     )
     assert page2.status_code == 200, page2.text
-    assert len(page2.json()["items"]) == 1
+    items2 = page2.json()["items"]
+    assert len(items2) == 1
+    assert items2[0]["id"] in all_ids - {i["id"] for i in page1}
 
 
 @pytest.mark.asyncio

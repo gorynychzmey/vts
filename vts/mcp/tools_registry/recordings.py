@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from fastapi import HTTPException
 from fastmcp import FastMCP
@@ -166,7 +167,7 @@ def register(mcp: FastMCP) -> None:
         before_id: uuid.UUID | None = None,
         after_ts: datetime | None = None,
         after_id: uuid.UUID | None = None,
-        order: str = "desc",
+        order: Literal["asc", "desc"] = "desc",
         task_ids: list[uuid.UUID] | None = None,
     ) -> RecordingList:
         """List the recordings in the library, newest first (by when each got
@@ -187,8 +188,9 @@ def register(mcp: FastMCP) -> None:
         case-insensitively on any part) or `diarized` to get only recordings
         that do or do not have identified voices.
 
-        `total` counts everything matching the filters, not this page, so
-        `offset` + len(items) < total means there is more to fetch.
+        `total` counts everything matching the filters, not this page. With
+        `offset` paging, `offset` + len(items) < total means there is more to
+        fetch; with cursors, a page shorter than `limit` means the end.
         """
         if order not in ("asc", "desc"):
             raise ValueError("order must be 'asc' or 'desc'")

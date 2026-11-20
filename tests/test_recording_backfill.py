@@ -319,3 +319,39 @@ async def test_unreadable_path_counts_as_missing(factory, tmp_path, monkeypatch)
     rec = (await _recordings(factory))["perm"]
     assert counts["redacted"] == 0 and counts["prompt_results"] == 0
     assert rec.prompt_results == []
+
+
+@pytest.mark.asyncio
+async def test_created_recording_keeps_the_task_creation_time_and_lists_there(factory, tmp_path):
+    """A recording made by the backfill is dated by its task, not by the migration.
+
+    Otherwise backfill_listed_at stamps all of them with one migration-time
+    instant and they sort above every real recording (vts-lzad).
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from vts.db.models import utcnow
+    from vts.services.recording_backfill import backfill_listed_at
+
+    old = utcnow() - timedelta(days=90)
+    adir = tmp_path / "old"
+    transcript = _write(adir / "outputs" / "transcript.txt")
+    async with factory() as s:
+        task = Task(
+            user_id=_USER, source_url="file://old.mp3", status=TaskStatus.completed,
+            artifact_dir=str(adir), transcript_path=transcript, options={},
+            created_at=old,
+        )
+        s.add(task)
+        await s.commit()
+
+    await _run(factory)
+    async with factory() as s:
+        async with s.bind.begin() as conn:
+            await conn.run_sync(backfill_listed_at)
+    async with factory() as s:
+        rec = (await s.execute(select(Recording))).scalars().one()
+    assert rec.created_at == old
+    assert rec.listed_at == old

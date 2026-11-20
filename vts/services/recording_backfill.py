@@ -109,7 +109,7 @@ def _create_missing(conn: Any) -> int:
                 "language, tags, meta, recorded_at, created_at, updated_at) VALUES ("
                 ":id, :user_id, :task_id, :title, false, :source_url, :artifact_dir, "
                 ":transcript_path, :summary_path, :state, :duration, :language, "
-                "CAST(:tags AS json), CAST(:meta AS json), :recorded_at, :now, :now)"
+                "CAST(:tags AS json), CAST(:meta AS json), :recorded_at, :created_at, :now)"
             ),
             {
                 "id": uuid.uuid4(),
@@ -128,6 +128,10 @@ def _create_missing(conn: Any) -> int:
                 "tags": "[]",
                 "meta": json.dumps(meta),
                 "recorded_at": task["created_at"],
+                # The task's own creation time, as create_task would have
+                # given the recording; the migration's clock would date every
+                # backfilled recording identically (vts-lzad).
+                "created_at": task["created_at"],
                 "now": now,
             },
         )
