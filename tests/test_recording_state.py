@@ -111,7 +111,6 @@ async def test_backfill_sets_state_from_task_and_detached(factory):
 
 async def _task_with_recording(factory, status=TaskStatus.running, *, recording=True):
     """A task (and optionally its recording) committed; returns the task id."""
-    from vts.db.repo import Repo
     async with factory() as s:
         task = Task(
             user_id=_USER, source_url="https://example.com/x", status=status,
@@ -157,6 +156,7 @@ async def test_failed_then_archived_stays_incomplete(factory):
 async def test_restart_puts_complete_recording_back_to_processing(factory):
     tid = await _task_with_recording(factory)
     await _set_status(factory, tid, TaskStatus.completed)
+    assert await _state(factory, tid) is RecordingState.complete
     await _set_status(factory, tid, TaskStatus.queued)
     assert await _state(factory, tid) is RecordingState.processing
 
