@@ -111,16 +111,17 @@ def _summary_text(recording: Any, people: list[str], blocks: list[dict[str, Any]
 
 def prompt_results_index(recording: Any) -> list[dict[str, str]]:
     """The prompt results a recording has, as [{ref, name}], for the view's
-    switcher. Only completed ones: a pending entry has no text to show. The
+    switcher. Only completed ones whose file is there: a pending entry has no
+    text to show, and a vanished file would open as an error (vts-lzad). The
     summary file of an old recording (before results were recorded
     as results) counts as "system:summary"."""
     from pathlib import Path
 
-    from vts.services.recording_artifacts import recording_result_entries
+    from vts.services.recording_artifacts import readable_result_entries
 
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for entry in recording_result_entries(recording):
+    for entry in readable_result_entries(recording):
         if entry.get("status") not in (None, "completed"):
             continue
         ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
@@ -419,6 +420,7 @@ def register(mcp: FastMCP) -> None:
         use `get_recording_prompt_result`.
         """
         from vts.mcp.tools_registry.recordings import recording_prompt_result
+        from vts.services.recording_artifacts import recording_result_entries
 
         factory = get_db_session_factory()
         async with factory() as session:
@@ -432,21 +434,37 @@ def register(mcp: FastMCP) -> None:
                 task = await repo.get_task_for_user(uuid.UUID(user.id), recording.source_task_id)
         regenerate = regenerate_state(task)
         index = prompt_results_index(recording)
-        result = recording_prompt_result(recording, ref)
-        wanted = f"{result.source}:{result.id}"
+        try:
+            result = recording_prompt_result(recording, ref)
+            wanted, markdown = f"{result.source}:{result.id}", result.content
+        except HTTPException as exc:
+            # A result the recording knows of but cannot serve yet — a
+            # regeneration deletes the files and marks the entries pending —
+            # still opens the view, empty, with its regenerate state, so the
+            # user sees the work under way instead of an error (vts-lzad).
+            # A ref the recording never had stays an error naming what exists.
+            wanted = (ref or "").strip() or "system:summary"
+            known = wanted == "system:summary" or any(
+                f"{e.get('source', '')}:{e.get('id', '')}" == wanted
+                for e in recording_result_entries(recording)
+            )
+            if exc.status_code != 404 or not known:
+                raise
+            markdown = ""
         title = recording.title or "Untitled recording"
         names = ", ".join(r["name"] for r in index) or "none"
         return ToolResult(
             content=(
-                f"Showing «{title}» ({wanted}) in the VTS summary view. "
-                f"Results available: {names}. To read or quote one, call "
+                f"Showing «{title}» ({wanted}) in the VTS summary view"
+                + ("" if markdown else " — its text is not available yet")
+                + f". Results available: {names}. To read or quote one, call "
                 f"get_recording_prompt_result with recording_id={recording.id}."
             ),
             structured_content={
                 "recording_id": str(recording.id),
                 "title": recording.title,
                 "ref": wanted,
-                "markdown": result.content,
+                "markdown": markdown,
                 "results": index,
                 "regenerate": regenerate,
             },

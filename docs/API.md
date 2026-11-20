@@ -214,10 +214,10 @@ the query (by person, dates or `recording_id`) instead of paging further.
 
 **Following a hit — two routes, different lifetimes.**
 
-| | addressed by | survives task deletion |
+| | addressed by | when the media is gone (archived) or the task deleted |
 |---|---|---|
-| `GET /api/recordings/{id}/transcript?around_sec=` | recording | **yes** |
-| `/player/{recording_id}?t=` | recording | **yes** (transcript only once the task is gone) |
+| `GET /api/recordings/{id}/transcript?around_sec=` | recording | **works** |
+| `/player/{recording_id}?t=` | recording | **shows the transcript** with the cited sentence marked, without media |
 
 Read a passage through the RECORDING: it owns its artifacts, so the transcript
 answers whether or not the job that produced it still exists. `around_sec`
@@ -225,9 +225,10 @@ returns just the passage around that second — showing one quote in context
 should not mean loading a two-hour transcript.
 
 The player link is for a person to WATCH the moment. `/player/{id}` takes a
-recording id or a task id. The media and the live updates belong to the task,
-so once the task is deleted the page shows the transcript alone, with the
-cited sentence marked. `/player/{task_id}?t=` links keep working.
+recording id or a task id. The media belongs to the task, so once it is gone —
+typically after the task is archived, which keeps the transcript — the page
+shows the transcript alone, with the cited sentence marked. The same holds
+when the task has been deleted. `/player/{task_id}?t=` links keep working.
 
 `recording_id` is the identifier to store — it outlives the task.
 

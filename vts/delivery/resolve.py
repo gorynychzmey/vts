@@ -13,6 +13,7 @@ from vts.services.recording_artifacts import (
     read_recording_result,
     read_recording_transcript,
 )
+from vts.services.recording_meta import language_code
 
 VALID_VARIANTS = ("raw", "redacted", "summary")
 
@@ -27,8 +28,11 @@ def _task_meta(task, recording) -> TaskMeta:
         source_url=task.source_url,
         source_title=task.source_title,
         # The recording's columns first; the task's options only for a
-        # recording whose language was never set.
-        language=recording.language or opts.get("detected_language") or opts.get("language"),
+        # recording whose language was never set — normalized like the column,
+        # since the contract promises an ISO code ("ru"), not "Russian".
+        language=language_code(
+            recording.language or opts.get("detected_language") or opts.get("language")
+        ),
         duration_s=recording.duration_sec,
         created_at=task.created_at,
     )
@@ -90,7 +94,8 @@ def resolve_variant(task, variant: str, recording) -> DeliveryPayload:
     except RecordingArtifactMissing as exc:
         raise VariantUnavailable(f"{variant}: {exc}") from exc
     if variant == "raw":
-        fmt = "txt" if _artifact_path(recording, "raw").suffix == ".txt" else "json"
+        raw_path = _artifact_path(recording, "raw")
+        fmt = "txt" if raw_path is not None and raw_path.suffix == ".txt" else "json"
     elif variant == "summary":
         fmt = "markdown"
     else:  # redacted

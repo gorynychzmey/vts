@@ -21,11 +21,8 @@ from typing import Any, Literal
 # after the files, since the on-disk layout is an implementation detail.
 ArtifactKind = Literal["raw", "redacted", "summary"]
 
-_RELATIVE_PATHS: dict[str, str] = {
-    "raw": "outputs/transcript.txt",
-    "redacted": "outputs/redacted_transcript.txt",
-    "summary": "outputs/summary.md",
-}
+# Where a legacy row's redacted transcript sits when `redacted_path` is NULL.
+_DEFAULT_REDACTED_RELPATH = "outputs/redacted_transcript.txt"
 
 
 logger = logging.getLogger(__name__)
@@ -35,19 +32,29 @@ class RecordingArtifactMissing(FileNotFoundError):
     """The recording has no such artifact — archived away, or never produced."""
 
 
-def _artifact_path(recording: Any, kind: str) -> Path:
-    # The stored path wins when there is one: a task may have written its
-    # transcript somewhere other than the default name.
-    if kind == "raw" and getattr(recording, "transcript_path", None):
-        return Path(recording.transcript_path)
-    if kind == "summary" and getattr(recording, "summary_path", None):
-        return Path(recording.summary_path)
-    if kind == "redacted" and getattr(recording, "redacted_path", None):
-        return Path(recording.redacted_path)
-    # NULL redacted_path / unset stored paths: legacy rows that were never
-    # backfilled still keep their files under the default names.
+def _artifact_path(recording: Any, kind: str) -> Path | None:
+    """Where an artifact of the recording lives, or None if it has none.
+
+    Raw and summary go by the stored path alone (vts-lzad): a NULL path means
+    "not produced (yet)" — a regeneration clears `summary_path` while the
+    previous outputs/summary.md may still sit on disk, and serving it would
+    show the result the user has just asked to replace. The HTTP routes answer
+    "not ready" there, and every reader goes through this one rule.
+
+    Only the redacted transcript falls back to its default name: legacy rows
+    were never backfilled with a `redacted_path` but keep the file.
+    """
+    if kind == "raw":
+        stored = getattr(recording, "transcript_path", None)
+        return Path(stored) if stored else None
+    if kind == "summary":
+        stored = getattr(recording, "summary_path", None)
+        return Path(stored) if stored else None
+    stored = getattr(recording, "redacted_path", None)
+    if stored:
+        return Path(stored)
     root = Path(str(getattr(recording, "artifact_dir", "") or ""))
-    return root / _RELATIVE_PATHS.get(kind, _RELATIVE_PATHS["raw"])
+    return root / _DEFAULT_REDACTED_RELPATH
 
 
 def read_recording_transcript(recording: Any, kind: ArtifactKind = "raw") -> str:
@@ -58,6 +65,8 @@ def read_recording_transcript(recording: Any, kind: ArtifactKind = "raw") -> str
     artifact was never produced or has been archived away".
     """
     path = _artifact_path(recording, kind)
+    if path is None:
+        raise RecordingArtifactMissing(f"recording has no {kind} artifact (not ready)")
     if not path.exists():
         raise RecordingArtifactMissing(
             f"recording has no {kind} artifact ({path.name})"
@@ -95,8 +104,8 @@ def recording_result_path(recording: Any, source: str, ref: str) -> str | None:
     return None
 
 
-def read_recording_result(recording: Any, source: str, ref: str) -> str:
-    """The text of one prompt result, read from the recording's own files.
+def _readable_result_path(recording: Any, source: str, ref: str) -> Path:
+    """The file of the result `(source, ref)`, checked but not read.
 
     The path comes from the database, and a recording outlives the task that
     wrote it, so it is data of unclear age. Resolving it and requiring it to
@@ -120,15 +129,50 @@ def read_recording_result(recording: Any, source: str, ref: str) -> str:
             and path == Path(summary).resolve()
         ):
             allowed = True
-        if not allowed:
-            logger.warning(
-                "prompt result path %s escapes recording dir %s; refusing",
-                raw_path, root_raw,
-            )
-            raise RecordingArtifactMissing(f"result {source}:{ref} is outside the recording")
+        is_file = path.is_file()
+    except (OSError, ValueError) as exc:
+        raise RecordingArtifactMissing(f"result {source}:{ref} is not readable") from exc
+    if not allowed:
+        logger.warning(
+            "prompt result path %s escapes recording dir %s; refusing",
+            raw_path, root_raw,
+        )
+        raise RecordingArtifactMissing(f"result {source}:{ref} is outside the recording")
+    if not is_file:
+        raise RecordingArtifactMissing(f"result {source}:{ref} is not readable")
+    return path
+
+
+def read_recording_result(recording: Any, source: str, ref: str) -> str:
+    """The text of one prompt result, read from the recording's own files.
+
+    Raises RecordingArtifactMissing when there is no entry, the path escapes
+    the recording, or the file is gone (see `_readable_result_path`).
+    """
+    path = _readable_result_path(recording, source, ref)
+    try:
         return path.read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
         raise RecordingArtifactMissing(f"result {source}:{ref} is not readable") from exc
+
+
+def readable_result_entries(recording: Any) -> list[dict[str, Any]]:
+    """The prompt results a reader can open: entries whose file is there.
+
+    What a client is offered must be what `read_recording_result` serves — a
+    pending entry (no file yet) or a result whose file vanished would only
+    open as a 404 (vts-lzad).
+    """
+    out: list[dict[str, Any]] = []
+    for entry in recording_result_entries(recording):
+        try:
+            _readable_result_path(
+                recording, str(entry.get("source")), str(entry.get("id"))
+            )
+        except RecordingArtifactMissing:
+            continue
+        out.append(entry)
+    return out
 
 
 def recording_transcript_entries(

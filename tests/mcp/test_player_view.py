@@ -403,3 +403,52 @@ async def test_the_switcher_lists_the_column_not_the_stale_meta(client_for, tmp_
         result = await client.call_tool("show_summary", {"recording_id": str(rec.id)})
     refs = [r["ref"] for r in result.structured_content["results"]]
     assert refs == ["system:summary", "user:m1"]
+
+
+async def test_show_summary_during_a_full_restart_shows_the_regenerate_state(client_for, monkeypatch, tmp_path):
+    """vts-lzad: a full restart deletes the result files, marks the entries
+    pending and clears summary_path. The view must still open — with nothing
+    to switch to and the regeneration under way — rather than fail with 404."""
+    from types import SimpleNamespace
+
+    import vts.mcp.tools_registry.apps as apps_mod
+    from vts.db.models import TaskStatus
+
+    task_id = uuid.uuid4()
+    rec = _Recording(
+        id=uuid.uuid4(), artifact_dir=str(tmp_path), summary_path=None, source_task_id=task_id,
+        prompt_results=[
+            {"source": "system", "id": "summary", "name": "Summary", "status": "pending"},
+            {"source": "user", "id": "m1", "name": "Memo", "status": "pending"},
+        ],
+    )
+    task = SimpleNamespace(
+        id=task_id, status=TaskStatus.running, steps=[],
+        options={"prompts": [{"source": "system", "id": "summary"}, {"source": "user", "id": "m1"}]},
+    )
+
+    class _RepoWithTask(_Repo):
+        async def get_task_for_user(self, user_id, wanted):
+            return task if wanted == task_id else None
+
+    async with client_for([rec], []) as client:
+        monkeypatch.setattr(apps_mod, "Repo", lambda _s: _RepoWithTask([rec]))
+        for ref in ("system:summary", "user:m1"):
+            result = await client.call_tool(
+                "show_summary", {"recording_id": str(rec.id), "ref": ref}, raise_on_error=False
+            )
+            assert not result.is_error, result.content[0].text
+            data = result.structured_content
+            assert data["ref"] == ref
+            assert data["markdown"] == ""
+            assert data["results"] == []
+            assert data["regenerate"]["reason"] == "task_running"
+            assert data["regenerate"]["current"] == ["system:summary", "user:m1"]
+
+
+async def test_a_vanished_result_file_is_not_offered_in_the_switcher(client_for, tmp_path):
+    rec = _with_results(tmp_path)
+    (tmp_path / "outputs" / "memo.md").unlink()
+    async with client_for([rec], []) as client:
+        result = await client.call_tool("show_summary", {"recording_id": str(rec.id)})
+    assert result.structured_content["results"] == [{"ref": "system:summary", "name": "Summary"}]

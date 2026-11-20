@@ -246,7 +246,8 @@ async def test_get_recording_prompt_result_reads_the_column_not_meta(tmp_path, m
 
 async def test_subtitles_name_the_voices_the_task_named(tmp_path, monkeypatch) -> None:
     """A cue speaks with the person's name when the recording's task named that
-    voice, and with the raw label for a voice nobody named."""
+    voice, and with the localized speaker word for a voice nobody named — the
+    same label the player and the HTTP subtitles show, never SPEAKER_NN."""
     import json
     import uuid
     from contextlib import asynccontextmanager
@@ -263,13 +264,14 @@ async def test_subtitles_name_the_voices_the_task_named(tmp_path, monkeypatch) -
     (outputs / "transcript.json").write_text(json.dumps({"entries": [
         {"start": 0.0, "end": 2.0, "text": "hello there", "speaker": "SPEAKER_00"},
         {"start": 2.0, "end": 4.0, "text": "hi back", "speaker": "SPEAKER_01"},
+        {"start": 300.0, "end": 302.0, "text": "much later", "speaker": "SPEAKER_02"},
     ]}), encoding="utf-8")
     user = FakeUser(id=str(uuid.uuid4()))
     repo = FakeRepo()
     task_id = uuid.uuid4()
     rec = FakeRecording(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_task_id=task_id,
-        artifact_dir=str(tmp_path),
+        artifact_dir=str(tmp_path), language="ru",
     )
     repo.recordings[rec.id] = rec
 
@@ -295,7 +297,17 @@ async def test_subtitles_name_the_voices_the_task_named(tmp_path, monkeypatch) -
             "get_recording_transcript",
             {"recording_id": str(rec.id), "as_subtitles": True},
         )
+        # A window that holds only the third voice still numbers it by the
+        # whole recording, as the player does — not "Голос 1" of the window.
+        windowed = await client.call_tool(
+            "get_recording_transcript",
+            {"recording_id": str(rec.id), "as_subtitles": True,
+             "around_sec": 301.0, "window_sec": 5.0},
+        )
     text = res.data.content
     assert "<v Vasya>hello there" in text
-    assert "<v SPEAKER_01>hi back" in text
-    assert "SPEAKER_00" not in text
+    assert "<v Голос 2>hi back" in text
+    assert "<v Голос 3>much later" in text
+    assert "SPEAKER_" not in text
+    assert "<v Голос 3>much later" in windowed.data.content
+    assert "hi back" not in windowed.data.content

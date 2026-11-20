@@ -308,11 +308,17 @@ async def load_recording_player_blocks(
         names = await Repo(session).speaker_names_for_task(
             recording.user_id, recording.source_task_id
         )
-    # The recording keeps the language it was transcribed in; the detection
-    # marker in its own outputs is the fallback, as it is for a task.
-    language = recording.language or effective_language(
-        {}, {"outputs": Path(recording.artifact_dir) / "outputs"}
-    )
     return player_blocks_from_artifacts(
-        recording.artifact_dir, language=language, names=names
+        recording.artifact_dir, language=recording_label_language(recording), names=names
+    )
+
+
+def recording_label_language(recording: Any) -> str | None:
+    """The language a recording's unnamed voices are labelled in ("Голос 2",
+    "Speaker 2"). The recording keeps the language it was transcribed in; the
+    detection marker in its own outputs is the fallback, as it is for a task.
+    One rule for every rendering of the transcript — player, subtitles over
+    HTTP and over MCP — so the same voice carries the same label everywhere."""
+    return recording.language or effective_language(
+        {}, {"outputs": Path(str(recording.artifact_dir or "")) / "outputs"}
     )

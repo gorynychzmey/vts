@@ -1050,14 +1050,9 @@ async def get_transcript(
             raise HTTPException(status_code=404, detail="Transcript is not ready")
         path = _artifact_path(recording, "raw")
         # No stored path is "not produced yet"; a stored path whose file is
-        # gone is "file missing". The default-name fallback still serves
-        # legacy rows that never had a path but do have the file.
-        missing = (
-            "Transcript file missing"
-            if recording.transcript_path
-            else "Transcript is not ready"
-        )
-        fmt = "txt" if path.suffix == ".txt" else "json"
+        # gone is "file missing" — the same answers as the HTTP route.
+        missing = "Transcript file missing" if path is not None else "Transcript is not ready"
+        fmt = "txt" if path is not None and path.suffix == ".txt" else "json"
         kind = "raw"
     else:  # redacted
         if recording is None:

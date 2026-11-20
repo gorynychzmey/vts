@@ -34,7 +34,9 @@ from vts.mcp.schemas import (
     RecordingTranscript,
     TranscriptEntry,
 )
+from vts.services.diarization.merge import label_map, speaker_label_word
 from vts.services.subtitles import render_webvtt
+from vts.api._helpers.artifact_store import recording_label_language
 from vts.api._helpers.recordings import rename_recording
 from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
@@ -82,17 +84,13 @@ def recording_prompt_result(recording: Recording, ref: str) -> PromptResult:
     # The entry stores a PATH, not the text: a reader looking for a "text" key
     # returned 200 with empty content once, and a caller cannot tell an empty
     # summary from a broken reader. The oldest recordings have no entry for the
-    # summary at all; for them `summary_path` is the only copy.
+    # summary at all; for them `summary_path` is the only copy. No stored path
+    # means "not ready", as over HTTP: a default-named outputs/summary.md left
+    # behind by a restart is the summary being replaced (vts-lzad).
     try:
         content = read_recording_result(recording, source, ident)
     except RecordingArtifactMissing:
         content = None
-        if wanted == "system:summary":
-            # No stored path at all: the default-named file is the last resort.
-            try:
-                content = read_recording_transcript(recording, "summary")
-            except RecordingArtifactMissing:
-                pass
     if content is not None:
         return PromptResult(
             task_id=recording.source_task_id,
@@ -365,13 +363,21 @@ def register(mcp: FastMCP) -> None:
                         recording, around_sec=around_sec, window_sec=window_sec
                     )
                     # A voice the recording's task gave a name speaks under it;
-                    # an unnamed one keeps its raw label. Names belong to the
-                    # task, so a recording whose task is gone has none.
+                    # an unnamed one gets the localized speaker word, numbered
+                    # by first appearance in the WHOLE recording — the label
+                    # the player and the HTTP subtitles show, never the raw
+                    # SPEAKER_NN (vts-lzad). Names belong to the task, so a
+                    # recording whose task is gone has none.
                     names: dict[str, str] = {}
                     if recording.source_task_id is not None:
                         names = await repo.speaker_names_for_task(
                             recording.user_id, recording.source_task_id
                         )
+                    labels = label_map(
+                        recording_transcript_entries(recording),
+                        speaker_label_word(recording_label_language(recording)),
+                        names=names,
+                    )
                     return RecordingTranscript(
                         recording_id=recording.id,
                         title=recording.title,
@@ -382,9 +388,7 @@ def register(mcp: FastMCP) -> None:
                         # block per entry keeps each line its own cue.
                         content=render_webvtt([
                             {
-                                "label": names.get(e.get("speaker") or "")
-                                or e.get("speaker")
-                                or "",
+                                "label": labels.get(e.get("speaker") or "", ""),
                                 "sentences": [{
                                     "start": e.get("start"),
                                     "end": e.get("end"),

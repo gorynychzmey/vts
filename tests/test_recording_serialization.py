@@ -83,7 +83,10 @@ def test_prompt_results_and_redacted_flag_come_from_the_recording_columns(tmp_pa
     """vts-lzad: the column is the source; meta is a stale legacy snapshot."""
     custom = tmp_path / "elsewhere.txt"
     custom.write_text("redacted")
-    real = {"source": "user", "id": "m", "name": "Memo", "path": "/x", "status": "completed"}
+    memo = tmp_path / "summary" / "results" / "user__m.md"
+    memo.parent.mkdir(parents=True)
+    memo.write_text("memo")
+    real = {"source": "user", "id": "m", "name": "Memo", "path": str(memo), "status": "completed"}
     rec = _recording(
         artifact_dir=str(tmp_path),
         redacted_path=str(custom),
@@ -94,3 +97,22 @@ def test_prompt_results_and_redacted_flag_come_from_the_recording_columns(tmp_pa
     assert out.prompt_results == [real]
     # The default-named file does not exist; the column points elsewhere.
     assert out.has_redacted is True
+
+
+def test_prompt_results_list_only_results_whose_file_is_there(tmp_path: Path) -> None:
+    """vts-lzad: a result is offered only if it can be read. A Memo whose file
+    vanished (or a pending entry with no file yet) would open as a 404."""
+    kept = tmp_path / "summary" / "results" / "user__kept.md"
+    kept.parent.mkdir(parents=True)
+    kept.write_text("kept")
+    present = {"source": "user", "id": "kept", "name": "Kept", "path": str(kept), "status": "completed"}
+    rec = _recording(
+        artifact_dir=str(tmp_path),
+        prompt_results=[
+            present,
+            {"source": "user", "id": "gone", "name": "Memo",
+             "path": str(tmp_path / "summary" / "results" / "user__gone.md"), "status": "completed"},
+            {"source": "user", "id": "next", "name": "Next", "status": "pending"},
+        ],
+    )
+    assert _serialize(rec).prompt_results == [present]

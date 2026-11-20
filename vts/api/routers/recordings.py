@@ -49,7 +49,7 @@ from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
     _artifact_path,
     read_recording_transcript,
-    recording_result_entries,
+    readable_result_entries,
     recording_transcript_entries,
 )
 
@@ -89,7 +89,9 @@ def _serialize(recording: Recording) -> RecordingOut:
         has_redacted=bool(redacted and redacted.exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
-        prompt_results=recording_result_entries(recording),
+        # Only results a reader can open: a pending entry or a vanished file
+        # would be offered and then 404 (vts-lzad).
+        prompt_results=readable_result_entries(recording),
         recorded_at=recording.recorded_at,
         created_at=recording.created_at,
         listed_at=recording.listed_at,

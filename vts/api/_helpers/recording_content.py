@@ -145,7 +145,7 @@ def _text_path_and_media_type(recording: Recording, variant: TextVariant) -> tup
         # The default name stands in for a NULL `redacted_path` (legacy rows):
         # a missing file reads as "not ready", as it always has.
         path = _artifact_path(recording, "redacted")
-        if not path.exists():
+        if path is None or not path.exists():
             raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
         return path, "text/plain; charset=utf-8"
     # Raw and summary go by the stored path alone, never the default name: a

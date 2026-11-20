@@ -76,3 +76,21 @@ def test_no_recording_raises_for_every_variant(tmp_path):
     for variant in ("raw", "redacted", "summary", "user:abc", "system:summary"):
         with pytest.raises(VariantUnavailable):
             resolve_variant(t, variant, None)
+
+
+@pytest.mark.parametrize("variant,default_name", [("raw", "transcript.txt"), ("summary", "summary.md")])
+def test_a_null_stored_path_is_unavailable_even_with_a_default_named_file(tmp_path, variant, default_name):
+    """vts-lzad: the same answer as HTTP — a NULL path is "not ready", and a
+    stale default-named file (e.g. during a summary restart) is not delivered."""
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / default_name).write_text("stale")
+    with pytest.raises(VariantUnavailable):
+        resolve_variant(_fake_task(tmp_path), variant, _fake_recording(tmp_path))
+
+
+def test_language_is_an_iso_code_even_from_the_task_fallback(tmp_path):
+    """TaskMeta.language is documented as a normalized ISO code (vts-lzad)."""
+    p = tmp_path / "transcript.txt"; p.write_text("x")
+    t = _fake_task(tmp_path, options={"detected_language": "Russian"})
+    r = _fake_recording(tmp_path, transcript_path=str(p), language=None)
+    assert resolve_variant(t, "raw", r).task.language == "ru"

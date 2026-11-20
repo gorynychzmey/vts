@@ -338,3 +338,18 @@ def test_read_result_raises_when_missing_or_escaping(tmp_path):
     for ref in ("gone", "esc", "unknown"):
         with pytest.raises(RecordingArtifactMissing):
             read_recording_result(rec, "user", ref)
+
+
+@pytest.mark.parametrize(
+    "kind,default_name",
+    [("raw", "transcript.txt"), ("summary", "summary.md")],
+)
+def test_raw_and_summary_never_fall_back_to_the_default_name(tmp_path, kind, default_name):
+    """vts-lzad: a NULL stored path means "not produced (yet)" — a regeneration
+    clears summary_path while the previous outputs/summary.md may still be on
+    disk. Serving it would show the result the user just asked to replace; the
+    HTTP routes already answer "not ready" here, and every reader must agree."""
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / default_name).write_text("stale")
+    with pytest.raises(RecordingArtifactMissing):
+        read_recording_transcript(_Rec(tmp_path), kind)

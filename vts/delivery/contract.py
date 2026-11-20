@@ -73,6 +73,8 @@ class DeliveryError(Exception):
 class TaskMeta:
     source_url: str
     source_title: str | None
+    #: The recording's language as a normalized ISO 639-1 code ("ru", "en"),
+    #: or None when unknown. Not a display name and not a locale ("ru-RU").
     language: str | None
     duration_s: float | None
     created_at: datetime
