@@ -117,7 +117,8 @@ async def _enqueue_uploaded_task(task, repo, redis, settings) -> "TaskOut":
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    recording = await repo.recording_for_task(task.id)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
 
 _QUEUE_POS_CACHE_SUFFIX = "cache:queue_positions"
 

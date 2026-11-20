@@ -1029,6 +1029,17 @@ class Repo:
             select(Recording).where(Recording.source_task_id == task_id)
         )
 
+    async def recordings_for_tasks(
+        self, task_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Recording]:
+        """The recordings of a page of tasks, keyed by task id — one query."""
+        if not task_ids:
+            return {}
+        rows = await self.session.scalars(
+            select(Recording).where(Recording.source_task_id.in_(task_ids))
+        )
+        return {r.source_task_id: r for r in rows}
+
     @staticmethod
     def _mark_listed(recording: "Recording") -> None:
         """Stamp `listed_at` the first time the recording has text; never again."""

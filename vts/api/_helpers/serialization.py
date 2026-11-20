@@ -14,8 +14,9 @@ from pathlib import Path
 from vts.api._helpers.base import SUMMARY_STEP_NAMES, _find_media_file
 from vts.api.schemas import TaskCompactOut, TaskOut
 from vts.core.failures import classify_failure_code
-from vts.db.models import StepStatus, Task, TaskStatus
+from vts.db.models import Recording, StepStatus, Task, TaskStatus
 from vts.services import task_status as _ts
+from vts.services.recording_artifacts import _artifact_path, recording_result_entries
 from vts.services.media import probe_duration
 from vts.services.task_progress import selected_prompt_refs
 
@@ -183,8 +184,24 @@ def _text_length_from_path(path_value: str | Path | None, *, prefer_json_text_fi
 
     return len(text_value.strip())
 
-def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
-    redacted_path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
+def _content_fields(task: Task, recording: Recording | None) -> tuple[str | None, str | None, str | None]:
+    """(transcript_path, summary_path, redacted_path) a card shows.
+
+    The recording owns these (vts-lzad); the task's own fields are only the
+    fallback for a task that has no recording. `redacted_path` is reported
+    only when the file exists, as before.
+    """
+    if recording is not None:
+        transcript, summary = recording.transcript_path, recording.summary_path
+        redacted = _artifact_path(recording, "redacted")
+    else:
+        transcript, summary = task.transcript_path, task.summary_path
+        redacted = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt" if task.artifact_dir else None
+    return transcript, summary, str(redacted) if redacted is not None and redacted.exists() else None
+
+
+def _task_stats_for_serialization(task: Task, recording: Recording | None = None) -> dict[str, int | None]:
+    transcript_path, summary_path, redacted_path = _content_fields(task, recording)
     media_file = _find_media_file(task.artifact_dir)
     media_bytes: int | None = None
     media_seconds: int | None = None
@@ -196,8 +213,8 @@ def _task_stats_for_serialization(task: Task) -> dict[str, int | None]:
         media_seconds = _media_seconds_for_file(media_file)
     return {
         "processing_seconds": _processing_seconds_for_task(task),
-        "transcript_chars": _text_length_from_path(task.transcript_path, prefer_json_text_field=True),
-        "summary_chars": _text_length_from_path(task.summary_path, prefer_json_text_field=False),
+        "transcript_chars": _text_length_from_path(transcript_path, prefer_json_text_field=True),
+        "summary_chars": _text_length_from_path(summary_path, prefer_json_text_field=False),
         "redacted_chars": _text_length_from_path(redacted_path, prefer_json_text_field=False),
         "media_seconds": media_seconds,
         "media_bytes": media_bytes,
@@ -271,6 +288,7 @@ def serialize_task(
     asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
+    recording: Recording | None = None,
 ) -> TaskOut:
     queue: str | None = None
     queue_position: int | None = None
@@ -285,6 +303,11 @@ def serialize_task(
     if summary_progress is not None:
         summary_current, summary_total = summary_progress.get(task.id, (0, 0))
     failure_code = classify_failure_code(task.error_message)
+    transcript_path, summary_path, redacted_path = _content_fields(task, recording)
+    options = task.options
+    if recording is not None:
+        # Output only: a new dict, so the task's own JSON column is untouched.
+        options = {**(task.options or {}), "prompt_results": recording_result_entries(recording)}
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
@@ -298,13 +321,10 @@ def serialize_task(
             "can_restart_final_summary": can_restart_final_summary_task(task),
             "can_resolve_speakers": can_resolve_speakers_task(task),
         },
-        options=task.options,
-        transcript_path=task.transcript_path,
-        summary_path=task.summary_path,
-        redacted_path=str(Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt")
-        if task.artifact_dir
-        and (Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt").exists()
-        else None,
+        options=options,
+        transcript_path=transcript_path,
+        summary_path=summary_path,
+        redacted_path=redacted_path,
         media_path=str(_mf) if (_mf := _find_media_file(task.artifact_dir)) else None,
         error_message=task.error_message,
         failure_code=failure_code,
@@ -325,7 +345,7 @@ def serialize_task(
             "transcribe": {"current": transcribe_current, "total": transcribe_total},
             "summary": {"current": summary_current, "total": summary_total},
         },
-        stats=_task_stats_for_serialization(task),
+        stats=_task_stats_for_serialization(task, recording),
     )
 
 def serialize_task_compact(
@@ -334,6 +354,7 @@ def serialize_task_compact(
     asr_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
+    recording: Recording | None = None,
 ) -> "TaskCompactOut":
     """Compact serializer for list views. Drops steps/options/paths/error
     message — see TaskCompactOut docstring for the rationale."""
@@ -370,5 +391,5 @@ def serialize_task_compact(
             "transcribe": {"current": transcribe_current, "total": transcribe_total},
             "summary": {"current": summary_current, "total": summary_total},
         },
-        stats=_task_stats_for_serialization(task),
+        stats=_task_stats_for_serialization(task, recording),
     )

@@ -400,7 +400,8 @@ async def uploads_finalize(
         asr_progress = await existing_repo.get_asr_progress_for_tasks([existing.id])
         summary_progress = {existing.id: summary_progress_for_task(existing)}
         return serialize_task(
-            existing, queue_positions, asr_progress, summary_progress, lane_positions
+            existing, queue_positions, asr_progress, summary_progress, lane_positions,
+            await existing_repo.recording_for_task(existing.id),
         )
 
     uid, meta = _load_owned_session(settings, user, upload_id)

@@ -383,3 +383,134 @@ async def test_subtitles_label_voices_in_the_chosen_language_before_completion(
     r = await client.get(f"/api/tasks/{task_id}/subtitles")
     assert r.status_code == 200, r.text
     assert "<v Голос 1>" in r.text, r.text
+
+
+# ------------------------------------------- task cards read the recording
+
+class _FakeRedis:
+    """Enough Redis for the queue-position cache the task routes read."""
+
+    async def get(self, key):
+        return None
+
+    async def setex(self, key, ttl, value) -> None:
+        return None
+
+
+@pytest.fixture
+def wired_redis(authed_app):
+    authed_app[0].state.redis = _FakeRedis()
+
+
+async def _make_task_disagree(factory, task_id, tmp_path):
+    """The task keeps stale content fields; the recording holds the real ones
+    (redacted text and a memo the task lacks)."""
+    from vts.db.repo import Repo
+
+    stale = tmp_path / "stale"
+    stale.mkdir()
+    (stale / "transcript.txt").write_text("STALE", encoding="utf-8")
+    (stale / "summary.md").write_text("STALE SUMMARY", encoding="utf-8")
+    async with factory() as session:
+        task = await Repo(session).get_task_by_id(task_id)
+        task.transcript_path = str(stale / "transcript.txt")
+        task.summary_path = str(stale / "summary.md")
+        task.options = {**task.options, "prompt_results": []}
+        await session.commit()
+    return stale
+
+
+@pytest.mark.asyncio
+async def test_task_card_shows_the_recordings_content_fields(
+    authed_app, wired_redis, client, tmp_path
+):
+    _app, factory = authed_app
+    root = tmp_path / "rec"
+    task_id, _rid = await _seed(factory, root)
+    stale = await _make_task_disagree(factory, task_id, tmp_path)
+
+    card = (await client.get(f"/api/tasks/{task_id}")).json()
+
+    assert card["transcript_path"] == str(root / "outputs" / "transcript.txt")
+    assert card["summary_path"] == str(root / "outputs" / "summary.md")
+    assert card["redacted_path"] == str(root / "outputs" / "redacted_transcript.txt")
+    assert card["options"]["prompt_results"] == [
+        {"source": "user", "id": "p1", "path": str(root / "summary" / "results" / "user__p1.md")}
+    ]
+    assert card["stats"]["transcript_chars"] == len(("raw transcript body " * 20).strip())
+    assert card["stats"]["summary_chars"] == len("# Summary\n\nshort")
+    assert card["stats"]["redacted_chars"] == len(("redacted body " * 20).strip())
+    assert str(stale) not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_serializing_never_mutates_the_tasks_options(authed_app, tmp_path):
+    from vts.api._helpers.serialization import serialize_task
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    task_id, _rid = await _seed(factory, tmp_path / "rec")
+    await _make_task_disagree(factory, task_id, tmp_path)
+    async with factory() as session:
+        repo = Repo(session)
+        task = await repo.get_task_by_id(task_id)
+        recording = await repo.recording_for_task(task_id)
+        before = {k: v for k, v in task.options.items()}
+        out = serialize_task(task, recording=recording)
+        assert out.options["prompt_results"] != task.options["prompt_results"]
+        assert task.options == before
+        assert out.options is not task.options
+
+
+@pytest.mark.asyncio
+async def test_task_without_a_recording_falls_back_to_its_own_fields(authed_app, tmp_path):
+    from vts.api._helpers.serialization import serialize_task
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    task_id, _rid = await _seed(factory, tmp_path / "rec")
+    async with factory() as session:
+        task = await Repo(session).get_task_by_id(task_id)
+        out = serialize_task(task, recording=None)
+        assert out.transcript_path == task.transcript_path
+        assert out.options == task.options
+
+
+@pytest.mark.asyncio
+async def test_recordings_for_tasks_is_one_query_keyed_by_task(authed_app, tmp_path):
+    from vts.db.repo import Repo
+
+    _app, factory = authed_app
+    a, a_rec = await _seed(factory, tmp_path / "a")
+    b, b_rec = await _seed(factory, tmp_path / "b")
+    async with factory() as session:
+        found = await Repo(session).recordings_for_tasks([a, b, uuid.uuid4()])
+        assert {k: v.id for k, v in found.items()} == {a: a_rec, b: b_rec}
+        assert await Repo(session).recordings_for_tasks([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_task_list_loads_recordings_once_per_page(
+    authed_app, wired_redis, client, tmp_path
+):
+    from sqlalchemy import event
+
+    _app, factory = authed_app
+    ids = [(await _seed(factory, tmp_path / f"r{i}"))[0] for i in range(3)]
+    engine = factory.kw["bind"]
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, *args):
+        if "FROM recordings" in statement and "source_task_id" in statement:
+            statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _count)
+    try:
+        for compact in ("false", "true"):
+            statements.clear()
+            r = await client.get("/api/tasks", params={"compact": compact})
+            assert r.status_code == 200
+            assert {t["id"] for t in r.json()} >= {str(i) for i in ids}
+            assert len(statements) == 1, statements
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _count)

@@ -132,7 +132,8 @@ async def create_task(
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    recording = await repo.recording_for_task(task.id)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
 
 
 @router.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
@@ -314,13 +315,20 @@ async def list_tasks(
     task_ids = [task.id for task in tasks]
     asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
     summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
+    recordings = await repo.recordings_for_tasks(task_ids)
     if compact:
         return [
-            serialize_task_compact(task, queue_positions, asr_progress, summary_progress, lane_positions)
+            serialize_task_compact(
+                task, queue_positions, asr_progress, summary_progress, lane_positions,
+                recordings.get(task.id),
+            )
             for task in tasks
         ]
     return [
-        serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+        serialize_task(
+            task, queue_positions, asr_progress, summary_progress, lane_positions,
+            recordings.get(task.id),
+        )
         for task in tasks
     ]
 
@@ -392,7 +400,8 @@ async def get_task(
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    recording = await repo.recording_for_task(task.id)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
 
 
 @router.patch("/api/tasks/{task_id}", response_model=TaskOut)
@@ -417,7 +426,8 @@ async def update_task(
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions)
+    recording = await repo.recording_for_task(task.id)
+    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
 
 
 @router.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)
