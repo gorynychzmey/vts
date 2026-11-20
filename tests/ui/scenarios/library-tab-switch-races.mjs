@@ -65,7 +65,8 @@ export async function run() {
         const bTs = p.get("before_ts");
         const bId = p.get("before_id");
         const afterCursor = (r) => !bTs || r.listed_at < bTs || (r.listed_at === bTs && r.id < bId);
-        const all = recordings(12);
+        // Newest first by (listed_at, id), the order the server returns.
+        const all = recordings(12).reverse();
         if (slowRecordings) {
           // Long enough to still be in flight when the tab is switched away.
           await new Promise((r) => setTimeout(r, 900));

@@ -8301,6 +8301,15 @@ const libraryPaging = {
   // Task ids whose recording entered the library above the head while the tab
   // was open: what the "New recordings (N)" banner counts.
   newIds: new Set(),
+  // Task ids whose recording is listed but older than the head. Listed order
+  // never changes (listed_at is set once), so such a task is never newer and
+  // is not looked up again until the list restarts. Not-yet-listed tasks are
+  // NOT cached: their first text can come with any later event.
+  olderIds: new Set(),
+  // Whether the current epoch's first page has arrived. Until it has, the list
+  // has no head, "newer than nothing" is true for everything, and a lookup
+  // would announce a recording page 1 is about to show.
+  firstPageLoaded: false,
   // What the SERVER says the library holds. The count next to the heading was
   // showing how many rows were on screen, so it climbed as you scrolled — a
   // paging artefact reported as a number about your library.
@@ -8319,6 +8328,8 @@ function resetLibraryState() {
   libraryItems = [];
   updateLibraryCursors();
   libraryLoaded = false;
+  libraryPaging.firstPageLoaded = false;
+  libraryPaging.olderIds.clear();
   clearNewRecordingsBanner();
   if (libraryList) libraryList.textContent = "";
   updateLibraryCount(libraryItems);
@@ -8534,6 +8545,8 @@ async function loadLibrary() {
   p.epoch += 1;
   p.loading = false;
   p.exhausted = false;
+  p.firstPageLoaded = false;
+  p.olderIds.clear();
   libraryItems = [];
   updateLibraryCursors();
   clearNewRecordingsBanner();
@@ -8577,6 +8590,7 @@ async function loadLibraryPage() {
     // rows cannot keep the sentinel fetching forever.
     p.exhausted = fetched.length < p.pageSize || (!firstPage && items.length === 0);
     libraryLoaded = true;
+    p.firstPageLoaded = true;
     if (firstPage) {
       applyLibraryFilter();
     } else {
@@ -8632,10 +8646,14 @@ const libraryLookups = new Map(); // taskId -> { timer, inFlight, again }
 
 function scheduleLibraryLookup(taskId) {
   // Never loaded: the first visit loads it fresh, nothing to announce against.
-  if (!libraryLoaded || !taskId) return;
+  // Restarting (filter change, refresh): page 1 will show whatever is there.
+  if (!libraryLoaded || !libraryPaging.firstPageLoaded || !taskId) return;
   const id = String(taskId);
   // Already announced and waiting for a click: nothing new to learn.
   if (libraryPaging.newIds.has(id)) return;
+  // Known to be listed below the head, and not on screen (a card that paging
+  // brought in since still takes its state updates).
+  if (libraryPaging.olderIds.has(id) && !findLibraryCardForTask(id)) return;
   let entry = libraryLookups.get(id);
   if (!entry) {
     entry = { timer: null, inFlight: false, again: false };
@@ -8666,7 +8684,7 @@ async function runLibraryLookup(taskId) {
     }
     // A reset (filter change, refresh, user switch) while this was in flight:
     // the answer describes a list that is no longer on screen.
-    if (myEpoch !== p.epoch || !libraryLoaded) return;
+    if (myEpoch !== p.epoch || !libraryLoaded || !p.firstPageLoaded) return;
     const item = payload && Array.isArray(payload.items) ? payload.items[0] : null;
     if (!item) return; // not listed (no text yet) or outside the filters
     const card = findLibraryCardForTask(taskId);
@@ -8680,6 +8698,8 @@ async function runLibraryLookup(taskId) {
     if (isNewerThan(item.listed_at, item.id, p.head)) {
       p.newIds.add(taskId);
       showNewRecordingsBanner();
+    } else {
+      p.olderIds.add(taskId);
     }
   } finally {
     // While in flight, scheduling only sets `again`, so no timer is pending:
@@ -8699,8 +8719,8 @@ function repaintLibraryCard(card, item) {
 
 // Banner click: what entered the library above the top card, newest on top,
 // inserted card by card so the ones already there (and whatever is open in
-// them) stay as they are. Scroll is left alone, unlike the task list: the
-// spec asks for the new rows to arrive without moving the reader.
+// them) stay as they are. Then scrolls to the top like the task list's
+// loadNewer, so what was asked for is in view; loaded pages stay loaded.
 async function loadNewerRecordings() {
   const p = libraryPaging;
   if (p.loading) return;
@@ -8743,6 +8763,7 @@ async function loadNewerRecordings() {
     } else {
       showNewRecordingsBanner();
     }
+    window.scrollTo({ top: 0, behavior: "smooth" });
   } finally {
     if (myEpoch === p.epoch) {
       p.loading = false;
