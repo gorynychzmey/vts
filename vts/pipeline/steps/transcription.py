@@ -581,7 +581,7 @@ class TranscribeSegmentsStep(Step):
                 if _need_set_transcript_path:
                     task_row = await repo.get_task_by_id(st.task_id)
                     if task_row is not None:
-                        task_row.transcript_path = str(transcript_txt)
+                        await repo.set_task_content(task_row, transcript_path=str(transcript_txt))
                     _need_set_transcript_path = False
                 await session.commit()
             await ctx.bus.publish_event(
@@ -709,7 +709,7 @@ class MergeTranscriptStep(Step):
             if task is None:
                 raise RuntimeError("task not found during merge")
             if not task.transcript_path:
-                task.transcript_path = str(transcript_txt)
+                await repo.set_task_content(task, transcript_path=str(transcript_txt))
             await session.commit()
 
         for path in st.dirs["segments"].glob("*.wav"):

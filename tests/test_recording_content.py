@@ -1,6 +1,8 @@
 """Recording content columns and the repo setters that fill them (vts-lzad)."""
 from __future__ import annotations
 
+import uuid
+
 from tests.test_recordings import _USER, _task_with_recording, factory  # noqa: F401
 from vts.db.repo import Repo
 
@@ -119,6 +121,7 @@ async def test_new_recording_is_not_in_the_library_until_it_has_text(factory):
 
 
 async def test_deleting_a_running_task_then_writing_content_is_a_noop(factory):
+    """Covers only the recording-lookup guard: the setter runs on a detached object."""
     from vts.api._helpers.recordings import delete_task_with_recording
     from sqlalchemy import select
     from vts.db.models import Recording, Task
@@ -135,3 +138,87 @@ async def test_deleting_a_running_task_then_writing_content_is_a_noop(factory):
         await Repo(s).set_task_content(task, transcript_path="/x")  # stale object: no raise
         await s.commit()
         assert (await s.scalars(select(Recording))).all() == []
+
+
+def _pipeline_ctx(factory):
+    from types import SimpleNamespace
+
+    from vts.pipeline.context import PipelineContext
+
+    ctx = PipelineContext.__new__(PipelineContext)
+    ctx.session_factory = factory
+    return ctx
+
+
+async def test_persist_detected_language_reaches_the_recording(factory):
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        task_id, rec_id = task.id, rec.id
+    await _pipeline_ctx(factory).persist_detected_language(task_id, "russian", 0.9)
+    async with factory() as s:
+        from vts.db.models import Recording, Task
+        assert (await s.get(Recording, rec_id)).language == "ru"
+        assert (await s.get(Task, task_id)).options["detected_language"] == "russian"
+
+
+async def test_persist_content_and_prompt_result_reach_the_recording(factory):
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        task_id, rec_id = task.id, rec.id
+    ctx = _pipeline_ctx(factory)
+    await ctx.persist_content(task_id, summary_path="/a/summary/final.md", redacted_path="/a/r.txt")
+    await ctx.persist_prompt_result(task_id, "user", "p1", "Memo", "/a/summary/results/p1.md")
+    async with factory() as s:
+        from vts.db.models import Recording, Task
+        rec = await s.get(Recording, rec_id)
+        assert (rec.summary_path, rec.redacted_path) == ("/a/summary/final.md", "/a/r.txt")
+        assert rec.prompt_results[0]["name"] == "Memo"
+        assert (await s.get(Task, task_id)).summary_path == "/a/summary/final.md"
+    # A task deleted mid-run: quiet no-op.
+    await ctx.persist_content(uuid.uuid4(), summary_path="/x")
+
+
+async def test_summary_restart_clears_the_recording_too(factory):
+    from vts.db.models import Recording, Task, TaskStatus
+    from sqlalchemy.orm import selectinload
+    from vts.services.summary_restart import reset_task_for_summary_restart
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        repo = Repo(s)
+        task.status = TaskStatus.completed
+        await repo.set_task_prompt_results(
+            task, [{"source": "system", "id": "summary", "name": "S", "path": "/p", "status": "completed"}]
+        )
+        await repo.set_task_content(task, summary_path="/a/final.md", redacted_path="/a/r.txt")
+        await s.commit()
+        task = await s.get(Task, task.id, options=[selectinload(Task.steps)], populate_existing=True)
+        await reset_task_for_summary_restart(repo, task)
+        assert rec.summary_path is None and rec.redacted_path is None
+        assert rec.prompt_results == task.options["prompt_results"]
+        assert rec.prompt_results[0]["status"] != "completed"
+
+
+async def test_restart_final_with_prompts_empties_recording_results(factory):
+    from vts.db.models import Step, StepStatus, Task, TaskStatus
+    from sqlalchemy.orm import selectinload
+    from vts.services.summary_restart import restart_final_with_prompts
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        repo = Repo(s)
+        task.status = TaskStatus.completed
+        await repo.set_task_prompt_results(
+            task, [{"source": "system", "id": "summary", "name": "S", "path": "/p", "status": "completed"}]
+        )
+        await repo.set_task_content(task, summary_path="/a/final.md")
+        for name in ("download", "summarize_windows", "summarize_final"):
+            s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
+        await s.commit()
+        task = await s.get(Task, task.id, options=[selectinload(Task.steps)], populate_existing=True)
+
+        class _Bus:
+            async def notify_queued(self):
+                return None
+
+        await restart_final_with_prompts(repo, task, [{"source": "system", "id": "summary"}], _Bus())
+        assert rec.prompt_results == []
+        assert rec.summary_path is None

@@ -460,6 +460,7 @@ async def restart_summary_task(
         else:
             _reset_final_summary_step(task)
             downgrade_system_summary_entry(task)
+            await repo.mirror_prompt_results(task)
             artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
     else:
         if not can_restart_summary_task(task):
@@ -493,7 +494,7 @@ async def restart_summary_task(
         await reset_task_for_summary_restart(repo, task)
         await bus.notify_queued()
         return MessageOut(status="queued")
-    task.summary_path = None
+    await repo.set_task_content(task, summary_path=None)
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
     await asyncio.gather(*artifact_resets)

@@ -49,7 +49,11 @@ def _summary_ctx(bus, lanes, llm) -> SimpleNamespace:
     async def _noop_persist_summary_progress(*args: object, **kwargs: object) -> None:
         return None
 
+    async def _noop_persist_content(*args: object, **kwargs: object) -> None:
+        return None
+
     return SimpleNamespace(
+        persist_content=_noop_persist_content,
         settings=SimpleNamespace(
             prompts_dir=None,
             llm_url="http://llama.local/v1",

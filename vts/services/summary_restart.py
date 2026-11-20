@@ -55,7 +55,8 @@ async def reset_task_for_summary_restart(repo: Repo, task: Task) -> None:
     """
     _reset_summary_steps(task)
     downgrade_all_result_entries(task)
-    task.summary_path = None
+    await repo.mirror_prompt_results(task)
+    await repo.set_task_content(task, summary_path=None, redacted_path=None)
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
     await repo.session.commit()
@@ -93,11 +94,12 @@ async def restart_final_with_prompts(
         raise SummaryRestartRefused(f"cannot_restart_final:{task.status.value}")
     new_refs = [{"source": p["source"], "id": p["id"]} for p in prompts]
     clear_all_finalize_results(task)  # files, prompt_results, summary_path
+    await repo.mirror_prompt_results(task)
     new_options = dict(task.options or {})
     new_options["prompts"] = new_refs
     task.options = new_options
     await _rebuild_finalize_tail(repo, task, new_options)
-    task.summary_path = None
+    await repo.set_task_content(task, summary_path=None)
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
     await repo.session.commit()

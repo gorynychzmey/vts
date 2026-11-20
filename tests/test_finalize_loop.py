@@ -126,6 +126,10 @@ def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None
                 return prompt
             return None
 
+        async def set_task_content(self, t, **fields) -> None:
+            for key, value in fields.items():
+                setattr(t, key, value)
+
         async def set_task_prompt_results(self, t, prompt_results: list[dict]) -> None:
             new_options = dict(t.options or {})
             new_options["prompt_results"] = prompt_results

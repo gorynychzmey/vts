@@ -822,6 +822,7 @@ class SummarizeWindowsStep(Step):
                 "".join(str(w.get("summary", "")).rstrip("\n") + "\n\n" for w in ordered),
                 encoding="utf-8",
             )
+            await ctx.persist_content(st.task_id, redacted_path=str(redacted_path))
             st.logger.info("window summaries already complete: %s", total_windows)
             return True
 
@@ -843,6 +844,7 @@ class SummarizeWindowsStep(Step):
             ),
             encoding="utf-8",
         )
+        await ctx.persist_content(st.task_id, redacted_path=str(redacted_path))
         while True:
             try:
                 for idx, chunk in enumerate(chunks, start=1):
@@ -993,6 +995,7 @@ class SummarizeWindowsStep(Step):
                 total_parts = len(chunks) + 1
                 timeout_seconds = int(getattr(ctx.settings, "llm_chat_timeout_seconds", 600))
                 redacted_path.write_text("", encoding="utf-8")
+                await ctx.persist_content(st.task_id, redacted_path=str(redacted_path))
                 await ctx.bus.publish_event(
                     user_id=st.user_id,
                     task_id=str(st.task_id),
@@ -1271,7 +1274,7 @@ class FinalizePromptStep(Step):
                     raise RuntimeError("task not found during final summary restore")
                 summary_path = str(summary_md)
                 if task.summary_path != summary_path:
-                    task.summary_path = summary_path
+                    await repo.set_task_content(task, summary_path=summary_path)
                     await session.commit()
         else:
             name = await prompt_source_for(self.source).display_name(ctx, self.id, st.user_id)
@@ -1467,7 +1470,7 @@ class FinalizePromptStep(Step):
                 task = await repo.get_task_by_id(st.task_id)
                 if task is None:
                     raise RuntimeError("task not found during final summary")
-                task.summary_path = str(summary_md)
+                await repo.set_task_content(task, summary_path=str(summary_md))
                 await session.commit()
         name = await prompt_source_for(source).display_name(ctx, id, st.user_id)
         await ctx.persist_prompt_result(st.task_id, source, id, name, str(summary_md))

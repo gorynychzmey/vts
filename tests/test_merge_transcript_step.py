@@ -46,6 +46,8 @@ class _FakeRepo:
     Only implements what MergeTranscriptStep.run actually calls.
     """
 
+    content_writes: list[dict] = []
+
     def __init__(self, session: object, segments: list[_FakeSegment]) -> None:
         self.session = session
         self._segments = segments
@@ -55,6 +57,10 @@ class _FakeRepo:
 
     async def get_task_by_id(self, task_id: uuid.UUID) -> SimpleNamespace:
         return SimpleNamespace(transcript_path=None)
+
+    async def set_task_content(self, task: SimpleNamespace, **fields: object) -> None:
+        task.transcript_path = fields["transcript_path"]
+        _FakeRepo.content_writes.append(fields)
 
     async def speaker_names_for_task(
         self, user_id: uuid.UUID, task_id: uuid.UUID
@@ -151,6 +157,7 @@ def _ctx(monkeypatch: pytest.MonkeyPatch, segments: list[_FakeSegment]) -> Simpl
         return _FakeRepo(session, segments)
 
     monkeypatch.setattr("vts.pipeline.steps.transcription.Repo", _repo_factory)
+    _FakeRepo.content_writes = []
 
     return SimpleNamespace(
         session_factory=lambda: _FakeSession(),
@@ -199,6 +206,10 @@ def test_merge_transcript_step_attributes_speakers_correctly_across_a_silent_chu
 
     success = asyncio.run(MergeTranscriptStep().run(ctx, st))
     assert success is True
+    # The transcript path goes through the content setter (recording + task).
+    assert _FakeRepo.content_writes == [
+        {"transcript_path": str(dirs["outputs"] / "transcript.txt")}
+    ]
 
     payload = json.loads((dirs["outputs"] / "transcript.json").read_text(encoding="utf-8"))
     entries = payload["entries"]

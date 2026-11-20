@@ -209,10 +209,21 @@ class PipelineContext:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 return
-            options = dict(task.options or {})
-            options["detected_language"] = language
-            options["detected_language_confidence"] = float(confidence)
-            task.options = options
+            await repo.set_detected_language(task, language, confidence)
+            await session.commit()
+
+    async def persist_content(self, task_id: uuid.UUID, **fields: Any) -> None:
+        """Write content paths (transcript/summary/redacted) to recording and task.
+
+        ``fields`` are the keyword arguments of ``Repo.set_task_content``.
+        A task deleted mid-run is a quiet no-op (vts-lzad).
+        """
+        async with self.session_factory() as session:
+            repo = Repo(session)
+            task = await repo.get_task_by_id(task_id)
+            if task is None:
+                return
+            await repo.set_task_content(task, **fields)
             await session.commit()
 
     async def persist_task_options(self, task_id: uuid.UUID, options: dict) -> None:

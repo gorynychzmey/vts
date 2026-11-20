@@ -105,7 +105,11 @@ def _make_processor(
     async def _stub_get_n_ctx(task_id: object, logger: object) -> int:
         return n_ctx
 
+    async def _noop_persist_content(*args: object, **kwargs: object) -> None:
+        return None
+
     ctx = SimpleNamespace(
+        persist_content=_noop_persist_content,
         settings=SimpleNamespace(
             prompts_dir=tmp_path / "prompts",
             llm_url="http://llm.local/v1",
