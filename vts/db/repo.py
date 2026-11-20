@@ -33,6 +33,7 @@ from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 from vts.services.asr_payload import decompose_raw_json
 from vts.services.recording_meta import language_code, recording_display_name
+from vts.services.recording_state import initial_state, state_for_status
 from vts.services.delivery_status import RETRYABLE_STATUSES
 
 
@@ -349,7 +350,24 @@ class Repo:
             .where(Task.id == task_id)
             .values(status=status, updated_at=utcnow()),
         )
+        await self._sync_recording_state(task_id, status)
         await self.session.flush()
+
+    async def _sync_recording_state(self, task_id: uuid.UUID, status: TaskStatus) -> None:
+        """Move the task's recording to the state this status implies (vts-lzad).
+
+        No-op for statuses with no mapping (archived keeps what the recording
+        had) and when the task has no recording (never created, or deleted).
+        """
+        state = state_for_status(status)
+        if state is None:
+            return
+        await self.session.execute(
+            update(Recording)
+            .where(Recording.source_task_id == task_id)
+            .values(state=state)
+            .execution_options(synchronize_session="fetch")
+        )
 
     async def transition_task_status(
         self, task_id: uuid.UUID, from_statuses: list[TaskStatus], to_status: TaskStatus
@@ -434,6 +452,7 @@ class Repo:
         task.awaiting_step = None
         task.updated_at = utcnow()
         await self.session.flush()
+        await self._sync_recording_state(task.id, status)
 
     async def set_awaiting_input(self, task: Task, step: str) -> None:
         task.status = TaskStatus.awaiting_input
@@ -543,6 +562,12 @@ class Repo:
                 source_task_id=task.id,
                 artifact_dir=task.artifact_dir,
                 recorded_at=task.created_at,
+                state=initial_state(
+                    task.status,
+                    transcript_path=task.transcript_path,
+                    summary_path=task.summary_path,
+                    prompts_requested=isinstance(options.get("prompts"), list) and len(options["prompts"]) > 0,
+                ),
             )
             self.session.add(recording)
 
