@@ -66,6 +66,7 @@ class _StubTask:
         self.summary_path: str | None = None
         self.summary_progress: dict | None = None
         self.updated_at = None
+        self.content_calls: list[dict] = []
 
 
 class _StubPrompt:
@@ -127,6 +128,7 @@ def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None
             return None
 
         async def set_task_content(self, t, **fields) -> None:
+            t.content_calls.append(dict(fields))
             for key, value in fields.items():
                 setattr(t, key, value)
 
@@ -406,6 +408,8 @@ def test_finalize_system_summary_keeps_backcompat(tmp_path: Path, monkeypatch) -
     assert final_md.read_text(encoding="utf-8") == "THE SUMMARY"
     assert (dirs["outputs"] / "summary.md").read_text(encoding="utf-8") == "THE SUMMARY"
     assert task.summary_path == str(final_md)
+    # Written through the content setter, so the recording gets it too.
+    assert task.content_calls == [{"summary_path": str(final_md)}]
 
     # The summary is also tracked in the result index, with its i18n name key.
     sysdef = next(p for p in list_system_prompts() if p.key == "summary")

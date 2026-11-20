@@ -141,8 +141,6 @@ async def test_deleting_a_running_task_then_writing_content_is_a_noop(factory):
 
 
 def _pipeline_ctx(factory):
-    from types import SimpleNamespace
-
     from vts.pipeline.context import PipelineContext
 
     ctx = PipelineContext.__new__(PipelineContext)
@@ -154,11 +152,12 @@ async def test_persist_detected_language_reaches_the_recording(factory):
     async with factory() as s:
         task, rec = await _task_with_recording(s)
         task_id, rec_id = task.id, rec.id
-    await _pipeline_ctx(factory).persist_detected_language(task_id, "russian", 0.9)
+    await _pipeline_ctx(factory).persist_detected_language(task_id, "german", 0.9)
     async with factory() as s:
         from vts.db.models import Recording, Task
-        assert (await s.get(Recording, rec_id)).language == "ru"
-        assert (await s.get(Task, task_id)).options["detected_language"] == "russian"
+        # The fixture task is created with language "ru": "de" can only come from the write.
+        assert (await s.get(Recording, rec_id)).language == "de"
+        assert (await s.get(Task, task_id)).options["detected_language"] == "german"
 
 
 async def test_persist_content_and_prompt_result_reach_the_recording(factory):
@@ -195,7 +194,7 @@ async def test_summary_restart_clears_the_recording_too(factory):
         await reset_task_for_summary_restart(repo, task)
         assert rec.summary_path is None and rec.redacted_path is None
         assert rec.prompt_results == task.options["prompt_results"]
-        assert rec.prompt_results[0]["status"] != "completed"
+        assert rec.prompt_results[0]["status"] == "pending"
 
 
 async def test_restart_final_with_prompts_empties_recording_results(factory):
