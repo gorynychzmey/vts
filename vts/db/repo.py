@@ -18,6 +18,7 @@ from vts.db.models import (
     DeliveryTarget,
     MatchDecision,
     Recording,
+    RecordingState,
     Preset,
     Prompt,
     Speaker,
@@ -356,10 +357,22 @@ class Repo:
     async def _sync_recording_state(self, task_id: uuid.UUID, status: TaskStatus) -> None:
         """Move the task's recording to the state this status implies (vts-lzad).
 
-        No-op for statuses with no mapping (archived keeps what the recording
-        had) and when the task has no recording (never created, or deleted).
+        No-op for statuses with no mapping (paused/waiting keep what the recording
+        had; archived only closes a still-processing one) and when the task has no recording (never created, or deleted).
         """
         state = state_for_status(status)
+        if status == TaskStatus.archived:
+            # Archived has no state of its own (the mapping stays pure), but a
+            # task archived from awaiting_input never gets another status, so
+            # its recording would stay `processing` forever. Finished states
+            # are left alone.
+            await self.session.execute(
+                update(Recording)
+                .where(Recording.source_task_id == task_id, Recording.state == RecordingState.processing)
+                .values(state=RecordingState.incomplete)
+                .execution_options(synchronize_session="fetch")
+            )
+            return
         if state is None:
             return
         await self.session.execute(
@@ -566,7 +579,7 @@ class Repo:
                     task.status,
                     transcript_path=task.transcript_path,
                     summary_path=task.summary_path,
-                    prompts_requested=isinstance(options.get("prompts"), list) and len(options["prompts"]) > 0,
+                    options=options,
                 ),
             )
             self.session.add(recording)

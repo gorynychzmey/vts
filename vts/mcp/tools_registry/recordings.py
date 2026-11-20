@@ -166,7 +166,8 @@ def register(mcp: FastMCP) -> None:
 
         A recording is a processed video or audio file that stays available
         after the job that produced it is gone. Use `id` from here with
-        `get_recording_transcript`.
+        `get_recording_transcript`. Recordings without any transcript yet are
+        not listed; each item's `state` says whether its results are final.
 
         Each item carries `people` — the names identified by voice, empty when
         the recording was not diarised. Filter with `person` (a name, matched

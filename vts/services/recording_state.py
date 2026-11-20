@@ -10,6 +10,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from vts.db.models import RecordingState, TaskStatus
+from vts.services.task_progress import selected_prompt_refs
 
 _STATUS_TO_STATE: dict[TaskStatus, RecordingState | None] = {
     TaskStatus.completed: RecordingState.complete,
@@ -30,20 +31,50 @@ def state_for_status(status: TaskStatus) -> RecordingState | None:
     return _STATUS_TO_STATE[TaskStatus(status)]
 
 
+def _archived_is_complete(
+    *, transcript_path: str | None, summary_path: str | None, options: dict
+) -> bool:
+    """Archiving is silent about success, so judge by what the task requested.
+
+    Every requested prompt needs a result. The built-in system summary is
+    recorded in `summary_path`; every other prompt only in
+    `options["prompt_results"]`. A task that requested nothing is judged by
+    its transcript.
+    """
+    refs = selected_prompt_refs(options)
+    if not refs:
+        return bool(transcript_path)
+    results = options.get("prompt_results") if isinstance(options, dict) else None
+    done = {
+        (str(e.get("source")), str(e.get("id")))
+        for e in (results if isinstance(results, list) else [])
+        if isinstance(e, dict) and e.get("status") == "completed"
+    }
+    for ref in refs:
+        key = (ref["source"], ref["id"])
+        if key == ("system", "summary"):
+            if not summary_path:
+                return False
+        elif key not in done:
+            return False
+    return True
+
+
 def initial_state(
     status: TaskStatus,
     *,
     transcript_path: str | None,
     summary_path: str | None,
-    prompts_requested: bool,
+    options: dict,
 ) -> RecordingState:
     """State for a recording that has none yet, judged from its task and files."""
     mapped = state_for_status(status)
     if mapped is not None:
         return mapped
     if TaskStatus(status) is TaskStatus.archived:
-        # Archiving is silent about success, so judge by what was produced.
-        if summary_path or (not prompts_requested and transcript_path):
+        if _archived_is_complete(
+            transcript_path=transcript_path, summary_path=summary_path, options=options
+        ):
             return RecordingState.complete
         return RecordingState.incomplete
     return RecordingState.processing  # paused / waiting / awaiting_input
@@ -63,12 +94,11 @@ def backfill_recording_states(conn) -> int:
             )
         else:
             options = row["task_options"]
-            prompts = options.get("prompts") if isinstance(options, dict) else None
             state = initial_state(
                 TaskStatus(row["task_status"]),
                 transcript_path=row["transcript_path"],
                 summary_path=row["summary_path"],
-                prompts_requested=isinstance(prompts, list) and len(prompts) > 0,
+                options=options if isinstance(options, dict) else {},
             )
         conn.execute(
             text("UPDATE recordings SET state = :state WHERE id = :id"),
