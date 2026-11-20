@@ -268,3 +268,96 @@ async def test_feature_flag_off_skips_the_lookup_entirely(
     await proc.process_task(tid)
 
     assert looked_up == [], "donor lookup ran despite features_donor_clone=False"
+
+
+@pytest.mark.asyncio
+async def test_clone_fills_the_clone_recording_with_requested_content(
+    tmp_path, monkeypatch
+) -> None:
+    """A cloned task must end with a complete, listed, remapped recording (vts-lzad).
+
+    The donor has a summary, one user prompt result the clone requested and one
+    it did not. Only the requested entry may carry over, with its path moved
+    into the clone's directory.
+    """
+    from tests._db import ensure_pgvector
+    from vts.db.models import RecordingState
+    from vts.db.repo import Repo
+
+    engine = make_test_engine()
+    await ensure_pgvector(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    donor_user, clone_user = uuid.uuid4(), uuid.uuid4()
+    donor_dir = tmp_path / "donor"
+    clone_dir = tmp_path / "clone"
+    for sub in ("outputs",):
+        (donor_dir / sub).mkdir(parents=True)
+    (donor_dir / "outputs" / "transcript.txt").write_text("hello")
+    (donor_dir / "outputs" / "summary.md").write_text("sum")
+    (donor_dir / "outputs" / "wanted.md").write_text("w")
+    (donor_dir / "outputs" / "unwanted.md").write_text("u")
+    (donor_dir / "outputs" / "redacted_transcript.txt").write_text("r")
+
+    wanted = {"source": "user", "id": "p-wanted", "name": "Wanted",
+              "path": str(donor_dir / "outputs" / "wanted.md"), "status": "done"}
+    unwanted = {"source": "user", "id": "p-unwanted", "name": "Unwanted",
+                "path": str(donor_dir / "outputs" / "unwanted.md"), "status": "done"}
+
+    async with session_factory() as session:
+        session.add(User(id=donor_user, username="donor"))
+        session.add(User(id=clone_user, username="clone"))
+        await session.commit()
+        repo = Repo(session)
+        donor = await repo.create_task(
+            user_id=donor_user, source_url="http://x/v", options={},
+            artifact_dir=str(donor_dir),
+        )
+        donor.transcript_path = str(donor_dir / "outputs" / "transcript.txt")
+        donor.summary_path = str(donor_dir / "outputs" / "summary.md")
+        await repo.set_task_prompt_results(donor, [wanted, unwanted])
+        await repo.set_task_status(donor, TaskStatus.completed)
+        clone = await repo.create_task(
+            user_id=clone_user, source_url="http://x/v",
+            options={"prompts": [{"source": "user", "id": "p-wanted"}]},
+            artifact_dir=str(clone_dir),
+        )
+        await session.commit()
+        task_id = clone.id
+        await session.refresh(donor, attribute_names=["steps"])
+
+    reindexed: list = []
+
+    async def _reindex(session, task, settings):
+        reindexed.append(task.id)
+        return 0
+
+    monkeypatch.setattr("vts.pipeline.processor.reindex_task", _reindex)
+
+    proc = _make_processor(session_factory, _CapturingBus())
+    async with session_factory() as session:
+        repo = Repo(session)
+        task = await session.get(Task, task_id)
+        donor_row = await session.get(Task, donor.id)
+        await session.refresh(donor_row, attribute_names=["steps"])
+        await proc._clone_from_donor(session, repo, task, donor_row)
+        await session.commit()
+
+    async with session_factory() as session:
+        repo = Repo(session)
+        rec = await repo.recording_for_task(task_id)
+        assert rec is not None
+        assert rec.state == RecordingState.complete
+        assert rec.summary_path == str(clone_dir / "outputs" / "summary.md")
+        assert rec.transcript_path == str(clone_dir / "outputs" / "transcript.txt")
+        assert rec.redacted_path == str(clone_dir / "outputs" / "redacted_transcript.txt")
+        assert rec.prompt_results == [
+            {**wanted, "path": str(clone_dir / "outputs" / "wanted.md")}
+        ]
+        listed = await repo.list_recordings(clone_user)
+        assert [r.id for r in listed] == [rec.id]
+    assert reindexed == [task_id]
+    await engine.dispose()

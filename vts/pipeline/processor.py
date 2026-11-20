@@ -25,6 +25,7 @@ from vts.pipeline.steps.diarization import DiarizationCancelled
 from vts.pipeline.steps.media import DownloadCancelled
 from vts.pipeline.types import build_dag_steps
 from vts.worker.lanes import LaneManager
+from vts.services.indexing import reindex_task
 from vts.services.task_progress import selected_prompt_refs
 from vts.services.redis_bus import RedisBus
 from vts.services.storage import cow_copy_dir, ensure_task_dirs
@@ -728,8 +729,29 @@ class TaskProcessor:
 
         # Keep a user-assigned name (rename while queued); only fill a blank one.
         task.source_title = task.source_title or donor.source_title
-        task.transcript_path = _remap(donor.transcript_path)
-        task.summary_path = _remap(donor.summary_path)
+
+        redacted = task_dir / "outputs" / "redacted_transcript.txt"
+        await repo.set_task_content(
+            task,
+            transcript_path=_remap(donor.transcript_path),
+            summary_path=_remap(donor.summary_path),
+            redacted_path=str(redacted) if redacted.exists() else None,
+        )
+
+        # Prompt results: only what this task asked for, and only files that
+        # actually arrived. The donor's own selection may be wider (vts-lzad).
+        requested = {
+            (ref["source"], ref["id"]) for ref in selected_prompt_refs(task.options or {})
+        }
+        kept: list[dict] = []
+        for entry in (donor.options or {}).get("prompt_results") or []:
+            if (entry.get("source"), entry.get("id")) not in requested:
+                continue
+            new_path = _remap(entry.get("path"))
+            if new_path is None or not Path(new_path).exists():
+                continue
+            kept.append({**entry, "path": new_path})
+        await repo.set_task_prompt_results(task, kept)
 
         # Copy steps (mark all as skipped / cloned)
         from vts.db.models import Step, StepStatus
@@ -751,6 +773,8 @@ class TaskProcessor:
         # used to set the same three fields inline and so missed the
         # awaiting_step cleanup that set_task_status does (vts-47w6).
         await repo.set_task_status(task, TaskStatus.completed)
+        # Searchable like any finished recording; never raises.
+        await reindex_task(session, task, self.settings)
 
     def _task_flag(self, options: dict[str, Any], key: str, *, default: bool) -> bool:
         value = options.get(key, default)
