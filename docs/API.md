@@ -61,7 +61,10 @@ What gets exposed (everything under `/api/tasks`, `/api/recordings`,
 - `POST /api/tasks/pause|resume|archive|restart_summary` — task control
 - `DELETE /api/tasks` — batch delete
 - `GET /api/tasks/{id}/subtitles` — the transcript as a WebVTT track
-- `GET /api/recordings` — the library of recordings
+- `GET /api/recordings` — the library of recordings. Each recording carries
+  `state`: `processing` (still being produced), `complete` (finished) or
+  `incomplete` (processing ended without finishing). A recording that has no
+  transcript yet is not listed (nor counted in `total`); it stays reachable by id.
 - `GET /api/recordings/{id}` — one recording
 - `GET /api/search` — semantic search across the corpus (see below)
 - `GET /api/me` — who am I (acting_as, is_admin)

@@ -76,6 +76,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         language=recording.language,
         tags=list(recording.tags or []),
         has_transcript=bool(transcript and Path(transcript).exists()),
+        state=recording.state.value,
         has_redacted=bool(redacted and redacted.exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,

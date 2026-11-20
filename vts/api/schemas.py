@@ -497,6 +497,9 @@ class RecordingOut(BaseModel):
     language: str | None = None
     tags: list[str] = []
     has_transcript: bool = False
+    # Where the recording is in its life: still being processed, finished, or
+    # ended without finishing (vts-lzad).
+    state: Literal["processing", "complete", "incomplete"] = "processing"
     # The processed transcript — its own artifact, and its own tab. Absent from
     # the payload before, so the tab was dead even where the file existed.
     has_redacted: bool = False

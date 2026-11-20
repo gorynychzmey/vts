@@ -50,6 +50,8 @@ async def _seed(session, user_id: uuid.UUID) -> list[Recording]:
             user_id=user_id,
             title=title,
             artifact_dir=f"/tmp/vts-test/{i}",
+            # A recording without text is not listed (vts-lzad).
+            transcript_path=f"/tmp/vts-test/{i}/transcript.txt",
             created_at=base + timedelta(days=i),
         )
         session.add(rec)
@@ -100,3 +102,31 @@ async def test_date_bounds_are_inclusive_and_independent(db_session):
     until = await repo.list_recordings(user_id, limit=50, created_to=cut)
     assert len(since) == 2 and len(until) == 2      # the boundary row is in both
     assert len(since) + len(until) == 4             # 3 rows, one counted twice
+
+
+@pytest.mark.asyncio
+async def test_recording_without_transcript_is_not_listed_nor_counted(db_session):
+    """vts-lzad: nothing to open means nothing to list, and the count agrees."""
+    made = await _seed(db_session, _USER)
+    empty = Recording(
+        id=uuid.uuid4(), user_id=_USER, title="No text yet",
+        artifact_dir="/tmp/vts-test/empty",
+    )
+    db_session.add(empty)
+    await db_session.flush()
+    repo = Repo(db_session)
+    listed = await repo.list_recordings(_USER, limit=50)
+    assert empty.id not in {r.id for r in listed}
+    assert {r.id for r in listed} == {r.id for r in made}
+    assert await repo.count_recordings(_USER) == 3
+
+
+@pytest.mark.asyncio
+async def test_recording_without_transcript_is_still_fetchable_by_id(db_session):
+    empty = Recording(
+        id=uuid.uuid4(), user_id=_USER, title="No text yet",
+        artifact_dir="/tmp/vts-test/empty",
+    )
+    db_session.add(empty)
+    await db_session.flush()
+    assert await Repo(db_session).get_recording_for_user(_USER, empty.id) is not None

@@ -111,3 +111,69 @@ def test_links_are_relative_when_no_base_url_is_configured():
     )
     assert links["player_url"].startswith("/player/")
     assert links["transcript_url"].startswith("/api/recordings/")
+
+
+# ------------------------------------------- the library shows state, not empties
+
+async def test_mcp_list_recordings_reports_state_and_hides_empty(monkeypatch):
+    """vts-lzad: a recording with no text is not listed; the rest carry state."""
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from fastmcp import Client
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    import vts.mcp.server as server_mod
+    import vts.mcp.tools_registry.recordings as recordings_mod
+    from tests._db import ensure_pgvector, make_test_engine
+    from tests.mcp.conftest import FakeUser
+    from vts.core.config import Settings
+    from vts.db.base import Base
+    from vts.db.models import Recording, RecordingState, User
+
+    user_id = uuid.uuid4()
+    engine = make_test_engine()
+    await ensure_pgvector(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            session.add(User(id=user_id, username="mcp-state"))
+            await session.flush()
+            with_text = Recording(
+                id=uuid.uuid4(), user_id=user_id, title="Has text",
+                artifact_dir="/tmp/vts-test/a",
+                transcript_path="/tmp/vts-test/a/transcript.txt",
+                state=RecordingState.incomplete,
+            )
+            empty = Recording(
+                id=uuid.uuid4(), user_id=user_id, title="Empty",
+                artifact_dir="/tmp/vts-test/b",
+            )
+            session.add_all([with_text, empty])
+            await session.commit()
+
+            @asynccontextmanager
+            async def _session_cm():
+                yield session
+
+            async def _authenticate(_session):
+                return FakeUser(id=str(user_id)), Settings()
+
+            monkeypatch.setattr(recordings_mod, "mcp_authenticate", _authenticate)
+            monkeypatch.setattr(recordings_mod, "get_db_session_factory", lambda: _session_cm)
+
+            async with Client(server_mod.build_mcp_server()) as client:
+                result = await client.call_tool("list_recordings", {})
+
+            assert result.is_error is False
+            assert [(i.id, i.state) for i in result.data.items] == [
+                (str(with_text.id), "incomplete")
+            ]
+            assert result.data.total == 1
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()

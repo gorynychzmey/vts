@@ -52,6 +52,8 @@ async def _task_with_recording(session, artifact_dir="/tmp/rec"):
         options={"language": "ru"}, artifact_dir=artifact_dir,
     )
     task.source_title = "Team sync"
+    # A recording without text is not listed (vts-lzad).
+    task.transcript_path = f"{artifact_dir}/transcript.txt"
     recording = await repo.upsert_recording_for_task(task)
     await session.commit()
     return task, recording
@@ -171,6 +173,7 @@ async def test_listing_recordings_is_scoped_to_the_user(factory):
             user_id=other, source_url="https://example.com/other",
             options={}, artifact_dir="/tmp/other",
         )
+        foreign.transcript_path = "/tmp/other/transcript.txt"
         await repo.upsert_recording_for_task(foreign)
         await session.commit()
 
@@ -312,6 +315,7 @@ async def test_a_recording_survives_its_task_in_the_library(authed_app, client, 
             options={}, artifact_dir=str(tmp_path),
         )
         task.source_title = "Kept"
+        task.transcript_path = str(tmp_path / "transcript.txt")
         await repo.upsert_recording_for_task(task)
         await session.commit()
         await session.delete(task)

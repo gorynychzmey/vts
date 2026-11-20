@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from vts.db.models import TaskStatus
+from vts.db.models import RecordingState, TaskStatus
 
 
 @dataclass
@@ -45,6 +45,7 @@ class FakeRecording:
     artifact_dir: str = "/tmp/vts-test/recording"
     transcript_path: str | None = None
     summary_path: str | None = None
+    state: RecordingState = RecordingState.processing
     meta: dict[str, Any] = field(default_factory=dict)
     duration_sec: float | None = None
     language: str | None = None

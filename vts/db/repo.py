@@ -616,7 +616,12 @@ class Repo:
         and shared by the HTTP endpoint and the MCP tool so a filter added to
         one is not missing from the other — three separate WHERE clauses is
         how the library search came to look only at the loaded page.
+
+        A recording without a transcript is never listed or counted: there is
+        nothing in it to open (vts-lzad). It stays reachable by id through
+        `get_recording_for_user`, which is deliberately not filtered.
         """
+        stmt = stmt.where(Recording.transcript_path.isnot(None))
         if q:
             stmt = stmt.where(Recording.title.ilike(f"%{q.strip()}%"))
         if created_from is not None:

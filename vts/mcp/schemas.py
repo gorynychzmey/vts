@@ -77,6 +77,7 @@ class RecordingInfo(BaseModel):
     has_transcript: bool = False
     has_summary: bool = False
     has_media: bool = False
+    state: Literal["processing", "complete", "incomplete"] = "processing"
     created_at: datetime
     # Resolved through the source task, because voice identification is a
     # property of the JOB, not of the recording. So this is empty for a

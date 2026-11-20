@@ -59,6 +59,7 @@ def _info(recording: Recording, *, people: list[str] | None = None) -> Recording
         has_transcript=bool(transcript and Path(transcript).exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
+        state=recording.state.value,
         created_at=recording.created_at,
     )
 

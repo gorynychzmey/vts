@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from vts.api.routers.recordings import _serialize
-from vts.db.models import Recording
+from vts.db.models import Recording, RecordingState
 
 
 def _recording(**kw) -> Recording:
@@ -26,6 +26,7 @@ def _recording(**kw) -> Recording:
         artifact_dir="",
         transcript_path=None,
         summary_path=None,
+        state=RecordingState.processing,
         meta={},
         tags=[],
         created_at=now,
@@ -70,3 +71,9 @@ def test_a_real_artifact_dir_is_still_probed(tmp_path: Path) -> None:
     payload = _serialize(_recording(artifact_dir=str(tmp_path)))
 
     assert payload.has_redacted is True
+
+
+def test_serialized_recording_carries_state() -> None:
+    """vts-lzad: the library tells a client whether the text is final."""
+    for state in RecordingState:
+        assert _serialize(_recording(state=state)).state == state.value
