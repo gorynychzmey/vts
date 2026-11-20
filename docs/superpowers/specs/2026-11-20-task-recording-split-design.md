@@ -115,15 +115,29 @@ through `delete_task_with_recording`).
 ### Library visibility
 
 A recording appears in the library once it has its first text (raw
-transcript, i.e. `transcript_path` set). Its mark follows the task (Victor):
+transcript, i.e. `transcript_path` set). Without text it is hidden and
+reachable only through its task — which is never lost from view: archived
+tasks stay in the task list, and removing a task means deleting it, which
+deletes the recording too.
 
-| Task status | Library |
-|---|---|
-| queued, running, paused, waiting (incl. speaker naming) | shown, "processing" |
-| completed, archived | shown, no mark |
-| failed, canceled | shown, "incomplete" — nothing more will come |
-| any status, no text yet | hidden; reachable only through the task |
-| task deleted (detached legacy recording) | shown, no mark |
+**Completeness is the recording's own state, not derived from the task**
+(Victor). A task status cannot carry it: `archived` is reached from
+`completed`, `failed` and `awaiting_input` alike (`ARCHIVABLE_STATUSES`), so an
+archived failure would look finished, and a recording whose task is gone would
+have nothing to derive from. The recording gets a state column, set by the
+pipeline and never touched by archiving:
+
+| Recording state | Set when | Library mark |
+|---|---|---|
+| `processing` | task created / resumed / restarted | "processing" |
+| `complete` | task completes | none |
+| `incomplete` | task fails or is canceled | "incomplete" — nothing more will come |
+
+Re-runs (summary restart today, `vts-y1g8` later) put the recording back to
+`processing`. Backfill: recordings of completed tasks → `complete`; of failed
+or canceled tasks → `incomplete`; of archived tasks → `complete` if the
+summary (or, for transcript-only tasks, the transcript) exists, otherwise
+`incomplete` — the pre-archive status is not stored anywhere.
 Corpus search is unaffected (chunks exist only once a transcript exists).
 
 ### Old addresses stay
@@ -155,8 +169,10 @@ in the image as usual.
 
 ### Stage 0 — library filter first *(builder-check call)*
 
-Ship the "hide recordings without `transcript_path`" filter and the
-`RecordingOut` status mark on their own, before stage 1. Otherwise rolling
+Ship the "hide recordings without `transcript_path`" filter, the recording
+state column (with its backfill and the pipeline setting it on
+complete/fail/cancel/restart) and its mark in `RecordingOut` and the library,
+on their own, before stage 1. Otherwise rolling
 stage 1 back would run code without the filter over recordings created at
 task start, and the library would fill with empty entries (anti-goal #1).
 
