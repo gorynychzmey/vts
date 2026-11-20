@@ -25,14 +25,16 @@ const NEEDLE_AT = 71;
 
 function recordings() {
   return Array.from({ length: TOTAL }, (_, i) => ({
-    id: `bbbbbbbb-0000-0000-0000-${String(i).padStart(12, "0")}`,
+    // Ids descend with the index: newest first by (listed_at, id), the order
+    // the server returns and the cursor pages through.
+    id: `bbbbbbbb-0000-0000-0000-${String(TOTAL - 1 - i).padStart(12, "0")}`,
     source_task_id: null,
     title: i === NEEDLE_AT ? "Совещание про бюджет" : `Recording ${i}`,
     title_is_custom: false,
     source_url: `file://rec${i}.m4a`, duration_sec: 600, language: "ru", tags: [],
     has_transcript: true, has_redacted: false, has_summary: false,
     has_media: false, prompt_results: [],
-    recorded_at: "2026-08-20T10:00:00Z",
+    recorded_at: "2026-08-20T10:00:00Z", listed_at: "2026-08-20T10:00:00Z",
     created_at: "2026-08-20T10:00:00Z", updated_at: "2026-08-20T11:00:00Z",
   }));
 }
@@ -49,7 +51,10 @@ export async function run() {
       if (url === "/api/recordings") {
         const p = new URLSearchParams(qs || "");
         const limit = Number(p.get("limit") || 50);
-        const offset = Number(p.get("offset") || 0);
+        // Cursor paging, like the endpoint (vts-lzad).
+        const bTs = p.get("before_ts");
+        const bId = p.get("before_id");
+        const afterCursor = (r) => !bTs || r.listed_at < bTs || (r.listed_at === bTs && r.id < bId);
         const q = (p.get("q") || "").toLowerCase();
         queries.push(q);
         // Filter server-side, exactly like the endpoint.
@@ -57,7 +62,7 @@ export async function run() {
           ? all.filter((r) => (r.title || "").toLowerCase().includes(q))
           : all;
         res.end(JSON.stringify({
-          items: matched.slice(offset, offset + limit),
+          items: matched.filter(afterCursor).slice(0, limit),
           total: matched.length,
         }));
         return;

@@ -26,8 +26,11 @@ function recordings() {
     has_transcript: true, has_redacted: false, has_summary: false,
     has_media: false, prompt_results: [],
     recorded_at: "2026-08-20T10:00:00Z",
+    // One shared listed_at: the id is what orders them, so the cursor's
+    // tie-break is what keeps pages from repeating or skipping rows.
+    listed_at: "2026-08-20T10:00:00Z",
     created_at: "2026-08-20T10:00:00Z", updated_at: "2026-08-20T11:00:00Z",
-  }));
+  })).reverse(); // newest first by (listed_at, id), as the server orders them
 }
 
 export async function run() {
@@ -44,9 +47,15 @@ export async function run() {
       if (url === "/api/recordings") {
         const q = new URLSearchParams(qs || "");
         const limit = Number(q.get("limit") || 50);
-        const offset = Number(q.get("offset") || 0);
-        requests.push({ limit, offset });
-        res.end(JSON.stringify({ items: recs.slice(offset, offset + limit), total: TOTAL }));
+        requests.push({ limit, params: q });
+        // Cursor paging, like the endpoint: rows strictly after (before_ts,
+        // before_id) in newest-first order. An offset is ignored on purpose —
+        // a client still paging by offset gets page 1 again and fails below.
+        let rows = recs;
+        const ts = q.get("before_ts");
+        const id = q.get("before_id");
+        if (ts) rows = recs.filter((r) => r.listed_at < ts || (r.listed_at === ts && r.id < id));
+        res.end(JSON.stringify({ items: rows.slice(0, limit), total: TOTAL }));
         return;
       }
       res.end(JSON.stringify(url === "/api/tasks" ? [] : {}));
@@ -111,6 +120,28 @@ export async function run() {
       () => document.querySelectorAll("#library-list .task").length);
     if (grown <= first) {
       failures.push(`scrolling loaded no further recordings (still ${grown})`);
+    }
+    // Page 2 is asked for by the cursor of the last card, not by offset: an
+    // offset shifts when a recording is inserted on top, and the page then
+    // repeats or skips a row (vts-lzad).
+    const page2 = requests[1]?.params;
+    const lastFirstPage = recs[first - 1];
+    if (!page2) {
+      failures.push("no second page was requested");
+    } else {
+      if (page2.get("before_ts") !== lastFirstPage.listed_at || page2.get("before_id") !== lastFirstPage.id) {
+        failures.push(
+          `page 2 asked for ${page2.toString()}, expected before_ts/before_id of the last card ` +
+          `(${lastFirstPage.listed_at}, ${lastFirstPage.id})`
+        );
+      }
+      if (page2.has("offset")) failures.push(`page 2 still sends offset (${page2.get("offset")})`);
+    }
+    const ids = await page.evaluate(
+      () => [...document.querySelectorAll("#library-list .task")].map((el) => el.dataset.recordingId));
+    if (new Set(ids).size !== ids.length) failures.push("the list holds duplicate cards after paging");
+    if (JSON.stringify(ids) !== JSON.stringify(recs.slice(0, ids.length).map((r) => r.id))) {
+      failures.push("the cards are not in the server's order after paging");
     }
     const countAfterScroll = await page.evaluate(
       () => document.getElementById("library-count")?.textContent || "");

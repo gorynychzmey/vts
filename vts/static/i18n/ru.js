@@ -310,6 +310,7 @@ window.__VTS_I18N.ru = {
 "library.about": "О записи",
 "library.open": "Библиотека",
 "library.title": "Библиотека",
+"library.new_recordings": "Новые записи",
 "library.hint": "Обработанные записи. Они остаются здесь и после удаления задачи.",
 "library.empty": "Пока пусто.",
 "library.detached": "задача удалена",

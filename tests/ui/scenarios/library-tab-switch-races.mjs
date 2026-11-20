@@ -45,7 +45,7 @@ function recordings(n) {
     source_url: `file://rec${i}.m4a`, duration_sec: 600, language: "ru", tags: [],
     has_transcript: true, has_redacted: false, has_summary: false,
     has_media: false, prompt_results: [],
-    recorded_at: "2026-08-20T10:00:00Z",
+    recorded_at: "2026-08-20T10:00:00Z", listed_at: "2026-08-20T10:00:00Z",
     created_at: "2026-08-20T10:00:00Z", updated_at: "2026-08-20T11:00:00Z",
   }));
 }
@@ -61,14 +61,17 @@ export async function run() {
       if (url === "/api/recordings") {
         const p = new URLSearchParams(qs || "");
         const limit = Number(p.get("limit") || 50);
-        const offset = Number(p.get("offset") || 0);
+        // Cursor paging, like the endpoint (vts-lzad).
+        const bTs = p.get("before_ts");
+        const bId = p.get("before_id");
+        const afterCursor = (r) => !bTs || r.listed_at < bTs || (r.listed_at === bTs && r.id < bId);
         const all = recordings(12);
         if (slowRecordings) {
           // Long enough to still be in flight when the tab is switched away.
           await new Promise((r) => setTimeout(r, 900));
         }
         res.end(JSON.stringify({
-          items: all.slice(offset, offset + limit), total: all.length,
+          items: all.filter(afterCursor).slice(0, limit), total: all.length,
         }));
         return;
       }

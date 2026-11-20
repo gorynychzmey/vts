@@ -5066,6 +5066,9 @@ function connectEvents() {
     if (!findTaskEl(payload.task_id)) {
       void maybeFlagNewerTask(payload.task_id);
     }
+    // The library listens too: a shown recording repaints its state, an
+    // unseen one may have just entered the library (vts-lzad).
+    scheduleLibraryLookup(payload.task_id);
   });
   state.eventSource.addEventListener("step", (event) => {
     const payload = JSON.parse(event.data);
@@ -5103,6 +5106,11 @@ function connectEvents() {
   state.eventSource.addEventListener("transcript_segment_text", (event) => {
     const payload = JSON.parse(event.data);
     appendTranscriptSegment(payload.task_id, payload.data.text);
+    // The first text is what puts a recording in the library. A shown card
+    // has nothing to learn from a segment; its state follows task_status.
+    if (!findLibraryCardForTask(payload.task_id)) {
+      scheduleLibraryLookup(payload.task_id);
+    }
   });
   state.eventSource.addEventListener("segment_summary_text", (event) => {
     const payload = JSON.parse(event.data);
@@ -8285,7 +8293,14 @@ let libraryItems = [];
 // Paged like the task list. Loading everything at once truncated at the
 // server's 200-row cap without saying so, and got slower with every recording.
 const libraryPaging = {
-  pageSize: 30, offset: 0, loading: false, exhausted: false,
+  pageSize: 30, loading: false, exhausted: false,
+  // Cursors {ts, id} on (listed_at, id), the server's order. Paging by offset
+  // shifted as soon as a recording was inserted on top, and the next page then
+  // repeated a row (vts-lzad). head = top card, tail = last card.
+  head: null, tail: null,
+  // Task ids whose recording entered the library above the head while the tab
+  // was open: what the "New recordings (N)" banner counts.
+  newIds: new Set(),
   // What the SERVER says the library holds. The count next to the heading was
   // showing how many rows were on screen, so it climbed as you scrolled — a
   // paging artefact reported as a number about your library.
@@ -8299,11 +8314,12 @@ const libraryPaging = {
 function resetLibraryState() {
   libraryPaging.epoch += 1;
   libraryPaging.loading = false;
-  libraryPaging.offset = 0;
   libraryPaging.exhausted = false;
   libraryPaging.total = 0;
   libraryItems = [];
+  updateLibraryCursors();
   libraryLoaded = false;
+  clearNewRecordingsBanner();
   if (libraryList) libraryList.textContent = "";
   updateLibraryCount(libraryItems);
 }
@@ -8322,9 +8338,9 @@ function dropLibraryCardForTask(taskId) {
   const sel = `[data-source-task-id="${CSS.escape(id)}"], [data-recording-id="${CSS.escape(id)}"]`;
   libraryList?.querySelectorAll(sel).forEach((el) => el.remove());
   libraryPaging.total = Math.max(0, (libraryPaging.total || 0) - dropped);
-  // Paging is by OFFSET: with a row gone, the next page starts one earlier,
-  // or the first row of that page would be skipped without anyone noticing.
-  libraryPaging.offset = Math.max(0, libraryPaging.offset - dropped);
+  // Paging is by cursor, so a gone row shifts nothing; only the cursors move
+  // if it was the top or last card.
+  updateLibraryCursors();
   updateLibraryCount(libraryItems);
 }
 
@@ -8386,32 +8402,41 @@ function recordingAsTask(recording) {
   };
 }
 
+function buildLibraryCard(item) {
+  // renderTaskCard returns the card ELEMENT itself, so the marker goes on it
+  // — not on something inside it.
+  const root = renderTaskCard(recordingAsTask(item), { kind: "recording" });
+  root.dataset.recordingId = String(item.id || "");
+  root._recording = item;
+  // A recording is not a task, and must not answer to a task's id: several
+  // lookups key off data-task-id, and a library card carrying one made the
+  // task list think it was already rendered. The id it needs for artifact
+  // URLs lives on _runtime, which is unaffected.
+  if (item.source_task_id) {
+    root.dataset.sourceTaskId = String(item.source_task_id);
+  }
+  root.removeAttribute("data-task-id");
+  if (!item.source_task_id) {
+    // The task is gone, and its artifacts may be too. Say so rather than
+    // offering tabs that will 404.
+    root.dataset.detached = "1";
+  }
+  applyLibraryMeta(root, item);
+  return root;
+}
+
 function renderLibraryList(items) {
   if (!libraryList) return;
   libraryList.textContent = "";
   for (const item of items) {
-    // renderTaskCard returns the card ELEMENT itself, so the marker goes on it
-    // — not on something inside it.
-    const root = renderTaskCard(recordingAsTask(item), { kind: "recording" });
-    root.dataset.recordingId = String(item.id || "");
-    root._recording = item;
-    // A recording is not a task, and must not answer to a task's id: several
-    // lookups key off data-task-id, and a library card carrying one made the
-    // task list think it was already rendered. The id it needs for artifact
-    // URLs lives on _runtime, which is unaffected.
-    if (item.source_task_id) {
-      root.dataset.sourceTaskId = String(item.source_task_id);
-    }
-    root.removeAttribute("data-task-id");
-    if (!item.source_task_id) {
-      // The task is gone, and its artifacts may be too. Say so rather than
-      // offering tabs that will 404.
-      root.dataset.detached = "1";
-    }
-    applyLibraryMeta(root, item);
-    libraryList.appendChild(root);
+    libraryList.appendChild(buildLibraryCard(item));
   }
   updateLibraryCount(items);
+}
+
+function findLibraryCardForTask(taskId) {
+  if (!libraryList || !taskId) return null;
+  return libraryList.querySelector(`[data-source-task-id="${CSS.escape(String(taskId))}"]`);
 }
 
 function updateLibraryCount(items) {
@@ -8437,6 +8462,8 @@ function updateLibraryCount(items) {
 function applyLibraryMeta(root, item) {
   const holder = root.querySelector(".task-meta-row") || root.querySelector(".task-header-row");
   if (!holder) return;
+  // Also the live repaint of a shown card (vts-lzad): replace, never stack.
+  root.querySelectorAll(".library-meta").forEach((el) => el.remove());
   const meta = document.createElement("div");
   meta.className = "library-meta";
   const parts = [];
@@ -8466,11 +8493,50 @@ function updateLibrarySentinel() {
   if (more) more.hidden = p.exhausted || p.loading;
 }
 
+// The library's filters as query parameters. Every request that lists
+// recordings sends them — the pages, the load-newer fetch and the per-task
+// lookup — so a recording the filters exclude is neither shown nor announced.
+function libraryFilterParams(params) {
+  // Filters go to the SERVER. Filtering the loaded page instead answers
+  // "not among the ones you have", which a user cannot tell apart from
+  // "does not exist" — the recording they want may be on page 2.
+  const needle = (libraryQ?.value || "").trim();
+  const from = (libraryFrom?.value || "").trim();
+  const to = (libraryTo?.value || "").trim();
+  if (needle) params.set("q", needle);
+  if (from) params.set("created_from", `${from}T00:00:00Z`);
+  // Through the END of the "to" day: the input is a date, so a recording
+  // made that afternoon must match rather than be cut off at midnight.
+  if (to) params.set("created_to", `${to}T23:59:59Z`);
+  return params;
+}
+
+// A recording's position in the library's order. null for one without a
+// listed_at (a server that predates it): sending "undefined" as a cursor would
+// be rejected, and no cursor at all is the honest fallback.
+function libraryCursorOf(item) {
+  if (!item || !item.listed_at) return null;
+  return { ts: item.listed_at, id: String(item.id) };
+}
+
+function updateLibraryCursors() {
+  libraryPaging.head = libraryCursorOf(libraryItems[0]);
+  libraryPaging.tail = libraryCursorOf(libraryItems[libraryItems.length - 1]);
+}
+
 async function loadLibrary() {
   if (!libraryList) return;
-  libraryPaging.offset = 0;
-  libraryPaging.exhausted = false;
+  const p = libraryPaging;
+  // A new query (filter change, refresh) restarts the list, and must be able
+  // to interrupt a page still in flight for the old one rather than be blocked
+  // by it — the epoch bump makes that page's answer land nowhere, the same
+  // ownership the task list's loadFirstPage keeps.
+  p.epoch += 1;
+  p.loading = false;
+  p.exhausted = false;
   libraryItems = [];
+  updateLibraryCursors();
+  clearNewRecordingsBanner();
   await loadLibraryPage();
 }
 
@@ -8481,34 +8547,44 @@ async function loadLibraryPage() {
   p.loading = true;
   updateLibrarySentinel();
   try {
-    // Filters go to the SERVER. Filtering the loaded page instead answers
-    // "not among the ones you have", which a user cannot tell apart from
-    // "does not exist" — the recording they want may be on page 2.
-    const params = new URLSearchParams({
-      limit: String(p.pageSize),
-      offset: String(p.offset),
-    });
-    const needle = (libraryQ?.value || "").trim();
-    const from = (libraryFrom?.value || "").trim();
-    const to = (libraryTo?.value || "").trim();
-    if (needle) params.set("q", needle);
-    if (from) params.set("created_from", `${from}T00:00:00Z`);
-    // Through the END of the "to" day: the input is a date, so a recording
-    // made that afternoon must match rather than be cut off at midnight.
-    if (to) params.set("created_to", `${to}T23:59:59Z`);
+    const firstPage = libraryItems.length === 0;
+    if (!firstPage && !p.tail) {
+      // No cursor to continue from (an item without listed_at): asking again
+      // without one would return page 1 forever.
+      p.exhausted = true;
+      return;
+    }
+    const params = libraryFilterParams(new URLSearchParams({ limit: String(p.pageSize) }));
+    if (!firstPage) {
+      params.set("before_ts", p.tail.ts);
+      params.set("before_id", p.tail.id);
+    }
     const payload = await api(`/api/recordings?${params.toString()}`);
     if (myEpoch !== p.epoch) return; // the user switched while this was in flight
-    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+    const fetched = payload && Array.isArray(payload.items) ? payload.items : [];
     if (payload && Number.isFinite(payload.total)) {
       libraryPaging.total = payload.total;
     }
+    // A recording prepended from the banner can come round again on a later
+    // page only if the server's order disagrees with ours; never show it twice.
+    const known = new Set(libraryItems.map((r) => String(r.id)));
+    const items = fetched.filter((r) => !known.has(String(r.id)));
     libraryItems = libraryItems.concat(items);
-    p.offset += items.length;
+    updateLibraryCursors();
     // A short page means the end. Comparing against the requested size rather
     // than a total keeps this correct if recordings are added while paging.
-    p.exhausted = items.length < p.pageSize;
+    // A page that brought nothing new ends it too, so a server that repeats
+    // rows cannot keep the sentinel fetching forever.
+    p.exhausted = fetched.length < p.pageSize || (!firstPage && items.length === 0);
     libraryLoaded = true;
-    applyLibraryFilter();
+    if (firstPage) {
+      applyLibraryFilter();
+    } else {
+      // Later pages are appended: rebuilding the list would collapse the
+      // cards the user has open above.
+      for (const item of items) libraryList.appendChild(buildLibraryCard(item));
+      updateLibraryCount(libraryItems);
+    }
   } catch {
     if (myEpoch !== p.epoch) return; // a failure from before the reset is not news
     // A failed load must not read as "you have nothing".
@@ -8524,6 +8600,159 @@ async function loadLibraryPage() {
     }
   }
 }
+
+// --- Live library (vts-lzad) ------------------------------------------------
+// The library behaves like the task list: a recording that enters it while the
+// tab is open is announced by a banner, and a shown recording repaints its
+// state mark in place. There is no library event on the server: the task
+// events are the signal, and the page asks for that task's recording.
+
+function clearNewRecordingsBanner() {
+  libraryPaging.newIds.clear();
+  const b = document.getElementById("new-recordings-banner");
+  if (b) b.hidden = true;
+}
+
+function showNewRecordingsBanner() {
+  const b = document.getElementById("new-recordings-banner");
+  const c = document.getElementById("new-recordings-count");
+  if (!b) return;
+  const n = libraryPaging.newIds.size;
+  if (n === 0) { b.hidden = true; return; }
+  if (c) c.textContent = `(${n})`;
+  b.hidden = false;
+}
+
+// Task events come in bursts (a transcript segment every few seconds, several
+// status changes in a row), so the lookup is debounced per task and never runs
+// twice at once for the same task; an event that lands during a lookup earns
+// one more lookup afterwards, so the last state wins.
+const LIBRARY_LOOKUP_DEBOUNCE_MS = 500;
+const libraryLookups = new Map(); // taskId -> { timer, inFlight, again }
+
+function scheduleLibraryLookup(taskId) {
+  // Never loaded: the first visit loads it fresh, nothing to announce against.
+  if (!libraryLoaded || !taskId) return;
+  const id = String(taskId);
+  // Already announced and waiting for a click: nothing new to learn.
+  if (libraryPaging.newIds.has(id)) return;
+  let entry = libraryLookups.get(id);
+  if (!entry) {
+    entry = { timer: null, inFlight: false, again: false };
+    libraryLookups.set(id, entry);
+  }
+  if (entry.inFlight) {
+    entry.again = true;
+    return;
+  }
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => void runLibraryLookup(id), LIBRARY_LOOKUP_DEBOUNCE_MS);
+}
+
+async function runLibraryLookup(taskId) {
+  const entry = libraryLookups.get(taskId);
+  if (!entry) return;
+  entry.timer = null;
+  entry.inFlight = true;
+  const p = libraryPaging;
+  const myEpoch = p.epoch;
+  try {
+    const params = libraryFilterParams(new URLSearchParams({ task_id: taskId, limit: "1" }));
+    let payload;
+    try {
+      payload = await api(`/api/recordings?${params.toString()}`);
+    } catch {
+      return;
+    }
+    // A reset (filter change, refresh, user switch) while this was in flight:
+    // the answer describes a list that is no longer on screen.
+    if (myEpoch !== p.epoch || !libraryLoaded) return;
+    const item = payload && Array.isArray(payload.items) ? payload.items[0] : null;
+    if (!item) return; // not listed (no text yet) or outside the filters
+    const card = findLibraryCardForTask(taskId);
+    if (card) {
+      repaintLibraryCard(card, item);
+      return;
+    }
+    // Re-checked after the await, like maybeFlagNewerTask: the recording may
+    // have been pulled in by the banner click while this was in flight.
+    if (p.newIds.has(taskId)) return;
+    if (isNewerThan(item.listed_at, item.id, p.head)) {
+      p.newIds.add(taskId);
+      showNewRecordingsBanner();
+    }
+  } finally {
+    // While in flight, scheduling only sets `again`, so no timer is pending:
+    // drop the entry, and start over if events arrived meanwhile.
+    libraryLookups.delete(taskId);
+    if (entry.again) scheduleLibraryLookup(taskId);
+  }
+}
+
+// A shown card takes the fresh recording without being rebuilt: rebuilding
+// would collapse an open card and lose its tab and scroll.
+function repaintLibraryCard(card, item) {
+  card._recording = item;
+  libraryItems = libraryItems.map((r) => (String(r.id) === String(item.id) ? item : r));
+  applyLibraryMeta(card, item);
+}
+
+// Banner click: what entered the library above the top card, newest on top,
+// inserted card by card so the ones already there (and whatever is open in
+// them) stay as they are. Scroll is left alone, unlike the task list: the
+// spec asks for the new rows to arrive without moving the reader.
+async function loadNewerRecordings() {
+  const p = libraryPaging;
+  if (p.loading) return;
+  if (!p.head) {
+    // Nothing loaded to keep: an empty library just loads.
+    await loadLibrary();
+    return;
+  }
+  const myEpoch = p.epoch;
+  p.loading = true;
+  try {
+    const params = libraryFilterParams(new URLSearchParams({
+      limit: String(p.pageSize),
+      order: "asc",
+      after_ts: p.head.ts,
+      after_id: p.head.id,
+    }));
+    let payload;
+    try {
+      payload = await api(`/api/recordings?${params.toString()}`);
+    } catch {
+      return;
+    }
+    if (myEpoch !== p.epoch) return;
+    const fetched = payload && Array.isArray(payload.items) ? payload.items : [];
+    if (Number.isFinite(payload?.total)) p.total = payload.total;
+    const known = new Set(libraryItems.map((r) => String(r.id)));
+    // Ascending from the server: each one goes on top of the previous.
+    for (const item of fetched) {
+      p.newIds.delete(String(item.source_task_id || item.id));
+      if (known.has(String(item.id))) continue;
+      libraryItems.unshift(item);
+      libraryList?.prepend(buildLibraryCard(item));
+    }
+    updateLibraryCursors();
+    updateLibraryCount(libraryItems);
+    // A full page may have more above it; a short one has brought everything.
+    if (fetched.length < p.pageSize) {
+      clearNewRecordingsBanner();
+    } else {
+      showNewRecordingsBanner();
+    }
+  } finally {
+    if (myEpoch === p.epoch) {
+      p.loading = false;
+      updateLibrarySentinel();
+    }
+  }
+}
+
+document.getElementById("new-recordings-banner")
+  ?.addEventListener("click", () => void loadNewerRecordings());
 
 // Typing filters by name. It is deliberately not the content search: that one
 // costs an embedding round-trip, so it waits for Enter.

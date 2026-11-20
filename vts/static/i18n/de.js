@@ -310,6 +310,7 @@ window.__VTS_I18N.de = {
 "library.about": "Über die Aufnahme",
 "library.open": "Bibliothek",
 "library.title": "Bibliothek",
+"library.new_recordings": "Neue Aufnahmen",
 "library.hint": "Verarbeitete Aufnahmen. Sie bleiben erhalten, auch wenn die Aufgabe gelöscht wurde.",
 "library.empty": "Noch nichts vorhanden.",
 "library.detached": "Aufgabe gelöscht",

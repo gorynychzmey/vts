@@ -310,6 +310,7 @@ window.__VTS_I18N.en = {
 "library.about": "About recording",
 "library.open": "Library",
 "library.title": "Library",
+"library.new_recordings": "New recordings",
 "library.hint": "Processed recordings. These stay here after their task is gone.",
 "library.empty": "Nothing here yet.",
 "library.detached": "task deleted",

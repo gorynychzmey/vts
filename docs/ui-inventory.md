@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 59 capabilities · 109 routes (80 in the OpenAPI schema, 29 hidden) · 41 MCP tools · 443 English UI strings.
+**Counts:** 59 capabilities · 109 routes (80 in the OpenAPI schema, 29 hidden) · 41 MCP tools · 444 English UI strings.
 
 ## Capabilities by entity
 
@@ -291,5 +291,8 @@ Migrations that introduced or changed the entities above.
 | `0030_user_sessions` | browser sessions live in the database, not Redis (vts-akf8) |
 | `0031_source_timeline` | move pre-fix transcripts onto the source media's timeline (vts-kb4z) |
 | `0032_recording_state` | recordings carry their own completeness state (vts-lzad) |
+| `0033_recording_content` | recordings hold their own content fields (vts-lzad) |
+| `0034_recording_content_backfill` | every task has its recording, recordings hold their content (vts-lzad) |
+| `0035_recording_listed_at` | recordings.listed_at: when a recording entered the library (vts-lzad) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 
