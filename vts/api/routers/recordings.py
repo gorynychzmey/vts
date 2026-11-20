@@ -37,7 +37,9 @@ from vts.services.auth import AuthenticatedUser
 from vts.services.corpus_search import search_corpus
 from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
+    _artifact_path,
     read_recording_transcript,
+    recording_result_entries,
     recording_transcript_entries,
 )
 
@@ -60,12 +62,9 @@ def _serialize(recording: Recording) -> RecordingOut:
     # process was started, which is not a property of the recording at all
     # (same shape as artifacts_removable_for_task, which returns False here).
     artifact_dir = recording.artifact_dir or ""
-    redacted = (
-        Path(artifact_dir) / "outputs" / "redacted_transcript.txt"
-        if artifact_dir else None
-    )
-    meta = recording.meta if isinstance(recording.meta, dict) else {}
-    prompt_results = meta.get("prompt_results")
+    redacted = _artifact_path(recording, "redacted") if (
+        artifact_dir or recording.redacted_path
+    ) else None
     return RecordingOut(
         id=recording.id,
         source_task_id=recording.source_task_id,
@@ -80,7 +79,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         has_redacted=bool(redacted and redacted.exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
-        prompt_results=[r for r in (prompt_results or []) if isinstance(r, dict)],
+        prompt_results=recording_result_entries(recording),
         recorded_at=recording.recorded_at,
         created_at=recording.created_at,
         listed_at=recording.listed_at,

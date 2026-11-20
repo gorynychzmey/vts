@@ -210,3 +210,52 @@ async def test_list_recordings_rejects_half_cursor_pairs_and_bad_order() -> None
                 "list_recordings", args, raise_on_error=False
             )
             assert result.is_error is True, f"{args} was accepted"
+
+
+async def test_get_recording_prompt_result_reads_the_column_not_meta(tmp_path, monkeypatch):
+    """vts-lzad: meta lists a stale entry, the column the real one."""
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from fastmcp import Client
+
+    from tests.mcp.conftest import FakeRecording, FakeRepo, FakeUser
+    from vts.core.config import Settings
+    from vts.mcp import server as server_mod
+    from vts.mcp.tools_registry import recordings as recordings_mod
+
+    real = tmp_path / "memo.md"
+    real.write_text("from the column", encoding="utf-8")
+    user = FakeUser(id=str(uuid.uuid4()))
+    repo = FakeRepo()
+    rec = FakeRecording(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), artifact_dir=str(tmp_path),
+        prompt_results=[{"source": "user", "id": "m", "name": "Memo", "path": str(real), "status": "completed"}],
+        meta={"prompt_results": [{"source": "user", "id": "stale", "name": "Stale", "path": str(tmp_path / "stale.md")}]},
+    )
+    repo.recordings[rec.id] = rec
+
+    @asynccontextmanager
+    async def _session_cm():
+        yield object()
+
+    async def _authenticate(_session):
+        return user, Settings()
+
+    monkeypatch.setattr(recordings_mod, "mcp_authenticate", _authenticate)
+    monkeypatch.setattr(recordings_mod, "get_db_session_factory", lambda: _session_cm)
+    monkeypatch.setattr(recordings_mod, "Repo", lambda _session: repo)
+
+    async with Client(server_mod.build_mcp_server()) as client:
+        ok = await client.call_tool(
+            "get_recording_prompt_result", {"recording_id": str(rec.id), "ref": "user:m"}
+        )
+        stale = await client.call_tool(
+            "get_recording_prompt_result",
+            {"recording_id": str(rec.id), "ref": "user:stale"},
+            raise_on_error=False,
+        )
+    assert ok.data.content == "from the column"
+    assert stale.is_error is True
+    assert "user:m" in str(stale.content[0].text)
+    assert "user:stale" not in str(stale.content[0].text).split("available")[-1]

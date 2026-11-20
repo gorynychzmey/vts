@@ -45,6 +45,8 @@ class FakeRecording:
     artifact_dir: str = "/tmp/vts-test/recording"
     transcript_path: str | None = None
     summary_path: str | None = None
+    redacted_path: str | None = None
+    prompt_results: list[dict[str, Any]] = field(default_factory=list)
     state: RecordingState = RecordingState.processing
     meta: dict[str, Any] = field(default_factory=dict)
     duration_sec: float | None = None

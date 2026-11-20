@@ -77,3 +77,20 @@ def test_serialized_recording_carries_state() -> None:
     """vts-lzad: the library tells a client whether the text is final."""
     for state in RecordingState:
         assert _serialize(_recording(state=state)).state == state.value
+
+
+def test_prompt_results_and_redacted_flag_come_from_the_recording_columns(tmp_path: Path) -> None:
+    """vts-lzad: the column is the source; meta is a stale legacy snapshot."""
+    custom = tmp_path / "elsewhere.txt"
+    custom.write_text("redacted")
+    real = {"source": "user", "id": "m", "name": "Memo", "path": "/x", "status": "completed"}
+    rec = _recording(
+        artifact_dir=str(tmp_path),
+        redacted_path=str(custom),
+        prompt_results=[real],
+        meta={"prompt_results": [{"source": "user", "id": "stale"}]},
+    )
+    out = _serialize(rec)
+    assert out.prompt_results == [real]
+    # The default-named file does not exist; the column points elsewhere.
+    assert out.has_redacted is True

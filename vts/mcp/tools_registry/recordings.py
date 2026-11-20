@@ -38,7 +38,9 @@ from vts.services.subtitles import render_webvtt
 from vts.api._helpers.recordings import rename_recording
 from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
+    read_recording_result,
     read_recording_transcript,
+    recording_result_entries,
     recording_transcript_entries,
 )
 
@@ -69,78 +71,38 @@ def _info(recording: Recording, *, people: list[str] | None = None) -> Recording
 logger = logging.getLogger(__name__)
 
 
-def _read_result_file(recording: Recording, raw_path: str) -> str:
-    """Read a prompt-result file, refusing anything outside the recording.
-
-    The path comes from the database, and a recording outlives the task that
-    wrote it, so it is data of unclear age rather than a value this code just
-    computed. Resolving it and requiring it to stay under the recording's own
-    artifact directory keeps a malformed or tampered row from turning a read
-    tool into "open any file the server can reach".
-
-    A missing file reads as empty rather than raising: the row can outlive the
-    artifact, and that is a 404-shaped answer the caller already handles.
-    """
-    from pathlib import Path
-
-    root = Path(str(getattr(recording, "artifact_dir", "") or "")).resolve()
-    try:
-        path = Path(raw_path).resolve()
-        if not root or not path.is_relative_to(root):
-            logger.warning(
-                "prompt result path %s escapes recording dir %s; refusing",
-                raw_path, root,
-            )
-            return ""
-        return path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
-        return ""
-
-
 def recording_prompt_result(recording: Recording, ref: str) -> PromptResult:
     """One prompt result of a recording (a summary, a memo), by "source:id".
 
     Shared by `get_recording_prompt_result` and the MCP Apps summary view
     (vts-vtma.5). Raises 404 naming the refs that do exist.
     """
-    results = (recording.meta or {}).get("prompt_results") or []
     wanted = (ref or "").strip() or "system:summary"
-    for entry in results:
-        if not isinstance(entry, dict):
-            continue
-        entry_ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
-        if entry_ref == wanted or entry.get("ref") == wanted:
-            source, _, ident = wanted.partition(":")
-            # The entry stores a PATH, not the text: real rows look
-            # like {"source","id","name","path","status"}. Reading a
-            # "text" key that does not exist returned 200 with empty
-            # content — worse than the crash it replaced, because a
-            # caller cannot tell an empty summary from a broken reader.
-            content = entry.get("text") or entry.get("result") or ""
-            if not content and entry.get("path"):
-                content = _read_result_file(recording, entry["path"])
-            return PromptResult(
-                task_id=recording.source_task_id,
-                source=source,
-                id=ident,
-                content=content,
-            )
-    # Falling back to the summary artifact: the oldest recordings were
-    # created before results were snapshotted into meta, and for them
-    # the file on disk is the only copy.
-    if wanted == "system:summary":
-        try:
-            return PromptResult(
-                task_id=recording.source_task_id,
-                source="system",
-                id="summary",
-                content=read_recording_transcript(recording, "summary"),
-            )
-        except RecordingArtifactMissing:
-            pass
+    source, _, ident = wanted.partition(":")
+    # The entry stores a PATH, not the text: a reader looking for a "text" key
+    # returned 200 with empty content once, and a caller cannot tell an empty
+    # summary from a broken reader. The oldest recordings have no entry for the
+    # summary at all; for them `summary_path` is the only copy.
+    try:
+        content = read_recording_result(recording, source, ident)
+    except RecordingArtifactMissing:
+        content = None
+        if wanted == "system:summary":
+            # No stored path at all: the default-named file is the last resort.
+            try:
+                content = read_recording_transcript(recording, "summary")
+            except RecordingArtifactMissing:
+                pass
+    if content is not None:
+        return PromptResult(
+            task_id=recording.source_task_id,
+            source=source,
+            id=ident,
+            content=content,
+        )
     available = [
         f"{e.get('source', '')}:{e.get('id', '')}"
-        for e in results if isinstance(e, dict)
+        for e in recording_result_entries(recording)
     ]
     raise HTTPException(
         status_code=404,

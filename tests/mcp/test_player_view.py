@@ -37,6 +37,7 @@ class _Recording:
     artifact_dir: str = "/nonexistent"
     meta: dict = field(default_factory=dict)
     summary_path: str | None = None
+    prompt_results: list = field(default_factory=list)
 
 
 class _Repo:
@@ -320,11 +321,11 @@ def _with_results(tmp_path):
     (out / "memo.md").write_text("Memo text", encoding="utf-8")
     return _Recording(
         id=uuid.uuid4(), artifact_dir=str(tmp_path), summary_path=str(out / "summary.md"),
-        meta={"prompt_results": [
+        prompt_results=[
             {"source": "system", "id": "summary", "name": "Summary", "path": str(out / "summary.md"), "status": "completed"},
             {"source": "user", "id": "m1", "name": "Memo", "path": str(out / "memo.md"), "status": "completed"},
             {"source": "user", "id": "p2", "name": "Pending one", "path": str(out / "x.md"), "status": "pending"},
-        ]},
+        ],
     )
 
 
@@ -390,3 +391,15 @@ async def test_the_summary_view_is_registered_and_self_contained():
         html = (await client.read_resource(SUMMARY_URI))[0].text
     assert "VtsMarkdown" in html and "VtsAppBridge" in html
     assert not re.search(r'<(script|link|img)[^>]+(src|href)=', html)
+
+
+async def test_the_switcher_lists_the_column_not_the_stale_meta(client_for, tmp_path):
+    """vts-lzad: meta keeps a stale snapshot; only the column counts."""
+    rec = _with_results(tmp_path)
+    rec.meta = {"prompt_results": [
+        {"source": "user", "id": "ghost", "name": "Ghost", "path": "/x", "status": "completed"},
+    ]}
+    async with client_for([rec], []) as client:
+        result = await client.call_tool("show_summary", {"recording_id": str(rec.id)})
+    refs = [r["ref"] for r in result.structured_content["results"]]
+    assert refs == ["system:summary", "user:m1"]

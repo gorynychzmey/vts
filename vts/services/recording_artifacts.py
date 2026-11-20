@@ -13,6 +13,7 @@ was a job that produced it.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +28,9 @@ _RELATIVE_PATHS: dict[str, str] = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 class RecordingArtifactMissing(FileNotFoundError):
     """The recording has no such artifact — archived away, or never produced."""
 
@@ -38,6 +42,10 @@ def _artifact_path(recording: Any, kind: str) -> Path:
         return Path(recording.transcript_path)
     if kind == "summary" and getattr(recording, "summary_path", None):
         return Path(recording.summary_path)
+    if kind == "redacted" and getattr(recording, "redacted_path", None):
+        return Path(recording.redacted_path)
+    # NULL redacted_path / unset stored paths: legacy rows that were never
+    # backfilled still keep their files under the default names.
     root = Path(str(getattr(recording, "artifact_dir", "") or ""))
     return root / _RELATIVE_PATHS.get(kind, _RELATIVE_PATHS["raw"])
 
@@ -55,6 +63,72 @@ def read_recording_transcript(recording: Any, kind: ArtifactKind = "raw") -> str
             f"recording has no {kind} artifact ({path.name})"
         )
     return path.read_text(encoding="utf-8")
+
+
+def recording_result_entries(recording: Any) -> list[dict[str, Any]]:
+    """The recording's prompt results — the `prompt_results` column, dicts only.
+
+    The legacy `meta["prompt_results"]` snapshot is deliberately not consulted:
+    the column is kept current by the pipeline and is the only source.
+    """
+    return [
+        e for e in (getattr(recording, "prompt_results", None) or [])
+        if isinstance(e, dict)
+    ]
+
+
+def recording_result_path(recording: Any, source: str, ref: str) -> str | None:
+    """The stored path of the result `(source, ref)`, or None.
+
+    Mirrors `vts.services.prompt_results.resolve_result_path` on the task side:
+    the system summary falls back to the recording's `summary_path` when no
+    entry carries it.
+    """
+    for entry in recording_result_entries(recording):
+        if str(entry.get("source")) == source and str(entry.get("id")) == ref:
+            path = entry.get("path")
+            if isinstance(path, str) and path:
+                return path
+    summary = getattr(recording, "summary_path", None)
+    if source == "system" and ref == "summary" and summary:
+        return summary
+    return None
+
+
+def read_recording_result(recording: Any, source: str, ref: str) -> str:
+    """The text of one prompt result, read from the recording's own files.
+
+    The path comes from the database, and a recording outlives the task that
+    wrote it, so it is data of unclear age. Resolving it and requiring it to
+    stay under the recording's artifact directory keeps a malformed or tampered
+    row from turning a read into "open any file the server can reach".
+    The system summary is also allowed at its own stored `summary_path`.
+
+    Raises RecordingArtifactMissing when there is no entry, the path escapes
+    the recording, or the file is gone.
+    """
+    raw_path = recording_result_path(recording, source, ref)
+    if not raw_path:
+        raise RecordingArtifactMissing(f"recording has no result {source}:{ref}")
+    root_raw = str(getattr(recording, "artifact_dir", "") or "")
+    try:
+        path = Path(raw_path).resolve()
+        allowed = bool(root_raw) and path.is_relative_to(Path(root_raw).resolve())
+        summary = getattr(recording, "summary_path", None)
+        if (
+            not allowed and source == "system" and ref == "summary" and summary
+            and path == Path(summary).resolve()
+        ):
+            allowed = True
+        if not allowed:
+            logger.warning(
+                "prompt result path %s escapes recording dir %s; refusing",
+                raw_path, root_raw,
+            )
+            raise RecordingArtifactMissing(f"result {source}:{ref} is outside the recording")
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise RecordingArtifactMissing(f"result {source}:{ref} is not readable") from exc
 
 
 def recording_transcript_entries(

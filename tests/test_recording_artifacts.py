@@ -247,3 +247,94 @@ async def test_another_users_recording_is_not_readable(authed_app, client, tmp_p
 
     r = await client.get(f"/api/recordings/{rec_id}/transcript")
     assert r.status_code == 404
+
+
+# ------------------------------------------- one read layer (vts-lzad, stage 2)
+
+class _Rec:
+    """The subset of Recording the read layer touches."""
+
+    def __init__(self, artifact_dir, **kw):
+        self.artifact_dir = str(artifact_dir)
+        self.transcript_path = None
+        self.summary_path = None
+        self.redacted_path = None
+        self.prompt_results = []
+        self.meta = {}
+        self.__dict__.update(kw)
+
+
+def test_redacted_path_column_wins_over_the_default_name(tmp_path):
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "redacted_transcript.txt").write_text("default")
+    custom = tmp_path / "outputs" / "custom_redacted.txt"
+    custom.write_text("custom")
+    assert read_recording_transcript(
+        _Rec(tmp_path, redacted_path=str(custom)), "redacted"
+    ) == "custom"
+
+
+def test_redacted_falls_back_to_the_default_name_only_when_the_column_is_null(tmp_path):
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "redacted_transcript.txt").write_text("legacy")
+    assert read_recording_transcript(_Rec(tmp_path), "redacted") == "legacy"
+    # A set-but-missing column does not silently read the default file.
+    with pytest.raises(RecordingArtifactMissing):
+        read_recording_transcript(
+            _Rec(tmp_path, redacted_path=str(tmp_path / "gone.txt")), "redacted"
+        )
+
+
+def test_result_entries_come_from_the_column_not_meta(tmp_path):
+    from vts.services.recording_artifacts import recording_result_entries
+
+    rec = _Rec(
+        tmp_path,
+        prompt_results=[{"source": "user", "id": "real"}, "junk"],
+        meta={"prompt_results": [{"source": "user", "id": "stale"}]},
+    )
+    assert recording_result_entries(rec) == [{"source": "user", "id": "real"}]
+
+
+def test_read_result_reads_the_entry_path_and_ignores_stale_meta(tmp_path):
+    from vts.services.recording_artifacts import read_recording_result
+
+    real = tmp_path / "memo.md"
+    real.write_text("real memo")
+    rec = _Rec(
+        tmp_path,
+        prompt_results=[{"source": "user", "id": "m", "path": str(real)}],
+        meta={"prompt_results": [{"source": "user", "id": "m", "path": str(tmp_path / "stale.md")}]},
+    )
+    assert read_recording_result(rec, "user", "m") == "real memo"
+
+
+def test_system_summary_falls_back_to_summary_path(tmp_path):
+    from vts.services.recording_artifacts import (
+        read_recording_result,
+        recording_result_path,
+    )
+
+    summary = tmp_path / "outputs" / "summary.md"
+    summary.parent.mkdir()
+    summary.write_text("the summary")
+    rec = _Rec(tmp_path, summary_path=str(summary))
+    assert recording_result_path(rec, "system", "summary") == str(summary)
+    assert read_recording_result(rec, "system", "summary") == "the summary"
+    assert recording_result_path(rec, "user", "summary") is None
+
+
+def test_read_result_raises_when_missing_or_escaping(tmp_path):
+    from vts.services.recording_artifacts import read_recording_result
+
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret")
+    adir = tmp_path / "rec"
+    adir.mkdir()
+    rec = _Rec(adir, prompt_results=[
+        {"source": "user", "id": "gone", "path": str(adir / "nope.md")},
+        {"source": "user", "id": "esc", "path": str(outside)},
+    ])
+    for ref in ("gone", "esc", "unknown"):
+        with pytest.raises(RecordingArtifactMissing):
+            read_recording_result(rec, "user", ref)

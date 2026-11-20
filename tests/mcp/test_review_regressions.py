@@ -175,26 +175,34 @@ async def test_recording_prompt_result_reads_the_file_not_a_missing_text_field(t
     # Behaviour, not layout: feed the reader a real entry shape and check the
     # content comes back. Asserting where read_text lives would break the
     # moment it moved into a helper — which is exactly what happened.
-    from vts.mcp.tools_registry.recordings import _read_result_file
+    from vts.services.recording_artifacts import (
+        RecordingArtifactMissing,
+        read_recording_result,
+    )
 
     root = tmp_path / "artifacts"
     root.mkdir()
     result = root / "summary.md"
     result.write_text("итог встречи", encoding="utf-8")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("not yours", encoding="utf-8")
 
     class _Rec:
         artifact_dir = str(root)
+        summary_path = None
+        prompt_results = [
+            {"source": "user", "id": "ok", "path": str(result)},
+            # The path comes from the database and outlives the task that
+            # wrote it: outside the recording it must be refused, not read.
+            {"source": "user", "id": "out", "path": str(outside)},
+            # A row can outlive its artifact.
+            {"source": "user", "id": "gone", "path": str(root / "gone.md")},
+        ]
 
-    assert _read_result_file(_Rec(), str(result)) == "итог встречи"
-
-    # A path outside the recording must be refused, not read: the value comes
-    # from the database and outlives the task that wrote it.
-    outside = tmp_path / "secret.txt"
-    outside.write_text("not yours", encoding="utf-8")
-    assert _read_result_file(_Rec(), str(outside)) == ""
-
-    # A row can outlive its artifact; that reads as empty, not as a crash.
-    assert _read_result_file(_Rec(), str(root / "gone.md")) == ""
+    assert read_recording_result(_Rec(), "user", "ok") == "итог встречи"
+    for ref in ("out", "gone"):
+        with pytest.raises(RecordingArtifactMissing):
+            read_recording_result(_Rec(), "user", ref)
 
 
 # ---------------------------------------------------------------------------
@@ -246,17 +254,15 @@ async def test_calling_the_tool_on_a_detached_recording_returns_its_summary(
         # The whole point: the job that produced this is deleted.
         source_task_id=None,
         artifact_dir=str(artifact_dir),
-        meta={
-            "prompt_results": [
-                {
-                    "source": "system",
-                    "id": "summary",
-                    "name": "Summary",
-                    "path": str(result_file),
-                    "status": "completed",
-                }
-            ]
-        },
+        prompt_results=[
+            {
+                "source": "system",
+                "id": "summary",
+                "name": "Summary",
+                "path": str(result_file),
+                "status": "completed",
+            }
+        ],
     )
     repo.recordings[recording.id] = recording
 

@@ -112,14 +112,16 @@ def _summary_text(recording: Any, people: list[str], blocks: list[dict[str, Any]
 def prompt_results_index(recording: Any) -> list[dict[str, str]]:
     """The prompt results a recording has, as [{ref, name}], for the view's
     switcher. Only completed ones: a pending entry has no text to show. The
-    summary file of an old recording (before results were snapshotted into
-    meta) counts as "system:summary"."""
+    summary file of an old recording (before results were recorded
+    as results) counts as "system:summary"."""
     from pathlib import Path
+
+    from vts.services.recording_artifacts import recording_result_entries
 
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for entry in (getattr(recording, "meta", None) or {}).get("prompt_results") or []:
-        if not isinstance(entry, dict) or entry.get("status") not in (None, "completed"):
+    for entry in recording_result_entries(recording):
+        if entry.get("status") not in (None, "completed"):
             continue
         ref = f"{entry.get('source', '')}:{entry.get('id', '')}"
         if ref in seen or ref == ":":
