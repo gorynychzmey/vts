@@ -138,7 +138,10 @@ deletes the recording too.
 `completed`, `failed` and `awaiting_input` alike (`ARCHIVABLE_STATUSES`), so an
 archived failure would look finished, and a recording whose task is gone would
 have nothing to derive from. The recording gets a state column, set by the
-pipeline and never touched by archiving:
+pipeline. Archiving keeps `complete` and `incomplete` as they are; the one
+thing it changes is a recording still `processing` (a task archived while
+waiting for speaker naming), which becomes `incomplete` — an archived task is
+not resumable, so nothing more will come:
 
 | Recording state | Set when | Library mark |
 |---|---|---|
@@ -148,9 +151,11 @@ pipeline and never touched by archiving:
 
 Re-runs (summary restart today, `vts-y1g8` later) put the recording back to
 `processing`. Backfill: recordings of completed tasks → `complete`; of failed
-or canceled tasks → `incomplete`; of archived tasks → `complete` if the
-summary (or, for transcript-only tasks, the transcript) exists, otherwise
-`incomplete` — the pre-archive status is not stored anywhere.
+or canceled tasks → `incomplete`; of archived tasks → `complete` if every
+requested result exists (the system summary via `summary_path`, any other
+prompt via a completed `prompt_results` entry; a task that requested no prompts
+needs only its transcript), otherwise `incomplete` — the pre-archive status is
+not stored anywhere.
 Corpus search is unaffected (chunks exist only once a transcript exists).
 
 ### Old addresses stay
