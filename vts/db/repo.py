@@ -612,6 +612,7 @@ class Repo:
             recording.title = recording_display_name(task.source_title, task.source_url)
         recording.source_url = task.source_url
         recording.transcript_path = task.transcript_path
+        self._mark_listed(recording)
         recording.summary_path = task.summary_path
         # Snapshot the prompt results. They live in the TASK's options, which a
         # recording does not carry — so without this a user prompt's result
@@ -643,6 +644,8 @@ class Repo:
         created_to: datetime | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        before: tuple[datetime, uuid.UUID] | None = None,
+        after: tuple[datetime, uuid.UUID] | None = None,
     ) -> Any:
         """The one place recording filters are expressed.
 
@@ -651,11 +654,20 @@ class Repo:
         one is not missing from the other — three separate WHERE clauses is
         how the library search came to look only at the loaded page.
 
-        A recording without a transcript is never listed or counted: there is
-        nothing in it to open (vts-lzad). It stays reachable by id through
-        `get_recording_for_user`, which is deliberately not filtered.
+        A recording that has never been listed (no text yet) is neither listed
+        nor counted: there is nothing in it to open (vts-lzad). It stays
+        reachable by id through `get_recording_for_user`, which is
+        deliberately not filtered.
+
+        `before` / `after` are strict keyset bounds on `(listed_at, id)`, the
+        library order; `count_recordings` never passes them.
         """
-        stmt = stmt.where(Recording.transcript_path.isnot(None))
+        stmt = stmt.where(Recording.listed_at.isnot(None))
+        key = tuple_(Recording.listed_at, Recording.id)
+        if before is not None:
+            stmt = stmt.where(key < tuple_(*before))
+        if after is not None:
+            stmt = stmt.where(key > tuple_(*after))
         if q:
             stmt = stmt.where(Recording.title.ilike(f"%{q.strip()}%"))
         if created_from is not None:
@@ -684,8 +696,13 @@ class Repo:
         created_to: datetime | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        before: tuple[datetime, uuid.UUID] | None = None,
+        after: tuple[datetime, uuid.UUID] | None = None,
+        order: str = "desc",
     ) -> list["Recording"]:
-        """A user's recordings, newest first, narrowed in the QUERY.
+        """A user's recordings in library order (`listed_at`, newest first by
+        default), narrowed in the QUERY. `before` / `after` are keyset cursors;
+        `order="asc"` pulls the rows next to an `after` cursor.
 
         Filtering here rather than in the caller is the whole point: a client
         that filters the page it happens to hold reports "not found" for a row
@@ -695,12 +712,13 @@ class Repo:
             select(Recording).where(Recording.user_id == user_id),
             q=q, created_from=created_from, created_to=created_to,
             task_ids=task_ids, exclude_task_ids=exclude_task_ids,
+            before=before, after=after,
         )
-        stmt = (
-            stmt.order_by(Recording.created_at.desc(), Recording.id.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        if order == "asc":
+            ordering = (Recording.listed_at.asc(), Recording.id.asc())
+        else:
+            ordering = (Recording.listed_at.desc(), Recording.id.desc())
+        stmt = stmt.order_by(*ordering).limit(limit).offset(offset)
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def count_recordings(
@@ -1004,6 +1022,12 @@ class Repo:
             select(Recording).where(Recording.source_task_id == task_id)
         )
 
+    @staticmethod
+    def _mark_listed(recording: "Recording") -> None:
+        """Stamp `listed_at` the first time the recording has text; never again."""
+        if recording.transcript_path is not None and recording.listed_at is None:
+            recording.listed_at = utcnow()
+
     async def set_task_content(
         self,
         task: Task,
@@ -1022,6 +1046,7 @@ class Repo:
             task.transcript_path = transcript_path
             if recording is not None:
                 recording.transcript_path = transcript_path
+                self._mark_listed(recording)
         if summary_path is not UNSET:
             task.summary_path = summary_path
             if recording is not None:

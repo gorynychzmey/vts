@@ -65,6 +65,13 @@ What gets exposed (everything under `/api/tasks`, `/api/recordings`,
   `state`: `processing` (still being produced), `complete` (finished) or
   `incomplete` (processing ended without finishing). A recording that has no
   transcript yet is not listed (nor counted in `total`); it stays reachable by id.
+  The list is ordered by `listed_at` (when the recording got its first text),
+  newest first. Page with `limit`/`offset`, or with the keyset cursors
+  `before_ts`+`before_id` (older) and `after_ts`+`after_id` (newer, with
+  `order=asc`), taken from an item's `listed_at` and `id`; each pair must be
+  given together. `task_id` (repeatable) keeps only the recordings of those
+  tasks. The MCP tool `list_recordings` takes the same parameters
+  (`task_ids` for the task filter).
 - `GET /api/recordings/{id}` — one recording
 - `GET /api/search` — semantic search across the corpus (see below)
 - `GET /api/me` — who am I (acting_as, is_admin)

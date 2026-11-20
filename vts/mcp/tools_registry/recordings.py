@@ -61,6 +61,7 @@ def _info(recording: Recording, *, people: list[str] | None = None) -> Recording
         has_media=_find_media_file(recording.artifact_dir) is not None,
         state=recording.state.value,
         created_at=recording.created_at,
+        listed_at=recording.listed_at,
     )
 
 
@@ -161,8 +162,20 @@ def register(mcp: FastMCP) -> None:
         created_to: datetime | None = None,
         diarized: bool | None = None,
         person: str | None = None,
+        before_ts: datetime | None = None,
+        before_id: uuid.UUID | None = None,
+        after_ts: datetime | None = None,
+        after_id: uuid.UUID | None = None,
+        order: str = "desc",
+        task_ids: list[uuid.UUID] | None = None,
     ) -> RecordingList:
-        """List the recordings in the library, newest first.
+        """List the recordings in the library, newest first (by when each got
+        its text, `listed_at`).
+
+        Page with `limit`/`offset`, or with cursors: `before_ts` + `before_id`
+        (the `listed_at` and `id` of the last item seen) for older ones,
+        `after_ts` + `after_id` with `order="asc"` for newer ones. `task_ids`
+        keeps only the recordings of those tasks.
 
         A recording is a processed video or audio file that stays available
         after the job that produced it is gone. Use `id` from here with
@@ -177,6 +190,14 @@ def register(mcp: FastMCP) -> None:
         `total` counts everything matching the filters, not this page, so
         `offset` + len(items) < total means there is more to fetch.
         """
+        if order not in ("asc", "desc"):
+            raise ValueError("order must be 'asc' or 'desc'")
+        if (before_ts is None) != (before_id is None):
+            raise ValueError("before_ts and before_id must be supplied together")
+        if (after_ts is None) != (after_id is None):
+            raise ValueError("after_ts and after_id must be supplied together")
+        before = (before_ts, before_id) if before_ts is not None else None
+        after = (after_ts, after_id) if after_ts is not None else None
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
@@ -185,6 +206,7 @@ def register(mcp: FastMCP) -> None:
 
             # Voice identification hangs off the TASK, so both voice filters
             # resolve to a set of task ids the repo then constrains on.
+            requested_task_ids = task_ids
             task_ids = exclude_ids = None
             if person or diarized is not None:
                 if person:
@@ -204,6 +226,16 @@ def register(mcp: FastMCP) -> None:
                     task_ids = ids
                 else:
                     exclude_ids = ids
+            if requested_task_ids is not None:
+                # Both an explicit set and a voice filter: the recordings must
+                # satisfy both, so intersect rather than let one win.
+                wanted = set(requested_task_ids)
+                task_ids = (
+                    list(requested_task_ids) if task_ids is None
+                    else [t for t in task_ids if t in wanted]
+                )
+                if not task_ids:
+                    return RecordingList(items=[], total=0)
 
             filters = {
                 "q": q, "created_from": created_from, "created_to": created_to,
@@ -213,6 +245,7 @@ def register(mcp: FastMCP) -> None:
                 user_id,
                 limit=max(1, min(int(limit), 200)),
                 offset=max(0, int(offset)),
+                before=before, after=after, order=order,
                 **filters,
             )
             total = await repo.count_recordings(user_id, **filters)

@@ -86,6 +86,13 @@ class RecordingInfo(BaseModel):
         ),
     )
     created_at: datetime
+    listed_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When the recording entered the library (got its first text). The "
+            "list is ordered by it; pass it back as before_ts/after_ts with id."
+        ),
+    )
     # Resolved through the source task, because voice identification is a
     # property of the JOB, not of the recording. So this is empty for a
     # recording whose task was deleted, even if it was diarised then — the

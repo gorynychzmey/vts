@@ -53,6 +53,7 @@ async def _seed(session, user_id: uuid.UUID) -> list[Recording]:
             # A recording without text is not listed (vts-lzad).
             transcript_path=f"/tmp/vts-test/{i}/transcript.txt",
             created_at=base + timedelta(days=i),
+            listed_at=base + timedelta(days=i),
         )
         session.add(rec)
         made.append(rec)

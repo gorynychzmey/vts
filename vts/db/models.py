@@ -517,12 +517,17 @@ class Recording(Base):
     meta: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    # When the recording first got text and so entered the library (vts-lzad).
+    # Set once, never moved: the library is ordered by it, so a recording that
+    # is listed later lands on top and cursor pages stay stable.
+    listed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
 
     __table_args__ = (
         Index("ix_recordings_user_created", "user_id", "created_at"),
+        Index("ix_recordings_user_listed", "user_id", "listed_at", "id"),
         # One recording per task: a task creates or updates its recording, it
         # does not accumulate them. Partial, since source_task_id goes NULL when
         # the task is deleted and several such orphans may coexist.

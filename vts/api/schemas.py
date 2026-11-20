@@ -512,6 +512,9 @@ class RecordingOut(BaseModel):
     prompt_results: list[dict] = []
     recorded_at: datetime | None = None
     created_at: datetime
+    # When the recording entered the library; the library order and the keyset
+    # cursor use it (vts-lzad).
+    listed_at: datetime | None = None
     updated_at: datetime
 
 

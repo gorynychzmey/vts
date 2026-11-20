@@ -14,7 +14,7 @@ from datetime import datetime
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,6 +83,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         prompt_results=[r for r in (prompt_results or []) if isinstance(r, dict)],
         recorded_at=recording.recorded_at,
         created_at=recording.created_at,
+        listed_at=recording.listed_at,
         updated_at=recording.updated_at,
     )
 
@@ -94,21 +95,42 @@ async def list_recordings(
     q: str | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
+    before_ts: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+    after_ts: datetime | None = None,
+    after_id: uuid.UUID | None = None,
+    order: str = "desc",
+    task_id: list[uuid.UUID] | None = Query(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> RecordingListOut:
-    """The user's recordings, newest first, filtered server-side.
-
-    The filters live here rather than in the browser because the client only
-    holds the pages it has loaded: filtering there answers "not among the 30
-    you have", which is indistinguishable to the user from "does not exist".
+    """The user's recordings, newest first by when each got text, filtered
+    server-side. Page with `limit`/`offset` or the `before_*`/`after_*`
+    cursors plus `order`; `task_id` (repeatable) filters by task.
     """
+    # The filters live here rather than in the browser because the client only
+    # holds the pages it has loaded: filtering there answers "not among the 30
+    # you have", which is indistinguishable to the user from "does not exist".
+    if order not in ("asc", "desc"):
+        raise HTTPException(status_code=422, detail="order must be 'asc' or 'desc'")
+    if (before_ts is None) != (before_id is None):
+        raise HTTPException(status_code=422, detail="before_ts and before_id must be supplied together")
+    if (after_ts is None) != (after_id is None):
+        raise HTTPException(status_code=422, detail="after_ts and after_id must be supplied together")
+    before = (before_ts, before_id) if before_ts is not None else None
+    after = (after_ts, after_id) if after_ts is not None else None
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
-    filters = {"q": q, "created_from": created_from, "created_to": created_to}
-    items = await repo.list_recordings(user_id, limit=limit, offset=offset, **filters)
+    filters = {
+        "q": q, "created_from": created_from, "created_to": created_to,
+        "task_ids": task_id or None,
+    }
+    items = await repo.list_recordings(
+        user_id, limit=limit, offset=offset, before=before, after=after,
+        order=order, **filters,
+    )
     # Counted with the SAME filters, so the number beside the heading describes
     # the result set rather than the corpus.
     total = await repo.count_recordings(user_id, **filters)

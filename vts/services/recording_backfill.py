@@ -192,3 +192,19 @@ def backfill_recording_content(conn: Any, *, artifacts_available: bool) -> dict[
     created = _create_missing(conn)
     redacted, prompt_results = _fill_content(conn)
     return {"created": created, "redacted": redacted, "prompt_results": prompt_results}
+
+
+def backfill_listed_at(conn: Any) -> int:
+    """Give every recording that already has text its place in the library order.
+
+    `listed_at` is the moment a recording got text; for rows from before the
+    column existed the best available answer is `created_at`. This also
+    covers the recordings migration 0034 created, which runs before the
+    column exists and so cannot set it. Only empty
+    values are set, so a repeat changes nothing. Returns the rows changed.
+    """
+    result = conn.execute(text(
+        "UPDATE recordings SET listed_at = created_at "
+        "WHERE transcript_path IS NOT NULL AND listed_at IS NULL"
+    ))
+    return int(result.rowcount or 0)

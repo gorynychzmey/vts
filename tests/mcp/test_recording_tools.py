@@ -129,7 +129,7 @@ async def test_mcp_list_recordings_reports_state_and_hides_empty(monkeypatch):
     from tests.mcp.conftest import FakeUser
     from vts.core.config import Settings
     from vts.db.base import Base
-    from vts.db.models import Recording, RecordingState, User
+    from vts.db.models import Recording, RecordingState, User, utcnow
 
     user_id = uuid.uuid4()
     engine = make_test_engine()
@@ -146,6 +146,7 @@ async def test_mcp_list_recordings_reports_state_and_hides_empty(monkeypatch):
                 id=uuid.uuid4(), user_id=user_id, title="Has text",
                 artifact_dir="/tmp/vts-test/a",
                 transcript_path="/tmp/vts-test/a/transcript.txt",
+                listed_at=utcnow(),
                 state=RecordingState.incomplete,
             )
             empty = Recording(
@@ -177,3 +178,13 @@ async def test_mcp_list_recordings_reports_state_and_hides_empty(monkeypatch):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
         await engine.dispose()
+
+
+async def test_list_recordings_offers_cursors_and_task_filter() -> None:
+    """The library cursors and the task filter reach MCP clients (vts-lzad)."""
+    tools = await _tools()
+    props = tools["list_recordings"].parameters["properties"]
+    for name in ("before_ts", "before_id", "after_ts", "after_id", "order", "task_ids"):
+        assert name in props, f"list_recordings does not accept {name}"
+    for name in ("limit", "offset"):
+        assert name in props
