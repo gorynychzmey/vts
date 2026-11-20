@@ -496,6 +496,13 @@ class Recording(Base):
     artifact_dir: Mapped[str] = mapped_column(Text, nullable=False)
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Content the recording owns itself (vts-lzad): the redacted transcript has
+    # no task column at all, and the prompt results used to live only in the
+    # task's options (snapshotted into meta).
+    redacted_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_results: Mapped[list[dict]] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'::json")
+    )
     state: Mapped[RecordingState] = mapped_column(
         Enum(RecordingState, name="recording_state", native_enum=False),
         nullable=False,

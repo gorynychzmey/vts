@@ -37,6 +37,10 @@ from vts.services.recording_meta import language_code, recording_display_name
 from vts.services.recording_state import initial_state, state_for_status
 from vts.services.delivery_status import RETRYABLE_STATUSES
 
+# Sentinel for "argument not given", distinct from an explicit None (which
+# clears a field).
+UNSET: Any = object()
+
 
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
@@ -965,6 +969,77 @@ class Repo:
         new_options["prompt_results"] = prompt_results
         task.options = new_options  # reassign so SQLAlchemy flushes the JSON column
         task.updated_at = utcnow()
+        recording = await self.recording_for_task(task.id)
+        if recording is not None:
+            recording.prompt_results = [dict(e) for e in prompt_results]
+        await self.session.flush()
+
+    # ------------------------------------------------------------------
+    # Recording content (vts-lzad)
+    #
+    # The recording owns its content fields; the task side is dual-written
+    # until stage 3. A task without a recording (deleted mid-run) writes only
+    # the task side: these setters never raise and never create a recording.
+    # ------------------------------------------------------------------
+
+    async def recording_for_task(self, task_id: uuid.UUID) -> Recording | None:
+        return await self.session.scalar(
+            select(Recording).where(Recording.source_task_id == task_id)
+        )
+
+    async def set_task_content(
+        self,
+        task: Task,
+        *,
+        transcript_path: str | None | object = UNSET,
+        summary_path: str | None | object = UNSET,
+        redacted_path: str | None | object = UNSET,
+    ) -> None:
+        """Write the given content paths to the recording and to the task.
+
+        Fields left at UNSET are untouched; an explicit None clears. The task
+        has no redacted column, so that one lands on the recording only.
+        """
+        recording = await self.recording_for_task(task.id)
+        if transcript_path is not UNSET:
+            task.transcript_path = transcript_path
+            if recording is not None:
+                recording.transcript_path = transcript_path
+        if summary_path is not UNSET:
+            task.summary_path = summary_path
+            if recording is not None:
+                recording.summary_path = summary_path
+        if redacted_path is not UNSET and recording is not None:
+            recording.redacted_path = redacted_path
+        task.updated_at = utcnow()
+        await self.session.flush()
+
+    async def set_detected_language(self, task: Task, language: str, confidence: float) -> None:
+        new_options = dict(task.options or {})
+        new_options["detected_language"] = language
+        new_options["detected_language_confidence"] = float(confidence)
+        task.options = new_options  # reassigned, never mutated in place
+        task.updated_at = utcnow()
+        code = language_code(language)
+        if code:
+            recording = await self.recording_for_task(task.id)
+            if recording is not None:
+                recording.language = code
+        await self.session.flush()
+
+    async def mirror_prompt_results(self, task: Task) -> None:
+        """Copy `task.options["prompt_results"]` to the recording.
+
+        For callers of the pure helpers in vts.services.prompt_results, which
+        mutate task.options synchronously and cannot await.
+        """
+        recording = await self.recording_for_task(task.id)
+        if recording is None:
+            return
+        entries = (task.options or {}).get("prompt_results")
+        recording.prompt_results = [
+            dict(e) for e in entries if isinstance(e, dict)
+        ] if isinstance(entries, list) else []
         await self.session.flush()
 
     # ------------------------------------------------------------------
