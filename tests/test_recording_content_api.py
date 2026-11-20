@@ -348,3 +348,38 @@ def test_search_hits_link_the_player_by_recording():
     assert links["player_url"] == (
         "https://vts.example/player/11111111-1111-1111-1111-111111111111?t=754"
     )
+
+
+# --------------------------------------------- label language during the run
+
+@pytest.mark.asyncio
+async def test_subtitles_label_voices_in_the_chosen_language_before_completion(
+    authed_app, client, tmp_path
+):
+    """A task submitted with an explicit language must label voices in it
+    while still running — before any upsert gives the recording its language.
+    The task-side reader used the task's options for this."""
+    _app, factory = authed_app
+    from vts.db.repo import Repo
+
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "transcript.json").write_text(
+        json.dumps({"text": "Привет", "entries": [
+            {"start": 0.0, "end": 1.0, "text": "Привет", "speaker": "SPEAKER_00"},
+        ]}),
+        encoding="utf-8",
+    )
+    task_id = uuid.uuid4()
+    async with factory() as session:
+        await Repo(session).create_task(
+            user_id=_USER,
+            source_url="https://example.com/v",
+            options={"transcript": True, "language": "ru"},
+            artifact_dir=str(tmp_path),
+            task_id=task_id,
+        )
+        await session.commit()
+
+    r = await client.get(f"/api/tasks/{task_id}/subtitles")
+    assert r.status_code == 200, r.text
+    assert "<v Голос 1>" in r.text, r.text

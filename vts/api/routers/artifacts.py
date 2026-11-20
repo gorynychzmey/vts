@@ -242,7 +242,7 @@ async def get_transcript_entries(
     clickable `sentences` with their own timecodes (vts-at8, vts-u6w).
     Returns {"blocks": []} (200, not 404) when the transcript isn't ready
     yet, so the page can poll on transcript_updated without special-casing
-    the not-ready state."""
+    the not-ready state. A task with no recording (legacy row) is a 404."""
     recording = await recording_for_task_or_404(Repo(session), uuid.UUID(user.id), task_id)
     return await recording_entries(recording, session)
 

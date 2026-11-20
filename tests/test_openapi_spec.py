@@ -51,7 +51,7 @@ async def test_openapi_hides_internal_routes(app_no_oauth) -> None:
         "/api/events",
         "/api/push/config", "/api/push/status",
         "/api/push/subscribe", "/api/push/unsubscribe",
-        "/player/{task_id}",
+        "/player/{item_id}",
         "/sw.js", "/manifest.webmanifest",
         "/healthz",  # internal liveness
     ):

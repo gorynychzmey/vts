@@ -132,6 +132,13 @@ class Repo:
                 source_url=source_url,
                 recorded_at=task.created_at,
                 state=RecordingState.processing,
+                # An explicit choice is known now (later updates come from
+                # set_detected_language and upsert_recording_for_task). Without
+                # it the player and subtitles of a running task, which read the
+                # recording, labelled voices in English (vts-lzad).
+                language=language_code(
+                    options.get("language") if isinstance(options, dict) else None
+                ),
             )
         )
         await self.session.flush()
