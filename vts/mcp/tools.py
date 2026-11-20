@@ -1049,7 +1049,14 @@ async def get_transcript(
         if recording is None:
             raise HTTPException(status_code=404, detail="Transcript is not ready")
         path = _artifact_path(recording, "raw")
-        missing = "Transcript file missing"
+        # No stored path is "not produced yet"; a stored path whose file is
+        # gone is "file missing". The default-name fallback still serves
+        # legacy rows that never had a path but do have the file.
+        missing = (
+            "Transcript file missing"
+            if recording.transcript_path
+            else "Transcript is not ready"
+        )
         fmt = "txt" if path.suffix == ".txt" else "json"
         kind = "raw"
     else:  # redacted
@@ -1112,6 +1119,18 @@ class _RedisLike(Protocol):
     def pubsub(self) -> _PubSubLike: ...
 
 
+def _forget_loaded_rows(repo: Any) -> None:
+    """Make the next read see what other sessions committed.
+
+    The wait holds ONE session for minutes. Re-selecting a row that session has
+    already loaded returns the cached instance, so a worker's later update to
+    the task or recording would never reach the periodic re-check.
+    """
+    session = getattr(repo, "session", None)
+    if session is not None:
+        session.expire_all()
+
+
 async def wait_for_task(
     *,
     task_id: uuid.UUID,
@@ -1149,6 +1168,7 @@ async def wait_for_task(
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=min(remaining, _WAIT_POLL_INTERVAL_SECONDS))
             if not msg:
                 # periodic re-check covers the no-phase-for-summary case
+                _forget_loaded_rows(repo)
                 task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
                 if task and _wait_condition_met(
                     task, until, await repo.recording_for_task(task.id)
@@ -1164,12 +1184,14 @@ async def wait_for_task(
             if payload.get("task_id") != str(task_id):
                 continue
             if _event_implies_target(payload.get("event", ""), payload.get("data") or {}, until):
+                _forget_loaded_rows(repo)
                 task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
                 return WaitResult(
                     task_id=task.id, status=str(task.status), reached=True,
                     stage=None, updated_at=task.updated_at,
                 )
 
+        _forget_loaded_rows(repo)
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         return WaitResult(
             task_id=task.id, status=str(task.status), reached=False,

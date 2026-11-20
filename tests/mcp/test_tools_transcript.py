@@ -137,3 +137,17 @@ async def test_get_transcript_without_a_recording_is_not_ready(tmp_path: Path) -
         with pytest.raises(HTTPException) as exc:
             await get_transcript(task_id=t.id, variant=variant, user=user, repo=repo)
         assert exc.value.status_code == 404
+
+
+async def test_get_transcript_raw_without_a_stored_path_is_not_ready(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x")
+    repo.tasks[t.id] = t
+    repo.add_recording(t, artifact_dir=str(tmp_path))
+
+    with pytest.raises(HTTPException) as exc:
+        await get_transcript(task_id=t.id, variant="raw", user=user, repo=repo)
+    assert exc.value.detail == "Transcript is not ready"
