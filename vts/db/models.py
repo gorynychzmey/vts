@@ -44,6 +44,18 @@ class TaskStatus(StrEnum):
     awaiting_input = "awaiting_input"
 
 
+class RecordingState(StrEnum):
+    """Completeness of a library entry, independent of its task (vts-lzad).
+
+    A task's `archived` status says only that the media was cleaned up, not
+    whether the run finished; the recording carries that answer itself.
+    """
+
+    processing = "processing"
+    complete = "complete"
+    incomplete = "incomplete"
+
+
 class StepStatus(StrEnum):
     pending = "pending"
     running = "running"
@@ -484,6 +496,12 @@ class Recording(Base):
     artifact_dir: Mapped[str] = mapped_column(Text, nullable=False)
     transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[RecordingState] = mapped_column(
+        Enum(RecordingState, name="recording_state", native_enum=False),
+        nullable=False,
+        default=RecordingState.processing,
+        server_default="processing",
+    )
     # Seconds. Nullable because a recording whose media never arrived has no
     # duration to state — better an absent value than a fabricated zero.
     duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
