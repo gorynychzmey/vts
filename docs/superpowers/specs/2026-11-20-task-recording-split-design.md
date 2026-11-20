@@ -171,7 +171,8 @@ moment is not stored anywhere.
 The library behaves like the task list:
 - a recording that enters the library while the tab is open is announced by a
   "new recordings (N)" banner at the top (respecting the library's filters);
-  a click loads them on top without resetting scroll or loaded pages. This
+  a click loads them on top and scrolls there, like the task list, without
+  reloading the list or dropping loaded pages. This
   holds for the user's own tasks too — the recording appears later than the
   user's action;
 - a shown recording updates its state mark in place on its task's
