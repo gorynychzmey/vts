@@ -50,10 +50,24 @@ from vts.services.recording_artifacts import (
     _artifact_path,
     read_recording_transcript,
     readable_result_entries,
+    recording_result_entries,
     recording_transcript_entries,
 )
 
 router = APIRouter()
+
+
+def _listed_prompt_results(recording: Recording) -> list[dict]:
+    """The results a library card shows as tabs, as a task card does: every
+    unfinished entry (pending, failed) stays, so a Memo tab survives a
+    regeneration as a disabled tab instead of vanishing; a COMPLETED entry
+    whose file is gone is dropped, since it would only open as a 404
+    (vts-lzad)."""
+    readable = {id(e) for e in readable_result_entries(recording)}
+    return [
+        e for e in recording_result_entries(recording)
+        if e.get("status") not in (None, "completed") or id(e) in readable
+    ]
 
 
 def _serialize(recording: Recording) -> RecordingOut:
@@ -89,9 +103,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         has_redacted=bool(redacted and redacted.exists()),
         has_summary=bool(summary and Path(summary).exists()),
         has_media=_find_media_file(recording.artifact_dir) is not None,
-        # Only results a reader can open: a pending entry or a vanished file
-        # would be offered and then 404 (vts-lzad).
-        prompt_results=readable_result_entries(recording),
+        prompt_results=_listed_prompt_results(recording),
         recorded_at=recording.recorded_at,
         created_at=recording.created_at,
         listed_at=recording.listed_at,

@@ -100,19 +100,24 @@ def test_prompt_results_and_redacted_flag_come_from_the_recording_columns(tmp_pa
 
 
 def test_prompt_results_list_only_results_whose_file_is_there(tmp_path: Path) -> None:
-    """vts-lzad: a result is offered only if it can be read. A Memo whose file
-    vanished (or a pending entry with no file yet) would open as a 404."""
+    """vts-lzad: a library card behaves like a task card. An unfinished entry
+    (pending during a regeneration, or failed) stays, so its tab shows as
+    disabled rather than vanishing; a COMPLETED entry whose file vanished is
+    dropped, since it would only open as a 404."""
     kept = tmp_path / "summary" / "results" / "user__kept.md"
     kept.parent.mkdir(parents=True)
     kept.write_text("kept")
     present = {"source": "user", "id": "kept", "name": "Kept", "path": str(kept), "status": "completed"}
+    pending = {"source": "user", "id": "next", "name": "Next", "status": "pending"}
+    failed = {"source": "user", "id": "bad", "name": "Bad", "status": "failed"}
     rec = _recording(
         artifact_dir=str(tmp_path),
         prompt_results=[
             present,
             {"source": "user", "id": "gone", "name": "Memo",
              "path": str(tmp_path / "summary" / "results" / "user__gone.md"), "status": "completed"},
-            {"source": "user", "id": "next", "name": "Next", "status": "pending"},
+            pending,
+            failed,
         ],
     )
-    assert _serialize(rec).prompt_results == [present]
+    assert _serialize(rec).prompt_results == [present, pending, failed]
