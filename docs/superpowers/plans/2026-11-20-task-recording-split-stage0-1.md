@@ -331,6 +331,60 @@ async def test_post_api_tasks_creates_recording(client): ...  # through the HTTP
 - [ ] **Step 1: Failing tests** with `tmp_path`: task without recording → created with correct state; archived task whose redacted file is gone → `redacted_path is None`, its missing prompt result dropped, present one kept; `artifacts_available=False` → created only, counts reflect it; running twice changes nothing the second time.
 - [ ] Steps 2–4. **Step 5: Commit** `feat(recordings): backfill content fields from existing tasks (vts-lzad)`.
 
+### Task 10: `listed_at`, library order, cursors and `task_ids` in API and MCP
+
+**Files:**
+- Modify: `vts/db/models.py` (`Recording.listed_at: Mapped[datetime | None]`, `DateTime(timezone=True)`, nullable; index `ix_recordings_user_listed` on `(user_id, listed_at, id)`)
+- Create: `alembic/versions/0035_recording_listed_at.py` (`down_revision = "0034_recording_content_backfill"`): add column + index; `UPDATE recordings SET listed_at = created_at WHERE transcript_path IS NOT NULL AND listed_at IS NULL`; downgrade drops index and column
+- Modify: `vts/db/repo.py` (`set_task_content`, `upsert_recording_for_task`, `_apply_recording_filters`, `list_recordings`, `count_recordings`)
+- Modify: `vts/services/recording_backfill.py` (recordings it creates with a transcript get `listed_at = created_at`)
+- Modify: `vts/api/schemas.py` (`RecordingOut.listed_at: datetime | None`), `vts/api/routers/recordings.py` (`list_recordings` params), `vts/mcp/schemas.py` + `vts/mcp/tools_registry/recordings.py` (`RecordingInfo.listed_at`, same params), `docs/API.md`
+- Test: `tests/test_recording_listed_at.py`, extend `tests/test_recordings_filters.py`, `tests/mcp/test_recording_tools.py`
+
+**Interfaces:**
+- Produces: `listed_at` is set to `utcnow()` by `set_task_content` / `upsert_recording_for_task` exactly when the recording's `transcript_path` goes from NULL to non-NULL and `listed_at` is NULL; never cleared or moved afterwards.
+- Produces: `_apply_recording_filters` uses `Recording.listed_at.isnot(None)` (replacing `transcript_path.isnot(None)`) and accepts `before: tuple[datetime, uuid.UUID] | None`, `after: tuple[datetime, uuid.UUID] | None` (strict keyset on `(listed_at, id)`); `task_ids` keeps its meaning (filter by `source_task_id`). `list_recordings(..., before=None, after=None, order="desc")` orders by `(listed_at, id)` in `order`; `count_recordings` ignores cursors.
+- Produces: `GET /api/recordings` new optional params `before_ts`+`before_id`, `after_ts`+`after_id` (each pair together or 422), `order` (`asc|desc`, default `desc`), `task_id` (repeatable → `task_ids`). `limit`/`offset` keep working (external clients). Same params on MCP `list_recordings` (`task_id` as `task_ids: list[uuid.UUID] | None`).
+
+- [ ] **Step 1: Failing tests** (real DB):
+  - `test_listed_at_set_on_first_transcript_and_never_moves`: create task → `listed_at is None`; `set_task_content(transcript_path=…)` → set; second call with another path and a summary restart → unchanged.
+  - `test_library_orders_by_listed_at_not_created_at`: task A created first, B second; B gets text first, then A → `list_recordings` ids == [A, B].
+  - `test_cursor_pages_do_not_overlap_after_insert_on_top`: 3 listed recordings, page 1 (limit 2), a 4th becomes listed, page 2 via `before` cursor of page-1 tail → exactly the remaining 1, no duplicate; `after` cursor of page-1 head with `order="asc"` → exactly the new one.
+  - `test_task_ids_filter_returns_that_tasks_recording` (HTTP `?task_id=`) and 422 on a half cursor pair.
+  - migration helper test: a recording with transcript and NULL `listed_at` gets `created_at`; one without transcript stays NULL.
+- [ ] **Step 2: Run** — FAIL. **Step 3: Implement.** **Step 4: Run** the new file, `tests/test_recordings*.py tests/test_recording*.py tests/mcp/` and the full backend suite — PASS.
+- [ ] **Step 5: Commit** `feat(library): order the library by when a recording entered it, with cursor paging (vts-lzad)`.
+
+### Task 11: library banner, in-place state updates, cursor paging in the web UI
+
+**Files:**
+- Modify: `vts/static/app.js` (`libraryPaging`, `loadLibrary`, `loadLibraryPage`, the `task_status` and `transcript_segment_text` SSE listeners, `applyLibraryMeta`/card render)
+- Modify: `vts/static/index.html` (banner element `#new-recordings-banner` with `#new-recordings-count`, placed above the library list, before the `<script>` tag — app.js has no `defer`)
+- Modify: `vts/static/i18n/en.js`, `ru.js`, `de.js`
+- Create: `tests/ui/scenarios/library-new-recordings-banner.mjs`, `tests/ui/scenarios/library-state-updates-live.mjs`
+- Modify (generated): `docs/ui-inventory.md` via `make ui-inventory`
+
+**Interfaces:**
+- Consumes: Task 10 API (`before_ts/before_id`, `after_ts/after_id`, `order`, `task_id`, `listed_at` in items).
+- Produces: i18n key `library.new_recordings` = "New recordings" / "Новые записи" / "Neue Aufnahmen" (count shown as "(N)" in `#new-recordings-count`, same pattern as `#new-tasks-banner`).
+- Behaviour:
+  - `loadLibraryPage` pages by `before` cursor of the last loaded item (`listed_at`, `id`), not offset; keeps sending the library filters.
+  - Library head cursor = `(listed_at, id)` of the top loaded item.
+  - On `task_status` or `transcript_segment_text` for a task id with no library card, while the library has been loaded: fetch `/api/recordings?task_id=<id>&limit=1` with the current filters (debounced per task, at most one in flight per task); if an item comes back and is newer than the head → add to `libraryNewIds`, show the banner. The pattern mirrors `maybeFlagNewerTask` / `showNewTasksBanner`.
+  - Banner click → fetch `after` the head with `order=asc` and current filters, prepend newest-on-top, drop loaded ids from `libraryNewIds`, hide the banner when a short page came back.
+  - Filter change / user switch / refresh button clear `libraryNewIds` and hide the banner.
+  - On `task_status` for a task whose library card is shown: fetch its recording by `task_id` and repaint that card's `.library-meta` state label in place (no list reload).
+
+- [ ] **Step 1: Failing scenarios**, stubbed server like `library-recording-state.mjs`, with the SSE stub sending events:
+  - banner: library open with 2 items; stub emits `task_status` for an unknown task whose `/api/recordings?task_id=` returns a newer listed recording → banner visible with "(1)"; click → that card is first, the 2 old cards still present below in order, banner hidden, no full reload (assert the old card DOM nodes are the same objects, e.g. via a marker attribute set before the event).
+  - not newer / not listed: `task_id` lookup returns nothing → no banner.
+  - live state: a shown "processing" card; stub emits `task_status` completed and `/api/recordings?task_id=` now returns `state: "complete"` → the label disappears from that card without a reload.
+  - cursor paging: scrolling loads page 2 with `before_ts/before_id` of the last card (assert the request URL in the stub).
+- [ ] **Step 2: Run** each scenario alone (fork wrapper, see Task 4 note) — FAIL.
+- [ ] **Step 3: Implement**; `make ui-inventory`.
+- [ ] **Step 4: Run** the new scenarios, the full UI suite and `make ui-inventory-check` — PASS. Revert the banner wiring once and confirm the banner scenario fails, then restore.
+- [ ] **Step 5: Commit** `feat(library): announce new recordings and update states live, like the task list (vts-lzad)`.
+
 ### Release B checkpoint
 
 - [ ] Full backend + UI suites green; `make ui-inventory-check`.

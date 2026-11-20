@@ -158,6 +158,29 @@ needs only its transcript), otherwise `incomplete` — the pre-archive status is
 not stored anywhere.
 Corpus search is unaffected (chunks exist only once a transcript exists).
 
+### Library order and live updates (Victor, added before release B)
+
+The library is ordered by **when a recording entered it**, not by when its task
+was created: a task created earlier can get its first text later. A
+`listed_at` timestamp is set the first time the recording gets a transcript
+and never changes afterwards (restarts and re-renders keep it). The library
+shows recordings with `listed_at` set, ordered by `(listed_at, id)` newest
+first. Existing visible recordings take `listed_at = created_at` — the true
+moment is not stored anywhere.
+
+The library behaves like the task list:
+- a recording that enters the library while the tab is open is announced by a
+  "new recordings (N)" banner at the top (respecting the library's filters);
+  a click loads them on top without resetting scroll or loaded pages. This
+  holds for the user's own tasks too — the recording appears later than the
+  user's action;
+- a shown recording updates its state mark in place on its task's
+  `task_status` event;
+- paging is by cursor, so inserting on top never shifts or duplicates pages.
+No new server event: the existing task events (`task_status`, transcript
+segment text) are the signals. Live refresh of the content tabs inside a
+library card is out of scope.
+
 ### Old addresses stay
 
 Task-addressed endpoints and MCP tools remain as thin adapters: resolve the
