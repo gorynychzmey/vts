@@ -364,6 +364,14 @@ def register(mcp: FastMCP) -> None:
                     entries = recording_transcript_entries(
                         recording, around_sec=around_sec, window_sec=window_sec
                     )
+                    # A voice the recording's task gave a name speaks under it;
+                    # an unnamed one keeps its raw label. Names belong to the
+                    # task, so a recording whose task is gone has none.
+                    names: dict[str, str] = {}
+                    if recording.source_task_id is not None:
+                        names = await repo.speaker_names_for_task(
+                            recording.user_id, recording.source_task_id
+                        )
                     return RecordingTranscript(
                         recording_id=recording.id,
                         title=recording.title,
@@ -372,9 +380,11 @@ def register(mcp: FastMCP) -> None:
                         # render_webvtt takes player BLOCKS ({label, sentences}),
                         # not the flat {start, end, text, speaker} entries — one
                         # block per entry keeps each line its own cue.
-                        text=render_webvtt([
+                        content=render_webvtt([
                             {
-                                "label": e.get("speaker") or "",
+                                "label": names.get(e.get("speaker") or "")
+                                or e.get("speaker")
+                                or "",
                                 "sentences": [{
                                     "start": e.get("start"),
                                     "end": e.get("end"),

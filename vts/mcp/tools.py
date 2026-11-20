@@ -37,7 +37,12 @@ from vts.services.preset_registry import (
 )
 from vts.services.prompt_registry import list_system_prompts, parse_ref, ref_to_dict
 from vts.services.source_url import InvalidSourceUrl, validate_source_url
-from vts.services.prompt_results import resolve_result_path
+from vts.services.recording_artifacts import (
+    RecordingArtifactMissing,
+    _artifact_path,
+    read_recording_result,
+    read_recording_transcript,
+)
 from vts.services.storage import task_dir
 from vts.services.task_progress import summary_progress_for_task
 
@@ -430,6 +435,7 @@ def _stage_label(task: Any) -> str | None:
 
 class _RepoStatusLike(Protocol):
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> Any | None: ...
+    async def recording_for_task(self, task_id: uuid.UUID) -> Any | None: ...
     async def get_asr_progress_for_tasks(
         self, task_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, tuple[int, int]]: ...
@@ -496,14 +502,19 @@ async def get_prompt_result(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    path = resolve_result_path(task, source, ref_id)
-    if path is None or not Path(path).exists():
+    # The recording owns the results (vts-lzad); the task only addresses them.
+    recording = await repo.recording_for_task(task.id)
+    if recording is None:
         raise HTTPException(status_code=404, detail="Result not found")
+    try:
+        content = read_recording_result(recording, source, ref_id)
+    except RecordingArtifactMissing as exc:
+        raise HTTPException(status_code=404, detail="Result not found") from exc
     return PromptResult(
         task_id=task.id,
         source=source,
         id=ref_id,
-        content=Path(path).read_text(encoding="utf-8"),
+        content=content,
     )
 
 
@@ -1032,22 +1043,29 @@ async def get_transcript(
     task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    # The recording owns the transcript (vts-lzad); the task only addresses it.
+    recording = await repo.recording_for_task(task.id)
     if variant == "raw":
-        if not task.transcript_path:
+        if recording is None:
             raise HTTPException(status_code=404, detail="Transcript is not ready")
-        path = Path(task.transcript_path)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Transcript file missing")
+        path = _artifact_path(recording, "raw")
+        missing = "Transcript file missing"
         fmt = "txt" if path.suffix == ".txt" else "json"
+        kind = "raw"
     else:  # redacted
-        path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
-        if not path.exists():
+        if recording is None:
             raise HTTPException(status_code=404, detail="Redacted transcript is not ready")
+        missing = "Redacted transcript is not ready"
         fmt = "txt"
+        kind = "redacted"
+    try:
+        content = read_recording_transcript(recording, kind)
+    except RecordingArtifactMissing as exc:
+        raise HTTPException(status_code=404, detail=missing) from exc
     return TranscriptResult(
         task_id=task.id,
         variant=variant,
-        content=path.read_text(encoding="utf-8"),
+        content=content,
         format=fmt,
     )
 
@@ -1056,13 +1074,15 @@ _TERMINAL = {s.value for s in task_status.TERMINAL_FOR_WAIT_STATUSES}
 _WAIT_POLL_INTERVAL_SECONDS = 5.0  # seconds between DB re-checks when no event arrives
 
 
-def _wait_condition_met(task: Any, until: str) -> bool:
+def _wait_condition_met(task: Any, until: str, recording: Any | None) -> bool:
     if str(task.status) in _TERMINAL:
         return True
+    # Readiness is the recording's: it owns the transcript and summary paths
+    # (vts-lzad). No recording yet means nothing is ready.
     if until == "transcript":
-        return bool(task.transcript_path)
+        return bool(recording and recording.transcript_path)
     if until == "summary":
-        return bool(task.summary_path)
+        return bool(recording and recording.summary_path)
     return False  # until == "done" already handled by terminal check
 
 
@@ -1114,7 +1134,7 @@ async def wait_for_task(
         task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        if _wait_condition_met(task, until):
+        if _wait_condition_met(task, until, await repo.recording_for_task(task.id)):
             return WaitResult(
                 task_id=task.id, status=str(task.status), reached=True,
                 stage=None, updated_at=task.updated_at,
@@ -1130,7 +1150,9 @@ async def wait_for_task(
             if not msg:
                 # periodic re-check covers the no-phase-for-summary case
                 task = await repo.get_task_for_user(uuid.UUID(user.id), task_id)
-                if task and _wait_condition_met(task, until):
+                if task and _wait_condition_met(
+                    task, until, await repo.recording_for_task(task.id)
+                ):
                     return WaitResult(
                         task_id=task.id, status=str(task.status), reached=True,
                         stage=None, updated_at=task.updated_at,

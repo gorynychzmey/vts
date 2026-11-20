@@ -19,7 +19,7 @@ from _db import make_test_engine
 from vts.core.config import get_settings
 from vts.core.secrets import encrypt_secrets
 from vts.db.base import Base
-from vts.db.models import DeliveryStatus, Task, TaskStatus, User
+from vts.db.models import DeliveryStatus, Recording, Task, TaskStatus, User
 from vts.db.repo import Repo
 from vts.delivery import registry
 from vts.delivery.consumer import delivery_tick
@@ -113,6 +113,12 @@ async def test_enqueue_then_consume_delivers_with_decrypted_secret(
         )
         session.add(task)
         await session.flush()
+        # The recording owns the transcript the consumer reads (vts-lzad).
+        session.add(Recording(
+            user_id=user.id, source_task_id=task.id, artifact_dir=str(tmp_path),
+            transcript_path=str(transcript),
+        ))
+        await session.flush()
 
         enqueued = await enqueue_deliveries(
             repo, task, max_attempts=3, now=datetime.now(timezone.utc)
@@ -179,6 +185,12 @@ async def test_delivery_survives_the_plugin_being_absent_then_returning(
             status=TaskStatus.completed,
         )
         session.add(task)
+        await session.flush()
+        # The recording owns the transcript the consumer reads (vts-lzad).
+        session.add(Recording(
+            user_id=user.id, source_task_id=task.id, artifact_dir=str(tmp_path),
+            transcript_path=str(transcript),
+        ))
         await session.flush()
         await enqueue_deliveries(repo, task, max_attempts=2, now=datetime.now(timezone.utc))
         await session.commit()

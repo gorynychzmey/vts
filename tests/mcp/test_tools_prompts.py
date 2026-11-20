@@ -23,9 +23,9 @@ async def test_get_prompt_result_system_summary(tmp_path: Path) -> None:
     summary.write_text("# Summary\nbody", encoding="utf-8")
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        summary_path=str(summary),
     )
     repo.tasks[t.id] = t
+    repo.add_recording(t, summary_path=str(summary), artifact_dir=str(tmp_path))
 
     res = await tools.get_prompt_result(task_id=t.id, ref="system:summary", user=user, repo=repo)
     assert res.content.startswith("# Summary")
@@ -43,13 +43,14 @@ async def test_get_prompt_result_user_prompt(tmp_path: Path) -> None:
     pid = str(uuid.uuid4())
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        options={
-            "prompt_results": [
-                {"source": "user", "id": pid, "name": "n", "path": str(result_file), "status": "done"}
-            ]
-        },
     )
     repo.tasks[t.id] = t
+    repo.add_recording(
+        t, artifact_dir=str(tmp_path),
+        prompt_results=[
+            {"source": "user", "id": pid, "name": "n", "path": str(result_file), "status": "done"}
+        ],
+    )
 
     res = await tools.get_prompt_result(task_id=t.id, ref=f"user:{pid}", user=user, repo=repo)
     assert res.content == "user prompt output"
@@ -70,6 +71,41 @@ async def test_get_prompt_result_missing(tmp_path: Path) -> None:
     repo = FakeRepo()
     t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x")
     repo.tasks[t.id] = t
+    repo.add_recording(t, artifact_dir=str(tmp_path))
+    with pytest.raises(HTTPException) as exc:
+        await tools.get_prompt_result(task_id=t.id, ref="system:summary", user=user, repo=repo)
+    assert exc.value.status_code == 404
+
+
+async def test_get_prompt_result_reads_the_recording_not_the_task(tmp_path: Path) -> None:
+    """Task and recording point at different files: the recording's wins."""
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    stale = tmp_path / "task-summary.md"
+    stale.write_text("task copy", encoding="utf-8")
+    fresh = tmp_path / "summary.md"
+    fresh.write_text("recording copy", encoding="utf-8")
+    t = FakeTask(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
+        summary_path=str(stale),
+    )
+    repo.tasks[t.id] = t
+    repo.add_recording(t, summary_path=str(fresh), artifact_dir=str(tmp_path))
+
+    res = await tools.get_prompt_result(task_id=t.id, ref="system:summary", user=user, repo=repo)
+    assert res.content == "recording copy"
+
+
+async def test_get_prompt_result_without_a_recording_is_not_found(tmp_path: Path) -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    summary = tmp_path / "summary.md"
+    summary.write_text("task only", encoding="utf-8")
+    t = FakeTask(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
+        summary_path=str(summary),
+    )
+    repo.tasks[t.id] = t
     with pytest.raises(HTTPException) as exc:
         await tools.get_prompt_result(task_id=t.id, ref="system:summary", user=user, repo=repo)
     assert exc.value.status_code == 404
@@ -80,9 +116,9 @@ async def test_get_prompt_result_file_missing(tmp_path: Path) -> None:
     repo = FakeRepo()
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        summary_path=str(tmp_path / "missing.md"),
     )
     repo.tasks[t.id] = t
+    repo.add_recording(t, summary_path=str(tmp_path / "missing.md"), artifact_dir=str(tmp_path))
     with pytest.raises(HTTPException) as exc:
         await tools.get_prompt_result(task_id=t.id, ref="system:summary", user=user, repo=repo)
     assert exc.value.status_code == 404

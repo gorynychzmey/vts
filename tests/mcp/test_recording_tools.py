@@ -242,3 +242,60 @@ async def test_get_recording_prompt_result_reads_the_column_not_meta(tmp_path, m
     assert stale.is_error is True
     assert "user:m" in str(stale.content[0].text)
     assert "user:stale" not in str(stale.content[0].text).split("available")[-1]
+
+
+async def test_subtitles_name_the_voices_the_task_named(tmp_path, monkeypatch) -> None:
+    """A cue speaks with the person's name when the recording's task named that
+    voice, and with the raw label for a voice nobody named."""
+    import json
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from fastmcp import Client
+
+    from tests.mcp.conftest import FakeRecording, FakeRepo, FakeUser
+    from vts.core.config import Settings
+    from vts.mcp import server as server_mod
+    from vts.mcp.tools_registry import recordings as recordings_mod
+
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    (outputs / "transcript.json").write_text(json.dumps({"entries": [
+        {"start": 0.0, "end": 2.0, "text": "hello there", "speaker": "SPEAKER_00"},
+        {"start": 2.0, "end": 4.0, "text": "hi back", "speaker": "SPEAKER_01"},
+    ]}), encoding="utf-8")
+    user = FakeUser(id=str(uuid.uuid4()))
+    repo = FakeRepo()
+    task_id = uuid.uuid4()
+    rec = FakeRecording(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_task_id=task_id,
+        artifact_dir=str(tmp_path),
+    )
+    repo.recordings[rec.id] = rec
+
+    async def speaker_names_for_task(user_id, tid):
+        assert tid == task_id
+        return {"SPEAKER_00": "Vasya"}
+
+    repo.speaker_names_for_task = speaker_names_for_task
+
+    @asynccontextmanager
+    async def _session_cm():
+        yield object()
+
+    async def _authenticate(_session):
+        return user, Settings()
+
+    monkeypatch.setattr(recordings_mod, "mcp_authenticate", _authenticate)
+    monkeypatch.setattr(recordings_mod, "get_db_session_factory", lambda: _session_cm)
+    monkeypatch.setattr(recordings_mod, "Repo", lambda _session: repo)
+
+    async with Client(server_mod.build_mcp_server()) as client:
+        res = await client.call_tool(
+            "get_recording_transcript",
+            {"recording_id": str(rec.id), "as_subtitles": True},
+        )
+    text = res.data.content
+    assert "<v Vasya>hello there" in text
+    assert "<v SPEAKER_01>hi back" in text
+    assert "SPEAKER_00" not in text

@@ -340,6 +340,20 @@ class FakeRepo:
             return None
         return r
 
+    async def recording_for_task(self, task_id: uuid.UUID) -> "FakeRecording | None":
+        for r in self.recordings.values():
+            if r.source_task_id == task_id:
+                return r
+        return None
+
+    def add_recording(self, task: FakeTask, **fields: Any) -> "FakeRecording":
+        """The recording a task produced; content tools read through it."""
+        rec = FakeRecording(
+            id=uuid.uuid4(), user_id=task.user_id, source_task_id=task.id, **fields
+        )
+        self.recordings[rec.id] = rec
+        return rec
+
     async def get_task_for_user(self, user_id: uuid.UUID, task_id: uuid.UUID) -> FakeTask | None:
         t = self.tasks.get(task_id)
         if t is None or t.user_id != user_id:

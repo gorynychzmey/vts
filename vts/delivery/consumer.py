@@ -42,7 +42,8 @@ async def process_one_delivery(session_factory, settings, attempt_id) -> None:
             if task is None:
                 raise RuntimeError(f"task {attempt.task_id} is gone")
 
-            payload = resolve_variant(task, attempt.variant)
+            recording = await repo.recording_for_task(task.id)
+            payload = resolve_variant(task, attempt.variant, recording)
             target = (
                 await repo.get_delivery_target(task.user_id, attempt.target_id)
                 if attempt.target_id

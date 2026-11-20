@@ -205,10 +205,11 @@ async def test_wait_for_summary_via_db_recheck(monkeypatch) -> None:
     redis = FakeRedisWithPubSub()
     t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x", status=TaskStatus.running)
     repo.tasks[t.id] = t
+    rec = repo.add_recording(t)
 
     async def mark_summary_ready():
         await asyncio.sleep(0.08)
-        t.summary_path = "/tmp/fake/summary.md"
+        rec.summary_path = "/tmp/fake/summary.md"
 
     asyncio.create_task(mark_summary_ready())
     res = await wait_for_task(
@@ -221,3 +222,47 @@ async def test_wait_for_summary_via_db_recheck(monkeypatch) -> None:
         events_channel="vts:events",
     )
     assert res.reached is True
+
+
+async def test_wait_reads_readiness_from_the_recording_not_the_task() -> None:
+    """Task and recording disagree: only the recording's paths count."""
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    redis = FakeRedisWithPubSub()
+    # The task claims both artifacts; its recording has only the transcript.
+    t = FakeTask(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
+        status=TaskStatus.running,
+        transcript_path="/tmp/task/transcript.txt", summary_path="/tmp/task/summary.md",
+    )
+    repo.tasks[t.id] = t
+    repo.add_recording(t, transcript_path="/tmp/rec/transcript.txt")
+
+    ready = await wait_for_task(
+        task_id=t.id, until="transcript", timeout_seconds=1,
+        user=user, repo=repo, redis=redis, events_channel="vts:events",
+    )
+    assert ready.reached is True
+
+    not_ready = await wait_for_task(
+        task_id=t.id, until="summary", timeout_seconds=1,
+        user=user, repo=repo, redis=redis, events_channel="vts:events",
+    )
+    assert not_ready.reached is False
+
+
+async def test_wait_without_a_recording_is_not_ready() -> None:
+    user = FakeUser(id=str(uuid.uuid4()), username="alice")
+    repo = FakeRepo()
+    redis = FakeRedisWithPubSub()
+    t = FakeTask(
+        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
+        status=TaskStatus.running, transcript_path="/tmp/task/transcript.txt",
+    )
+    repo.tasks[t.id] = t
+
+    res = await wait_for_task(
+        task_id=t.id, until="transcript", timeout_seconds=1,
+        user=user, repo=repo, redis=redis, events_channel="vts:events",
+    )
+    assert res.reached is False

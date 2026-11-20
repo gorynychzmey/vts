@@ -1,13 +1,18 @@
-"""Resolve delivery variant content from task artifacts.
+"""Resolve delivery variant content from a task's recording.
 
-Mirrors how the MCP layer reads transcript/summary files
-(see vts/mcp/tools.py: get_transcript).
+The recording owns the content (vts-lzad); the task only addresses the
+delivery. Reads go through the same layer as the MCP tools
+(see vts/services/recording_artifacts.py).
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from vts.delivery.contract import DeliveryPayload, TaskMeta
+from vts.services.recording_artifacts import (
+    RecordingArtifactMissing,
+    _artifact_path,
+    read_recording_result,
+    read_recording_transcript,
+)
 
 VALID_VARIANTS = ("raw", "redacted", "summary")
 
@@ -16,47 +21,39 @@ class VariantUnavailable(RuntimeError):
     """The requested variant has no content for this task."""
 
 
-def _task_meta(task) -> TaskMeta:
+def _task_meta(task, recording) -> TaskMeta:
     opts = task.options or {}
     return TaskMeta(
         source_url=task.source_url,
         source_title=task.source_title,
-        language=opts.get("detected_language") or opts.get("language"),
-        duration_s=opts.get("duration_s"),
+        # The recording's columns first; the task's options only for a
+        # recording whose language was never set.
+        language=recording.language or opts.get("detected_language") or opts.get("language"),
+        duration_s=recording.duration_sec,
         created_at=task.created_at,
     )
 
 
-def _read(path: Path | None, *, variant: str) -> str:
-    if path is None:
-        raise VariantUnavailable(f"{variant}: no path recorded")
-    if not path.exists():
-        raise VariantUnavailable(f"{variant}: file missing at {path}")
-    return path.read_text(encoding="utf-8")
-
-
-def _resolve_prompt_variant(task, variant: str) -> DeliveryPayload:
-    """Deliver the rendered output of one prompt run against this task.
+def _resolve_prompt_variant(task, variant: str, recording) -> DeliveryPayload:
+    """Deliver the rendered output of one prompt run against this recording.
 
     Reuses the addressing the MCP/REST result endpoints already use, so a
     delivery names a prompt result exactly the way everything else does.
     """
     from vts.services.prompt_registry import parse_ref
-    from vts.services.prompt_results import resolve_result_path
 
     try:
         source, ref_id = parse_ref(variant)
     except ValueError as exc:
         raise VariantUnavailable(f"unknown variant: {variant}") from exc
 
-    path = resolve_result_path(task, source, ref_id)
-    if not path:
-        # Not an error the pipeline should die on: the prompt may simply not
-        # have run for this task (it was deselected, or the task predates the
-        # prompt). VariantUnavailable is what the consumer already handles.
-        raise VariantUnavailable(f"{variant}: no result recorded for this task")
-
-    content = _read(Path(path), variant=variant)
+    # Not an error the pipeline should die on: the prompt may simply not have
+    # run for this recording (it was deselected, or it predates the prompt).
+    # VariantUnavailable is what the consumer already handles.
+    try:
+        content = read_recording_result(recording, source, ref_id)
+    except RecordingArtifactMissing as exc:
+        raise VariantUnavailable(f"{variant}: {exc}") from exc
     return DeliveryPayload(
         task_id=str(task.id),
         variant=variant,
@@ -64,7 +61,7 @@ def _resolve_prompt_variant(task, variant: str) -> DeliveryPayload:
         # Prompt results are rendered by an LLM against a markdown-shaped
         # instruction, the same as the summary variant.
         content_format="markdown",
-        task=_task_meta(task),
+        task=_task_meta(task, recording),
     )
 
 
@@ -78,23 +75,25 @@ def is_prompt_variant(variant: str) -> bool:
     return isinstance(variant, str) and ":" in variant
 
 
-def resolve_variant(task, variant: str) -> DeliveryPayload:
+def resolve_variant(task, variant: str, recording) -> DeliveryPayload:
     if is_prompt_variant(variant):
-        return _resolve_prompt_variant(task, variant)
+        if recording is None:
+            raise VariantUnavailable(f"{variant}: the task has no recording")
+        return _resolve_prompt_variant(task, variant, recording)
     if variant not in VALID_VARIANTS:
         raise VariantUnavailable(f"unknown variant: {variant}")
+    if recording is None:
+        raise VariantUnavailable(f"{variant}: the task has no recording")
 
+    try:
+        content = read_recording_transcript(recording, variant)
+    except RecordingArtifactMissing as exc:
+        raise VariantUnavailable(f"{variant}: {exc}") from exc
     if variant == "raw":
-        path = Path(task.transcript_path) if task.transcript_path else None
-        content = _read(path, variant=variant)
-        fmt = "txt" if path.suffix == ".txt" else "json"
+        fmt = "txt" if _artifact_path(recording, "raw").suffix == ".txt" else "json"
     elif variant == "summary":
-        path = Path(task.summary_path) if task.summary_path else None
-        content = _read(path, variant=variant)
         fmt = "markdown"
     else:  # redacted
-        path = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt"
-        content = _read(path, variant=variant)
         fmt = "txt"
 
     return DeliveryPayload(
@@ -102,5 +101,5 @@ def resolve_variant(task, variant: str) -> DeliveryPayload:
         variant=variant,
         content=content,
         content_format=fmt,
-        task=_task_meta(task),
+        task=_task_meta(task, recording),
     )

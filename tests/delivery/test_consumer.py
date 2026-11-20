@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from _db import make_test_engine
 from vts.core.config import get_settings
 from vts.db.base import Base
-from vts.db.models import DeliveryStatus, Task, TaskStatus, User
+from vts.db.models import DeliveryStatus, Recording, Task, TaskStatus, User
 from vts.db.repo import Repo
 from vts.delivery import registry
 from vts.delivery.consumer import delivery_tick
@@ -54,6 +54,17 @@ class OkAdapter:
         return DeliveryResult(external_id="doc9", external_url="http://o/doc9")
 
 
+class CapturingAdapter(OkAdapter):
+    name = "capture"
+
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def deliver(self, payload, target):
+        self.payloads.append(payload)
+        return await super().deliver(payload, target)
+
+
 class BoomAdapter:
     name = "boom"
 
@@ -70,9 +81,19 @@ class BoomAdapter:
         raise DeliveryError("nope")
 
 
-async def _completed_task_with_raw(factory, tmp_path, adapter_name: str) -> Task:
+async def _completed_task_with_raw(
+    factory, tmp_path, adapter_name: str, *, with_recording: bool = True,
+    recording_text: str = "body", duration_sec: float | None = None,
+) -> Task:
+    """A completed task whose RECORDING holds the transcript.
+
+    The task's own transcript_path points at different text on purpose: the
+    consumer must deliver what the recording says.
+    """
     p = tmp_path / "transcript.txt"
-    p.write_text("body", encoding="utf-8")
+    p.write_text(recording_text, encoding="utf-8")
+    stale = tmp_path / "task-transcript.txt"
+    stale.write_text("stale task copy", encoding="utf-8")
     async with factory() as session:
         repo = Repo(session)
         u = User(id=uuid.uuid4(), username=f"u-{uuid.uuid4().hex[:8]}")
@@ -84,11 +105,17 @@ async def _completed_task_with_raw(factory, tmp_path, adapter_name: str) -> Task
             source_url="http://x",
             options={},
             artifact_dir=str(tmp_path),
-            transcript_path=str(p),
+            transcript_path=str(stale),
             status=TaskStatus.completed,
         )
         session.add(t)
         await session.flush()
+        if with_recording:
+            session.add(Recording(
+                user_id=u.id, source_task_id=t.id, artifact_dir=str(tmp_path),
+                transcript_path=str(p), duration_sec=duration_sec,
+            ))
+            await session.flush()
         await repo.create_delivery_attempt(
             task_id=t.id,
             target_id=None,
@@ -182,3 +209,34 @@ async def test_parked_delivery_leaves_once_adapter_returns(
         rows = await Repo(session).list_deliveries_for_task(t.id)
     assert rows[0].status == DeliveryStatus.delivered
     assert rows[0].external_url == "http://o/doc9"
+
+
+@pytest.mark.asyncio
+async def test_tick_delivers_the_recordings_content_and_duration(
+    session_factory, tmp_path, monkeypatch
+):
+    adapter = CapturingAdapter()
+    monkeypatch.setattr(registry, "_CACHE", {"capture": adapter}, raising=False)
+    await _completed_task_with_raw(
+        session_factory, tmp_path, "capture",
+        recording_text="from the recording", duration_sec=123.5,
+    )
+    await delivery_tick(session_factory, get_settings(), datetime.now(timezone.utc))
+    [payload] = adapter.payloads
+    assert payload.content == "from the recording"
+    assert payload.task.duration_s == 123.5
+
+
+@pytest.mark.asyncio
+async def test_tick_without_a_recording_fails_like_a_missing_artifact(
+    session_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(registry, "_CACHE", {"ok": OkAdapter()}, raising=False)
+    t = await _completed_task_with_raw(
+        session_factory, tmp_path, "ok", with_recording=False
+    )
+    await delivery_tick(session_factory, get_settings(), datetime.now(timezone.utc))
+    async with session_factory() as session:
+        rows = await Repo(session).list_deliveries_for_task(t.id)
+    assert rows[0].status == DeliveryStatus.pending  # retryable, not delivered
+    assert "VariantUnavailable" in (rows[0].last_error or "")
