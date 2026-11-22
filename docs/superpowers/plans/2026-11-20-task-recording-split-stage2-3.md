@@ -14,7 +14,7 @@
 
 - Tests on Postgres only: `VTS_TEST_DATABASE_URL=postgresql+asyncpg://vts:vts@localhost:5432/vts_test_lzad .venv/bin/python -m pytest` from `/home/victor/dev/vts.worktrees/lzad` (own DB; the default is shared and fixtures `drop_all`). UI: `node tests/ui/run.mjs`; one scenario needs a fork wrapper (scenario-child.mjs uses `process.send`).
 - JSON columns reassigned, never mutated in place.
-- Version: Task 1 bumps 1.10.0 → 1.11.0 (release C); Task 7 bumps → 1.12.0 (release D). Check `git tag -l "build-<v>"` and main before each bump.
+- Version: Release C is 1.10.1, release D a patch on top (Victor 2026-11-22: minor only with new functionality — tags). Check `git tag -l "build-<v>"` and main before each bump.
 - Narrow `git add`; no tree-wide stash/checkout/clean; never commit `tests/ui/node_modules`.
 - Public repo: no private hosts/paths/keys.
 - English in code/comments/commits; reference `vts-lzad`.
@@ -45,7 +45,7 @@
 
 - [ ] **Step 1: Failing test** `test_archive_keeps_every_recording_owned_file`: build an artifact dir with every file above plus `media/audio_16k.wav`, `outputs/diarization.json`, `outputs/speaker_matches.json`, `summary/windows.json`, `summary/results/user__p1.md`; archive; assert exactly the kept set exists and the rest is gone. Plus `test_recording_readers_survive_archive`: with a real recording, after archive `read_recording_transcript(rec, "redacted")`, `recording_transcript_entries(rec)` and `player_blocks_from_artifacts(...)` return non-empty and the prompt result file is readable.
 - [ ] **Step 2: RED.** **Step 3: Implement.** **Step 4:** run new + `tests/test_api_task_progress.py tests/test_recording*.py` — PASS.
-- [ ] **Step 5: Commit** (with 1.11.0 bump) `fix(archive): keep what the recording owns (vts-lzad)`.
+- [ ] **Step 5: Commit** (with the release version bump) `fix(archive): keep what the recording owns (vts-lzad)`.
 
 ### Task 2: one read layer on the recording
 
@@ -133,7 +133,7 @@
 - [ ] Steps 2–4 (+ full backend suite). **Step 5: Commit** `refactor(mcp,delivery): read content through the recording (vts-lzad)`.
 
 ### Release C checkpoint
-- [ ] Whole-branch review (most capable model) of release C; one fix wave; full backend + UI suites; ask Victor for merge + `build-1.11.0`; after deploy verify an archived task's library card on prod still shows its texts (read-only check of files + `GET` through the app if possible).
+- [ ] Whole-branch review (most capable model) of release C; one fix wave; full backend + UI suites; ask Victor for merge + `build-1.10.1`; after deploy verify an archived task's library card on prod still shows its texts (read-only check of files + `GET` through the app if possible).
 
 ---
 
@@ -151,7 +151,7 @@
 - `options["detected_language"]` stays (pipeline runtime input).
 - A grep-gate test `tests/test_no_task_content_fields.py`: no `\.transcript_path` / `\.summary_path` on a task object and no `options\["prompt_results"\]` in `vts/` outside `alembic/` and the backfill module (allow-list by file).
 
-- [ ] Failing tests (task fields stay NULL after a full pipeline-shaped sequence; grep gate) → implement → full backend suite → **Commit** (with 1.12.0 bump) `refactor(recordings): the recording is the only writer target (vts-lzad)`.
+- [ ] Failing tests (task fields stay NULL after a full pipeline-shaped sequence; grep gate) → implement → full backend suite → **Commit** (with a patch bump) `refactor(recordings): the recording is the only writer target (vts-lzad)`.
 
 ### Task 8: reversible migration dropping the task's content columns
 
@@ -167,4 +167,4 @@
 - [ ] Failing test (upgrade then downgrade on a seeded DB → task fields equal the recording's) → implement → `alembic upgrade head` / `downgrade -1` / `upgrade head` on a scratch DB → full suites → **Commit** `feat(db): drop the task's content columns, reversibly (vts-lzad)`.
 
 ### Release D checkpoint
-- [ ] Whole-branch review; fix wave; suites; ask Victor for merge + `build-1.12.0`; after deploy verify migration 0036 and that new tasks complete with recording fields set and task columns gone.
+- [ ] Whole-branch review; fix wave; suites; ask Victor for merge + the next patch tag; after deploy verify migration 0036 and that new tasks complete with recording fields set and task columns gone.
