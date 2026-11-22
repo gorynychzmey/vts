@@ -296,5 +296,6 @@ Migrations that introduced or changed the entities above.
 | `0033_recording_content` | recordings hold their own content fields (vts-lzad) |
 | `0034_recording_content_backfill` | every task has its recording, recordings hold their content (vts-lzad) |
 | `0035_recording_listed_at` | recordings.listed_at: when a recording entered the library (vts-lzad) |
+| `0036_drop_task_content_columns` | drop the task's content columns; the recording holds the content (vts-lzad) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

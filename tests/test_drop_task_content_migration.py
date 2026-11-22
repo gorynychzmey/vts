@@ -151,13 +151,15 @@ async def test_upgrade_strips_the_old_copies_and_keeps_everything_else(engine):
 
 
 @pytest.mark.asyncio
-async def test_upgrade_copies_what_the_recording_lacks_before_the_drop(engine):
+async def test_upgrade_copies_what_the_recording_lacks_before_the_drop(engine, tmp_path):
     """An unfinished task under 1.10.1 held its paths and prompt results on the
     task only (the completion upsert copies them). The upgrade moves them to
     the recording instead of dropping them; what the recording already has
     wins."""
     ids = await _seed(engine)
-    memo = [dict(_RESULTS[0])]
+    memo_file = tmp_path / "memo.md"
+    memo_file.write_text("memo")
+    memo = [{**_RESULTS[0], "path": str(memo_file)}]
     f = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     async with f() as s:
         # A bare recording for the lonely task: no paths, no results.
@@ -283,3 +285,33 @@ async def test_both_directions_are_safe_to_repeat(engine):
     await _run(engine, refill_task_content)
     assert (await _tasks(engine), await _recordings(engine)) == once
     assert once[0][ids["linked"]]["transcript_path"] == "/a/outputs/transcript.txt"
+
+
+@pytest.mark.asyncio
+async def test_upgrade_copies_only_prompt_results_whose_file_exists(engine, tmp_path):
+    """Same rule as 0034: an entry without a path (a failed prompt) or whose
+    file is gone has nothing for the recording to show."""
+    kept_file = tmp_path / "kept.md"
+    kept_file.write_text("kept")
+    kept = {"source": "user", "id": "kept", "status": "completed", "path": str(kept_file)}
+    gone = {"source": "user", "id": "gone", "status": "completed",
+            "path": str(tmp_path / "gone.md")}
+    failed = {"source": "user", "id": "failed", "status": "failed"}
+    f = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with f() as s:
+        task = Task(
+            user_id=_USER, source_url="https://example.com/mixed",
+            status=TaskStatus.completed, artifact_dir=str(tmp_path),
+            options={"prompt_results": [kept, gone, failed]},
+        )
+        s.add(task)
+        await s.flush()
+        rec = Recording(user_id=_USER, source_task_id=task.id, artifact_dir=str(tmp_path))
+        s.add(rec)
+        await s.commit()
+        rec_id = rec.id
+
+    counts = await _run(engine, strip_task_content)
+
+    assert (await _recordings(engine))[rec_id]["prompt_results"] == [kept]
+    assert counts["copied_prompt_results"] == 1

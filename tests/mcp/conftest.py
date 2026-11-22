@@ -20,8 +20,6 @@ class FakeTask:
     source_title: str | None = None
     status: TaskStatus = TaskStatus.queued
     artifact_dir: str = "/tmp/vts-test/task"
-    transcript_path: str | None = None
-    summary_path: str | None = None
     error_message: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     summary_progress: dict[str, int] | None = None

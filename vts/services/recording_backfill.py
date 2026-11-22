@@ -260,8 +260,9 @@ def _copy_to_recordings(conn: Any) -> tuple[int, int]:
 
     A recording that gains a transcript this way is listed at its creation
     time, as `backfill_listed_at` lists the ones that had text before
-    `listed_at` existed. Returns (recordings given a path, recordings given
-    prompt results).
+    `listed_at` existed. Prompt results are copied only where their file
+    exists, as in `backfill`. Returns (recordings given a path, recordings
+    given prompt results).
     """
     rows = conn.execute(text(
         "SELECT r.id, r.transcript_path AS r_transcript, r.summary_path AS r_summary, "
@@ -286,7 +287,8 @@ def _copy_to_recordings(conn: Any) -> tuple[int, int]:
             paths += 1
         if not row["r_results"]:
             options = row["t_options"] if isinstance(row["t_options"], dict) else {}
-            entries = _result_list(options.get("prompt_results"))
+            # Same rule as 0034: only entries whose file is still on disk.
+            entries = _existing_prompt_results(options.get("prompt_results"))
             if entries:
                 # A whole new value, never an in-place change of the old one.
                 conn.execute(

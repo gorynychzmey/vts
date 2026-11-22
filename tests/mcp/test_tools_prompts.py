@@ -78,17 +78,12 @@ async def test_get_prompt_result_missing(tmp_path: Path) -> None:
 
 
 async def test_get_prompt_result_reads_the_recording_not_the_task(tmp_path: Path) -> None:
-    """Task and recording point at different files: the recording's wins."""
+    """The task has no content fields; the recording is the only source."""
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
-    stale = tmp_path / "task-summary.md"
-    stale.write_text("task copy", encoding="utf-8")
     fresh = tmp_path / "summary.md"
     fresh.write_text("recording copy", encoding="utf-8")
-    t = FakeTask(
-        id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        summary_path=str(stale),
-    )
+    t = FakeTask(id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x")
     repo.tasks[t.id] = t
     repo.add_recording(t, summary_path=str(fresh), artifact_dir=str(tmp_path))
 
@@ -103,7 +98,7 @@ async def test_get_prompt_result_without_a_recording_is_not_found(tmp_path: Path
     summary.write_text("task only", encoding="utf-8")
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        summary_path=str(summary),
+        artifact_dir=str(tmp_path),
     )
     repo.tasks[t.id] = t
     with pytest.raises(HTTPException) as exc:

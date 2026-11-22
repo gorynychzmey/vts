@@ -94,7 +94,7 @@ async def test_get_transcript_raw_json_format(tmp_path: Path) -> None:
 
 
 async def test_get_transcript_reads_the_recording_not_the_task(tmp_path: Path) -> None:
-    """The task and its recording disagree on purpose: the recording wins."""
+    """The task has no content fields; files left in its dir are not read, the recording's are."""
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     task_dir = tmp_path / "task"
@@ -109,7 +109,7 @@ async def test_get_transcript_reads_the_recording_not_the_task(tmp_path: Path) -
     (rec_dir / "outputs" / "redacted_transcript.txt").write_text("recording redacted", encoding="utf-8")
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        transcript_path=str(stale), artifact_dir=str(task_dir),
+        artifact_dir=str(task_dir),
     )
     repo.tasks[t.id] = t
     repo.add_recording(t, transcript_path=str(fresh), artifact_dir=str(rec_dir))
@@ -129,7 +129,7 @@ async def test_get_transcript_without_a_recording_is_not_ready(tmp_path: Path) -
     stale.write_text("task only", encoding="utf-8")
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        transcript_path=str(stale), artifact_dir=str(tmp_path),
+        artifact_dir=str(tmp_path),
     )
     repo.tasks[t.id] = t
 

@@ -225,15 +225,14 @@ async def test_wait_for_summary_via_db_recheck(monkeypatch) -> None:
 
 
 async def test_wait_reads_readiness_from_the_recording_not_the_task() -> None:
-    """Task and recording disagree: only the recording's paths count."""
+    """The task has no content fields; only the recording's paths count."""
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     redis = FakeRedisWithPubSub()
-    # The task claims both artifacts; its recording has only the transcript.
+    # The recording has only the transcript.
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
         status=TaskStatus.running,
-        transcript_path="/tmp/task/transcript.txt", summary_path="/tmp/task/summary.md",
     )
     repo.tasks[t.id] = t
     repo.add_recording(t, transcript_path="/tmp/rec/transcript.txt")
@@ -257,7 +256,7 @@ async def test_wait_without_a_recording_is_not_ready() -> None:
     redis = FakeRedisWithPubSub()
     t = FakeTask(
         id=uuid.uuid4(), user_id=uuid.UUID(user.id), source_url="x",
-        status=TaskStatus.running, transcript_path="/tmp/task/transcript.txt",
+        status=TaskStatus.running,
     )
     repo.tasks[t.id] = t
 
