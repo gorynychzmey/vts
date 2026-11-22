@@ -392,6 +392,8 @@ class FakeRepo:
         source_type: str | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: str = "all",
     ) -> int:
         rows = await self.list_tasks_page(
             user_id, limit=10**6, status=status, q=q,
@@ -400,6 +402,21 @@ class FakeRepo:
             exclude_task_ids=exclude_task_ids,
         )
         return len(rows)
+
+    # Tags are covered against the real Repo (tests/mcp/test_tags_tools.py); the
+    # fake only has to say "none" so tools that read them keep working.
+    async def recordings_for_tasks(self, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, Any]:
+        wanted = set(task_ids)
+        return {
+            r.source_task_id: r for r in self.recordings.values()
+            if r.source_task_id in wanted
+        }
+
+    async def tags_for_recordings(self, recording_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Any]]:
+        return {}
+
+    async def own_tag_ids(self, user_id: uuid.UUID, ids: Any) -> set[str]:
+        return set()
 
     async def speaker_names_for_tasks(
         self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
@@ -448,6 +465,8 @@ class FakeRepo:
         source_type: str | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: str = "all",
     ) -> list[FakeTask]:
         items = [t for t in self.tasks.values() if t.user_id == user_id]
         if task_ids is not None:

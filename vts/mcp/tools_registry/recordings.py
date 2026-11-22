@@ -32,12 +32,14 @@ from vts.mcp.schemas import (
     RecordingInfo,
     RecordingList,
     RecordingTranscript,
+    TagInfo,
     TranscriptEntry,
 )
 from vts.services.diarization.merge import label_map, speaker_label_word
 from vts.services.subtitles import render_webvtt
 from vts.api._helpers.artifact_store import recording_label_language
 from vts.api._helpers.recordings import rename_recording
+from vts.api._helpers.task_input import tag_names_or_422
 from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
     read_recording_result,
@@ -47,7 +49,9 @@ from vts.services.recording_artifacts import (
 )
 
 
-def _info(recording: Recording, *, people: list[str] | None = None) -> RecordingInfo:
+def _info(
+    recording: Recording, *, people: list[str] | None = None, tags: list[str] | None = None,
+) -> RecordingInfo:
     from pathlib import Path
 
     from vts.api._helpers.base import _find_media_file
@@ -58,6 +62,7 @@ def _info(recording: Recording, *, people: list[str] | None = None) -> Recording
         id=recording.id,
         source_task_id=recording.source_task_id,
         people=list(people or []),
+        tags=list(tags or []),
         title=recording.title,
         duration_sec=recording.duration_sec,
         language=recording.language,
@@ -129,6 +134,8 @@ def register(mcp: FastMCP) -> None:
         after_id: uuid.UUID | None = None,
         order: Literal["asc", "desc"] = "desc",
         task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> RecordingList:
         """List the recordings in the library, newest first (by when each got
         its text, `listed_at`).
@@ -151,6 +158,12 @@ def register(mcp: FastMCP) -> None:
         `total` counts everything matching the filters, not this page. With
         `offset` paging, `offset` + len(items) < total means there is more to
         fetch; with cursors, a page shorter than `limit` means the end.
+
+        Each item carries `tags`, its tag names. Filter with `tags` (names,
+        case-insensitive): `tag_match="all"` (default) keeps recordings that
+        carry every one of them — an unknown name then matches nothing —
+        and `"any"` keeps those carrying at least one. `list_tags` shows the
+        names that exist.
         """
         if order not in ("asc", "desc"):
             raise ValueError("order must be 'asc' or 'desc'")
@@ -202,6 +215,7 @@ def register(mcp: FastMCP) -> None:
             filters = {
                 "q": q, "created_from": created_from, "created_to": created_to,
                 "task_ids": task_ids, "exclude_task_ids": exclude_ids,
+                "tags": tags or None, "tag_match": tag_match,
             }
             items = await repo.list_recordings(
                 user_id,
@@ -215,13 +229,58 @@ def register(mcp: FastMCP) -> None:
             people = await repo.speaker_names_for_tasks(
                 user_id, [r.source_task_id for r in items if r.source_task_id]
             )
+            tags_by_recording = await repo.tags_for_recordings([r.id for r in items])
             return RecordingList(
                 items=[
-                    _info(r, people=people.get(r.source_task_id, []))
+                    _info(
+                        r,
+                        people=people.get(r.source_task_id, []),
+                        tags=[t.name for t in tags_by_recording.get(r.id, [])],
+                    )
                     for r in items
                 ],
                 total=total,
             )
+
+    @mcp.tool(name="list_tags", annotations=READ_ONLY)
+    async def _list_tags() -> list[TagInfo]:
+        """List the caller's tags with how many recordings carry each, sorted
+        by name. A tag no recording carries is listed with count 0. Use the
+        names with `list_recordings(tags=...)`, `list_tasks(tags=...)` and
+        `tag_recording`."""
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            rows = await Repo(session).list_tags(uuid.UUID(user.id))
+            return [TagInfo(name=tag.name, count=count) for tag, count in rows]
+
+    @mcp.tool(name="tag_recording", annotations=UPDATE)
+    async def _tag_recording(
+        recording_id: uuid.UUID,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> list[str]:
+        """Add and/or remove tags on a recording; returns its tag names after
+        the change, sorted by name.
+
+        `add` creates tags that do not exist yet; `remove` ignores names the
+        recording does not carry. Other tags on the recording are left alone,
+        and a tag no recording carries any more stays in `list_tags` with
+        count 0. Names are trimmed, compared case-insensitively and at most 64
+        characters; an invalid name is rejected before anything changes.
+        """
+        add_names = tag_names_or_422(add)
+        remove_names = tag_names_or_422(remove)
+        session_factory = get_db_session_factory()
+        async with session_factory() as session:
+            user, _settings = await mcp_authenticate(session)
+            repo = Repo(session)
+            recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
+            if recording is None:
+                raise HTTPException(status_code=404, detail="Recording not found")
+            tags = await repo.change_recording_tags(recording, add_names, remove_names)
+            await session.commit()
+            return [t.name for t in tags]
 
     @mcp.tool(name="list_people", annotations=READ_ONLY)
     async def _list_people() -> PeopleList:
@@ -312,7 +371,8 @@ def register(mcp: FastMCP) -> None:
             await rename_recording(session, recording, title)
             await session.commit()
             await session.refresh(recording)
-            return _info(recording)
+            tags = (await repo.tags_for_recordings([recording.id])).get(recording.id, [])
+            return _info(recording, tags=[t.name for t in tags])
 
     @mcp.tool(name="get_recording_transcript", annotations=READ_ONLY)
     async def _get_recording_transcript(

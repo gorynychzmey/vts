@@ -33,6 +33,7 @@ class RecordingAdapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, str]] = []
         self.configs: list[dict] = []
+        self.tags: list[tuple[str, ...]] = []
 
     def config_schema(self) -> dict:
         return {}
@@ -50,6 +51,7 @@ class RecordingAdapter:
         # What the adapter actually received as config — the flat merge of the
         # credential's connection fields and the target's own settings.
         self.configs.append(dict(target.config))
+        self.tags.append(payload.task.tags)
         return DeliveryResult(external_id="e1", external_url="http://o/e1")
 
 
@@ -113,11 +115,13 @@ async def test_enqueue_then_consume_delivers_with_decrypted_secret(
         session.add(task)
         await session.flush()
         # The recording owns the transcript the consumer reads (vts-lzad).
-        session.add(Recording(
+        recording = Recording(
             user_id=user.id, source_task_id=task.id, artifact_dir=str(tmp_path),
             transcript_path=str(transcript),
-        ))
+        )
+        session.add(recording)
         await session.flush()
+        await repo.set_recording_tags(recording, ["work", "Alpha"])
 
         enqueued = await enqueue_deliveries(
             repo, task, max_attempts=3, now=datetime.now(timezone.utc)
@@ -145,6 +149,8 @@ async def test_enqueue_then_consume_delivers_with_decrypted_secret(
     # adapter already has the resolved content in `payload`. It was delivered
     # as "raw" — asserted above — purely from that stored value.
     assert rec.configs == [{"base_url": "https://rec.example"}]
+    # The recording's tags reach the adapter, sorted by name (vts-qwcj).
+    assert rec.tags == [("Alpha", "work")]
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,10 @@ This complements the server-side MCP endpoint; it does not replace it.
 | `list_presets`, `create_preset`, `update_preset`, `delete_preset` | `/api/presets` |
 | `get_default_preset`, `set_default_preset` | `/api/me/default_preset` |
 
+`list_recordings` also takes `tags` (names) and `tag_match` (`all` or `any`), and
+`submit_video` takes `tags`, mirroring the HTTP parameters of the same meaning
+(see "Tags" in `docs/API.md`).
+
 The adapter deliberately calls the same HTTP API as the web UI. Consequently,
 cookie authentication, development authentication, administrator impersonation,
 tenant/owner filtering, and HTTP validation remain enforced by the existing

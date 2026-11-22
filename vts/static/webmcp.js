@@ -39,6 +39,18 @@
     return query ? `${path}?${query}` : path;
   }
 
+  // Tag names go as a repeated `tag` parameter, the way the HTTP list endpoints
+  // take them; `tag_match` is only sent alongside, since alone it narrows nothing.
+  function tagQuery(path, values, input) {
+    const query = queryPath(path, values);
+    const names = Array.isArray(input.tags) ? input.tags.filter((t) => typeof t === "string" && t.trim()) : [];
+    if (!names.length) return query;
+    const params = new URLSearchParams(query.includes("?") ? query.slice(query.indexOf("?") + 1) : "");
+    for (const name of names) params.append("tag", name);
+    if (input.tag_match) params.set("tag_match", String(input.tag_match));
+    return `${path}?${params.toString()}`;
+  }
+
   function boundedInteger(value, fallback, minimum, maximum, name) {
     const result = value === undefined ? fallback : Number(value);
     if (!Number.isInteger(result) || result < minimum || result > maximum) {
@@ -119,18 +131,20 @@
           query: { type: "string", description: "Filter recording titles." },
           created_from: { type: "string", format: "date-time" },
           created_to: { type: "string", format: "date-time" },
+          tags: { type: "array", items: { type: "string" }, description: "Only recordings carrying these tags (names, case-insensitive)." },
+          tag_match: { type: "string", enum: ["all", "any"], default: "all", description: "all = every given tag; any = at least one." },
         },
         additionalProperties: false,
       },
       annotations: readOnly,
       async execute(input, options) {
-        return api(queryPath("/api/recordings", {
+        return api(tagQuery("/api/recordings", {
           limit: boundedInteger(input.limit, 50, 1, 200, "limit"),
           offset: boundedInteger(input.offset, 0, 0, 10000, "offset"),
           q: input.query,
           created_from: input.created_from,
           created_to: input.created_to,
-        }), { signal: options?.signal });
+        }, input), { signal: options?.signal });
       },
     },
     {
@@ -151,6 +165,7 @@
         audio_only: { type: "boolean", default: false }, transcript: { type: "boolean", default: true },
         diarize: { type: "boolean", default: false }, prompts: { type: "array", items: { type: "object" } },
         delivery: { type: "array", items: { type: "object" } },
+        tags: { type: "array", items: { type: "string" }, description: "Tag names to put on the recording; created when missing." },
         // No `preset` here, deliberately (vts-a2ww). POST /api/tasks has never
         // understood one: the web form resolves a preset into these very
         // fields and posts the expanded values. Advertising it meant pydantic

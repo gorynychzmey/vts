@@ -36,7 +36,11 @@ from typing import Any, Protocol, runtime_checkable
 #: followup). Adding module constants is backwards compatible, so old adapters
 #: keep loading — but an adapter that IMPORTS them requires 1.3 and must say
 #: so, since the name does not exist on an older core.
-CONTRACT_VERSION = (1, 3)
+#: 1.4 added TaskMeta.tags, the recording's tag names (vts-qwcj). Appended at
+#: the END of the dataclass with a default, so an adapter constructing TaskMeta
+#: positionally (tests, fixtures) keeps working, and an adapter built for
+#: 1.3 still loads. An adapter that READS `payload.task.tags` requires 1.4.
+CONTRACT_VERSION = (1, 4)
 
 
 #: How long an adapter may spend inside one interactive call
@@ -78,6 +82,10 @@ class TaskMeta:
     language: str | None
     duration_s: float | None
     created_at: datetime
+    #: The recording's tag names at delivery time, sorted by name (case-
+    #: insensitive); empty when untagged or the task has no recording. Added in
+    #: contract 1.4.
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

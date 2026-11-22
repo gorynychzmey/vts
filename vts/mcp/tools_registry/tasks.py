@@ -59,6 +59,7 @@ def register(mcp: FastMCP) -> None:
         prompts: list[dict] | None = None,
         preset: dict | None = None,
         delivery: list[dict] | None = None,
+        tags: list[str] | None = None,
     ) -> SubmitVideoResult:
         """Submit a video URL for processing. Returns task_id immediately.
 
@@ -94,6 +95,11 @@ def register(mcp: FastMCP) -> None:
                 nothing produces. Omitting `variant` uses the target's
                 configured default. An unknown target id, or one whose adapter
                 plugin is not currently installed, is rejected with 422.
+            tags: Optional tag names to put on the recording this task
+                produces, created when they do not exist yet. Names are
+                trimmed, compared case-insensitively and at most 64
+                characters; an invalid name is rejected with 422 before
+                anything is created.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -112,6 +118,7 @@ def register(mcp: FastMCP) -> None:
                     prompts=prompts,
                     preset=preset,
                     delivery=delivery,
+                    tags=tags,
                 )
                 await session.commit()
                 return result
@@ -131,6 +138,8 @@ def register(mcp: FastMCP) -> None:
         source_type: Literal["file", "url"] | None = None,
         diarized: bool | None = None,
         person: str | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> TaskPage:
         """List the calling user's tasks, newest first, in pages.
 
@@ -149,11 +158,16 @@ def register(mcp: FastMCP) -> None:
                 without.
             person: a name (any part of it, case-insensitive) — tasks where
                 that person was identified by voice.
+            tags: tag names; tasks whose recording carries all of them
+                (`tag_match="all"`, the default) or at least one
+                (`tag_match="any"`). Case-insensitive; with "all" an unknown
+                name matches nothing. Use `list_tags` to see the names.
         Keep filters identical across pages of one walk — changing a filter
         changes the set the cursor points into.
 
         Each task carries `people`: the names identified in it, empty when
         voices were never resolved. Use `list_people` to see who is known.
+        Each task also carries `tags`, the names on its recording.
         """
         session_factory = get_db_session_factory()
         async with session_factory() as session:
@@ -163,6 +177,7 @@ def register(mcp: FastMCP) -> None:
                 status=status, limit=limit, cursor=cursor,
                 q=q, created_from=created_from, created_to=created_to,
                 source_type=source_type, diarized=diarized, person=person,
+                tags=tags, tag_match=tag_match,
             )
 
     @mcp.tool(name="delete_task", annotations=DESTRUCTIVE)

@@ -35,6 +35,8 @@ class TaskSummary(BaseModel):
     # no label was ever bound to a person. Names, not SPEAKER_NN tags: the tags
     # are an implementation detail no client should have to decode.
     people: list[str] = Field(default_factory=list)
+    # The tags of the task's recording: names, sorted by name (case-insensitive).
+    tags: list[str] = Field(default_factory=list)
 
 
 class TaskPage(BaseModel):
@@ -98,6 +100,15 @@ class RecordingInfo(BaseModel):
     # recording whose task was deleted, even if it was diarised then — the
     # decisions survive but no longer point anywhere.
     people: list[str] = Field(default_factory=list)
+    # Tag names, sorted by name (case-insensitive). Empty when untagged.
+    tags: list[str] = Field(default_factory=list)
+
+
+class TagInfo(BaseModel):
+    """One of the caller's tags and how many recordings carry it (0 = unused)."""
+
+    name: str
+    count: int = 0
 
 
 class RecordingList(BaseModel):

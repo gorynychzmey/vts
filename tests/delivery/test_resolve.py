@@ -94,3 +94,52 @@ def test_language_is_an_iso_code_even_from_the_task_fallback(tmp_path):
     t = _fake_task(tmp_path, options={"detected_language": "Russian"})
     r = _fake_recording(tmp_path, transcript_path=str(p), language=None)
     assert resolve_variant(t, "raw", r).task.language == "ru"
+
+
+# ---------------------------------------------------------------- tags (vts-qwcj)
+
+def _tag(name):
+    return types.SimpleNamespace(name=name, name_key=name.casefold())
+
+
+def test_task_meta_carries_the_recordings_tag_names_sorted_by_key(tmp_path):
+    p = tmp_path / "t.txt"; p.write_text("x")
+    r = _fake_recording(tmp_path, transcript_path=str(p))
+    payload = resolve_variant(
+        _fake_task(tmp_path), "raw", r, tags=[_tag("work"), _tag("Zeta"), _tag("Alpha")],
+    )
+    assert payload.task.tags == ("Alpha", "work", "Zeta")
+
+
+def test_task_meta_tags_default_to_empty(tmp_path):
+    p = tmp_path / "t.txt"; p.write_text("x")
+    r = _fake_recording(tmp_path, transcript_path=str(p))
+    assert resolve_variant(_fake_task(tmp_path), "raw", r).task.tags == ()
+
+
+def test_prompt_variants_carry_tags_too(tmp_path):
+    out = tmp_path / "memo.md"; out.write_text("memo")
+    r = _fake_recording(tmp_path, prompt_results=[
+        {"source": "user", "id": "abc", "name": "Memo", "path": str(out), "status": "completed"},
+    ])
+    payload = resolve_variant(_fake_task(tmp_path), "user:abc", r, tags=[_tag("b"), _tag("a")])
+    assert payload.task.tags == ("a", "b")
+
+
+def test_an_adapter_built_for_contract_1_3_still_loads_on_1_4():
+    # Additive field => minor bump; min-compatible loading must keep older
+    # adapters working.
+    from vts.delivery.contract import CONTRACT_VERSION
+    from vts.delivery.registry import _compatibility_problem
+
+    assert CONTRACT_VERSION == (1, 4)
+    assert _compatibility_problem((1, 3)) is None
+    assert _compatibility_problem((1, 4)) is None
+    assert _compatibility_problem((1, 5)) is not None
+
+
+def test_task_meta_still_builds_positionally_without_tags():
+    from vts.delivery.contract import TaskMeta
+
+    meta = TaskMeta("u", "t", "en", 1.0, datetime.now(timezone.utc))
+    assert meta.tags == ()

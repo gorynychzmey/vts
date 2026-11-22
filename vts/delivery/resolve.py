@@ -22,7 +22,7 @@ class VariantUnavailable(RuntimeError):
     """The requested variant has no content for this task."""
 
 
-def _task_meta(task, recording) -> TaskMeta:
+def _task_meta(task, recording, tags=()) -> TaskMeta:
     opts = task.options or {}
     return TaskMeta(
         source_url=task.source_url,
@@ -35,10 +35,13 @@ def _task_meta(task, recording) -> TaskMeta:
         ),
         duration_s=recording.duration_sec,
         created_at=task.created_at,
+        # Sorted here as well as by the query: the contract promises an order,
+        # and a caller passing tags in any order must not break it.
+        tags=tuple(t.name for t in sorted(tags, key=lambda t: t.name_key)),
     )
 
 
-def _resolve_prompt_variant(task, variant: str, recording) -> DeliveryPayload:
+def _resolve_prompt_variant(task, variant: str, recording, tags=()) -> DeliveryPayload:
     """Deliver the rendered output of one prompt run against this recording.
 
     Reuses the addressing the MCP/REST result endpoints already use, so a
@@ -65,7 +68,7 @@ def _resolve_prompt_variant(task, variant: str, recording) -> DeliveryPayload:
         # Prompt results are rendered by an LLM against a markdown-shaped
         # instruction, the same as the summary variant.
         content_format="markdown",
-        task=_task_meta(task, recording),
+        task=_task_meta(task, recording, tags),
     )
 
 
@@ -79,11 +82,13 @@ def is_prompt_variant(variant: str) -> bool:
     return isinstance(variant, str) and ":" in variant
 
 
-def resolve_variant(task, variant: str, recording) -> DeliveryPayload:
+def resolve_variant(task, variant: str, recording, tags=()) -> DeliveryPayload:
+    """`tags` are the recording's Tag rows (anything with `name` and
+    `name_key`), loaded by the caller: resolving stays free of database access."""
     if is_prompt_variant(variant):
         if recording is None:
             raise VariantUnavailable(f"{variant}: the task has no recording")
-        return _resolve_prompt_variant(task, variant, recording)
+        return _resolve_prompt_variant(task, variant, recording, tags)
     if variant not in VALID_VARIANTS:
         raise VariantUnavailable(f"unknown variant: {variant}")
     if recording is None:
@@ -106,5 +111,5 @@ def resolve_variant(task, variant: str, recording) -> DeliveryPayload:
         variant=variant,
         content=content,
         content_format=fmt,
-        task=_task_meta(task, recording),
+        task=_task_meta(task, recording, tags),
     )

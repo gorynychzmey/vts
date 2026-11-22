@@ -183,7 +183,7 @@ async def test_list_presets_system_first_then_user(fake_user: FakeUser) -> None:
     assert len(user_presets) == 1
     assert user_presets[0].name == "mine"
     assert user_presets[0].editable is True
-    assert user_presets[0].options == {"language": "ru"}
+    assert user_presets[0].options == {"language": "ru", "tags": []}
 
 
 async def test_create_preset(fake_user: FakeUser) -> None:
@@ -193,7 +193,7 @@ async def test_create_preset(fake_user: FakeUser) -> None:
     )
     assert info.source == "user"
     assert info.name == "P"
-    assert info.options == {"language": "en"}
+    assert info.options == {"language": "en", "tags": []}
     assert uuid.UUID(info.id) in repo.presets
 
 
@@ -211,7 +211,7 @@ async def test_update_preset(fake_user: FakeUser) -> None:
         preset_id=row.id, name="new", options={"language": "ru"}, user=fake_user, repo=repo
     )
     assert info.name == "new"
-    assert repo.presets[row.id].options == {"language": "ru"}
+    assert repo.presets[row.id].options == {"language": "ru", "tags": []}
 
 
 async def test_update_preset_not_found(fake_user: FakeUser) -> None:

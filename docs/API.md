@@ -337,6 +337,18 @@ multi-file); a JSON-encoded list in the `tags` form field of
 and applied to the recording created with the task (for chunked uploads, at
 `finalize`, which itself takes no tags).
 
+**MCP tools.** `list_tags` returns `[{name, count}]`; `tag_recording(recording_id,
+add=[], remove=[])` adds and removes tags (creating missing ones) and returns the
+recording's tag names after the change. `submit_video` takes `tags` (names,
+validated before anything is created), `list_tasks` and `list_recordings` take
+`tags` and `tag_match` like the HTTP filters, and their items carry `tags` as a
+list of names sorted by name. The MCP preset tools filter tag ids exactly as the
+HTTP routes do.
+
+**Delivery adapters** receive the recording's tags as `payload.task.tags`, a
+tuple of names sorted by name (contract 1.4, additive: an adapter declaring an
+older minor still loads, and it is empty when the recording is untagged).
+
 User presets store tag **ids** in `options.tags`, so renaming a tag does not
 break a preset. Ids that are not one of your existing tags are dropped when
 the preset is saved and skipped when it is read; system presets always have

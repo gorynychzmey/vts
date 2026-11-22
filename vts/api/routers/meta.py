@@ -58,6 +58,7 @@ from vts.db.repo import Repo
 from vts.metrics.step_weights import SEED_FINAL_SUMMARY_FALLBACK, SEED_STEP_WEIGHTS
 from vts.services import task_status as _ts
 from vts.services.auth import AuthenticatedUser
+from vts.services.tags import keep_own_tags, preset_tag_ids
 from vts.services.push import (
     SubscriptionPayload,
     delete_subscription,
@@ -280,25 +281,12 @@ async def delete_prompt_endpoint(
     return Response(status_code=204)
 
 
-def _preset_tag_ids(options: dict | None) -> list[str]:
-    tags = (options or {}).get("tags")
-    return [str(t) for t in tags] if isinstance(tags, list) else []
-
-
 def _user_preset_out(row, own_tag_ids: set[str]) -> PresetOut:
     """A user preset with only the tag ids that are still this user's tags:
     a deleted tag is skipped on read, before the next save removes it."""
-    tags = [t for t in _preset_tag_ids(row.options) if t in own_tag_ids]
+    tags = [t for t in preset_tag_ids(row.options) if t in own_tag_ids]
     return PresetOut(source="user", id=str(row.id), name=row.name,
                      options=PresetOptions(**{**row.options, "tags": tags}), editable=True)
-
-
-async def _keep_own_tags(repo: Repo, user_id: uuid.UUID, options: dict) -> dict:
-    """Preset options to store: tag ids that are not the user's existing
-    tags (unknown, deleted, another user's, malformed) are dropped (vts-qwcj)."""
-    wanted = _preset_tag_ids(options)
-    own = await repo.own_tag_ids(user_id, wanted)
-    return {**options, "tags": list(dict.fromkeys(t for t in wanted if t in own))}
 
 
 @router.get("/api/presets", response_model=list[PresetOut])
@@ -312,7 +300,7 @@ async def list_presets_endpoint(user: AuthenticatedUser = Depends(get_current_us
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
     rows = await repo.list_presets(user_id)
-    own = await repo.own_tag_ids(user_id, [t for r in rows for t in _preset_tag_ids(r.options)])
+    own = await repo.own_tag_ids(user_id, [t for r in rows for t in preset_tag_ids(r.options)])
     out.extend(_user_preset_out(row, own) for row in rows)
     return out
 
@@ -323,7 +311,7 @@ async def create_preset_endpoint(payload: PresetCreateRequest,
                                  session: AsyncSession = Depends(get_session_dep)) -> PresetOut:
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
-    options = await _keep_own_tags(repo, user_id, payload.options.model_dump())
+    options = await keep_own_tags(repo, user_id, payload.options.model_dump())
     row = await repo.create_preset(user_id, payload.name.strip(), options)
     await session.commit()
     return _user_preset_out(row, set(options["tags"]))
@@ -336,14 +324,14 @@ async def update_preset_endpoint(preset_id: uuid.UUID, payload: PresetUpdateRequ
     repo = Repo(session)
     user_id = uuid.UUID(user.id)
     options = (
-        await _keep_own_tags(repo, user_id, payload.options.model_dump())
+        await keep_own_tags(repo, user_id, payload.options.model_dump())
         if payload.options else None
     )
     row = await repo.update_preset(user_id, preset_id, name=payload.name, options=options)
     if row is None:
         raise HTTPException(status_code=404, detail="Preset not found")
     await session.commit()
-    return _user_preset_out(row, await repo.own_tag_ids(user_id, _preset_tag_ids(row.options)))
+    return _user_preset_out(row, await repo.own_tag_ids(user_id, preset_tag_ids(row.options)))
 
 
 @router.delete("/api/presets/{preset_id}", status_code=204)

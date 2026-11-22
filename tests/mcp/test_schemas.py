@@ -41,6 +41,8 @@ def test_task_summary_shape() -> None:
         "task_id", "status", "title", "url", "created_at", "updated_at",
         # Names identified by voice; empty when the task was not diarised.
         "people",
+        # Tag names of the task's recording; empty when untagged.
+        "tags",
     }
 
 

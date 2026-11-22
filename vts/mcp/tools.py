@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
+from vts.api._helpers.task_input import tag_names_or_422
 from vts.db.models import TaskStatus
 from vts.mcp.cursor import decode_cursor, encode_cursor
 from vts.mcp.schemas import (
@@ -44,6 +45,7 @@ from vts.services.recording_artifacts import (
     read_recording_transcript,
 )
 from vts.services.storage import task_dir
+from vts.services.tags import keep_own_tags, visible_preset_options
 from vts.services.task_progress import summary_progress_for_task
 
 
@@ -64,6 +66,8 @@ class _RepoLike(Protocol):
         artifact_dir: str,
         task_id: uuid.UUID | None = None,
     ) -> Any: ...
+    async def recording_for_task(self, task_id: uuid.UUID) -> Any | None: ...
+    async def set_recording_tags(self, recording: Any, names: list[str]) -> list[Any]: ...
 
     async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
     async def list_prompts(
@@ -100,6 +104,7 @@ async def submit_video(
     prompts: list[dict] | None = None,
     preset: dict | None = None,
     delivery: list[dict] | None = None,
+    tags: list[str] | None = None,
 ) -> SubmitVideoResult:
     """Create a new task in the queued state and notify the worker.
 
@@ -133,9 +138,14 @@ async def submit_video(
     out at submit time. Delivery inherited from a PRESET is not gated that way —
     a temporarily missing plugin must not fail the task; that delivery is
     enqueued and parked until the adapter returns.
+
+    `tags` are names to put on the new recording, created when missing. They
+    are validated here, before anything is created, so a bad name leaves no
+    task and no artifact directory behind (vts-qwcj).
     """
     if not url or not url.strip():
         raise HTTPException(status_code=422, detail="url is required")
+    tag_names = tag_names_or_422(tags)
     # This path does NOT build a TaskCreateRequest, so it needs its own call to
     # the shared validator — validating only the Pydantic schema would leave
     # MCP as an open server-side request primitive (vts-h45).
@@ -249,6 +259,9 @@ async def submit_video(
         artifact_dir=str(artifact),
         task_id=task_id,
     )
+    if tag_names:
+        # Same transaction as the task, like POST /api/tasks.
+        await repo.set_recording_tags(await repo.recording_for_task(task.id), tag_names)
     await bus.notify_queued()
     await bus.publish_event(
         user_id=str(task.user_id),
@@ -275,6 +288,8 @@ class _RepoListLike(Protocol):
         source_type: str | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> list[Any]: ...
     async def count_tasks_page(
         self,
@@ -287,7 +302,15 @@ class _RepoListLike(Protocol):
         source_type: str | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> int: ...
+    async def recordings_for_tasks(
+        self, task_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Any]: ...
+    async def tags_for_recordings(
+        self, recording_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[Any]]: ...
     async def speaker_names_for_tasks(
         self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[str]]: ...
@@ -313,6 +336,8 @@ async def list_tasks(
     source_type: Literal["file", "url"] | None = None,
     diarized: bool | None = None,
     person: str | None = None,
+    tags: list[str] | None = None,
+    tag_match: Literal["all", "any"] = "all",
 ) -> TaskPage:
     """List the caller's tasks newest-first, one page at a time.
 
@@ -326,7 +351,13 @@ async def list_tasks(
     through the voice registry, so they select tasks where a label was bound
     to a NAMED person — a diarised task whose speakers were left anonymous
     does not match ``diarized=True``, because nothing in it is identifiable.
+
+    ``tags`` keeps tasks whose recording carries every given tag
+    (``tag_match="all"``, the default) or at least one (``"any"``). Names match
+    the way tag names are compared everywhere: trimmed, case-insensitive.
     """
+    if tag_match not in ("all", "any"):
+        raise HTTPException(status_code=422, detail="tag_match must be 'all' or 'any'")
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
     if created_from is not None and created_to is not None and created_from > created_to:
@@ -381,11 +412,21 @@ async def list_tasks(
         source_type=source_type,
         task_ids=only_tasks,
         exclude_task_ids=exclude_tasks,
+        tags=tags or None,
+        tag_match=tag_match,
     )
     has_more = len(rows) > limit
     tasks = rows[:limit]
     # One query for the whole page, not one per task.
     people = await repo.speaker_names_for_tasks(user_uuid, [t.id for t in tasks])
+    # Tags hang off the recording the task produced; two queries for the page.
+    recordings = await repo.recordings_for_tasks([t.id for t in tasks])
+    tags_by_recording = await repo.tags_for_recordings([r.id for r in recordings.values()])
+
+    def _tag_names(task_id: uuid.UUID) -> list[str]:
+        recording = recordings.get(task_id)
+        return [t.name for t in tags_by_recording.get(recording.id, [])] if recording else []
+
     summaries = [
         TaskSummary(
             task_id=t.id,
@@ -395,6 +436,7 @@ async def list_tasks(
             created_at=t.created_at,
             updated_at=t.updated_at,
             people=people.get(t.id, []),
+            tags=_tag_names(t.id),
         )
         for t in tasks
     ]
@@ -417,6 +459,8 @@ async def list_tasks(
         source_type=source_type,
         task_ids=only_tasks,
         exclude_task_ids=exclude_tasks,
+        tags=tags or None,
+        tag_match=tag_match,
     )
     return TaskPage(
         tasks=summaries, next_cursor=next_cursor, has_more=has_more,
@@ -926,6 +970,7 @@ class _RepoPresetLike(Protocol):
         options: dict | None,
     ) -> Any | None: ...
     async def delete_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> bool: ...
+    async def own_tag_ids(self, user_id: uuid.UUID, ids: Any) -> set[str]: ...
     async def get_user_default_preset(self, user_id: uuid.UUID) -> dict | None: ...
     async def set_user_default_preset(self, user_id: uuid.UUID, ref: dict | None) -> None: ...
 
@@ -938,12 +983,17 @@ async def list_presets(
     """List presets available to the caller: built-in system presets first,
     then the user's own presets (mirrors web GET /api/presets)."""
     out: list[PresetInfo] = [
-        PresetInfo(source="system", id=p.key, name=p.display_name, editable=False, options=dict(p.options))
+        # System presets are shared by every user, and tags are per user.
+        PresetInfo(source="system", id=p.key, name=p.display_name, editable=False,
+                   options={**p.options, "tags": []})
         for p in list_system_presets()
     ]
-    for row in await repo.list_presets(uuid.UUID(user.id)):
+    user_id = uuid.UUID(user.id)
+    rows = await repo.list_presets(user_id)
+    # A deleted tag is skipped on read, before the next save removes it.
+    for row, options in zip(rows, await visible_preset_options(repo, user_id, rows)):
         out.append(
-            PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+            PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=options)
         )
     return out
 
@@ -959,8 +1009,11 @@ async def create_preset(
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="name is required")
-    row = await repo.create_preset(uuid.UUID(user.id), name, dict(options or {}))
-    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+    user_id = uuid.UUID(user.id)
+    stored = await keep_own_tags(repo, user_id, dict(options or {}))
+    row = await repo.create_preset(user_id, name, stored)
+    (visible,) = await visible_preset_options(repo, user_id, [row])
+    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=visible)
 
 
 async def update_preset(
@@ -976,15 +1029,17 @@ async def update_preset(
         name = name.strip()
         if not name:
             raise HTTPException(status_code=422, detail="name must not be blank")
+    user_id = uuid.UUID(user.id)
     row = await repo.update_preset(
-        uuid.UUID(user.id),
+        user_id,
         preset_id,
         name=name,
-        options=dict(options) if options is not None else None,
+        options=await keep_own_tags(repo, user_id, dict(options)) if options is not None else None,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Preset not found")
-    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=dict(row.options))
+    (visible,) = await visible_preset_options(repo, user_id, [row])
+    return PresetInfo(source="user", id=str(row.id), name=row.name, editable=True, options=visible)
 
 
 async def delete_preset(
