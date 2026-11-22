@@ -113,7 +113,7 @@ The DAG is defined in [`vts/pipeline/types.py`](../vts/pipeline/types.py) as a f
 | 11 | `prepare_summary_chunks` | `outputs/transcript.json` | `summary/chunks.json` (token-counted windows) | File exists |
 | 12 | `summarize_windows` | chunks (parallel via gpu lane, llm priority) | `summary/window_NN.txt`, `summary/windows.json` | `windows.json` exists |
 | 13 | `pack_window_notes` | `summary/windows.json` | `summary/packed_notes.json` (only when packing triggered) | File exists or skip-flag in step row |
-| 14+ | finalize tail (one step per selected prompt) | window notes (packed if applicable) | per-prompt result; `summary/final.md` + `tasks.summary_path` for the built-in summary | File exists |
+| 14+ | finalize tail (one step per selected prompt) | window notes (packed if applicable) | per-prompt result; `summary/final.md` + `recordings.summary_path` for the built-in summary | File exists |
 
 Steps 1–13 are the fixed head (`DAG_HEAD`). The tail is **dynamic**: `build_dag_steps()`
 appends one finalize step per prompt selected on the task. The built-in summary
@@ -241,7 +241,7 @@ Schema is managed by Alembic; baseline is `alembic/versions/0001_initial.py`, su
 | Table | Columns | Keys & indexes |
 |-------|---------|----------------|
 | `users` | `id UUID PK`, `username TEXT UNIQUE`, `created_at TIMESTAMPTZ`, `preferred_ytdlp_client TEXT?` | unique on `username` |
-| `tasks` | `id UUID PK`, `user_id UUID FK→users`, `source_url TEXT`, `source_title TEXT?`, `status ENUM(queued, running, paused, completed, failed, canceled, archived)`, `options JSON`, `artifact_dir TEXT`, `transcript_path TEXT?`, `summary_path TEXT?`, `summary_progress JSON?`, `error_message TEXT?`, `created_at`, `updated_at` | FK CASCADE; indexes `(user_id, created_at)`, `(status, created_at)` |
+| `tasks` | `id UUID PK`, `user_id UUID FK→users`, `source_url TEXT`, `source_title TEXT?`, `status ENUM(queued, running, paused, completed, failed, canceled, archived)`, `options JSON`, `artifact_dir TEXT`, `summary_progress JSON?`, `error_message TEXT?`, `created_at`, `updated_at` | FK CASCADE; indexes `(user_id, created_at)`, `(status, created_at)` |
 | `steps` | `id UUID PK`, `task_id UUID FK→tasks`, `name TEXT(64)`, `status ENUM(pending, running, completed, failed, skipped)`, `attempt INT`, `started_at?`, `finished_at?`, `message TEXT?` | FK CASCADE; unique `(task_id, name)`; index `(task_id, status)` |
 | `asr_segments` | `id UUID PK`, `task_id UUID FK→tasks`, `segment_index INT`, `start_sec FLOAT`, `end_sec FLOAT`, `text TEXT`, `payload JSON` (decomposed axes), `raw_json JSON` (legacy, cleared by `0026`) | FK CASCADE; unique `(task_id, segment_index)`; index `(task_id, start_sec)` |
 | `recordings` | `id UUID PK`, `user_id UUID FK→users`, `source_task_id UUID? FK→tasks`, `title TEXT?`, `source_url TEXT?`, `artifact_dir TEXT`, `transcript_path TEXT?`, `summary_path TEXT?`, `duration_sec FLOAT?`, `language TEXT?`, `tags JSON`, `meta JSON`, `recorded_at?`, `created_at`, `updated_at` | user FK CASCADE, **task FK SET NULL**; index `(user_id, created_at)`; partial unique on `source_task_id` |
