@@ -27,7 +27,7 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
         ),
         sa.Column("name", sa.String(64), nullable=False),
-        sa.Column("name_key", sa.String(64), nullable=False),
+        sa.Column("name_key", sa.String(256), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("user_id", "name_key", name="uq_tags_user_key"),
     )

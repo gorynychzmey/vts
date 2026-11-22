@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import true as sa_true
 from sqlalchemy import Text, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -1946,8 +1949,8 @@ class Repo:
         if await self._tag_by_key(user_id, key) is not None:
             raise TagExists(name)
         tag = Tag(user_id=user_id, name=name, name_key=key)
-        self.session.add(tag)
-        await self.session.flush()
+        async with self._unique_tag_write(name):
+            self.session.add(tag)
         return tag
 
     async def rename_tag(self, user_id: uuid.UUID, tag_id: uuid.UUID, name: str) -> Tag | None:
@@ -1960,9 +1963,9 @@ class Repo:
         key = name.casefold()
         if key != tag.name_key and await self._tag_by_key(user_id, key) is not None:
             raise TagExists(name)
-        tag.name = name
-        tag.name_key = key
-        await self.session.flush()
+        async with self._unique_tag_write(name):
+            tag.name = name
+            tag.name_key = key
         return tag
 
     async def delete_tag(self, user_id: uuid.UUID, tag_id: uuid.UUID) -> int | None:
@@ -2015,7 +2018,7 @@ class Repo:
         await self.session.execute(
             delete(RecordingTag).where(
                 RecordingTag.recording_id == recording.id,
-                RecordingTag.tag_id.not_in(wanted) if wanted else True,
+                RecordingTag.tag_id.not_in(wanted) if wanted else sa_true(),
             )
         )
         await self._link(recording.id, wanted)
@@ -2058,6 +2061,20 @@ class Repo:
         for rid, tag in (await self.session.execute(stmt)).all():
             out.setdefault(rid, []).append(tag)
         return out
+
+    @asynccontextmanager
+    async def _unique_tag_write(self, name: str):
+        """Wrap a tag insert/rename. The savepoint is opened BEFORE the write is
+        staged (begin_nested flushes pending state, which must not happen in the
+        outer transaction). A unique-key violation, i.e. a concurrent writer won
+        the race past our check, becomes TagExists and only the savepoint is
+        rolled back, so the outer transaction stays usable."""
+        try:
+            async with self.session.begin_nested():
+                yield
+                await self.session.flush()
+        except IntegrityError as exc:
+            raise TagExists(name) from exc
 
     async def _tag_by_key(self, user_id: uuid.UUID, key: str) -> Tag | None:
         return await self.session.scalar(

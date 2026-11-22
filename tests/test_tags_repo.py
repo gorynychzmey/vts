@@ -194,3 +194,41 @@ async def test_tags_for_recordings_one_query_sorted(factory):
         assert [t.name for t in got[r2.id]] == ["c"]
         assert r3.id not in got
         assert await repo.tags_for_recordings([]) == {}
+
+
+async def test_casefold_expansion_fits_the_key(factory):
+    # "ß" casefolds to "ss": a valid 40-char name has an 80-char key.
+    async with factory() as s:
+        tag = await Repo(s).create_tag(_USER, "ß" * 40)
+        await s.commit()
+        assert tag.name_key == "ss" * 40
+
+
+@pytest.mark.parametrize("op", ["create", "rename"])
+async def test_unique_violation_becomes_tag_exists(factory, monkeypatch, op):
+    from sqlalchemy import text
+
+    async with factory() as s:
+        repo = Repo(s)
+        victim = await repo.create_tag(_USER, "other")
+        target = await repo.create_tag(_USER, "src") if op == "rename" else None
+        await s.commit()
+
+        async def blind(user_id, key):
+            # Another request wins the race between our check and our flush.
+            await s.execute(text(
+                "INSERT INTO tags (id, user_id, name, name_key, created_at) "
+                "VALUES (:i, :u, 'Racer', 'racer', now())"
+            ), {"i": uuid.uuid4(), "u": user_id})
+            return None
+
+        monkeypatch.setattr(repo, "_tag_by_key", blind)
+        with pytest.raises(TagExists):
+            if op == "create":
+                await repo.create_tag(_USER, "RACER")
+            else:
+                await repo.rename_tag(_USER, target.id, "RACER")
+        monkeypatch.undo()
+        # the outer session is still usable and the racer's row survived
+        assert {t.name for t, _ in await repo.list_tags(_USER)} == {"other", "src", "Racer"} - (
+            {"src"} if op == "create" else set())

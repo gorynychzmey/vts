@@ -552,7 +552,8 @@ class Tag(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
-    name_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Wider than `name`: casefold can expand ("ß" -> "ss"), at most 3x.
+    name_key: Mapped[str] = mapped_column(String(256), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     __table_args__ = (UniqueConstraint("user_id", "name_key", name="uq_tags_user_key"),)
