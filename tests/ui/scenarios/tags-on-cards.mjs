@@ -265,13 +265,27 @@ export async function run() {
       }
     }
 
-    // ---- Esc cancels ----
+    // ---- a click inside the editor that is not on the input keeps it open;
+    //      Esc closes the suggestion list first, then cancels ----
     if (await openEditor(page, LIB_CARD)) {
       const from = requests.length;
+      await page.click(`${LIB_CARD} .task-tags-edit .tag-chip-label`, { timeout: 3000 }).catch(() => {});
+      await page.click(`${LIB_CARD} .task-tags-edit .tag-field`, { position: { x: 3, y: 3 }, timeout: 3000 }).catch(() => {});
+      await page.waitForTimeout(300); // a stray leave-save would land within this
+      if (requests.slice(from).some((r) => r.method === "PUT")) failures.push("clicking a chip label / empty space in the editor saved it");
+      if (!(await editorOpen(page, LIB_CARD))) failures.push("clicking a chip label / empty space in the editor closed it");
       await page.evaluate((c) => {
         document.querySelector(`${c} .task-tags-edit .tag-chip .tag-chip-remove`)?.setAttribute("data-test-target", "2");
       }, LIB_CARD);
       await page.click(`${LIB_CARD} [data-test-target="2"]`, { timeout: 3000 }).catch(() => {});
+      const listOpen = () => page.evaluate((c) => {
+        const l = document.querySelector(`${c} .task-tags-edit .tag-suggestions`);
+        return !!l && !l.classList.contains("hidden");
+      }, LIB_CARD);
+      if (!(await listOpen())) failures.push("the suggestion list should be open while editing (setup for the Esc check)");
+      await page.keyboard.press("Escape");
+      if (await listOpen()) failures.push("the first Esc should close the suggestion list");
+      if (!(await editorOpen(page, LIB_CARD))) failures.push("the first Esc (list open) must close the list, not the editor");
       await page.keyboard.press("Escape");
       const closed = await page.waitForFunction((c) => {
         const el = document.querySelector(`${c} .task-tags-edit`);
@@ -298,6 +312,7 @@ export async function run() {
     if (await openEditor(mobile, LONG_CARD)) {
       over = await sideways();
       if (over > 0) failures.push(`at 375px the card's tag editor scrolls the page sideways by ${over}px`);
+      await mobile.keyboard.press("Escape");
       await mobile.keyboard.press("Escape");
     } else {
       failures.push("could not open the tag editor at 375px");

@@ -63,6 +63,9 @@ const deliveryState = {
 // for the same reason as deliveryState: bootstrap's loadPresets() ->
 // applyPresetOptions() maps a preset's tag ids to names through it.
 let tagsCache = [];
+// False until GET /api/tags has answered with a list: before that, tag ids
+// cannot be mapped to names, and a save must not treat "none shown" as "none".
+let tagsLoadedOk = false;
 const presetSelect = document.getElementById("preset-select");
 const presetSaveBtn = document.getElementById("preset-save-btn");
 const presetDanglingHint = document.getElementById("preset-dangling-hint");
@@ -3914,8 +3917,8 @@ function applyPresetOptions(options) {
   // refs and anything syncSummaryToggle() normalised — this is the baseline
   // recomputePresetDirty() compares against.
   appliedPresetOptions = currentFormOptions();
-  // Adds, never replaces: tags typed before choosing a preset stay (vts-qwcj).
-  if (formTagField) formTagField.addNames(tagNamesForIds(opts.tags));
+  // Tags typed by hand stay; the previous preset's tags give way (vts-qwcj).
+  applyPresetTags(opts.tags);
   return dangling;
 }
 
@@ -4102,7 +4105,13 @@ async function loadPresets() {
 // ids (missing tags created). PATCH replaces a preset's options wholesale, so
 // leaving `tags` out would wipe the preset's tags (vts-qwcj). Tag edits do not
 // light the "changed" badge; saving still stores them.
-async function composerPresetOptions() {
+async function composerPresetOptions(preset = null) {
+  // Without the tag list nothing could be mapped, so the field shows none of
+  // the preset's tags; keep what it stores rather than writing [].
+  if (!tagsLoadedOk && preset) {
+    const stored = preset.options && Array.isArray(preset.options.tags) ? preset.options.tags : [];
+    return { ...currentFormOptions(), tags: stored };
+  }
   if (formTagField) formTagField.commitPending();
   const tags = formTagField ? await tagIdsForNames(formTagField.getNames()) : [];
   return { ...currentFormOptions(), tags };
@@ -4116,7 +4125,7 @@ async function savePresetClicked() {
       await api(`/api/presets/${preset.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ options: await composerPresetOptions() }),
+        body: JSON.stringify({ options: await composerPresetOptions(preset) }),
       });
     } catch (err) {
       console.error("Failed to save preset changes", err);
@@ -4244,6 +4253,7 @@ async function loadTags() {
     const list = await api("/api/tags");
     if (Array.isArray(list)) {
       tagsCache = list.filter((tag) => tag && tag.id && typeof tag.name === "string");
+      tagsLoadedOk = true;
     }
   } catch {
     // keep the old list
@@ -4475,6 +4485,8 @@ function createTagField({
   });
 
   input.addEventListener("keydown", (event) => {
+    // An IME is still composing: Enter or comma belongs to it, not to us.
+    if (event.isComposing) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (list.classList.contains("hidden")) openSuggestions();
@@ -4500,15 +4512,16 @@ function createTagField({
       commitPending();
       openSuggestions();
     } else if (event.key === "Escape") {
-      if (onCancel) {
-        event.preventDefault();
-        event.stopPropagation();
-        onCancel();
-      } else if (!list.classList.contains("hidden")) {
-        // Close the list, not the dialog around the field.
+      // The open list goes first — not the editor, not the dialog around the
+      // field; a second Esc then cancels.
+      if (!list.classList.contains("hidden")) {
         event.preventDefault();
         event.stopPropagation();
         closeSuggestions();
+      } else if (onCancel) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
       }
     } else if (event.key === "Backspace" && !input.value && names.length) {
       names = names.slice(0, -1);
@@ -4534,8 +4547,15 @@ function createTagField({
     if (onLeave) onLeave();
   });
 
+  // A press anywhere in the field but the input (a chip, the gaps) must not
+  // blur the input — leaving the field saves a card's editor — so the focus
+  // stays, and the click hands it to the input if it was elsewhere.
+  root.addEventListener("mousedown", (event) => {
+    if (event.target !== input) event.preventDefault();
+  });
   root.addEventListener("click", (event) => {
-    if (event.target === root || event.target === chipsEl) input.focus();
+    if (event.target instanceof Element && event.target.closest("button, .tag-suggestions")) return;
+    input.focus();
   });
 
   const field = {
@@ -4558,6 +4578,14 @@ function createTagField({
       });
       return any;
     },
+    removeNames(values) {
+      const keys = new Set((Array.isArray(values) ? values : []).map(tagKey));
+      const kept = names.filter((n) => !keys.has(tagKey(n)));
+      if (kept.length === names.length) return;
+      names = kept;
+      renderChips();
+      changed();
+    },
     commitPending,
     focus: () => input.focus(),
   };
@@ -4570,6 +4598,21 @@ const formTagField = document.getElementById("task-tags-field")
   ? createTagField({ container: document.getElementById("task-tags-field") })
   : null;
 
+// The names the last applied preset put into the form (not those the user
+// already had). Choosing another preset takes these back out first, so the
+// form never carries one preset's tags into another's "Save changes".
+let presetTagContribution = [];
+
+// Swap the previous preset's contribution for this preset's tags.
+function applyPresetTags(ids) {
+  if (!formTagField) return;
+  formTagField.removeNames(presetTagContribution);
+  const incoming = tagNamesForIds(ids);
+  const had = new Set(formTagField.getNames().map(tagKey));
+  formTagField.addNames(incoming);
+  presetTagContribution = incoming.filter((name) => !had.has(tagKey(name)));
+}
+
 // A user preset's tags, by current name; system presets carry none.
 function presetTagNames(preset) {
   if (!preset || preset.source !== "user") return [];
@@ -4580,7 +4623,8 @@ function presetTagNames(preset) {
 // the preset filled it in the first place.
 function resetFormTags() {
   if (!formTagField) return;
-  formTagField.setNames(presetTagNames(findPreset(selectedPresetRef)));
+  presetTagContribution = presetTagNames(findPreset(selectedPresetRef));
+  formTagField.setNames(presetTagContribution);
 }
 
 // ---- tags on cards ----
@@ -5815,6 +5859,7 @@ async function refreshAll() {
   // chips go (vts-qwcj).
   await loadTags();
   if (formTagField) formTagField.setNames([]);
+  presetTagContribution = [];
   // After loadTasks(), matching bootstrap's order: loadPresets() applies the
   // default preset to the composer and reads the delivery data loaded above.
   await loadPresets();
@@ -8439,6 +8484,9 @@ function setPresetFormMode(editId) {
   // edited or deleted, but duplicating it is the normal way to start from it.
   const editable = !!presetEditing && presetEditing.source === "user" && presetEditing.editable;
   presetDeleteBtn?.classList.toggle("hidden", !editable);
+  // Tags are per user; system presets carry none and cannot be edited.
+  document.getElementById("preset-tags-block")
+    ?.classList.toggle("hidden", !!presetEditing && !editable);
   presetDuplicateBtn?.classList.toggle("hidden", !presetEditing);
   if (presetSubmitBtn) presetSubmitBtn.disabled = !!presetEditing && !editable;
 }

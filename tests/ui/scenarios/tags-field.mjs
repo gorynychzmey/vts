@@ -299,8 +299,16 @@ export async function run() {
 
     // ---- preset dialog: shows ids as names, saves ids, creates missing ----
     await openFromHeaderMenu(page, "#presets-btn");
-    await page.click("#presets-list .mgr-item >> text=Клуб", { timeout: 3000 }).catch(() => {});
     const P = "#preset-tags-field";
+    // Tags are per user and system presets carry none: no field for them.
+    const fieldShown = () => page.evaluate((s) => {
+      const el = document.querySelector(s);
+      return !!el && el.offsetParent !== null && el.getBoundingClientRect().height > 0;
+    }, P);
+    await page.click("#presets-list .mgr-item >> text=Default", { timeout: 3000 }).catch(() => {});
+    if (await fieldShown()) failures.push("the preset editor must not show the tag field for a system preset");
+    await page.click("#presets-list .mgr-item >> text=Клуб", { timeout: 3000 }).catch(() => {});
+    if (!(await fieldShown())) failures.push("the preset editor must show the tag field for a user preset");
     if (!(await waitChips(page, P, ["Семья"]))) {
       failures.push(`the preset editor should show the preset's tags by name; chips: ${JSON.stringify(await chipNames(page, P))}`);
     }

@@ -6176,3 +6176,16 @@ dialog:not([open]) {
 .task-tags.hidden {
   display: none;
 }
+
+/* Wraps the preset editor's tag label + field so both hide together for a
+   system preset; keeps the editor column's own spacing inside the wrapper. */
+#preset-tags-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.44rem;
+  min-width: 0;
+}
+
+#preset-tags-block.hidden {
+  display: none;
+}
