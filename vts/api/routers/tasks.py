@@ -27,7 +27,7 @@ import uuid
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -35,6 +35,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -262,16 +263,17 @@ async def list_tasks(
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     source_type: str | None = None,
+    tag: list[str] | None = Query(default=None),
+    tag_match: Literal["all", "any"] = "all",
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> list[TaskOut] | list[TaskCompactOut]:
-    """List tasks owned by the current user, newest first. Paginate with
-    `limit`/`offset` or the cursors `before_ts`/`before_id` and
-    `after_ts`/`after_id` plus `order`; `compact=true` for slim records.
-    Filter with `q` (title or URL), `created_from`/`created_to`, and
-    `source_type` (`file` or `url`)."""
+    """List the user's tasks, newest first. Page with `limit`/`offset` or the
+    `before_*`/`after_*` cursors plus `order`; `compact=true` for slim records.
+    Filter with `q`, `created_from`/`created_to`, `source_type` (`file`|`url`),
+    `tag` (repeatable) and `tag_match` (`all`|`any`)."""
     if limit is not None and limit < 0:
         raise HTTPException(status_code=422, detail="limit must be non-negative")
     if offset < 0:
@@ -305,8 +307,13 @@ async def list_tasks(
         "created_from": created_from,
         "created_to": created_to,
         "source_type": source_type,
+        "tags": tag or None,
+        "tag_match": tag_match,
     }
-    filtering = any(v is not None and v != "" for v in filters.values())
+    # tag_match alone narrows nothing, so it is not part of the "filtered" test.
+    filtering = any(
+        v is not None and v != "" for k, v in filters.items() if k != "tag_match"
+    )
     if before is not None or after is not None or filtering:
         # A filtered request goes through the cursor query even without a
         # cursor: it is the only one that knows the filters, and it
@@ -372,6 +379,8 @@ async def count_tasks(
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     source_type: str | None = None,
+    tag: list[str] | None = Query(default=None),
+    tag_match: Literal["all", "any"] = "all",
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> JSONResponse:
@@ -401,6 +410,8 @@ async def count_tasks(
         created_from=created_from,
         created_to=created_to,
         source_type=source_type,
+        tags=tag or None,
+        tag_match=tag_match,
     )
     return JSONResponse({"total": total})
 

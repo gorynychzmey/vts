@@ -14,7 +14,7 @@ from datetime import datetime
 import uuid
 from pathlib import Path
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
@@ -128,12 +128,15 @@ async def list_recordings(
     after_id: uuid.UUID | None = None,
     order: str = "desc",
     task_id: list[uuid.UUID] | None = Query(default=None),
+    tag: list[str] | None = Query(default=None),
+    tag_match: Literal["all", "any"] = "all",
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
 ) -> RecordingListOut:
     """The user's recordings, newest first by when each got text, filtered
     server-side. Page with `limit`/`offset` or the `before_*`/`after_*`
-    cursors plus `order`; `task_id` (repeatable) filters by task.
+    cursors plus `order`; `task_id` (repeatable) filters by task, `tag`
+    (repeatable, with `tag_match=all|any`) by tags.
     """
     # The filters live here rather than in the browser because the client only
     # holds the pages it has loaded: filtering there answers "not among the 30
@@ -153,6 +156,7 @@ async def list_recordings(
     filters = {
         "q": q, "created_from": created_from, "created_to": created_to,
         "task_ids": task_id or None,
+        "tags": tag or None, "tag_match": tag_match,
     }
     items = await repo.list_recordings(
         user_id, limit=limit, offset=offset, before=before, after=after,

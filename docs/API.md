@@ -321,6 +321,15 @@ first spelling is kept). An invalid name is a `422`.
 Task and recording payloads (`GET /api/tasks`, `GET /api/tasks/{id}`,
 `GET /api/recordings`, ...) carry `tags: [{id, name}]`, sorted by name.
 
+Filter by tags with the repeatable `tag` query parameter on `GET /api/tasks`,
+`GET /api/tasks/count` and `GET /api/recordings`, plus `tag_match=all|any`
+(default `all`; any other value is `422`). Names match the way tag names are
+compared everywhere (trimmed, case-insensitive). With `all` every given tag
+must be on the recording and an unknown name gives an empty result; with `any`
+at least one must be, and unknown names are ignored. A task without a
+recording has no tags, so a tag filter excludes it. Tag filters combine with
+`q`, the date filters and the cursors.
+
 Tags can be set when the task is created: `tags: ["..."]` in the
 `POST /api/tasks` body and in `POST /api/uploads/init` (both single-file and
 multi-file); a JSON-encoded list in the `tags` form field of

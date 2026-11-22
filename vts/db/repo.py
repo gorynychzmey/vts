@@ -4,14 +4,14 @@ from collections.abc import Iterable
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import true as sa_true
-from sqlalchemy import Text, delete, func, or_, select, tuple_, update
+from sqlalchemy import Text, and_, delete, exists, false, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, undefer
+from sqlalchemy.orm import aliased, selectinload, undefer
 
 from vts.db.models import (
     ApiToken,
@@ -39,7 +39,7 @@ from vts.db.models import (
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 from vts.services.asr_payload import decompose_raw_json
-from vts.services.tags import TagExists, dedupe_names, normalize_tag_name
+from vts.services.tags import TagExists, TagNameError, dedupe_names, normalize_tag_name, tag_key
 from vts.services.recording_meta import language_code, recording_display_name
 from vts.services.recording_state import initial_state, state_for_status
 from vts.services.delivery_status import RETRYABLE_STATUSES
@@ -58,6 +58,53 @@ def utcnow() -> datetime:
 # task whose options differ (vts-wpy), and a URL processed more than this many
 # times with the wanted options never matching is not worth an unbounded scan.
 _DONOR_CANDIDATE_LIMIT = 20
+
+
+
+def _tag_clause(
+    tags: list[str],
+    tag_match: Literal["all", "any"],
+    recording_link,
+):
+    """WHERE clause for "the recording carries these tags" (vts-qwcj).
+
+    One correlated EXISTS per tag key, so the database does the matching and no
+    id list is loaded into Python. `recording_link(rec)` ties the aliased
+    recording `rec` to the outer row (the recording itself, or the task it was
+    made from). The tag must belong to the recording's own user, so another
+    user's tag of the same key can never match.
+
+    Names that cannot be tags (empty, too long) are unknown names: with "all"
+    one unknown name empties the result, with "any" it is ignored and only an
+    all-unknown list empties it.
+    """
+    keys: list[str] = []
+    unknown = False
+    for raw in tags:
+        try:
+            key = tag_key(raw)
+        except TagNameError:
+            unknown = True
+            continue
+        if key not in keys:
+            keys.append(key)
+    if tag_match == "all" and unknown:
+        return false()
+    if not keys:
+        return false()
+
+    def has(key: str):
+        rec = aliased(Recording)
+        return exists(
+            select(1)
+            .select_from(RecordingTag)
+            .join(Tag, Tag.id == RecordingTag.tag_id)
+            .join(rec, rec.id == RecordingTag.recording_id)
+            .where(Tag.name_key == key, Tag.user_id == rec.user_id, recording_link(rec))
+        )
+
+    clauses = [has(k) for k in keys]
+    return and_(*clauses) if tag_match == "all" else or_(*clauses)
 
 
 class Repo:
@@ -179,8 +226,11 @@ class Repo:
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: str | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ):
-        """Narrow a Task query by search text, creation date and source type.
+        """Narrow a Task query by search text, creation date, source type and
+        the tags of the task's recording (a task without one has no tags).
 
         Shared by the cursor page and the legacy list so the two cannot drift.
         These only NARROW the set — the cursor/order logic is untouched, the
@@ -208,6 +258,10 @@ class Repo:
             stmt = stmt.where(Task.source_url.startswith("file://"))
         elif source_type == "url":
             stmt = stmt.where(~Task.source_url.startswith("file://"))
+        if tags:
+            stmt = stmt.where(
+                _tag_clause(tags, tag_match, lambda rec: rec.source_task_id == Task.id)
+            )
         return stmt
 
     async def list_tasks_page(
@@ -223,6 +277,8 @@ class Repo:
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: str | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> list[Task]:
@@ -256,6 +312,7 @@ class Repo:
         stmt = self._apply_task_filters(
             stmt, q=q, created_from=created_from,
             created_to=created_to, source_type=source_type,
+            tags=tags, tag_match=tag_match,
         )
         if before is not None:
             stmt = stmt.where(key < tuple_(*before))
@@ -278,6 +335,8 @@ class Repo:
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         source_type: str | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
     ) -> int:
@@ -301,6 +360,7 @@ class Repo:
         stmt = self._apply_task_filters(
             stmt, q=q, created_from=created_from,
             created_to=created_to, source_type=source_type,
+            tags=tags, tag_match=tag_match,
         )
         return int((await self.session.scalar(stmt)) or 0)
 
@@ -651,6 +711,8 @@ class Repo:
         exclude_task_ids: list[uuid.UUID] | None = None,
         before: tuple[datetime, uuid.UUID] | None = None,
         after: tuple[datetime, uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> Any:
         """The one place recording filters are expressed.
 
@@ -688,6 +750,10 @@ class Repo:
                     Recording.source_task_id.notin_(exclude_task_ids),
                 )
             )
+        if tags:
+            stmt = stmt.where(
+                _tag_clause(tags, tag_match, lambda rec: rec.id == Recording.id)
+            )
         return stmt
 
     async def list_recordings(
@@ -704,6 +770,8 @@ class Repo:
         before: tuple[datetime, uuid.UUID] | None = None,
         after: tuple[datetime, uuid.UUID] | None = None,
         order: str = "desc",
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> list["Recording"]:
         """A user's recordings in library order (`listed_at`, newest first by
         default), narrowed in the QUERY. `before` / `after` are keyset cursors;
@@ -717,7 +785,7 @@ class Repo:
             select(Recording).where(Recording.user_id == user_id),
             q=q, created_from=created_from, created_to=created_to,
             task_ids=task_ids, exclude_task_ids=exclude_task_ids,
-            before=before, after=after,
+            before=before, after=after, tags=tags, tag_match=tag_match,
         )
         if order == "asc":
             ordering = (Recording.listed_at.asc(), Recording.id.asc())
@@ -735,6 +803,8 @@ class Repo:
         created_to: datetime | None = None,
         task_ids: list[uuid.UUID] | None = None,
         exclude_task_ids: list[uuid.UUID] | None = None,
+        tags: list[str] | None = None,
+        tag_match: Literal["all", "any"] = "all",
     ) -> int:
         """How many recordings match, ignoring paging.
 
@@ -747,6 +817,7 @@ class Repo:
             ),
             q=q, created_from=created_from, created_to=created_to,
             task_ids=task_ids, exclude_task_ids=exclude_task_ids,
+            tags=tags, tag_match=tag_match,
         )
         return int((await self.session.scalar(stmt)) or 0)
 
