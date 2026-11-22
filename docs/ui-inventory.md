@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 60 capabilities · 113 routes (83 in the OpenAPI schema, 30 hidden) · 41 MCP tools · 444 English UI strings.
+**Counts:** 62 capabilities · 119 routes (89 in the OpenAPI schema, 30 hidden) · 43 MCP tools · 448 English UI strings.
 
 ## Capabilities by entity
 
@@ -49,8 +49,15 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Read a recording's transcript | Show in transcript | works after the originating task is deleted; windowed with around_sec | `GET /api/recordings/{recording_id}/transcript` | Library tab — 'Show in transcript' on a search hit |
 | Read a recording's tabs | Raw transcript | read from the recording, so they work after the originating task is deleted | `GET /api/recordings/{recording_id}/text/{variant}`<br>`GET /api/recordings/{recording_id}/subtitles`<br>`GET /api/recordings/{recording_id}/results/{source}/{ref}` | Library tab — recording card tabs (transcript, processed, summary, prompt results), subtitles toggle and share |
 | Rename a recording | Rename recording | a chosen name stops following the task; clearing it resumes | `PATCH /api/recordings/{recording_id}` | Library tab — recording card menu |
+| Edit tags | Edit tags | replaces the recording's whole set by names; missing tags are created | `PUT /api/tasks/{task_id}/tags`<br>`PUT /api/recordings/{recording_id}/tags` | Task and library card menu — “Edit tags” swaps the card's `.task-tags` row for the tag field |
 | Search the corpus | — | returns nothing below the relevance threshold, never the nearest passages | `GET /api/search` | API and the search_transcripts MCP tool (no page yet) |
 | Open a recording | Library | owner-scoped, 404 otherwise | `GET /api/recordings/{recording_id}` | Library tab — recording card |
+
+### Tag
+
+| Action | Label (en) | States | Endpoint(s) | Screen |
+| --- | --- | --- | --- | --- |
+| Suggest and create tags | Tags | a preset stores tag ids; saving it creates missing tags first | `GET /api/tags`<br>`POST /api/tags` | Tag field — new-task form (`#task-tags-field`), preset editor (`#preset-tags-field`), card “Edit tags” |
 
 ### Speaker (voice)
 
@@ -226,7 +233,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 
 `vts/mcp/tools_registry/` exposes the same capabilities to agents. Tools with no matching UI control are the practical reason the “no screen” list above is not a gap.
 
-`submit_video`, `list_tasks`, `delete_task`, `get_status`, `get_transcript`, `get_prompt_result`, `wait_for_task`, `list_prompts`, `create_prompt`, `update_prompt`, `delete_prompt`, `list_presets`, `create_preset`, `update_preset`, `delete_preset`, `get_default_preset`, `set_default_preset`, `list_delivery_targets`, `list_delivery_credentials`, `create_delivery_credential`, `update_delivery_credential`, `delete_delivery_credential`, `create_delivery_target`, `update_delivery_target`, `delete_delivery_target`, `get_delivery_status`, `retry_delivery`, `search_transcripts`, `list_recordings`, `list_people`, `get_recording_prompt_result`, `rename_recording`, `get_recording_transcript`, `show_recording`, `app_player_blocks`, `app_media_url`, `show_summary`, `regenerate_summary`, `show_speakers`, `app_speaker_preview_url`, `app_resolve_speakers`
+`submit_video`, `list_tasks`, `delete_task`, `get_status`, `get_transcript`, `get_prompt_result`, `wait_for_task`, `list_prompts`, `create_prompt`, `update_prompt`, `delete_prompt`, `list_presets`, `create_preset`, `update_preset`, `delete_preset`, `get_default_preset`, `set_default_preset`, `list_delivery_targets`, `list_delivery_credentials`, `create_delivery_credential`, `update_delivery_credential`, `delete_delivery_credential`, `create_delivery_target`, `update_delivery_target`, `delete_delivery_target`, `get_delivery_status`, `retry_delivery`, `search_transcripts`, `list_recordings`, `list_tags`, `tag_recording`, `list_people`, `get_recording_prompt_result`, `rename_recording`, `get_recording_transcript`, `show_recording`, `app_player_blocks`, `app_media_url`, `show_summary`, `regenerate_summary`, `show_speakers`, `app_speaker_preview_url`, `app_resolve_speakers`
 
 ## Route coverage
 
@@ -249,6 +256,8 @@ Routes not claimed by any capability above (each is a documentation gap):
 - `GET /api/recordings/{recording_id}/entries`
 - `GET /api/recordings/{recording_id}/media`
 - `GET /api/recordings/{recording_id}/speaker-previews/{speaker_label}/{index}/audio`
+- `DELETE /api/tags/{tag_id}`
+- `PATCH /api/tags/{tag_id}`
 - `GET /api/tasks/count`
 
 Frontend call sites with no matching route (would be a bug):
@@ -297,5 +306,6 @@ Migrations that introduced or changed the entities above.
 | `0034_recording_content_backfill` | every task has its recording, recordings hold their content (vts-lzad) |
 | `0035_recording_listed_at` | recordings.listed_at: when a recording entered the library (vts-lzad) |
 | `0036_drop_task_content_columns` | drop the task's content columns; the recording holds the content (vts-lzad) |
+| `0037_tags` | tags on recordings (vts-qwcj) |
 | `29ea92208495_prompt_is_system_and_nullable_updated_at` | prompt is_system and nullable updated_at |
 

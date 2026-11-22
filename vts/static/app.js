@@ -59,6 +59,10 @@ const deliveryState = {
   targets: [],
   variants: [],
 };
+// The user's tags from GET /api/tags, [{id, name, count}] (vts-qwcj). Up here
+// for the same reason as deliveryState: bootstrap's loadPresets() ->
+// applyPresetOptions() maps a preset's tag ids to names through it.
+let tagsCache = [];
 const presetSelect = document.getElementById("preset-select");
 const presetSaveBtn = document.getElementById("preset-save-btn");
 const presetDanglingHint = document.getElementById("preset-dangling-hint");
@@ -1964,6 +1968,8 @@ function createRuntime(task) {
     // Set only on a library card: the recording it shows, which addresses its
     // content and its player (vts-lzad). A task card has none.
     recordingId: String(task.recording_id || ""),
+    // The recording's tags, [{id, name}] sorted by the server (vts-qwcj).
+    tags: tagList(task.tags),
     currentStepName: runningStep ? runningStep.name : failedStep ? failedStep.name : "",
     failedStepName: failedStep ? failedStep.name : "",
     currentStepStartedAt: runningStep ? parseIsoMs(runningStep.started_at) : null,
@@ -2887,6 +2893,8 @@ function renderTaskCard(task, options = {}) {
   // restart actions. Marking both (rather than only the exception) keeps the
   // CSS honest about which one is the addition.
   root.dataset.cardKind = options.kind === "recording" ? "recording" : "task";
+  root.querySelector(".task-edit-tags-btn")?.addEventListener("click", () => enterTagsEdit(root));
+  renderTaskTags(root);
   renderTaskRuntime(root);
   return root;
 }
@@ -3328,6 +3336,7 @@ async function uploadFileChunked(file, fields) {
         prompts: fields.prompts,
         delivery: fields.delivery,
         display_name: fields.display_name || null,
+        tags: fields.tags || [],
       }),
       headers: {
         "Content-Type": "application/json",
@@ -3438,6 +3447,7 @@ async function uploadFilesChunked(files, fields) {
         prompts: fields.prompts,
         delivery: fields.delivery,
         display_name: fields.display_name || null,
+        tags: fields.tags || [],
       }),
       headers: {
         "Content-Type": "application/json",
@@ -3904,6 +3914,8 @@ function applyPresetOptions(options) {
   // refs and anything syncSummaryToggle() normalised — this is the baseline
   // recomputePresetDirty() compares against.
   appliedPresetOptions = currentFormOptions();
+  // Adds, never replaces: tags typed before choosing a preset stay (vts-qwcj).
+  if (formTagField) formTagField.addNames(tagNamesForIds(opts.tags));
   return dangling;
 }
 
@@ -4086,6 +4098,16 @@ async function loadPresets() {
   }
 }
 
+// What the composer saves into a preset: its settings plus the field's tags as
+// ids (missing tags created). PATCH replaces a preset's options wholesale, so
+// leaving `tags` out would wipe the preset's tags (vts-qwcj). Tag edits do not
+// light the "changed" badge; saving still stores them.
+async function composerPresetOptions() {
+  if (formTagField) formTagField.commitPending();
+  const tags = formTagField ? await tagIdsForNames(formTagField.getNames()) : [];
+  return { ...currentFormOptions(), tags };
+}
+
 async function savePresetClicked() {
   const mode = presetSaveBtn ? presetSaveBtn.dataset.mode : "create";
   const preset = findPreset(selectedPresetRef);
@@ -4094,7 +4116,7 @@ async function savePresetClicked() {
       await api(`/api/presets/${preset.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ options: currentFormOptions() }),
+        body: JSON.stringify({ options: await composerPresetOptions() }),
       });
     } catch (err) {
       console.error("Failed to save preset changes", err);
@@ -4115,7 +4137,7 @@ async function savePresetClicked() {
     created = await api("/api/presets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, options: currentFormOptions() }),
+      body: JSON.stringify({ name, options: await composerPresetOptions() }),
     });
   } catch (err) {
     console.error("Failed to create preset", err);
@@ -4199,6 +4221,458 @@ if (promptSelect) {
   promptSelect.addEventListener("change", recomputePresetDirty);
 }
 
+// ---------- Tags (vts-qwcj) ----------
+
+// The display form the server stores: trimmed, inner whitespace collapsed.
+function normalizeTagName(name) {
+  return String(name || "").trim().replace(/\s+/g, " ");
+}
+
+// Client-side stand-in for the server's name_key (normalised + casefold). JS
+// has no casefold, so this is an approximation used only to dedupe chips and
+// to tell existing tags from new ones; the server decides what is the same tag.
+function tagKey(name) {
+  return normalizeTagName(name).toLowerCase();
+}
+
+const TAG_NAME_MAX = 64;
+
+/** Refresh tagsCache. Suggestions are a convenience, so a failed or odd answer
+ *  keeps the previous list instead of reporting anything. */
+async function loadTags() {
+  try {
+    const list = await api("/api/tags");
+    if (Array.isArray(list)) {
+      tagsCache = list.filter((tag) => tag && tag.id && typeof tag.name === "string");
+    }
+  } catch {
+    // keep the old list
+  }
+  return tagsCache;
+}
+
+function findCachedTag(name) {
+  const key = tagKey(name);
+  return tagsCache.find((tag) => tagKey(tag.name) === key) || null;
+}
+
+// A preset stores tag ids so a rename follows; the field works in names. An id
+// the cache does not know (deleted meanwhile) is skipped.
+function tagNamesForIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return ids
+    .map((id) => tagsCache.find((tag) => String(tag.id) === String(id)))
+    .filter(Boolean)
+    .map((tag) => tag.name);
+}
+
+/** Ids for `names`, creating the tags that do not exist yet. A 409 means the
+ *  tag was created elsewhere since the cache was read: re-read the list and
+ *  use the id found there. Any other failure is thrown to the caller. */
+async function tagIdsForNames(names) {
+  const ids = [];
+  for (const name of names) {
+    let tag = findCachedTag(name);
+    if (!tag) {
+      try {
+        const made = await api("/api/tags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (made && made.id) {
+          tag = { id: made.id, name: made.name || name, count: 0 };
+          tagsCache = [...tagsCache, tag];
+        }
+      } catch (err) {
+        if (!String((err && err.message) || "").startsWith("409")) throw err;
+        await loadTags();
+        tag = findCachedTag(name);
+        if (!tag) throw err;
+      }
+    }
+    if (tag && tag.id && !ids.includes(String(tag.id))) ids.push(String(tag.id));
+  }
+  return ids;
+}
+
+// [{id, name}] from a server answer, tolerating rows written before tags existed.
+function tagList(value) {
+  return Array.isArray(value)
+    ? value
+      .filter((tag) => tag && typeof tag.name === "string")
+      .map((tag) => ({ id: String(tag.id || ""), name: tag.name }))
+    : [];
+}
+
+/** One chip. With `onRemove` it gets a × button; a chip for a name that is
+ *  not an existing tag says so (`tag-chip--new` plus a "new" mark). */
+function buildTagChip(name, { isNew = false, onRemove = null } = {}) {
+  const chip = document.createElement("span");
+  chip.className = isNew ? "tag-chip tag-chip--new" : "tag-chip";
+  const label = document.createElement("span");
+  label.className = "tag-chip-label";
+  label.textContent = name;
+  chip.appendChild(label);
+  if (isNew) {
+    const mark = document.createElement("span");
+    mark.className = "tag-chip-mark";
+    mark.setAttribute("data-i18n", "tags.new");
+    mark.textContent = t("tags.new");
+    chip.appendChild(mark);
+  }
+  if (onRemove) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tag-chip-remove";
+    remove.setAttribute("aria-label", `${name} ×`);
+    remove.textContent = "×";
+    // Keep focus in the input: a click that blurred it would read as leaving
+    // the field, which saves a card's tags before the removal is done.
+    remove.addEventListener("mousedown", (event) => event.preventDefault());
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onRemove();
+    });
+    chip.appendChild(remove);
+  }
+  return chip;
+}
+
+/** The tag field: chips for the chosen tags and an input with suggestions
+ *  from tagsCache, filtered by the typed text (by key). Enter, comma or a
+ *  suggestion click adds; arrows move through the suggestions; × or Backspace
+ *  on an empty input removes; a duplicate by key is ignored.
+ *
+ *  `allowCreate: false` only accepts existing tags (a filter picker).
+ *  Hooks for an inline editor: `onSubmit` (Enter on an empty input),
+ *  `onCancel` (Esc), `onLeave` (focus left the field). */
+function createTagField({
+  container,
+  initial = [],
+  onChange = null,
+  allowCreate = true,
+  onSubmit = null,
+  onCancel = null,
+  onLeave = null,
+} = {}) {
+  const root = document.createElement("div");
+  root.className = "tag-field";
+  const chipsEl = document.createElement("span");
+  chipsEl.className = "tag-field-chips";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tag-field-input";
+  input.maxLength = TAG_NAME_MAX;
+  input.autocomplete = "off";
+  input.setAttribute("data-i18n-placeholder", "tags.placeholder");
+  input.placeholder = t("tags.placeholder");
+  input.setAttribute("data-i18n-aria-label", "tags.label");
+  input.setAttribute("aria-label", t("tags.label"));
+  const list = document.createElement("ul");
+  list.className = "tag-suggestions hidden";
+  list.setAttribute("role", "listbox");
+  // A press on the list must not blur the input (see buildTagChip).
+  list.addEventListener("mousedown", (event) => event.preventDefault());
+  root.append(chipsEl, input, list);
+  if (container) container.replaceChildren(root);
+
+  let names = [];
+  let shown = [];
+  let active = -1;
+
+  const has = (name) => names.some((n) => tagKey(n) === tagKey(name));
+  const changed = () => {
+    if (onChange) onChange(names.slice());
+  };
+
+  // Which chips read as new depends on tagsCache; repaint only when that
+  // changes, so a refresh does not swap a chip out from under the pointer.
+  let paintedAs = "";
+  const chipState = () => names.map((n) => `${n}\u0000${findCachedTag(n) ? 0 : 1}`).join("\u0001");
+
+  function renderChips() {
+    paintedAs = chipState();
+    chipsEl.replaceChildren(
+      ...names.map((name) =>
+        buildTagChip(name, {
+          isNew: !findCachedTag(name),
+          onRemove: () => {
+            names = names.filter((n) => n !== name);
+            renderChips();
+            changed();
+            if (!list.classList.contains("hidden")) openSuggestions();
+          },
+        })
+      )
+    );
+  }
+
+  function add(raw) {
+    const name = normalizeTagName(raw);
+    if (!name || name.length > TAG_NAME_MAX) return false;
+    const existing = findCachedTag(name);
+    if (!existing && !allowCreate) return false;
+    // An existing tag is shown under its stored spelling.
+    const display = existing ? existing.name : name;
+    if (has(display)) return true; // a duplicate is consumed, not added
+    names.push(display);
+    renderChips();
+    changed();
+    return true;
+  }
+
+  function closeSuggestions() {
+    list.classList.add("hidden");
+    active = -1;
+  }
+
+  function paintActive() {
+    [...list.children].forEach((li, i) => li.classList.toggle("active", i === active));
+    if (active >= 0) list.children[active]?.scrollIntoView({ block: "nearest" });
+  }
+
+  function openSuggestions() {
+    const query = tagKey(input.value);
+    shown = tagsCache.filter((tag) => !has(tag.name) && (!query || tagKey(tag.name).includes(query)));
+    active = -1;
+    list.replaceChildren(
+      ...shown.map((tag) => {
+        const li = document.createElement("li");
+        li.className = "tag-suggestion";
+        li.setAttribute("role", "option");
+        li.textContent = tag.name;
+        li.addEventListener("click", () => {
+          add(tag.name);
+          input.value = "";
+          openSuggestions();
+        });
+        return li;
+      })
+    );
+    list.classList.toggle("hidden", !shown.length);
+  }
+
+  // Adds whatever is typed but not yet a chip. True when the input was empty.
+  function commitPending() {
+    if (!normalizeTagName(input.value)) {
+      input.value = "";
+      return true;
+    }
+    if (add(input.value)) input.value = "";
+    return false;
+  }
+
+  input.addEventListener("input", () => {
+    const value = input.value;
+    if (value.includes(",")) {
+      // A pasted "a, b" adds both; whatever follows the last comma stays typed.
+      const parts = value.split(",");
+      input.value = parts.pop();
+      parts.forEach((part) => add(part));
+    }
+    openSuggestions();
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (list.classList.contains("hidden")) openSuggestions();
+      if (!shown.length) return;
+      active = event.key === "ArrowDown"
+        ? Math.min(active + 1, shown.length - 1)
+        : Math.max(active - 1, -1);
+      paintActive();
+    } else if (event.key === "Enter") {
+      // Never submit the surrounding form from here.
+      event.preventDefault();
+      if (active >= 0 && shown[active]) {
+        add(shown[active].name);
+        input.value = "";
+        openSuggestions();
+      } else if (commitPending()) {
+        if (onSubmit) onSubmit();
+      } else {
+        openSuggestions();
+      }
+    } else if (event.key === ",") {
+      event.preventDefault();
+      commitPending();
+      openSuggestions();
+    } else if (event.key === "Escape") {
+      if (onCancel) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      } else if (!list.classList.contains("hidden")) {
+        // Close the list, not the dialog around the field.
+        event.preventDefault();
+        event.stopPropagation();
+        closeSuggestions();
+      }
+    } else if (event.key === "Backspace" && !input.value && names.length) {
+      names = names.slice(0, -1);
+      renderChips();
+      changed();
+    }
+  });
+
+  // Suggestions follow the server: re-read the list when the field is entered.
+  root.addEventListener("focusin", (event) => {
+    if (event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) return;
+    openSuggestions();
+    void loadTags().then(() => {
+      if (chipState() !== paintedAs) renderChips();
+      if (root.contains(document.activeElement)) openSuggestions();
+    });
+  });
+
+  root.addEventListener("focusout", (event) => {
+    if (event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) return;
+    closeSuggestions();
+    if (allowCreate) commitPending();
+    if (onLeave) onLeave();
+  });
+
+  root.addEventListener("click", (event) => {
+    if (event.target === root || event.target === chipsEl) input.focus();
+  });
+
+  const field = {
+    el: root,
+    input,
+    getNames: () => names.slice(),
+    setNames(values) {
+      names = [];
+      (Array.isArray(values) ? values : []).forEach((name) => {
+        const clean = normalizeTagName(name);
+        if (clean && !has(clean)) names.push(clean);
+      });
+      input.value = "";
+      renderChips();
+    },
+    addNames(values) {
+      let any = false;
+      (Array.isArray(values) ? values : []).forEach((name) => {
+        if (!has(name) && add(name)) any = true;
+      });
+      return any;
+    },
+    commitPending,
+    focus: () => input.focus(),
+  };
+  field.setNames(initial);
+  return field;
+}
+
+// The new-task form's field. Built at load so bootstrap's preset apply finds it.
+const formTagField = document.getElementById("task-tags-field")
+  ? createTagField({ container: document.getElementById("task-tags-field") })
+  : null;
+
+// A user preset's tags, by current name; system presets carry none.
+function presetTagNames(preset) {
+  if (!preset || preset.source !== "user") return [];
+  return tagNamesForIds(preset.options && preset.options.tags);
+}
+
+// After a create the field starts over from the chosen preset's tags, the way
+// the preset filled it in the first place.
+function resetFormTags() {
+  if (!formTagField) return;
+  formTagField.setNames(presetTagNames(findPreset(selectedPresetRef)));
+}
+
+// ---- tags on cards ----
+
+function renderTaskTags(taskEl) {
+  if (!taskEl || taskEl._editingTags) return;
+  const row = taskEl.querySelector(".task-tags");
+  if (!row) return;
+  const tags = (taskEl._runtime && taskEl._runtime.tags) || [];
+  row.replaceChildren(...tags.map((tag) => buildTagChip(tag.name)));
+  row.classList.toggle("hidden", !tags.length);
+}
+
+// A card's tags changed: its runtime, and for a library card the recording the
+// list holds, or the next repaint or re-render would bring the old ones back.
+function setCardTags(card, tags) {
+  if (!card) return;
+  if (card._runtime) card._runtime.tags = tags;
+  if (card._recording) {
+    card._recording = { ...card._recording, tags };
+    const id = String(card._recording.id);
+    libraryItems = libraryItems.map((r) => (String(r.id) === id ? card._recording : r));
+  }
+  renderTaskTags(card);
+}
+
+// Task cards save through the task, library cards through their recording —
+// a detached recording has no task to go through.
+async function saveCardTags(taskEl, names) {
+  const recordingId = cardRecordingId(taskEl);
+  const url = recordingId
+    ? `/api/recordings/${encodeURIComponent(recordingId)}/tags`
+    : `/api/tasks/${encodeURIComponent(taskEl._runtime.id)}/tags`;
+  const answer = await api(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names }),
+  });
+  return tagList(answer);
+}
+
+function enterTagsEdit(taskEl) {
+  const row = taskEl.querySelector(".task-tags");
+  const host = taskEl.querySelector(".task-tags-edit");
+  if (!row || !host || !taskEl._runtime || taskEl._editingTags) return;
+  taskEl._editingTags = true;
+  // Esc tears the field down, and that must not then save on the blur it causes.
+  let closed = false;
+  let saving = false;
+  const finish = () => {
+    closed = true;
+    taskEl._editingTags = false;
+    host.classList.add("hidden");
+    host.replaceChildren();
+    renderTaskTags(taskEl);
+  };
+  const save = async () => {
+    if (closed || saving) return;
+    saving = true;
+    field.commitPending();
+    let tags;
+    try {
+      tags = await saveCardTags(taskEl, field.getNames());
+    } catch (err) {
+      // Keep the editor open so the user can retry or cancel.
+      saving = false;
+      console.error("saving tags failed", err);
+      return;
+    }
+    finish();
+    setCardTags(taskEl, tags);
+    // The same recording's card in the other list, when it is loaded.
+    const other = taskEl.dataset.cardKind === "recording"
+      ? (taskEl.dataset.sourceTaskId ? findTaskEl(taskEl.dataset.sourceTaskId) : null)
+      : findLibraryCardForTask(taskEl._runtime.id);
+    if (other && other !== taskEl) setCardTags(other, tags);
+    void loadTags();
+  };
+  const field = createTagField({
+    container: host,
+    initial: (taskEl._runtime.tags || []).map((tag) => tag.name),
+    onSubmit: () => void save(),
+    onLeave: () => void save(),
+    onCancel: () => {
+      if (!closed && !saving) finish();
+    },
+  });
+  row.classList.add("hidden");
+  host.classList.remove("hidden");
+  field.focus();
+}
+
 const taskFormError = document.getElementById("task-form-error");
 
 function showTaskFormError(message) {
@@ -4227,6 +4701,9 @@ async function createTask(event) {
   const isFile = getSourceType() === "file";
   const fileInput = document.getElementById("file-input");
   let created = null;
+  // Typed but not yet a chip still counts: the user saw it in the field.
+  if (formTagField) formTagField.commitPending();
+  const tags = formTagField ? formTagField.getNames() : [];
   try {
     if (isFile && fileInput) {
       const selected = stagedFiles.length ? stagedFiles.slice() : Array.from(fileInput.files || []);
@@ -4253,6 +4730,9 @@ async function createTask(event) {
         prompts: JSON.stringify(getSelectedPrompts()),
         delivery: JSON.stringify(selectedDeliveryRefs(deliverySelect)),
         display_name: "",
+        // An array, unlike prompts/delivery above: /api/uploads/init takes a
+        // real list; only the multipart form below needs it encoded.
+        tags,
       };
       if (selected.length > 1) {
         // A set of 2+ files is always a multi-file recording: upload it as
@@ -4275,6 +4755,7 @@ async function createTask(event) {
           fd.append("diarize", fields.diarize ? "true" : "false");
           fd.append("prompts", fields.prompts);
           fd.append("delivery", fields.delivery);
+          fd.append("tags", JSON.stringify(fields.tags));
           created = await uploadFileWithProgress(fd, file.name);
         }
       }
@@ -4287,7 +4768,8 @@ async function createTask(event) {
         diarize: form.diarize.checked,
         speaker_no_manual_stop: form.speaker_no_manual_stop.checked,
         prompts: getSelectedPrompts(),
-        delivery: selectedDeliveryRefs(deliverySelect)
+        delivery: selectedDeliveryRefs(deliverySelect),
+        tags,
       };
       created = await api("/api/tasks", {
         method: "POST",
@@ -4311,6 +4793,9 @@ async function createTask(event) {
   form.transcript.checked = true;
   resetPromptSelection();
   resetDeliverySelection();
+  resetFormTags();
+  // The create may have made new tags; suggestions should know them.
+  void loadTags();
   syncSummaryToggle();
   syncSourceType();
   if (created && created.id) {
@@ -5325,6 +5810,11 @@ async function refreshAll() {
   if (document.getElementById("view-library")?.hidden === false) {
     await loadLibrary();
   }
+  // Tags are per-user too, and the preset applied below maps its tag ids to
+  // names through this list — so it loads first, and the previous user's
+  // chips go (vts-qwcj).
+  await loadTags();
+  if (formTagField) formTagField.setNames([]);
   // After loadTasks(), matching bootstrap's order: loadPresets() applies the
   // default preset to the composer and reads the delivery data loaded above.
   await loadPresets();
@@ -7919,6 +8409,9 @@ const presetDeleteBtn = document.getElementById("preset-delete-btn");
 const presetDuplicateBtn = document.getElementById("preset-duplicate-btn");
 const presetEditDefault = document.getElementById("preset-edit-default");
 const presetDefaultPill = document.getElementById("preset-default-pill");
+const presetTagField = document.getElementById("preset-tags-field")
+  ? createTagField({ container: document.getElementById("preset-tags-field") })
+  : null;
 
 // The preset currently open in the editor. The list rows only select; every
 // action (delete, duplicate, make-default) reads this instead of closing over
@@ -8019,6 +8512,7 @@ function resetPresetForm() {
   // only when a preset was picked from the list. So the dialog opened with the
   // "Deliver to" label above an empty gap.
   renderPresetDeliverySelect([]);
+  if (presetTagField) presetTagField.setNames([]);
   setPresetFormMode("");
   renderPresetsListFromCache();
 }
@@ -8057,6 +8551,8 @@ function fillPresetForm(preset) {
       deliveryTargetsList().some((t) => t.id === d.deliver_to)
     )
   );
+  // Stored as ids; shown by current name. System presets carry none.
+  if (presetTagField) presetTagField.setNames(presetTagNames(preset));
   setPresetFormMode(preset.id);
   // Re-render so the picked row shows as active; the list is the only place
   // that tells you which preset the editor is showing.
@@ -8196,7 +8692,9 @@ async function refreshPresetsManager() {
 document.getElementById("presets-btn")?.addEventListener("click", async () => {
   if (!presetsDialog) return;
   resetPresetForm();
-  await loadPrompts();
+  // Fresh tags before any preset is shown: an id the cache does not know is
+  // dropped from the field, and saving would then drop it from the preset.
+  await Promise.all([loadPrompts(), loadTags()]);
   await refreshPresetsManager();
   if (typeof presetsDialog.showModal === "function") {
     presetsDialog.showModal();
@@ -8248,6 +8746,10 @@ presetForm?.addEventListener("submit", async (event) => {
     delivery: selectedDeliveryRefs(presetDeliverySelect),
   };
   try {
+    // Ids, not names, and always sent: PATCH replaces the options wholesale,
+    // so a body without `tags` would wipe them (vts-qwcj).
+    if (presetTagField) presetTagField.commitPending();
+    options.tags = presetTagField ? await tagIdsForNames(presetTagField.getNames()) : [];
     let resp;
     if (editId) {
       resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(editId)}`), {
@@ -8288,6 +8790,7 @@ presetForm?.addEventListener("submit", async (event) => {
   resetPresetForm();
   await refreshPresetsManager();
   await loadPresets();
+  void loadTags();
 });
 
 // The list rows only select, so creating starts from an explicit empty editor.
@@ -8464,6 +8967,7 @@ function recordingAsTask(recording) {
     capabilities: {},
     progress: {},
     stats: {},
+    tags: recording.tags || [],
   };
 }
 
@@ -8769,6 +9273,8 @@ function repaintLibraryCard(card, item) {
   card._recording = item;
   libraryItems = libraryItems.map((r) => (String(r.id) === String(item.id) ? item : r));
   applyLibraryMeta(card, item);
+  if (card._runtime) card._runtime.tags = tagList(item.tags);
+  renderTaskTags(card);
 }
 
 // Banner click: what entered the library above the top card, newest on top,

@@ -384,6 +384,25 @@ CAPABILITIES: list[Cap] = [
     },
     {
         "entity": "Recording",
+        "action": "Edit tags",
+        "label": "menu.edit_tags",
+        "endpoints": [
+            "PUT /api/tasks/{task_id}/tags",
+            "PUT /api/recordings/{recording_id}/tags",
+        ],
+        "screen": "Task and library card menu — “Edit tags” swaps the card's `.task-tags` row for the tag field",
+        "states": "replaces the recording's whole set by names; missing tags are created",
+    },
+    {
+        "entity": "Tag",
+        "action": "Suggest and create tags",
+        "label": "tags.label",
+        "endpoints": ["GET /api/tags", "POST /api/tags"],
+        "screen": "Tag field — new-task form (`#task-tags-field`), preset editor (`#preset-tags-field`), card “Edit tags”",
+        "states": "a preset stores tag ids; saving it creates missing tags first",
+    },
+    {
+        "entity": "Recording",
         "action": "Search the corpus",
         "label": "",
         "endpoints": ["GET /api/search"],

@@ -482,6 +482,13 @@
               </select>
             </label>
           </div>
+          <!-- Its own row, not a cell of .options-row: below 40rem that row is a
+               2-column grid, and a field whose chips wrap needs the full width
+               (vts-qwcj). app.js builds the field inside the host. -->
+          <div class="row tags-row">
+            <span class="tags-row-label" data-i18n="tags.label">Tags</span>
+            <div class="tag-field-host" id="task-tags-field"></div>
+          </div>
           <div class="row preset-dangling-hint" id="preset-dangling-hint" hidden>
             <span data-i18n="preset.dangling_prompts">This preset has deleted prompts</span>
             <button type="button" id="preset-resave-btn" class="btn-text" data-i18n="preset.resave"
@@ -773,6 +780,10 @@
                  have their own tabs, and one chip per prompt would grow the row
                  without bound (Victor, 2026-08-18). -->
             <div class="task-size-row hidden"></div>
+            <!-- The recording's tags, read-only; "Edit tags" in the menu swaps
+                 the row for the tag field built in .task-tags-edit (vts-qwcj). -->
+            <div class="task-tags hidden"></div>
+            <div class="task-tags-edit hidden"></div>
           </div>
           <!-- ONE row, not two: the expand chevron used to sit on a line of its
                own above the other buttons, which made every card two rows tall
@@ -870,6 +881,10 @@
                   <button class="menu-item task-edit-name-btn" type="button" data-i18n-title="action.edit_name">
                     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/></svg>
                     <span data-i18n="menu.rename">Rename</span>
+                  </button>
+                  <button class="menu-item task-edit-tags-btn" type="button" data-i18n-title="menu.edit_tags">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
+                    <span data-i18n="menu.edit_tags">Edit tags</span>
                   </button>
                   <div class="menu-sep"></div>
                   <!-- Put it away. Both remove the task from the list; delete is last
@@ -1236,6 +1251,10 @@
           <span class="prompt-select-label" data-i18n="new_task.delivery">Deliver to</span>
           <div class="prompt-select" id="preset-edit-delivery"></div>
         </div>
+        <div class="field-head">
+          <span class="field-label" data-i18n="tags.label">Tags</span>
+        </div>
+        <div class="tag-field-host" id="preset-tags-field"></div>
         <!-- "Default" is a property of the preset being edited, so it belongs in
              the editor — it used to be a per-row icon button whose meaning was
              only discoverable from a tooltip. -->
