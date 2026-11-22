@@ -218,8 +218,9 @@ def backfill_listed_at(conn: Any) -> int:
 def backfill_recording_states(conn: Any) -> int:
     """Set `state` on every recording; sync Connection, used by migration 0032.
 
-    That migration runs before recordings have content columns of their own,
-    so the content is judged from the task's old fields.
+    The state is judged from the recording's own transcript and summary
+    paths and its task's status. Prompt results come from the task's options:
+    that migration runs before recordings have a `prompt_results` column.
     """
     rows = conn.execute(text(
         "SELECT r.id, r.transcript_path, r.summary_path, r.source_task_id, "
@@ -245,3 +246,101 @@ def backfill_recording_states(conn: Any) -> int:
             {"state": state.value, "id": row["id"]},
         )
     return len(rows)
+
+
+def _without_prompt_results(value: Any) -> dict | None:
+    """A copy of a JSON object without `prompt_results`; None when it has none."""
+    if not isinstance(value, dict) or "prompt_results" not in value:
+        return None
+    return {k: v for k, v in value.items() if k != "prompt_results"}
+
+
+def strip_task_content(conn: Any) -> dict[str, int]:
+    """Upgrade half of migration 0036: drop the old copies of the content.
+
+    The recording's own columns are the content now. What goes is the copy
+    1.10.1 kept in `tasks.options["prompt_results"]` and the snapshot in
+    `recordings.meta["prompt_results"]`; every other key stays. Runs before
+    the task columns are dropped, so it also counts the tasks whose
+    transcript or summary path their recording does not have (an unfinished
+    task under 1.10.1 copied its paths only at completion): the drop loses
+    those, and the count says how many there were. Returns the counts.
+    """
+    orphaned = conn.execute(text(
+        "SELECT count(*) FROM tasks t LEFT JOIN recordings r ON r.source_task_id = t.id "
+        "WHERE (t.transcript_path IS NOT NULL AND r.transcript_path IS NULL) "
+        "OR (t.summary_path IS NOT NULL AND r.summary_path IS NULL)"
+    )).scalar_one()
+    task_options = 0
+    for row in conn.execute(text("SELECT id, options FROM tasks")).mappings().all():
+        options = _without_prompt_results(row["options"])
+        if options is None:
+            continue
+        conn.execute(
+            text("UPDATE tasks SET options = CAST(:options AS json) WHERE id = :id"),
+            {"options": json.dumps(options), "id": row["id"]},
+        )
+        task_options += 1
+    recording_meta = 0
+    for row in conn.execute(text("SELECT id, meta FROM recordings")).mappings().all():
+        meta = _without_prompt_results(row["meta"])
+        if meta is None:
+            continue
+        conn.execute(
+            text("UPDATE recordings SET meta = CAST(:meta AS json) WHERE id = :id"),
+            {"meta": json.dumps(meta), "id": row["id"]},
+        )
+        recording_meta += 1
+    return {
+        "task_options": task_options,
+        "recording_meta": recording_meta,
+        "orphaned_paths": int(orphaned),
+    }
+
+
+def refill_task_content(conn: Any) -> dict[str, int]:
+    """Downgrade half of migration 0036: give the task back what 1.10.1 reads.
+
+    1.10.1 reads a task's content from `tasks.transcript_path`,
+    `tasks.summary_path` and `options["prompt_results"]`, and on every upsert
+    copies them onto the recording. Each task with a recording therefore gets
+    exactly what that recording holds, or the first upsert would blank it.
+    Every recording gets its `meta["prompt_results"]` snapshot back, as 1.10.1
+    keeps it. Runs after the columns are re-added. A task without a recording
+    has nothing to restore and is left as it is. Returns the rows written.
+    """
+    rows = conn.execute(text(
+        "SELECT t.id, t.options, r.transcript_path, r.summary_path, r.prompt_results "
+        "FROM tasks t JOIN recordings r ON r.source_task_id = t.id"
+    )).mappings().all()
+    for row in rows:
+        options = dict(row["options"]) if isinstance(row["options"], dict) else {}
+        options["prompt_results"] = _result_list(row["prompt_results"])
+        conn.execute(
+            text(
+                "UPDATE tasks SET transcript_path = :transcript, summary_path = :summary, "
+                "options = CAST(:options AS json) WHERE id = :id"
+            ),
+            {
+                "transcript": row["transcript_path"],
+                "summary": row["summary_path"],
+                "options": json.dumps(options),
+                "id": row["id"],
+            },
+        )
+    recordings = conn.execute(
+        text("SELECT id, meta, prompt_results FROM recordings")
+    ).mappings().all()
+    for row in recordings:
+        meta = dict(row["meta"]) if isinstance(row["meta"], dict) else {}
+        meta["prompt_results"] = _result_list(row["prompt_results"])
+        conn.execute(
+            text("UPDATE recordings SET meta = CAST(:meta AS json) WHERE id = :id"),
+            {"meta": json.dumps(meta), "id": row["id"]},
+        )
+    return {"tasks": len(rows), "recordings": len(recordings)}
+
+
+def _result_list(results: Any) -> list[dict]:
+    """The recording's prompt results as 1.10.1 stores them: a list of dicts."""
+    return [dict(r) for r in results if isinstance(r, dict)] if isinstance(results, list) else []

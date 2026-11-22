@@ -85,15 +85,9 @@ async def _completed_task_with_raw(
     factory, tmp_path, adapter_name: str, *, with_recording: bool = True,
     recording_text: str = "body", duration_sec: float | None = None,
 ) -> Task:
-    """A completed task whose RECORDING holds the transcript.
-
-    The task's own transcript_path points at different text on purpose: the
-    consumer must deliver what the recording says.
-    """
+    """A completed task whose RECORDING holds the transcript."""
     p = tmp_path / "transcript.txt"
     p.write_text(recording_text, encoding="utf-8")
-    stale = tmp_path / "task-transcript.txt"
-    stale.write_text("stale task copy", encoding="utf-8")
     async with factory() as session:
         repo = Repo(session)
         u = User(id=uuid.uuid4(), username=f"u-{uuid.uuid4().hex[:8]}")
@@ -105,7 +99,6 @@ async def _completed_task_with_raw(
             source_url="http://x",
             options={},
             artifact_dir=str(tmp_path),
-            transcript_path=str(stale),
             status=TaskStatus.completed,
         )
         session.add(t)

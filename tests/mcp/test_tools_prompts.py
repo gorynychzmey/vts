@@ -16,7 +16,7 @@ from vts.mcp import tools
 
 
 async def test_get_prompt_result_system_summary(tmp_path: Path) -> None:
-    """system:summary falls back to task.summary_path via resolve_result_path."""
+    """system:summary falls back to the recording's summary_path via resolve_result_path."""
     user = FakeUser(id=str(uuid.uuid4()), username="alice")
     repo = FakeRepo()
     summary = tmp_path / "summary.md"

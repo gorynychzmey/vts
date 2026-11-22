@@ -67,7 +67,7 @@ async def _recording_with_named_voice(session, tmp_path, *, language="ru"):
         user_id=_USER, source_url="file://clip.m4a", options={"language": language},
         artifact_dir=str(tmp_path),
     )
-    task.transcript_path = str(tmp_path / "outputs" / "transcript.txt")
+    await repo.set_task_content(task, transcript_path=str(tmp_path / "outputs" / "transcript.txt"))
     person = Speaker(user_id=_USER, name="Вася")
     session.add(person)
     await session.flush()

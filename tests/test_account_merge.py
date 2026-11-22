@@ -260,8 +260,10 @@ async def test_artifact_rewrite_repoints_stored_paths_at_the_new_directory(sessi
     old = await _user(session, OLD)
     task = await _task(session, old)
     task.artifact_dir = str(tmp_path / user_hash(OLD) / str(task.id))
-    task.transcript_path = f"{task.artifact_dir}/outputs/transcript.txt"
-    task.summary_path = f"{task.artifact_dir}/outputs/summary.md"
+    await session.flush()
+    recording = await _recording(session, old, task)
+    recording.transcript_path = f"{task.artifact_dir}/outputs/transcript.txt"
+    recording.summary_path = f"{task.artifact_dir}/outputs/summary.md"
     await session.flush()
 
     await merge_accounts(
@@ -269,13 +271,15 @@ async def test_artifact_rewrite_repoints_stored_paths_at_the_new_directory(sessi
     )
 
     expected = str(tmp_path / user_hash(NEW) / str(task.id))
+    task_dir = await session.scalar(sa.select(Task.artifact_dir).where(Task.id == task.id))
     row = (
         await session.execute(
-            sa.select(Task.artifact_dir, Task.transcript_path, Task.summary_path).where(
-                Task.id == task.id
-            )
+            sa.select(
+                Recording.artifact_dir, Recording.transcript_path, Recording.summary_path
+            ).where(Recording.id == recording.id)
         )
     ).one()
+    assert task_dir == expected
     assert row.artifact_dir == expected
     assert row.transcript_path == f"{expected}/outputs/transcript.txt"
     assert row.summary_path == f"{expected}/outputs/summary.md"

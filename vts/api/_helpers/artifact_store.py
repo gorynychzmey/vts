@@ -38,11 +38,12 @@ RECORDING_OWNED_RELPATHS: tuple[str, ...] = (
 # Every file under this directory is a prompt result and is kept as well.
 RECORDING_OWNED_DIR = "summary/results"
 
-def _archive_task_artifacts(task: Task, recording: Any = None) -> None:
+def _archive_task_artifacts(task: Task, recording: Any | None) -> None:
     """Strip a task's directory down to what its recording owns.
 
     The recording's own stored paths are kept too, wherever they point inside
-    the directory.
+    the directory. `recording` is required so a caller cannot forget it; None
+    means the task has no recording, and only the fixed file set is kept.
     """
     artifact_root = Path(task.artifact_dir)
     if not artifact_root.exists():

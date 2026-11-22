@@ -23,7 +23,9 @@ ALLOWED = {
     "vts/services/recording_backfill.py",
 }
 
-_TASKISH = r"(?:task|task_row|donor|t|Task)"
+# Any name containing "task" (task_row, source_task, tasks in raw SQL), plus
+# the other names a task travels under.
+_TASKISH = r"(?:\w*task\w*|donor|candidate|t|Task)"
 _FIELD = r"(?:transcript_path|summary_path)"
 PATTERNS = [
     re.compile(rf"\b{_TASKISH}\.{_FIELD}\b"),
@@ -62,6 +64,10 @@ def test_the_patterns_catch_the_shapes_they_are_for() -> None:
         'entries = task.options["prompt_results"]',
         'pr = (donor.options or {}).get("prompt_results")',
         "select(Task.summary_path)",
+        "if candidate.transcript_path:",
+        "path = source_task.summary_path",
+        "getattr(task_obj, 'transcript_path', None)",
+        "tasks.transcript_path",
     ]
     passed = [
         "recording.transcript_path",

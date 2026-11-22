@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests._db import ensure_pgvector, make_test_engine
@@ -23,6 +23,11 @@ async def factory():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        # The backfill runs at revision 0034, when tasks still had these
+        # columns; the model no longer declares them (vts-lzad).
+        await conn.execute(text(
+            "ALTER TABLE tasks ADD COLUMN transcript_path TEXT, ADD COLUMN summary_path TEXT"
+        ))
     f = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     async with f() as s:
         s.add(User(id=_USER, username="tester"))
@@ -31,6 +36,13 @@ async def factory():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+
+
+async def _set_task_paths(s, task_id, *, transcript=None, summary=None) -> None:
+    await s.execute(
+        text("UPDATE tasks SET transcript_path = :t, summary_path = :s WHERE id = :id"),
+        {"t": transcript, "s": summary, "id": task_id},
+    )
 
 
 async def _run(factory, *, available: bool = True) -> dict[str, int]:
@@ -71,11 +83,11 @@ async def test_task_without_recording_gets_one(factory, tmp_path):
         task = Task(
             user_id=_USER, source_url="file://Team%20sync.mp3", source_title=None,
             status=TaskStatus.completed, artifact_dir=str(adir),
-            transcript_path=transcript, summary_path=None,
             options={"detected_language": "russian"},
         )
         s.add(task)
         await s.flush()
+        await _set_task_paths(s, task.id, transcript=transcript)
         s.add_all([
             AsrSegment(task_id=task.id, segment_index=0, start_sec=0.0, end_sec=12.5),
             AsrSegment(task_id=task.id, segment_index=1, start_sec=12.5, end_sec=42.0),
@@ -123,12 +135,12 @@ async def test_existing_recording_gets_files_that_still_exist(factory, tmp_path)
     async with factory() as s:
         archived = Task(
             user_id=_USER, source_url="https://example.com/a", status=TaskStatus.archived,
-            artifact_dir=str(gone), transcript_path="/t",
+            artifact_dir=str(gone),
             options={"prompts": ["user:memo", "user:todo"], "prompt_results": results},
         )
         live = Task(
             user_id=_USER, source_url="https://example.com/b", status=TaskStatus.completed,
-            artifact_dir=str(kept_dir), transcript_path="/t", options={},
+            artifact_dir=str(kept_dir), options={},
         )
         s.add_all([archived, live])
         await s.flush()
@@ -168,7 +180,7 @@ async def test_values_the_live_code_wrote_are_kept(factory, tmp_path):
     async with factory() as s:
         task = Task(
             user_id=_USER, source_url="https://example.com/c", status=TaskStatus.completed,
-            artifact_dir=str(adir), transcript_path="/t",
+            artifact_dir=str(adir),
             options={"prompt_results": [
                 {"source": "user", "id": "other", "status": "completed", "path": other},
             ]},
@@ -242,7 +254,7 @@ async def test_second_run_changes_nothing(factory, tmp_path):
     async with factory() as s:
         with_rec = Task(
             user_id=_USER, source_url="https://example.com/w", status=TaskStatus.completed,
-            artifact_dir=str(adir), transcript_path="/t", options={"prompt_results": results},
+            artifact_dir=str(adir), options={"prompt_results": results},
         )
         s.add_all([
             with_rec,
@@ -303,7 +315,7 @@ async def test_unreadable_path_counts_as_missing(factory, tmp_path, monkeypatch)
     async with factory() as s:
         s.add(Task(
             user_id=_USER, source_url="https://example.com/p", source_title="perm",
-            status=TaskStatus.completed, artifact_dir=str(adir), transcript_path="/t",
+            status=TaskStatus.completed, artifact_dir=str(adir),
             options={"prompt_results": results},
         ))
         await s.commit()
@@ -341,10 +353,12 @@ async def test_created_recording_keeps_the_task_creation_time_and_lists_there(fa
     async with factory() as s:
         task = Task(
             user_id=_USER, source_url="file://old.mp3", status=TaskStatus.completed,
-            artifact_dir=str(adir), transcript_path=transcript, options={},
+            artifact_dir=str(adir), options={},
             created_at=old,
         )
         s.add(task)
+        await s.flush()
+        await _set_task_paths(s, task.id, transcript=transcript)
         await s.commit()
 
     await _run(factory)

@@ -432,7 +432,7 @@ async def _seed_archived_task(factory, tmp_path):
         recording = await repo.upsert_recording_for_task(task)
         recording_id = recording.id
         await session.commit()
-        _archive_task_artifacts(task)
+        _archive_task_artifacts(task, recording)
     assert not (tmp_path / "media").exists(), "archiving should remove the media"
     return task_id, recording_id
 

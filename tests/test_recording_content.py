@@ -10,14 +10,12 @@ from vts.db.repo import Repo
 async def test_set_task_content_writes_the_recording_only(factory):
     async with factory() as s:
         task, rec = await _task_with_recording(s)
-        task.transcript_path = None  # the fixture's own seed; the setter must not refill it
         await Repo(s).set_task_content(
             task,
             transcript_path="/a/outputs/transcript.txt",
             summary_path="/a/summary/final.md",
             redacted_path="/a/outputs/redacted_transcript.txt",
         )
-        assert (task.transcript_path, task.summary_path) == (None, None)
         assert rec.summary_path == "/a/summary/final.md"
         assert rec.transcript_path == "/a/outputs/transcript.txt"
         assert rec.redacted_path == "/a/outputs/redacted_transcript.txt"
@@ -82,7 +80,6 @@ async def test_setters_without_recording_do_not_raise(factory):
         await repo.set_task_prompt_results(task, [{"id": "x"}])
         await repo.set_detected_language(task, "russian", 0.5)
         # Nothing to write to: the content is dropped, the runtime input kept.
-        assert task.transcript_path is None
         assert "prompt_results" not in task.options
         assert task.options["detected_language"] == "russian"
         assert await repo.recording_for_task(task.id) is None
@@ -169,7 +166,6 @@ async def test_persist_content_and_prompt_result_reach_the_recording(factory):
         assert (rec.summary_path, rec.redacted_path) == ("/a/summary/final.md", "/a/r.txt")
         assert rec.prompt_results[0]["name"] == "Memo"
         task = await s.get(Task, task_id)
-        assert task.summary_path is None
         assert "prompt_results" not in task.options
     # A task deleted mid-run: quiet no-op.
     await ctx.persist_content(uuid.uuid4(), summary_path="/x")
@@ -301,7 +297,6 @@ async def test_a_pipeline_shaped_run_leaves_the_task_content_fields_empty(factor
     async with factory() as s:
         task = await s.get(Task, task_id)
         rec = await Repo(s).recording_for_task(task_id)
-        assert (task.transcript_path, task.summary_path) == (None, None)
         assert "prompt_results" not in task.options
         assert task.options["detected_language"] == "russian"
         assert rec.transcript_path == "/a/outputs/transcript.txt"
@@ -316,7 +311,6 @@ async def test_upsert_does_not_copy_content_from_the_task(factory):
     async with factory() as s:
         task, rec = await _task_with_recording(s)
         await Repo(s).set_task_content(task, summary_path=None)
-        task.summary_path = "/stale/summary.md"
         task.options = {**task.options, "prompt_results": [{"id": "stale"}]}
         await Repo(s).upsert_recording_for_task(task)
         assert rec.summary_path is None

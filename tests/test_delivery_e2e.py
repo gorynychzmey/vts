@@ -108,7 +108,6 @@ async def test_enqueue_then_consume_delivers_with_decrypted_secret(
             source_url="http://x",
             options={"delivery": [{"deliver_to": str(target.id)}]},
             artifact_dir=str(tmp_path),
-            transcript_path=str(transcript),
             status=TaskStatus.completed,
         )
         session.add(task)
@@ -181,7 +180,6 @@ async def test_delivery_survives_the_plugin_being_absent_then_returning(
             source_url="http://x",
             options={"delivery": [{"deliver_to": str(target.id)}]},
             artifact_dir=str(tmp_path),
-            transcript_path=str(transcript),
             status=TaskStatus.completed,
         )
         session.add(task)

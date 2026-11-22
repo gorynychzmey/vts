@@ -56,10 +56,9 @@ class _FakeRepo:
         return self._segments
 
     async def get_task_by_id(self, task_id: uuid.UUID) -> SimpleNamespace:
-        return SimpleNamespace(transcript_path=None)
+        return SimpleNamespace()
 
     async def set_task_content(self, task: SimpleNamespace, **fields: object) -> None:
-        task.transcript_path = fields["transcript_path"]
         _FakeRepo.content_writes.append(fields)
 
     async def speaker_names_for_task(

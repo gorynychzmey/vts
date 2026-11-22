@@ -471,8 +471,7 @@ async def test_a_donor_whose_recording_has_no_transcript_is_not_cloned(tmp_path)
             user_id=donor_user, source_url="http://x/v", options={},
             artifact_dir=str(donor_dir),
         )
-        # An old row's own column still names the file; the recording does not.
-        donor.transcript_path = str(donor_dir / "outputs" / "transcript.txt")
+        # The file is on disk, but the recording does not name it.
         await repo.set_task_status(donor, TaskStatus.completed)
         clone = await repo.create_task(
             user_id=clone_user, source_url="http://x/v", options={},

@@ -108,8 +108,6 @@ class Task(Base):
     )
     options: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     artifact_dir: Mapped[str] = mapped_column(Text, nullable=False)
-    transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     awaiting_step: Mapped[str | None] = mapped_column(String, nullable=True)

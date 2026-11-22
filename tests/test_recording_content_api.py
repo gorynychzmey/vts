@@ -150,8 +150,8 @@ async def test_recording_entries_carry_the_resolved_blocks(authed_app, client, t
 async def test_task_routes_serve_the_recordings_content_not_the_tasks(
     authed_app, client, tmp_path
 ):
-    """Task and recording disagree on purpose: the adapter must follow the
-    recording, which is the owner of the content."""
+    """The task's options carry a stale prompt-result copy on purpose: the
+    adapter must follow the recording, which is the owner of the content."""
     _app, factory = authed_app
     from vts.db.repo import Repo
 
@@ -163,8 +163,6 @@ async def test_task_routes_serve_the_recordings_content_not_the_tasks(
     (stale / "memo.md").write_text("STALE TASK MEMO", encoding="utf-8")
     async with factory() as session:
         task = await Repo(session).get_task_by_id(task_id)
-        task.transcript_path = str(stale / "transcript.txt")
-        task.summary_path = str(stale / "summary.md")
         task.options = {
             **task.options,
             "prompt_results": [{"source": "user", "id": "p1", "path": str(stale / "memo.md")}],
@@ -403,8 +401,8 @@ def wired_redis(authed_app):
 
 
 async def _make_task_disagree(factory, task_id, tmp_path):
-    """The task keeps stale content fields; the recording holds the real ones
-    (redacted text and a memo the task lacks)."""
+    """The task's options keep a stale (empty) prompt-result list; the
+    recording holds the real content (redacted text and a memo)."""
     from vts.db.repo import Repo
 
     stale = tmp_path / "stale"
@@ -413,8 +411,6 @@ async def _make_task_disagree(factory, task_id, tmp_path):
     (stale / "summary.md").write_text("STALE SUMMARY", encoding="utf-8")
     async with factory() as session:
         task = await Repo(session).get_task_by_id(task_id)
-        task.transcript_path = str(stale / "transcript.txt")
-        task.summary_path = str(stale / "summary.md")
         task.options = {**task.options, "prompt_results": []}
         await session.commit()
     return stale
