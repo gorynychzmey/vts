@@ -302,6 +302,37 @@ A test asserts the classification is exhaustive — a tool added without an
 annotation fails the build, because a missing hint reads as "unknown" and some
 clients treat unknown as safe.
 
+## Tags
+
+Recordings carry tags. A tag belongs to one user; its name is trimmed, inner
+whitespace is collapsed to one space, it must be 1–64 characters, and names
+are compared case-insensitively ("Work", " work " and "WORK" are one tag; the
+first spelling is kept). An invalid name is a `422`.
+
+| Request | Result |
+|---------|--------|
+| `GET /api/tags` | `[{id, name, count}]` sorted by name; `count` = recordings carrying the tag (unused tags have `0`) |
+| `POST /api/tags {"name": "..."}` | `201 {id, name}`; `409 {"detail": "Tag already exists"}` if the name is taken |
+| `PATCH /api/tags/{id} {"name": "..."}` | `{id, name}`; `409` if another tag has that name (a change of case alone is allowed); `404` if not yours |
+| `DELETE /api/tags/{id}` | `{"unlinked": n}`: the tag is removed from every recording; `404` if not yours |
+| `PUT /api/recordings/{id}/tags {"names": [...]}` | Replaces the recording's tags with exactly these names, creating missing ones; returns `[{id, name}]` |
+| `PUT /api/tasks/{id}/tags {"names": [...]}` | The same, for the recording of a task |
+
+Task and recording payloads (`GET /api/tasks`, `GET /api/tasks/{id}`,
+`GET /api/recordings`, ...) carry `tags: [{id, name}]`, sorted by name.
+
+Tags can be set when the task is created: `tags: ["..."]` in the
+`POST /api/tasks` body and in `POST /api/uploads/init` (both single-file and
+multi-file); a JSON-encoded list in the `tags` form field of
+`POST /api/tasks/upload`. The names are validated before anything is created
+and applied to the recording created with the task (for chunked uploads, at
+`finalize`, which itself takes no tags).
+
+User presets store tag **ids** in `options.tags`, so renaming a tag does not
+break a preset. Ids that are not one of your existing tags are dropped when
+the preset is saved and skipped when it is read; system presets always have
+`tags: []`.
+
 ## Paginated reads of large text artifacts
 
 `/api/tasks/{id}/transcript`, `/summary`, `/redacted`, `/log` and

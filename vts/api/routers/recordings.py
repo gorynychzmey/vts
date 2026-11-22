@@ -31,6 +31,8 @@ from vts.api._helpers.recording_content import (
     serve_recording_text,
 )
 from vts.api._helpers.recordings import rename_recording
+from vts.api._helpers.serialization import load_recording_tags, tag_outs
+from vts.api._helpers.task_input import tag_names_or_422
 from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
 from vts.api.schemas import (
     RecordingListOut,
@@ -38,10 +40,12 @@ from vts.api.schemas import (
     RecordingTranscriptOut,
     SearchHitOut,
     SearchResultOut,
+    TagNamesIn,
+    TagOut,
     TranscriptEntryOut,
 )
 from vts.core.config import Settings
-from vts.db.models import Recording
+from vts.db.models import Recording, Tag
 from vts.db.repo import Repo
 from vts.services.auth import AuthenticatedUser
 from vts.services.corpus_search import search_corpus
@@ -70,7 +74,7 @@ def _listed_prompt_results(recording: Recording) -> list[dict]:
     ]
 
 
-def _serialize(recording: Recording) -> RecordingOut:
+def _serialize(recording: Recording, tags: list[Tag] | None = None) -> RecordingOut:
     """A recording as the library shows it.
 
     The four `has_*` flags are probed from disk rather than stored: archiving
@@ -97,7 +101,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         source_url=recording.source_url,
         duration_sec=recording.duration_sec,
         language=recording.language,
-        tags=[],  # filled in by the tags API (vts-qwcj)
+        tags=tag_outs(tags),
         has_transcript=bool(transcript and Path(transcript).exists()),
         state=recording.state.value,
         has_redacted=bool(redacted and redacted.exists()),
@@ -157,7 +161,10 @@ async def list_recordings(
     # Counted with the SAME filters, so the number beside the heading describes
     # the result set rather than the corpus.
     total = await repo.count_recordings(user_id, **filters)
-    return RecordingListOut(items=[_serialize(r) for r in items], total=int(total or 0))
+    tags = await repo.tags_for_recordings([r.id for r in items])
+    return RecordingListOut(
+        items=[_serialize(r, tags.get(r.id)) for r in items], total=int(total or 0),
+    )
 
 
 @router.get("/api/recordings/{recording_id}", response_model=RecordingOut)
@@ -171,7 +178,7 @@ async def get_recording(
     recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
     if recording is None:
         raise HTTPException(status_code=404, detail="Recording not found")
-    return _serialize(recording)
+    return _serialize(recording, await load_recording_tags(repo, recording))
 
 
 @router.get("/api/recordings/{recording_id}/media", include_in_schema=False)
@@ -268,7 +275,26 @@ async def rename_recording_endpoint(
         raise HTTPException(status_code=404, detail="Recording not found")
     await rename_recording(session, recording, display_name)
     await session.commit()
-    return _serialize(recording)
+    return _serialize(recording, await load_recording_tags(repo, recording))
+
+
+@router.put("/api/recordings/{recording_id}/tags", response_model=list[TagOut])
+async def set_recording_tags_endpoint(
+    recording_id: uuid.UUID,
+    payload: TagNamesIn,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> list[TagOut]:
+    """Replace the recording's tags with `names` (the full set); missing
+    tags are created. Returns the tags after the change."""
+    names = tag_names_or_422(payload.names)
+    repo = Repo(session)
+    recording = await repo.get_recording_for_user(uuid.UUID(user.id), recording_id)
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    tags = await repo.set_recording_tags(recording, names)
+    await session.commit()
+    return tag_outs(tags)
 
 
 @router.get("/api/search", response_model=SearchResultOut)

@@ -15,10 +15,11 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.orm.attributes import set_committed_value
 
-from vts.api._helpers.serialization import serialize_task
+from vts.api._helpers.serialization import load_recording_tags, serialize_task
 from vts.api.schemas import TaskOut
 from vts.db.repo import Repo
 from vts.services.redis_bus import RedisBus
+from vts.services.tags import TagNameError, dedupe_names
 from vts.services.task_progress import summary_progress_for_task
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,30 @@ def normalize_display_name(raw: str | None) -> str | None:
     if not cleaned:
         return None
     return cleaned[:_MAX_DISPLAY_NAME_CHARS]
+
+def tag_names_or_422(names: list[str] | None) -> list[str]:
+    """Normalised, deduplicated tag names, or a 422 naming the bad one.
+
+    Called before anything is created, so an invalid name leaves no task, no
+    artifact directory and no half-made tags behind (vts-qwcj).
+    """
+    try:
+        return dedupe_names(names or [])
+    except TagNameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+def tag_names_from_form(raw: str | None) -> list[str]:
+    """The `tags` form field of a multipart upload: a JSON list of names,
+    encoded like `prompts` and `delivery`."""
+    if not raw:
+        return []
+    try:
+        names = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="tags must be valid JSON") from exc
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise HTTPException(status_code=422, detail="tags must be a JSON list of strings")
+    return tag_names_or_422(names)
 
 _ALLOWED_UPLOAD_SUFFIXES: frozenset[str] = frozenset(
     {
@@ -118,7 +143,10 @@ async def _enqueue_uploaded_task(task, repo, redis, settings) -> "TaskOut":
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
     recording = await repo.recording_for_task(task.id)
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
+    return serialize_task(
+        task, queue_positions, asr_progress, summary_progress, lane_positions, recording,
+        tags=await load_recording_tags(repo, recording),
+    )
 
 _QUEUE_POS_CACHE_SUFFIX = "cache:queue_positions"
 

@@ -102,6 +102,31 @@ class PresetOptions(BaseModel):
     diarize: bool = False
     prompts: list[PromptRef] = Field(default_factory=list)
     delivery: list[DeliveryRef] = Field(default_factory=list)
+    # Tag ids, not names, so a rename follows. Only the user's existing tags
+    # survive a save or a read; system presets never carry any (vts-qwcj).
+    tags: list[str] = Field(default_factory=list)
+
+
+class TagOut(BaseModel):
+    id: UUID
+    name: str
+
+
+class TagWithCountOut(TagOut):
+    # Recordings linked to the tag, listed in the library or not.
+    count: int
+
+
+class TagNameIn(BaseModel):
+    name: str
+
+
+class TagNamesIn(BaseModel):
+    names: list[str]
+
+
+class TagDeleteOut(BaseModel):
+    unlinked: int
 
 
 class PresetOut(BaseModel):
@@ -322,6 +347,9 @@ class TaskCreateRequest(BaseModel):
     # Optional delivery destinations, by target name. Validated against the
     # caller's targets (and their adapters' availability) in the endpoint.
     delivery: list[DeliveryRef] = Field(default_factory=list)
+    # Tag names for the recording created with the task; missing ones are
+    # created (vts-qwcj).
+    tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_stage_dependencies(self) -> "TaskCreateRequest":
@@ -417,6 +445,8 @@ class TaskOut(BaseModel):
     steps: list[StepOut]
     progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
+    # The recording's tags, sorted by name (vts-qwcj).
+    tags: list[TagOut] = Field(default_factory=list)
 
     @field_serializer("created_at")
     def _ser_created_at(self, v: datetime) -> str:
@@ -447,6 +477,8 @@ class TaskCompactOut(BaseModel):
     updated_at: datetime
     progress: TaskProgressOut = Field(default_factory=TaskProgressOut)
     stats: TaskStatsOut = Field(default_factory=TaskStatsOut)
+    # The recording's tags, sorted by name (vts-qwcj).
+    tags: list[TagOut] = Field(default_factory=list)
 
     @field_serializer("created_at")
     def _ser_created_at(self, v: datetime) -> str:
@@ -495,7 +527,7 @@ class RecordingOut(BaseModel):
     source_url: str | None = None
     duration_sec: float | None = None
     language: str | None = None
-    tags: list[str] = []
+    tags: list[TagOut] = []
     has_transcript: bool = False
     # Where the recording is in its life: still being processed, finished, or
     # ended without finishing (vts-lzad).
@@ -699,6 +731,9 @@ class UploadInitRequest(BaseModel):
     # model, so the list arrives encoded (vts-j2kh).
     delivery: str | None = None
     display_name: str | None = None
+    # Tag names, applied to the recording when finalize creates the task
+    # (vts-qwcj).
+    tags: list[str] = Field(default_factory=list)
     # When present, this is a multi-file set and `filename`/`total_size` above
     # are ignored. Absent means the existing single-file flow (vts-vm0).
     files: list[UploadFileSpec] | None = None

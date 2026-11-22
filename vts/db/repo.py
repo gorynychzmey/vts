@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -2044,6 +2045,22 @@ class Repo:
                 )
             )
         return (await self.tags_for_recordings([recording.id])).get(recording.id, [])
+
+    async def own_tag_ids(self, user_id: uuid.UUID, ids: Iterable[str]) -> set[str]:
+        """Which of these ids (strings, as presets store them) are the user's
+        existing tags. Malformed ids are simply not among them."""
+        parsed: set[uuid.UUID] = set()
+        for raw in ids:
+            try:
+                parsed.add(uuid.UUID(str(raw)))
+            except ValueError:
+                continue
+        if not parsed:
+            return set()
+        rows = await self.session.scalars(
+            select(Tag.id).where(Tag.user_id == user_id, Tag.id.in_(parsed))
+        )
+        return {str(i) for i in rows}
 
     async def tags_for_recordings(
         self, recording_ids: list[uuid.UUID]

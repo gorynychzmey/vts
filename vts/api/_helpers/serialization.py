@@ -12,9 +12,9 @@ import uuid
 from pathlib import Path
 
 from vts.api._helpers.base import SUMMARY_STEP_NAMES, _find_media_file
-from vts.api.schemas import TaskCompactOut, TaskOut
+from vts.api.schemas import TagOut, TaskCompactOut, TaskOut
 from vts.core.failures import classify_failure_code
-from vts.db.models import Recording, StepStatus, Task, TaskStatus
+from vts.db.models import Recording, StepStatus, Tag, Task, TaskStatus
 from vts.services import task_status as _ts
 from vts.services.recording_artifacts import _artifact_path, recording_result_entries
 from vts.services.media import probe_duration
@@ -283,6 +283,17 @@ def _media_seconds_for_file(media_file: Path) -> int | None:
         pass  # best-effort cache; still return the freshly probed value
     return seconds
 
+def tag_outs(tags: list[Tag] | None) -> list[TagOut]:
+    """Tags as cards show them; the repo already returns them sorted by key."""
+    return [TagOut(id=t.id, name=t.name) for t in tags or []]
+
+async def load_recording_tags(repo, recording: Recording | None) -> list[Tag]:
+    """One recording's tags, for single-task responses (lists batch-load with
+    `Repo.tags_for_recordings` instead)."""
+    if recording is None:
+        return []
+    return (await repo.tags_for_recordings([recording.id])).get(recording.id, [])
+
 def serialize_task(
     task: Task,
     queue_positions: dict[uuid.UUID, int] | None = None,
@@ -290,6 +301,8 @@ def serialize_task(
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
     recording: Recording | None = None,
+    *,
+    tags: list[Tag] | None = None,
 ) -> TaskOut:
     queue: str | None = None
     queue_position: int | None = None
@@ -347,6 +360,7 @@ def serialize_task(
             "summary": {"current": summary_current, "total": summary_total},
         },
         stats=_task_stats_for_serialization(task, recording),
+        tags=tag_outs(tags),
     )
 
 def serialize_task_compact(
@@ -356,6 +370,8 @@ def serialize_task_compact(
     summary_progress: dict[uuid.UUID, tuple[int, int]] | None = None,
     lane_positions: dict[uuid.UUID, tuple[str, int]] | None = None,
     recording: Recording | None = None,
+    *,
+    tags: list[Tag] | None = None,
 ) -> "TaskCompactOut":
     """Compact serializer for list views. Drops steps/options/paths/error
     message — see TaskCompactOut docstring for the rationale."""
@@ -393,4 +409,5 @@ def serialize_task_compact(
             "summary": {"current": summary_current, "total": summary_total},
         },
         stats=_task_stats_for_serialization(task, recording),
+        tags=tag_outs(tags),
     )

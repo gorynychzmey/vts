@@ -65,6 +65,7 @@ class UploadSession:
         display_name: str | None,
         filename: str,
         created_at: str,
+        tags: list[str] | None = None,
     ) -> Path:
         d = cls._dir(artifacts_root, username, upload_id)
         media = d / "media"
@@ -82,6 +83,9 @@ class UploadSession:
             "display_name": display_name,
             "filename": filename,
             "created_at": created_at,
+            # Applied to the recording at finalize; kept apart from `options`,
+            # which becomes the task's options verbatim (vts-qwcj).
+            "tags": list(tags or []),
         }
         cls.meta_path(artifacts_root, username, upload_id).write_text(
             json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8"
@@ -145,6 +149,7 @@ class UploadSession:
         options: dict,
         display_name: str | None,
         created_at: str,
+        tags: list[str] | None = None,
     ) -> Path:
         """Stage N parts under one session. `files` is already in concat order."""
         d = cls._dir(artifacts_root, username, upload_id)
@@ -173,6 +178,7 @@ class UploadSession:
             "options": options,
             "display_name": display_name,
             "created_at": created_at,
+            "tags": list(tags or []),
         }
         cls.meta_path(artifacts_root, username, upload_id).write_text(
             json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8"

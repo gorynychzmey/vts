@@ -48,8 +48,8 @@ from vts import __version__
 from vts.api._helpers.artifact_store import _archive_task_artifacts, _reset_final_summary_artifacts, _reset_final_summary_step
 from vts.api._helpers.recording_content import recording_for_task_or_404, recording_result
 from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording, rename_recording_for_task
-from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, serialize_task, serialize_task_compact
-from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
+from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, load_recording_tags, serialize_task, serialize_task_compact, tag_outs
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name, tag_names_from_form, tag_names_or_422
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -60,6 +60,8 @@ from vts.api.schemas import (
     BatchResultOut,
     MessageOut,
     RestartSummaryRequest,
+    TagNamesIn,
+    TagOut,
     TaskCompactOut,
     TaskCreateRequest,
     TaskIdsRequest,
@@ -97,8 +99,11 @@ async def create_task(
 
     repo = Repo(session)
     effective_user_id = uuid.UUID(user.id)
+    tag_names = tag_names_or_422(request.tags)
     options = request.model_dump()
     options.pop("url", None)
+    # Tags belong to the recording, not to the task's options.
+    options.pop("tags", None)
     # Explicit submit: an unknown target or an unavailable adapter is an
     # error the caller should see now, before any work is done.
     try:
@@ -118,6 +123,8 @@ async def create_task(
         artifact_dir=str(artifact),
         task_id=task_id,
     )
+    recording = await repo.recording_for_task(task.id)
+    tags = await repo.set_recording_tags(recording, tag_names) if tag_names else []
     await session.commit()
     bus = RedisBus(redis, settings)
     await bus.notify_queued()
@@ -132,8 +139,10 @@ async def create_task(
     lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
-    recording = await repo.recording_for_task(task.id)
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
+    return serialize_task(
+        task, queue_positions, asr_progress, summary_progress, lane_positions, recording,
+        tags=tags,
+    )
 
 
 @router.get("/api/tasks/{task_id}/results/{source}/{ref}", include_in_schema=False)
@@ -161,12 +170,15 @@ async def upload_task(
     diarize: bool = Form(default=False),
     prompts: str | None = Form(default=None),
     delivery: str | None = Form(default=None),
+    # JSON list of tag names, encoded like `prompts` (vts-qwcj).
+    tags: str | None = Form(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
     redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings_dep),
 ) -> TaskOut:
     normalized_prompts = _normalize_prompts_json(prompts)
+    tag_names = tag_names_from_form(tags)
     normalized_delivery = _normalize_delivery_json(delivery)
     if normalized_prompts and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
@@ -227,6 +239,8 @@ async def upload_task(
         task_id=task_id,
         source_title=normalize_display_name(display_name),
     )
+    if tag_names:
+        await repo.set_recording_tags(await repo.recording_for_task(task.id), tag_names)
     await session.commit()
     return await _enqueue_uploaded_task(task, repo, redis, settings)
 
@@ -316,18 +330,25 @@ async def list_tasks(
     asr_progress = await repo.get_asr_progress_for_tasks(task_ids)
     summary_progress = {task.id: summary_progress_for_task(task) for task in tasks}
     recordings = await repo.recordings_for_tasks(task_ids)
+    # One query for the page's tags, keyed by recording id.
+    tags_by_recording = await repo.tags_for_recordings([r.id for r in recordings.values()])
+
+    def _tags(task: Task) -> list:
+        recording = recordings.get(task.id)
+        return tags_by_recording.get(recording.id, []) if recording else []
+
     if compact:
         return [
             serialize_task_compact(
                 task, queue_positions, asr_progress, summary_progress, lane_positions,
-                recordings.get(task.id),
+                recordings.get(task.id), tags=_tags(task),
             )
             for task in tasks
         ]
     return [
         serialize_task(
             task, queue_positions, asr_progress, summary_progress, lane_positions,
-            recordings.get(task.id),
+            recordings.get(task.id), tags=_tags(task),
         )
         for task in tasks
     ]
@@ -401,7 +422,10 @@ async def get_task(
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
     recording = await repo.recording_for_task(task.id)
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
+    return serialize_task(
+        task, queue_positions, asr_progress, summary_progress, lane_positions, recording,
+        tags=await load_recording_tags(repo, recording),
+    )
 
 
 @router.patch("/api/tasks/{task_id}", response_model=TaskOut)
@@ -427,7 +451,27 @@ async def update_task(
     asr_progress = await repo.get_asr_progress_for_tasks([task.id])
     summary_progress = {task.id: summary_progress_for_task(task)}
     recording = await repo.recording_for_task(task.id)
-    return serialize_task(task, queue_positions, asr_progress, summary_progress, lane_positions, recording)
+    return serialize_task(
+        task, queue_positions, asr_progress, summary_progress, lane_positions, recording,
+        tags=await load_recording_tags(repo, recording),
+    )
+
+
+@router.put("/api/tasks/{task_id}/tags", response_model=list[TagOut])
+async def set_task_tags(
+    task_id: uuid.UUID,
+    payload: TagNamesIn,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session_dep),
+) -> list[TagOut]:
+    """Replace the tags of the task's recording with `names`; missing tags
+    are created. Same as PUT /api/recordings/{id}/tags."""
+    names = tag_names_or_422(payload.names)
+    repo = Repo(session)
+    recording = await recording_for_task_or_404(repo, uuid.UUID(user.id), task_id)
+    tags = await repo.set_recording_tags(recording, names)
+    await session.commit()
+    return tag_outs(tags)
 
 
 @router.post("/api/tasks/{task_id}/restart_summary", response_model=MessageOut)

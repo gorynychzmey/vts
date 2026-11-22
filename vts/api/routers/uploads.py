@@ -26,8 +26,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api._helpers.base import _user_hash_dir
-from vts.api._helpers.serialization import serialize_task
-from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name
+from vts.api._helpers.serialization import load_recording_tags, serialize_task
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name, tag_names_or_422
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -75,6 +75,8 @@ async def uploads_init(
     session: AsyncSession = Depends(get_session_dep),
     settings: Settings = Depends(get_settings_dep),
 ) -> UploadInitOut:
+    # Validated now, before any bytes move; created at finalize (vts-qwcj).
+    tag_names = tag_names_or_422(payload.tags)
     if payload.files:
         if len(payload.files) > settings.upload_max_files:
             raise HTTPException(
@@ -125,6 +127,7 @@ async def uploads_init(
             user_id=user.id, upload_id=upload_id, files=spec_files, kind=kind,
             options=options, display_name=normalize_display_name(payload.display_name),
             created_at=datetime.now(tz=timezone.utc).isoformat(),
+            tags=tag_names,
         )
         return UploadInitOut(
             upload_id=str(upload_id),
@@ -168,6 +171,7 @@ async def uploads_init(
         display_name=normalize_display_name(payload.display_name),
         filename=payload.filename,
         created_at=datetime.now(tz=timezone.utc).isoformat(),
+        tags=tag_names,
     )
     return UploadInitOut(upload_id=str(upload_id), chunk_size=settings.upload_chunk_bytes)
 
@@ -399,9 +403,11 @@ async def uploads_finalize(
         lane_positions = await _get_lane_positions(redis, settings.redis_prefix)
         asr_progress = await existing_repo.get_asr_progress_for_tasks([existing.id])
         summary_progress = {existing.id: summary_progress_for_task(existing)}
+        existing_recording = await existing_repo.recording_for_task(existing.id)
         return serialize_task(
             existing, queue_positions, asr_progress, summary_progress, lane_positions,
-            await existing_repo.recording_for_task(existing.id),
+            existing_recording,
+            tags=await load_recording_tags(existing_repo, existing_recording),
         )
 
     uid, meta = _load_owned_session(settings, user, upload_id)
@@ -599,6 +605,7 @@ async def uploads_finalize(
             task_id=uid,
             source_title=meta.get("display_name"),
         )
+        await _apply_upload_tags(repo, task, meta)
         await session.commit()
         # Only now is the Task row real: safe to remove the sidecar that
         # made this session retryable up to this point (vts-vm0).
@@ -625,5 +632,14 @@ async def uploads_finalize(
         task_id=uid,
         source_title=meta.get("display_name"),
     )
+    await _apply_upload_tags(repo, task, meta)
     await session.commit()
     return await _enqueue_uploaded_task(task, repo, redis, settings)
+
+
+async def _apply_upload_tags(repo: Repo, task, meta: dict) -> None:
+    """Tag the recording created with the task, from the names validated at
+    init. A sidecar written before tags existed has none (vts-qwcj)."""
+    names = meta.get("tags") or []
+    if names:
+        await repo.set_recording_tags(await repo.recording_for_task(task.id), names)
