@@ -129,8 +129,11 @@ set of tags per task + recording (no detaching, unlike the title).
   (`POST /api/tasks`, single upload, multi-file init); finalize does not take
   tags. A tag created for an upload that is later abandoned stays as an empty
   tag — empty tags are legal.
-- **Delivery and exports do not carry tags** in this step (open question to
-  Victor below).
+- **Delivery carries tags** (Victor, 2026-11-22): `TaskMeta.tags: tuple[str, ...]`
+  — the recording's tag names at delivery time, sorted; empty when none. How
+  an adapter uses them (frontmatter, properties, labels) is the adapter's
+  business. Adding an optional field is additive → `CONTRACT_VERSION` minor
+  bump (1.3 → 1.4), per the contract rule in `vts/delivery/contract.py`.
 
 ## Non-goals
 
