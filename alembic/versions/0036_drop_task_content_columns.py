@@ -1,6 +1,7 @@
 """drop the task's content columns; the recording holds the content (vts-lzad)
 
-Upgrade drops `tasks.transcript_path` and `tasks.summary_path` and strips
+Upgrade first copies onto each recording whatever content it lacks from its
+task, then drops `tasks.transcript_path` and `tasks.summary_path` and strips
 `prompt_results` from every `tasks.options` and `recordings.meta`. Nothing in
 the application reads them any more: the recording's own columns are the
 content.
@@ -29,9 +30,11 @@ def upgrade() -> None:
     op.drop_column("tasks", "transcript_path")
     op.drop_column("tasks", "summary_path")
     print(
-        f"task content: prompt_results stripped from {counts['task_options']} tasks "
+        f"task content: copied paths to {counts['copied_paths']} recordings and "
+        f"prompt results to {counts['copied_prompt_results']}; "
+        f"prompt_results stripped from {counts['task_options']} tasks "
         f"and {counts['recording_meta']} recordings; "
-        f"{counts['orphaned_paths']} tasks had a path their recording lacks"
+        f"{counts['orphaned_paths']} tasks without a recording had a path"
     )
 
 

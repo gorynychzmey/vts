@@ -255,17 +255,66 @@ def _without_prompt_results(value: Any) -> dict | None:
     return {k: v for k, v in value.items() if k != "prompt_results"}
 
 
+def _copy_to_recordings(conn: Any) -> tuple[int, int]:
+    """Copy a task's content onto its recording where the recording has none.
+
+    A recording that gains a transcript this way is listed at its creation
+    time, as `backfill_listed_at` lists the ones that had text before
+    `listed_at` existed. Returns (recordings given a path, recordings given
+    prompt results).
+    """
+    rows = conn.execute(text(
+        "SELECT r.id, r.transcript_path AS r_transcript, r.summary_path AS r_summary, "
+        "r.prompt_results AS r_results, t.transcript_path AS t_transcript, "
+        "t.summary_path AS t_summary, t.options AS t_options "
+        "FROM recordings r JOIN tasks t ON t.id = r.source_task_id"
+    )).mappings().all()
+    paths = results = 0
+    for row in rows:
+        transcript = row["r_transcript"] or row["t_transcript"]
+        summary = row["r_summary"] or row["t_summary"]
+        if (transcript, summary) != (row["r_transcript"], row["r_summary"]):
+            conn.execute(
+                text(
+                    "UPDATE recordings SET transcript_path = CAST(:transcript AS text), "
+                    "summary_path = :summary, listed_at = CASE "
+                    "WHEN CAST(:transcript AS text) IS NOT NULL "
+                    "THEN COALESCE(listed_at, created_at) ELSE listed_at END WHERE id = :id"
+                ),
+                {"transcript": transcript, "summary": summary, "id": row["id"]},
+            )
+            paths += 1
+        if not row["r_results"]:
+            options = row["t_options"] if isinstance(row["t_options"], dict) else {}
+            entries = _result_list(options.get("prompt_results"))
+            if entries:
+                # A whole new value, never an in-place change of the old one.
+                conn.execute(
+                    text(
+                        "UPDATE recordings SET prompt_results = CAST(:results AS json) "
+                        "WHERE id = :id"
+                    ),
+                    {"results": json.dumps(entries), "id": row["id"]},
+                )
+                results += 1
+    return paths, results
+
+
 def strip_task_content(conn: Any) -> dict[str, int]:
     """Upgrade half of migration 0036: drop the old copies of the content.
 
     The recording's own columns are the content now. What goes is the copy
     1.10.1 kept in `tasks.options["prompt_results"]` and the snapshot in
-    `recordings.meta["prompt_results"]`; every other key stays. Runs before
-    the task columns are dropped, so it also counts the tasks whose
-    transcript or summary path their recording does not have (an unfinished
-    task under 1.10.1 copied its paths only at completion): the drop loses
-    those, and the count says how many there were. Returns the counts.
+    `recordings.meta["prompt_results"]`; every other key stays.
+
+    Runs before the task columns are dropped. An unfinished task under 1.10.1
+    held its paths and prompt results on the task only (the completion upsert
+    copies them), so first whatever the recording lacks is copied onto it;
+    what the recording already has wins. A task without a recording has
+    nowhere to go: the drop loses its paths, and `orphaned_paths` says how
+    many there were. Returns the counts.
     """
+    copied_paths, copied_results = _copy_to_recordings(conn)
     orphaned = conn.execute(text(
         "SELECT count(*) FROM tasks t LEFT JOIN recordings r ON r.source_task_id = t.id "
         "WHERE (t.transcript_path IS NOT NULL AND r.transcript_path IS NULL) "
@@ -292,6 +341,8 @@ def strip_task_content(conn: Any) -> dict[str, int]:
         )
         recording_meta += 1
     return {
+        "copied_paths": copied_paths,
+        "copied_prompt_results": copied_results,
         "task_options": task_options,
         "recording_meta": recording_meta,
         "orphaned_paths": int(orphaned),

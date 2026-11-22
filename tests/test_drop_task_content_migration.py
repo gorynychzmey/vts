@@ -144,23 +144,72 @@ async def test_upgrade_strips_the_old_copies_and_keeps_everything_else(engine):
     # The recording's own column is the content now; it is not touched.
     assert recs[ids["rec"]]["prompt_results"] == _RESULTS
     assert recs[ids["rec"]]["updated_at"] == before[ids["rec"]]["updated_at"]
-    assert counts == {"task_options": 1, "recording_meta": 2, "orphaned_paths": 0}
+    assert counts == {
+        "copied_paths": 0, "copied_prompt_results": 0,
+        "task_options": 1, "recording_meta": 2, "orphaned_paths": 0,
+    }
 
 
 @pytest.mark.asyncio
-async def test_upgrade_counts_task_paths_the_recording_lacks(engine):
+async def test_upgrade_copies_what_the_recording_lacks_before_the_drop(engine):
+    """An unfinished task under 1.10.1 held its paths and prompt results on the
+    task only (the completion upsert copies them). The upgrade moves them to
+    the recording instead of dropping them; what the recording already has
+    wins."""
     ids = await _seed(engine)
+    memo = [dict(_RESULTS[0])]
+    f = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with f() as s:
+        # A bare recording for the lonely task: no paths, no results.
+        bare = Recording(user_id=_USER, source_task_id=ids["lonely"], artifact_dir="/b")
+        # A task with a path and no recording at all: nothing to copy to.
+        homeless = Task(
+            user_id=_USER, source_url="https://example.com/homeless",
+            status=TaskStatus.running, artifact_dir="/h", options={},
+        )
+        s.add_all([bare, homeless])
+        await s.commit()
+        bare_id, homeless_id = bare.id, homeless.id
     async with engine.begin() as conn:
-        # Unfinished under 1.10.1: the task has a transcript, the completion
-        # upsert that copies it never ran.
         await conn.execute(
-            text("UPDATE tasks SET transcript_path = '/b/outputs/transcript.txt' WHERE id = :id"),
-            {"id": ids["lonely"]},
+            text(
+                "UPDATE tasks SET transcript_path = '/b/outputs/transcript.txt', "
+                "summary_path = '/b/outputs/summary.md', options = CAST(:o AS json) "
+                "WHERE id = :id"
+            ),
+            {"o": json.dumps({"language": "de", "prompt_results": memo}), "id": ids["lonely"]},
+        )
+        await conn.execute(
+            text("UPDATE tasks SET transcript_path = '/h/t.txt' WHERE id = :id"),
+            {"id": homeless_id},
+        )
+        # The linked task disagrees with its recording; the recording wins.
+        await conn.execute(
+            text("UPDATE tasks SET summary_path = '/a/old.md' WHERE id = :id"),
+            {"id": ids["linked"]},
         )
 
     counts = await _run(engine, strip_task_content)
 
-    assert counts["orphaned_paths"] == 1
+    async with engine.connect() as conn:
+        rows = {
+            r["id"]: dict(r) for r in (await conn.execute(text(
+                "SELECT id, transcript_path, summary_path, prompt_results, listed_at, "
+                "created_at FROM recordings"
+            ))).mappings().all()
+        }
+    bare_row = rows[bare_id]
+    assert bare_row["transcript_path"] == "/b/outputs/transcript.txt"
+    assert bare_row["summary_path"] == "/b/outputs/summary.md"
+    assert bare_row["prompt_results"] == memo
+    # It has text now, so it is listed, as backfill_listed_at would list it.
+    assert bare_row["listed_at"] == bare_row["created_at"]
+    assert rows[ids["rec"]]["summary_path"] == "/a/outputs/summary.md"
+    assert rows[ids["rec"]]["prompt_results"] == _RESULTS
+    assert counts == {
+        "copied_paths": 1, "copied_prompt_results": 1,
+        "task_options": 2, "recording_meta": 2, "orphaned_paths": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -226,6 +275,7 @@ async def test_both_directions_are_safe_to_repeat(engine):
     ids = await _seed(engine)
     await _run(engine, strip_task_content)
     assert await _run(engine, strip_task_content) == {
+        "copied_paths": 0, "copied_prompt_results": 0,
         "task_options": 0, "recording_meta": 0, "orphaned_paths": 0,
     }
     await _run(engine, refill_task_content)
