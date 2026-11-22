@@ -464,8 +464,11 @@ async def restart_summary_task(
             return MessageOut(status=status)
         else:
             _reset_final_summary_step(task)
-            downgrade_system_summary_entry(task)
-            await repo.mirror_prompt_results(task)
+            recording = await repo.recording_for_task(task.id)
+            if recording is not None:
+                await repo.set_task_prompt_results(
+                    task, downgrade_system_summary_entry(recording.prompt_results)
+                )
             artifact_resets.append(asyncio.to_thread(_reset_final_summary_artifacts, task))
     else:
         if not can_restart_summary_task(task):
@@ -659,7 +662,9 @@ async def archive_tasks(
         if not _ts.can_archive(task.status):
             results[tid] = f"cannot_archive:{task.status.value}"
             continue
-        await asyncio.to_thread(_archive_task_artifacts, task)
+        await asyncio.to_thread(
+            _archive_task_artifacts, task, await repo.recording_for_task(task.id)
+        )
         await repo.set_task_status(task, TaskStatus.archived)
         results[tid] = "archived"
     await session.commit()

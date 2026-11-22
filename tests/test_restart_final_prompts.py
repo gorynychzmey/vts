@@ -25,6 +25,17 @@ class _FakeRedis:
         return 1 if self.store.pop(key, None) is not None else 0
 
 
+async def _seed_recording(s, task, summary_path, results):
+    """The recording holds the task's content (vts-lzad)."""
+    from vts.db.repo import Repo
+
+    await s.flush()
+    repo = Repo(s)
+    await repo.upsert_recording_for_task(task)
+    await repo.set_task_content(task, summary_path=summary_path)
+    await repo.set_task_prompt_results(task, results)
+
+
 def test_prompts_allowed_with_final_only():
     req = RestartSummaryRequest(mode="final_only",
                                 prompts=[PromptRef(source="system", id="summary")])
@@ -63,13 +74,12 @@ async def test_restart_final_with_new_prompts_rebuilds_tail(client, authed_app, 
         (art / "summary" / "final.md").write_text("old")
         task = Task(id=uuid.uuid4(), user_id=uid, source_url="x",
                     artifact_dir=str(art), status=TaskStatus.completed,
-                    summary_path=str(art/"summary"/"final.md"),
                     options={"prompts": [{"source":"system","id":"summary"},
-                                         {"source":"user","id":"a"}],
-                             "prompt_results": [
-                                {"source":"system","id":"summary","name":"S","path":str(art/"summary"/"final.md"),"status":"completed"},
-                                {"source":"user","id":"a","name":"A","path":str(art/"summary"/"results"/"user__a.md"),"status":"completed"}]})
+                                         {"source":"user","id":"a"}]})
         s.add(task)
+        await _seed_recording(s, task, str(art/"summary"/"final.md"), [
+            {"source":"system","id":"summary","name":"S","path":str(art/"summary"/"final.md"),"status":"completed"},
+            {"source":"user","id":"a","name":"A","path":str(art/"summary"/"results"/"user__a.md"),"status":"completed"}])
         for name in ["download","extract_audio","trim_initial_silence","segment_audio",
                      "detect_language","transcribe_segments","merge_transcript",
                      "prepare_llama_model","prepare_summary_chunks","summarize_windows",
@@ -96,8 +106,9 @@ async def test_restart_final_with_new_prompts_rebuilds_tail(client, authed_app, 
         assert step_status[f"finalize:user:{pb_id}"] == StepStatus.pending  # added
         assert step_status["summarize_final"] == StepStatus.pending         # reset
         assert step_status["summarize_windows"] == StepStatus.completed     # head untouched
-        assert t.summary_path is None
-        assert t.options["prompt_results"] == []
+        rec = await Repo(s).recording_for_task(t.id)
+        assert rec.summary_path is None
+        assert rec.prompt_results == []
 
 
 @pytest.mark.asyncio
@@ -148,17 +159,14 @@ async def test_restart_downgrades_stale_summary_result_entry(
         (results_dir / "user__a.json").write_text('{"raw": "old memo"}')
         task = Task(id=uuid.uuid4(), user_id=uid, source_url="x",
                     artifact_dir=str(art), status=TaskStatus.completed,
-                    summary_path=str(art / "summary" / "final.md"),
                     options={"prompts": [{"source": "system", "id": "summary"},
-                                         {"source": "user", "id": "a"}],
-                             "prompt_results": [
-                                {"source": "system", "id": "summary", "name": "S",
-                                 "path": str(art / "summary" / "final.md"),
-                                 "status": "completed"},
-                                {"source": "user", "id": "a", "name": "A",
-                                 "path": str(results_dir / "user__a.md"),
-                                 "status": "completed"}]})
+                                         {"source": "user", "id": "a"}]})
         s.add(task)
+        await _seed_recording(s, task, str(art / "summary" / "final.md"), [
+            {"source": "system", "id": "summary", "name": "S",
+             "path": str(art / "summary" / "final.md"), "status": "completed"},
+            {"source": "user", "id": "a", "name": "A",
+             "path": str(results_dir / "user__a.md"), "status": "completed"}])
         for name in ["download", "merge_transcript", "summarize_windows",
                      "summarize_final", "finalize:user:a"]:
             s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
@@ -172,10 +180,11 @@ async def test_restart_downgrades_stale_summary_result_entry(
     async with factory() as s:
         from vts.db.repo import Repo
         t = await Repo(s).get_task_by_id(uuid.UUID(task_id))
-        by_ref = {(e["source"], e["id"]): e for e in t.options["prompt_results"]}
+        rec = await Repo(s).recording_for_task(t.id)
+        by_ref = {(e["source"], e["id"]): e for e in rec.prompt_results}
         assert by_ref[("system", "summary")]["status"] == "pending", \
             f"stale system:summary entry must be downgraded, got {by_ref}"
-        assert t.summary_path is None
+        assert rec.summary_path is None
         step_status = {st.name: st.status for st in t.steps}
         if mode == "full":
             # processed transcript is regenerated -> user results are stale
@@ -215,13 +224,12 @@ async def test_restart_summary_clears_packed_notes_only_on_full(
         task = Task(
             id=uuid.uuid4(), user_id=uid, source_url="x", artifact_dir=str(art),
             status=TaskStatus.completed,
-            summary_path=str(art / "summary" / "final.md"),
-            options={"prompts": [{"source": "system", "id": "summary"}],
-                     "prompt_results": [
-                         {"source": "system", "id": "summary", "name": "S",
-                          "path": str(art / "summary" / "final.md"), "status": "completed"}]},
+            options={"prompts": [{"source": "system", "id": "summary"}]},
         )
         s.add(task)
+        await _seed_recording(s, task, str(art / "summary" / "final.md"), [
+            {"source": "system", "id": "summary", "name": "S",
+             "path": str(art / "summary" / "final.md"), "status": "completed"}])
         for name in ["download", "merge_transcript", "summarize_windows",
                      "pack_window_notes", "summarize_final"]:
             s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
@@ -240,10 +248,10 @@ async def test_restart_summary_clears_packed_notes_only_on_full(
 @pytest.mark.asyncio
 async def test_two_finalize_results_both_persist(authed_app, tmp_path):
     """Regression (vts-jal): a task that finalizes two prompts (system summary +
-    one user prompt) must end with BOTH entries in options.prompt_results.
+    one user prompt) must end with BOTH entries in the recording's index.
 
     Mirrors the worker: each finalize step persists its result via its own
-    session (upsert_result_entry over a shallow dict(task.options) +
+    session (upsert_result_entry over the loaded list +
     set_task_prompt_results). The earlier in-place list mutation caused the
     second write to be silently dropped on commit, leaving one result and a
     hidden results dropdown.
@@ -260,16 +268,18 @@ async def test_two_finalize_results_both_persist(authed_app, tmp_path):
                     options={"prompts": [{"source": "system", "id": "summary"},
                                          {"source": "user", "id": "u1"}]})
         s.add(task)
+        await s.flush()
+        await Repo(s).upsert_recording_for_task(task)
         await s.commit()
         tid = task.id
 
     async def persist(source, ref_id, name):
-        # Exactly what TaskProcessor._persist_prompt_result does.
+        # Exactly what PipelineContext.persist_prompt_result does.
         async with factory() as s:
             repo = Repo(s)
             t = await repo.get_task_by_id(tid)
-            options = dict(t.options or {})
-            entries = upsert_result_entry(options, source, ref_id, name, "/p", "completed")
+            rec = await repo.recording_for_task(tid)
+            entries = upsert_result_entry(rec.prompt_results, source, ref_id, name, "/p", "completed")
             await repo.set_task_prompt_results(t, entries)
             await s.commit()
 
@@ -277,8 +287,7 @@ async def test_two_finalize_results_both_persist(authed_app, tmp_path):
     await persist("user", "u1", "My prompt")
 
     async with factory() as s:
-        t = await Repo(s).get_task_by_id(tid)
-        results = t.options.get("prompt_results", [])
+        results = (await Repo(s).recording_for_task(tid)).prompt_results
         assert {(e["source"], e["id"]) for e in results} == {
             ("system", "summary"), ("user", "u1")
         }, f"both finalize results must persist, got {results}"

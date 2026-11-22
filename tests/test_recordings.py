@@ -53,7 +53,7 @@ async def _task_with_recording(session, artifact_dir="/tmp/rec"):
     )
     task.source_title = "Team sync"
     # A recording without text is not listed (vts-lzad).
-    task.transcript_path = f"{artifact_dir}/transcript.txt"
+    await repo.set_task_content(task, transcript_path=f"{artifact_dir}/transcript.txt")
     recording = await repo.upsert_recording_for_task(task)
     await session.commit()
     return task, recording
@@ -93,7 +93,7 @@ async def test_re_running_a_task_updates_its_recording_rather_than_adding_one(fa
         task, first = await _task_with_recording(session)
         repo = Repo(session)
         task.source_title = "Team sync (renamed)"
-        task.transcript_path = "/tmp/rec/outputs/transcript.txt"
+        await repo.set_task_content(task, transcript_path="/tmp/rec/outputs/transcript.txt")
         second = await repo.upsert_recording_for_task(task)
         await session.commit()
 
@@ -173,7 +173,7 @@ async def test_listing_recordings_is_scoped_to_the_user(factory):
             user_id=other, source_url="https://example.com/other",
             options={}, artifact_dir="/tmp/other",
         )
-        foreign.transcript_path = "/tmp/other/transcript.txt"
+        await repo.set_task_content(foreign, transcript_path="/tmp/other/transcript.txt")
         await repo.upsert_recording_for_task(foreign)
         await session.commit()
 
@@ -253,7 +253,7 @@ async def test_library_lists_the_users_recordings(authed_app, client, tmp_path):
             options={"language": "ru"}, artifact_dir=str(tmp_path),
         )
         task.source_title = "Team sync"
-        task.transcript_path = str(transcript)
+        await repo.set_task_content(task, transcript_path=str(transcript))
         await repo.add_asr_segment(
             task_id=task.id, segment_index=0, start_sec=0.0, end_sec=42.5,
             text="hello", raw_json={},
@@ -315,7 +315,7 @@ async def test_a_recording_survives_its_task_in_the_library(authed_app, client, 
             options={}, artifact_dir=str(tmp_path),
         )
         task.source_title = "Kept"
-        task.transcript_path = str(tmp_path / "transcript.txt")
+        await repo.set_task_content(task, transcript_path=str(tmp_path / "transcript.txt"))
         await repo.upsert_recording_for_task(task)
         await session.commit()
         await session.delete(task)
@@ -683,8 +683,7 @@ async def test_a_recording_records_which_artifacts_it_has(factory, tmp_path):
       * "media deleted" showed on every row, because absent media was read as
         deleted media rather than as a recording that simply has none.
 
-    The list of prompt results comes from the TASK's options, which a recording
-    does not carry — so it is snapshotted when the recording is written.
+    The prompt results are the recording's own index (vts-lzad).
     """
     async with factory() as session:
         repo = Repo(session)
@@ -695,18 +694,21 @@ async def test_a_recording_records_which_artifacts_it_has(factory, tmp_path):
         (outputs / "summary.md").write_text("# sum", encoding="utf-8")
 
         task = await repo.create_task(
-            user_id=_USER, source_url="file://a.m4a",
-            options={"prompt_results": [
-                {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
-            ]},
+            user_id=_USER, source_url="file://a.m4a", options={},
             artifact_dir=str(tmp_path),
         )
-        task.transcript_path = str(outputs / "transcript.txt")
-        task.summary_path = str(outputs / "summary.md")
+        await repo.set_task_prompt_results(task, [
+            {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
+        ])
+        await repo.set_task_content(
+            task,
+            transcript_path=str(outputs / "transcript.txt"),
+            summary_path=str(outputs / "summary.md"),
+        )
         recording = await repo.upsert_recording_for_task(task)
         await session.commit()
 
-        results = recording.meta.get("prompt_results") or []
+        results = recording.prompt_results
         assert [r["name"] for r in results] == ["Memo"], (
             "the recording did not remember its prompt results"
         )
@@ -714,16 +716,16 @@ async def test_a_recording_records_which_artifacts_it_has(factory, tmp_path):
 
 @pytest.mark.asyncio
 async def test_prompt_results_survive_the_task(factory, tmp_path):
-    # The snapshot is the point: options belong to the task, and the task can go.
+    # The results are the recording's, and the task can go.
     async with factory() as session:
         repo = Repo(session)
         task = await repo.create_task(
-            user_id=_USER, source_url="file://a.m4a",
-            options={"prompt_results": [
-                {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
-            ]},
+            user_id=_USER, source_url="file://a.m4a", options={},
             artifact_dir=str(tmp_path),
         )
+        await repo.set_task_prompt_results(task, [
+            {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
+        ])
         recording = await repo.upsert_recording_for_task(task)
         await session.commit()
         rec_id = recording.id
@@ -733,27 +735,4 @@ async def test_prompt_results_survive_the_task(factory, tmp_path):
 
     async with factory() as session:
         stored = await session.get(Recording, rec_id)
-        assert [r["name"] for r in stored.meta.get("prompt_results", [])] == ["Memo"]
-
-
-@pytest.mark.asyncio
-async def test_a_rerun_refreshes_the_snapshot(factory, tmp_path):
-    # A second prompt run must show up; a stale snapshot would hide a tab.
-    async with factory() as session:
-        repo = Repo(session)
-        task = await repo.create_task(
-            user_id=_USER, source_url="file://a.m4a",
-            options={"prompt_results": [{"source": "user", "id": "u1", "name": "Memo",
-                                         "status": "completed"}]},
-            artifact_dir=str(tmp_path),
-        )
-        await repo.upsert_recording_for_task(task)
-        await session.commit()
-
-        task.options = {**task.options, "prompt_results": [
-            {"source": "user", "id": "u1", "name": "Memo", "status": "completed"},
-            {"source": "user", "id": "u2", "name": "Действия", "status": "completed"},
-        ]}
-        again = await repo.upsert_recording_for_task(task)
-        await session.commit()
-        assert [r["name"] for r in again.meta["prompt_results"]] == ["Memo", "Действия"]
+        assert [r["name"] for r in stored.prompt_results] == ["Memo"]

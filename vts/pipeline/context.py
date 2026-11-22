@@ -161,9 +161,11 @@ class PipelineContext:
             task = await repo.get_task_by_id(task_id)
             if task is None:
                 return
-            options = dict(task.options or {})
+            recording = await repo.recording_for_task(task_id)
+            if recording is None:
+                return
             entries = upsert_result_entry(
-                options, source, id, name, path, status="completed"
+                recording.prompt_results, source, id, name, path, status="completed"
             )
             await repo.set_task_prompt_results(task, entries)
             await session.commit()
@@ -220,7 +222,7 @@ class PipelineContext:
             await session.commit()
 
     async def persist_content(self, task_id: uuid.UUID, **fields: Any) -> None:
-        """Write content paths (transcript/summary/redacted) to recording and task.
+        """Write content paths (transcript/summary/redacted) to the recording.
 
         ``fields`` are the keyword arguments of ``Repo.set_task_content``.
         A task deleted mid-run is a quiet no-op (vts-lzad).

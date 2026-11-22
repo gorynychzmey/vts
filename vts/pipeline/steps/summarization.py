@@ -1273,7 +1273,8 @@ class FinalizePromptStep(Step):
                 if task is None:
                     raise RuntimeError("task not found during final summary restore")
                 summary_path = str(summary_md)
-                if task.summary_path != summary_path:
+                recording = await repo.recording_for_task(task.id)
+                if recording is not None and recording.summary_path != summary_path:
                     await repo.set_task_content(task, summary_path=summary_path)
                     await session.commit()
         else:

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from vts.db.models import Step, StepStatus, Task, TaskStatus
+from vts.db.repo import Repo
 
 
 class _FakeRedis:
@@ -65,10 +66,13 @@ async def _seed_task(factory, tmp_path: Path, status: TaskStatus) -> uuid.UUID:
             source_url="x",
             artifact_dir=str(art),
             status=status,
-            summary_path=str(art / "summary" / "final.md"),
             options={"prompts": [{"source": "system", "id": "summary"}]},
         )
         s.add(task)
+        await s.flush()
+        repo = Repo(s)
+        await repo.upsert_recording_for_task(task)
+        await repo.set_task_content(task, summary_path=str(art / "summary" / "final.md"))
         for name in ("download", "merge_transcript", "summarize_windows", "summarize_final"):
             s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
         await s.commit()
@@ -105,7 +109,7 @@ async def test_restart_of_a_paused_task_is_done_now_not_deferred(
     async with factory() as s:
         row = await s.get(Task, task_id)
         assert row.status == TaskStatus.queued
-        assert row.summary_path is None
+        assert (await Repo(s).recording_for_task(task_id)).summary_path is None
 
     # And it is genuinely runnable: no flag is left behind for `admit` to trip on.
     from vts.core.config import Settings

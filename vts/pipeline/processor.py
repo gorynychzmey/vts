@@ -704,6 +704,12 @@ class TaskProcessor:
 
         donor_dir = Path(donor.artifact_dir)
         task_dir = Path(task.artifact_dir)
+        # The donor's content lives on its recording. Without one (or without
+        # text on it) there is nothing to clone: raising sends the task down
+        # the normal pipeline (vts-lzad).
+        donor_recording = await repo.recording_for_task(donor.id)
+        if donor_recording is None or not donor_recording.transcript_path:
+            raise RuntimeError(f"donor {donor.id} has no recording with a transcript")
 
         logger.info(
             "cloning from donor task %s (user %s) -> task %s (user %s)",
@@ -733,8 +739,8 @@ class TaskProcessor:
         redacted = task_dir / "outputs" / "redacted_transcript.txt"
         await repo.set_task_content(
             task,
-            transcript_path=_remap(donor.transcript_path),
-            summary_path=_remap(donor.summary_path),
+            transcript_path=_remap(donor_recording.transcript_path),
+            summary_path=_remap(donor_recording.summary_path),
             redacted_path=str(redacted) if redacted.exists() else None,
         )
 
@@ -744,7 +750,7 @@ class TaskProcessor:
             (ref["source"], ref["id"]) for ref in selected_prompt_refs(task.options or {})
         }
         kept: list[dict] = []
-        for entry in (donor.options or {}).get("prompt_results") or []:
+        for entry in donor_recording.prompt_results or []:
             if (entry.get("source"), entry.get("id")) not in requested:
                 continue
             new_path = _remap(entry.get("path"))
@@ -770,7 +776,7 @@ class TaskProcessor:
         await repo.clone_asr_segments(donor.id, task.id)
 
         # The recording's derived fields (title, duration from the cloned
-        # segments, language, prompt-result snapshot). reindex_task would do
+        # segments, language). reindex_task would do
         # this too, but it returns early when embeddings are off (vts-lzad).
         await repo.upsert_recording_for_task(task)
 

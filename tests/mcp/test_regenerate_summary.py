@@ -91,17 +91,17 @@ async def _seed(factory, tmp_path, *, status=TaskStatus.completed, detach=False)
         art = tmp_path / "task"
         (art / "summary").mkdir(parents=True)
         (art / "summary" / "final.md").write_text("old summary")
+        results = [
+            {"source": "system", "id": "summary", "name": "S",
+             "path": str(art / "summary" / "final.md"), "status": "completed"},
+            {"source": "user", "id": "a", "name": "A",
+             "path": str(art / "summary" / "results" / "user__a.md"), "status": "completed"},
+        ]
         task = Task(
             id=uuid.uuid4(), user_id=_USER, source_url="x", artifact_dir=str(art),
-            status=status, summary_path=str(art / "summary" / "final.md"),
+            status=status,
             options={
                 "prompts": [{"source": "system", "id": "summary"}, {"source": "user", "id": "a"}],
-                "prompt_results": [
-                    {"source": "system", "id": "summary", "name": "S",
-                     "path": str(art / "summary" / "final.md"), "status": "completed"},
-                    {"source": "user", "id": "a", "name": "A",
-                     "path": str(art / "summary" / "results" / "user__a.md"), "status": "completed"},
-                ],
             },
         )
         s.add(task)
@@ -109,6 +109,9 @@ async def _seed(factory, tmp_path, *, status=TaskStatus.completed, detach=False)
             s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
         await s.flush()
         recording = await Repo(s).upsert_recording_for_task(task)
+        # The content lives on the recording (vts-lzad).
+        await Repo(s).set_task_content(task, summary_path=str(art / "summary" / "final.md"))
+        await Repo(s).set_task_prompt_results(task, results)
         if detach:
             recording.source_task_id = None
         await s.commit()
@@ -130,8 +133,9 @@ async def test_regenerate_reruns_every_prompt_with_the_new_set(factory, client, 
         assert task.options["prompts"] == [{"source": "system", "id": "summary"},
                                            {"source": "user", "id": str(pb)}]
         # All previous results are gone, as in the web UI's restart.
-        assert not task.options.get("prompt_results")
-        assert task.summary_path is None
+        recording = await Repo(s).recording_for_task(task_id)
+        assert recording.prompt_results == []
+        assert recording.summary_path is None
         steps = {st.name: st.status for st in task.steps}
         assert "finalize:user:a" not in steps
         assert steps["summarize_final"] == StepStatus.pending
@@ -161,7 +165,7 @@ async def test_a_running_task_is_refused_and_left_alone(factory, client, tmp_pat
     async with factory() as s:
         task = await Repo(s).get_task_by_id(task_id)
         assert task.status == TaskStatus.running
-        assert len(task.options["prompt_results"]) == 2
+        assert len((await Repo(s).recording_for_task(task_id)).prompt_results) == 2
 
 
 @pytest.mark.parametrize("prompts, fragment", [
@@ -181,7 +185,7 @@ async def test_bad_prompt_sets_change_nothing(factory, client, tmp_path, prompts
     async with factory() as s:
         task = await Repo(s).get_task_by_id(task_id)
         assert task.status == TaskStatus.completed
-        assert len(task.options["prompt_results"]) == 2
+        assert len((await Repo(s).recording_for_task(task_id)).prompt_results) == 2
 
 
 async def test_the_tool_is_marked_destructive():

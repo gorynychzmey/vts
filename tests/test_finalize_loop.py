@@ -15,11 +15,8 @@ from vts.pipeline.steps.summarization import (
     prompt_source_for,
 )
 from vts.services.prompt_registry import list_system_prompts
-from vts.services.prompt_results import (
-    result_entries,
-    resolve_result_path,
-    upsert_result_entry,
-)
+from vts.services.prompt_results import upsert_result_entry
+from vts.services.recording_artifacts import recording_result_entries, recording_result_path
 
 
 # --------------------------------------------------------------------------- #
@@ -59,11 +56,11 @@ class _FakeLLM:
 
 
 class _StubTask:
-    """In-memory stand-in for a Task row with a plain JSON `options` column."""
+    """In-memory stand-in for a Task row and the recording that holds its content."""
 
     def __init__(self, options: dict) -> None:
         self.options = options
-        self.summary_path: str | None = None
+        self.recording = SimpleNamespace(summary_path=None, prompt_results=[])
         self.summary_progress: dict | None = None
         self.updated_at = None
         self.content_calls: list[dict] = []
@@ -127,15 +124,16 @@ def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None
                 return prompt
             return None
 
+        async def recording_for_task(self, task_id: uuid.UUID):
+            return task.recording
+
         async def set_task_content(self, t, **fields) -> None:
             t.content_calls.append(dict(fields))
             for key, value in fields.items():
-                setattr(t, key, value)
+                setattr(t.recording, key, value)
 
         async def set_task_prompt_results(self, t, prompt_results: list[dict]) -> None:
-            new_options = dict(t.options or {})
-            new_options["prompt_results"] = prompt_results
-            t.options = new_options
+            t.recording.prompt_results = [dict(e) for e in prompt_results]
 
     monkeypatch.setattr("vts.pipeline.steps.summarization.Repo", _StubRepo)
     monkeypatch.setattr(
@@ -172,11 +170,9 @@ def _make_ctx(tmp_path: Path, monkeypatch, *, llm_output: str, task, prompt=None
         task.summary_progress = {"current": current, "total": total}
 
     async def _persist_prompt_result(task_id, source, id, name, path):
-        options = dict(task.options or {})
-        entries = upsert_result_entry(options, source, id, name, path, status="completed")
-        new_options = dict(task.options or {})
-        new_options["prompt_results"] = entries
-        task.options = new_options
+        task.recording.prompt_results = upsert_result_entry(
+            task.recording.prompt_results, source, id, name, path, status="completed"
+        )
 
     async def _get_n_ctx(task_id, logger):
         return 32768
@@ -224,33 +220,30 @@ def _st(dirs: dict[str, Path], user_id: str, options: dict) -> StepState:
 # Unit tests
 # --------------------------------------------------------------------------- #
 def test_upsert_result_entry_inserts_then_updates() -> None:
-    options: dict = {}
-    entries = upsert_result_entry(options, "user", "abc", "My Prompt", "/p/a.md", "completed")
+    entries = upsert_result_entry([], "user", "abc", "My Prompt", "/p/a.md", "completed")
     assert entries == [
         {"source": "user", "id": "abc", "name": "My Prompt", "path": "/p/a.md", "status": "completed"}
     ]
     # second upsert for same ref updates in place (no duplicate)
-    entries = upsert_result_entry(options, "user", "abc", "Renamed", "/p/b.md", "completed")
+    entries = upsert_result_entry(entries, "user", "abc", "Renamed", "/p/b.md", "completed")
     assert len(entries) == 1
     assert entries[0]["name"] == "Renamed"
     assert entries[0]["path"] == "/p/b.md"
 
 
 def test_upsert_result_entry_does_not_alias_input_list() -> None:
-    """The returned list must NOT be the same object as options['prompt_results'],
-    and the input's existing list must not be mutated in place.
+    """The returned list must NOT be the input list, and the input must not be
+    mutated in place.
 
-    Regression (vts-jal): persist_prompt_result passes a SHALLOW dict(task.options),
-    so options['prompt_results'] is the same list SQLAlchemy loaded for the JSON
-    column. If upsert mutates that list in place, the change is not tracked and the
+    Regression (vts-jal): persist_prompt_result passes the list SQLAlchemy loaded
+    for the JSON column. If upsert mutates that list in place, the change is not tracked and the
     second finalize step's write is silently dropped on commit -> only one
     prompt_result survives -> results dropdown stays hidden.
     """
     original_list = [
         {"source": "system", "id": "summary", "name": "S", "path": "/p/s.md", "status": "completed"}
     ]
-    options = {"prompt_results": original_list}
-    entries = upsert_result_entry(options, "user", "abc", "U", "/p/u.md", "completed")
+    entries = upsert_result_entry(original_list, "user", "abc", "U", "/p/u.md", "completed")
     # New entry is present in the returned list...
     assert len(entries) == 2
     assert {(e["source"], e["id"]) for e in entries} == {("system", "summary"), ("user", "abc")}
@@ -378,9 +371,9 @@ def test_finalize_writes_result_index_for_custom_prompt(tmp_path: Path, monkeypa
     assert not (dirs["root"] / "summary" / "final.md").exists()
     # Custom prompts must not clobber the canonical summary back-compat outputs.
     assert not (dirs["outputs"] / "summary.md").exists()
-    assert task.summary_path is None
+    assert task.recording.summary_path is None
 
-    entries = result_entries(task)
+    entries = recording_result_entries(task.recording)
     assert any(
         e["source"] == "user"
         and e["id"] == str(pid)
@@ -388,7 +381,7 @@ def test_finalize_writes_result_index_for_custom_prompt(tmp_path: Path, monkeypa
         and e["name"] == "My Custom Prompt"
         for e in entries
     )
-    assert resolve_result_path(task, "user", str(pid)) == str(result_md)
+    assert recording_result_path(task.recording, "user", str(pid)) == str(result_md)
 
 
 def test_finalize_system_summary_keeps_backcompat(tmp_path: Path, monkeypatch) -> None:
@@ -407,13 +400,13 @@ def test_finalize_system_summary_keeps_backcompat(tmp_path: Path, monkeypatch) -
     assert final_md.exists()
     assert final_md.read_text(encoding="utf-8") == "THE SUMMARY"
     assert (dirs["outputs"] / "summary.md").read_text(encoding="utf-8") == "THE SUMMARY"
-    assert task.summary_path == str(final_md)
-    # Written through the content setter, so the recording gets it too.
+    assert task.recording.summary_path == str(final_md)
+    # Written through the content setter.
     assert task.content_calls == [{"summary_path": str(final_md)}]
 
     # The summary is also tracked in the result index, with its i18n name key.
     sysdef = next(p for p in list_system_prompts() if p.key == "summary")
-    entries = result_entries(task)
+    entries = recording_result_entries(task.recording)
     assert any(
         e["source"] == "system" and e["id"] == "summary" and e["name"] == sysdef.i18n_name_key
         for e in entries

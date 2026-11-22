@@ -2,12 +2,10 @@
 
 A recording owns its result and says on its own whether that result is whole.
 The task status cannot say it: `archived` follows both a finished and a failed
-run. These helpers are pure so the status-change wiring and the backfill
-migration share one rule.
+run. These helpers are pure so the status-change wiring and the migration
+backfills (`vts.services.recording_backfill`) share one rule.
 """
 from __future__ import annotations
-
-from sqlalchemy import text
 
 from vts.db.models import RecordingState, TaskStatus
 from vts.services.task_progress import selected_prompt_refs
@@ -32,22 +30,24 @@ def state_for_status(status: TaskStatus) -> RecordingState | None:
 
 
 def _archived_is_complete(
-    *, transcript_path: str | None, summary_path: str | None, options: dict
+    *,
+    transcript_path: str | None,
+    summary_path: str | None,
+    prompt_results: list | None,
+    options: dict,
 ) -> bool:
     """Archiving is silent about success, so judge by what the task requested.
 
     Every requested prompt needs a result. The built-in system summary is
-    recorded in `summary_path`; every other prompt only in
-    `options["prompt_results"]`. A task that requested nothing is judged by
-    its transcript.
+    recorded in `summary_path`; every other prompt only in the prompt-result
+    index. A task that requested nothing is judged by its transcript.
     """
     refs = selected_prompt_refs(options)
     if not refs:
         return bool(transcript_path)
-    results = options.get("prompt_results") if isinstance(options, dict) else None
     done = {
         (str(e.get("source")), str(e.get("id")))
-        for e in (results if isinstance(results, list) else [])
+        for e in (prompt_results if isinstance(prompt_results, list) else [])
         if isinstance(e, dict) and e.get("status") == "completed"
     }
     for ref in refs:
@@ -65,43 +65,24 @@ def initial_state(
     *,
     transcript_path: str | None,
     summary_path: str | None,
+    prompt_results: list | None,
     options: dict,
 ) -> RecordingState:
-    """State for a recording that has none yet, judged from its task and files."""
+    """State for a recording that has none yet.
+
+    Judged from the task's status, what it requested (`options`), and the
+    recording's own content: its paths and prompt-result index.
+    """
     mapped = state_for_status(status)
     if mapped is not None:
         return mapped
     if TaskStatus(status) is TaskStatus.archived:
         if _archived_is_complete(
-            transcript_path=transcript_path, summary_path=summary_path, options=options
+            transcript_path=transcript_path,
+            summary_path=summary_path,
+            prompt_results=prompt_results,
+            options=options,
         ):
             return RecordingState.complete
         return RecordingState.incomplete
     return RecordingState.processing  # paused / waiting / awaiting_input
-
-
-def backfill_recording_states(conn) -> int:
-    """Set `state` on every recording; sync Connection, used by the migration."""
-    rows = conn.execute(text(
-        "SELECT r.id, r.transcript_path, r.summary_path, r.source_task_id, "
-        "t.status AS task_status, t.options AS task_options "
-        "FROM recordings r LEFT JOIN tasks t ON t.id = r.source_task_id"
-    )).mappings().all()
-    for row in rows:
-        if row["source_task_id"] is None or row["task_status"] is None:
-            state = (
-                RecordingState.complete if row["transcript_path"] else RecordingState.incomplete
-            )
-        else:
-            options = row["task_options"]
-            state = initial_state(
-                TaskStatus(row["task_status"]),
-                transcript_path=row["transcript_path"],
-                summary_path=row["summary_path"],
-                options=options if isinstance(options, dict) else {},
-            )
-        conn.execute(
-            text("UPDATE recordings SET state = :state WHERE id = :id"),
-            {"state": state.value, "id": row["id"]},
-        )
-    return len(rows)

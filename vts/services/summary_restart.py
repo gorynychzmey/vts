@@ -43,7 +43,7 @@ async def reset_task_for_summary_restart(repo: Repo, task: Task) -> None:
     The order is the point. ``_reset_summary_artifacts`` deletes files and
     cannot be undone, while everything before the commit can — so a commit that
     fails after the files were already gone would roll the task back to
-    ``completed`` with a ``summary_path`` pointing at a file that no longer
+    ``completed`` with a recording ``summary_path`` pointing at a file that no longer
     exists, and the UI would 404 on it. That is the same defect class as
     vts-b6l. Committing first inverts the worst case into a self-healing one: a
     task sitting in ``queued`` with stale files that the next run overwrites
@@ -54,8 +54,11 @@ async def reset_task_for_summary_restart(repo: Repo, task: Task) -> None:
     callers previously got that wrong in their own copy.
     """
     _reset_summary_steps(task)
-    downgrade_all_result_entries(task)
-    await repo.mirror_prompt_results(task)
+    recording = await repo.recording_for_task(task.id)
+    if recording is not None:
+        await repo.set_task_prompt_results(
+            task, downgrade_all_result_entries(recording.prompt_results)
+        )
     await repo.set_task_content(task, summary_path=None, redacted_path=None)
     await repo.set_task_summary_progress(task, 0, 0)
     await repo.set_task_status(task, TaskStatus.queued)
@@ -93,8 +96,7 @@ async def restart_final_with_prompts(
     if not can_restart_final_summary_task(task):
         raise SummaryRestartRefused(f"cannot_restart_final:{task.status.value}")
     new_refs = [{"source": p["source"], "id": p["id"]} for p in prompts]
-    clear_all_finalize_results(task)  # files, prompt_results, summary_path
-    await repo.mirror_prompt_results(task)
+    await repo.set_task_prompt_results(task, clear_all_finalize_results(task.artifact_dir))
     new_options = dict(task.options or {})
     new_options["prompts"] = new_refs
     task.options = new_options

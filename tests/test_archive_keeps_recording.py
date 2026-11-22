@@ -109,3 +109,18 @@ def test_recording_readers_survive_archive(tmp_path: Path) -> None:
     )
     assert blocks
     assert (tmp_path / "summary" / "results" / "user__p1.md").read_text() == "result one"
+
+
+def test_archive_keeps_the_paths_the_recording_stores(tmp_path: Path) -> None:
+    """The recording's own stored paths survive, not the task's old columns."""
+    kept = _write(tmp_path, "outputs/custom_transcript.txt", "recording's")
+    task_only = _write(tmp_path, "outputs/old_summary.md", "task's")
+    task = SimpleNamespace(
+        artifact_dir=str(tmp_path), transcript_path=None, summary_path=str(task_only)
+    )
+    recording = SimpleNamespace(transcript_path=str(kept), summary_path=None)
+
+    _archive_task_artifacts(task, recording)
+
+    assert kept.exists()
+    assert not task_only.exists()

@@ -708,8 +708,8 @@ class MergeTranscriptStep(Step):
             task = await repo.get_task_by_id(st.task_id)
             if task is None:
                 raise RuntimeError("task not found during merge")
-            if not task.transcript_path:
-                await repo.set_task_content(task, transcript_path=str(transcript_txt))
+            # Idempotent: the same path the segment loop may already have set.
+            await repo.set_task_content(task, transcript_path=str(transcript_txt))
             await session.commit()
 
         for path in st.dirs["segments"].glob("*.wav"):

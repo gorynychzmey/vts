@@ -463,17 +463,21 @@ async def test_serializing_never_mutates_the_tasks_options(authed_app, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_task_without_a_recording_falls_back_to_its_own_fields(authed_app, tmp_path):
+async def test_task_without_a_recording_shows_no_content(authed_app, tmp_path):
+    """The task's own old fields are never served, even when a row still has them."""
     from vts.api._helpers.serialization import serialize_task
     from vts.db.repo import Repo
 
     _app, factory = authed_app
     task_id, _rid = await _seed(factory, tmp_path / "rec")
+    await _make_task_disagree(factory, task_id, tmp_path)
     async with factory() as session:
         task = await Repo(session).get_task_by_id(task_id)
+        task.options = {**task.options, "prompt_results": [{"source": "user", "id": "old"}]}
         out = serialize_task(task, recording=None)
-        assert out.transcript_path == task.transcript_path
-        assert out.options == task.options
+        assert (out.transcript_path, out.summary_path, out.redacted_path) == (None, None, None)
+        assert out.options["prompt_results"] == []
+        assert out.stats.transcript_chars is None and out.stats.summary_chars is None
 
 
 @pytest.mark.asyncio

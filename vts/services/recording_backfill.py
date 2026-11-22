@@ -24,7 +24,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from vts.db.models import TaskStatus, utcnow
+from vts.db.models import RecordingState, TaskStatus, utcnow
 from vts.services.recording_meta import language_code, recording_display_name
 from vts.services.recording_state import initial_state
 
@@ -100,6 +100,7 @@ def _create_missing(conn: Any) -> int:
             TaskStatus(task["status"]),
             transcript_path=task["transcript_path"],
             summary_path=task["summary_path"],
+            prompt_results=meta["prompt_results"],
             options=options,
         )
         conn.execute(
@@ -212,3 +213,35 @@ def backfill_listed_at(conn: Any) -> int:
         "WHERE transcript_path IS NOT NULL AND listed_at IS NULL"
     ))
     return int(result.rowcount or 0)
+
+
+def backfill_recording_states(conn: Any) -> int:
+    """Set `state` on every recording; sync Connection, used by migration 0032.
+
+    That migration runs before recordings have content columns of their own,
+    so the content is judged from the task's old fields.
+    """
+    rows = conn.execute(text(
+        "SELECT r.id, r.transcript_path, r.summary_path, r.source_task_id, "
+        "t.status AS task_status, t.options AS task_options "
+        "FROM recordings r LEFT JOIN tasks t ON t.id = r.source_task_id"
+    )).mappings().all()
+    for row in rows:
+        if row["source_task_id"] is None or row["task_status"] is None:
+            state = (
+                RecordingState.complete if row["transcript_path"] else RecordingState.incomplete
+            )
+        else:
+            options = row["task_options"] if isinstance(row["task_options"], dict) else {}
+            state = initial_state(
+                TaskStatus(row["task_status"]),
+                transcript_path=row["transcript_path"],
+                summary_path=row["summary_path"],
+                prompt_results=options.get("prompt_results"),
+                options=options,
+            )
+        conn.execute(
+            text("UPDATE recordings SET state = :state WHERE id = :id"),
+            {"state": state.value, "id": row["id"]},
+        )
+    return len(rows)

@@ -10,11 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests._db import ensure_pgvector, make_test_engine
 from vts.db.base import Base
 from vts.db.models import Recording, RecordingState, Task, TaskStatus, User
-from vts.services.recording_state import (
-    backfill_recording_states,
-    initial_state,
-    state_for_status,
-)
+from vts.services.recording_backfill import backfill_recording_states
+from vts.services.recording_state import initial_state, state_for_status
 
 _USER = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 
@@ -61,7 +58,14 @@ def _done(*refs, status="completed"):
 
 
 def _archived(options, *, transcript="/t", summary=None):
-    return initial_state(TaskStatus.archived, transcript_path=transcript, summary_path=summary, options=options)
+    # The prompt-result index belongs to the recording; the cases below write
+    # it next to what the task requested for readability only.
+    options = dict(options)
+    results = options.pop("prompt_results", None)
+    return initial_state(
+        TaskStatus.archived, transcript_path=transcript, summary_path=summary,
+        prompt_results=results, options=options,
+    )
 
 
 def test_initial_state_archived_with_summary_is_complete():
@@ -114,7 +118,7 @@ def test_initial_state_archived_legacy_summary_false_is_transcript_only():
 
 @pytest.mark.parametrize("status", [TaskStatus.paused, TaskStatus.waiting, TaskStatus.awaiting_input])
 def test_initial_state_in_flight_statuses_are_processing(status):
-    assert initial_state(status, transcript_path=None, summary_path=None, options={}) is RecordingState.processing
+    assert initial_state(status, transcript_path=None, summary_path=None, prompt_results=[], options={}) is RecordingState.processing
 
 
 async def test_backfill_sets_state_from_task_and_detached(factory):

@@ -70,8 +70,11 @@ async def _recording(session, tmp_path, *, detach=False):
         user_id=_USER, source_url="file://clip.m4a", options={},
         artifact_dir=str(tmp_path),
     )
-    task.transcript_path = str(outputs / "transcript.txt")
-    task.summary_path = str(outputs / "summary.md")
+    await repo.set_task_content(
+        task,
+        transcript_path=str(outputs / "transcript.txt"),
+        summary_path=str(outputs / "summary.md"),
+    )
     recording = await repo.upsert_recording_for_task(task)
     if detach:
         # The task is gone; the recording and its files remain.
@@ -176,7 +179,7 @@ async def test_the_endpoint_serves_a_transcript_by_recording(authed_app, client,
             user_id=uuid.UUID(_TEST_USER_ID), source_url="file://clip.m4a",
             options={}, artifact_dir=str(tmp_path),
         )
-        task.transcript_path = str(outputs / "transcript.txt")
+        await repo.set_task_content(task, transcript_path=str(outputs / "transcript.txt"))
         recording = await repo.upsert_recording_for_task(task)
         await session.commit()
         rec_id = recording.id
@@ -208,7 +211,7 @@ async def test_the_endpoint_still_works_after_the_task_is_deleted(
             user_id=uuid.UUID(_TEST_USER_ID), source_url="file://clip.m4a",
             options={}, artifact_dir=str(tmp_path),
         )
-        task.transcript_path = str(outputs / "transcript.txt")
+        await repo.set_task_content(task, transcript_path=str(outputs / "transcript.txt"))
         recording = await repo.upsert_recording_for_task(task)
         await session.commit()
         rec_id = recording.id

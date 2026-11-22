@@ -18,7 +18,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    from vts.services.recording_state import backfill_recording_states
+    from vts.services.recording_backfill import backfill_recording_states
 
     op.add_column(
         "recordings",

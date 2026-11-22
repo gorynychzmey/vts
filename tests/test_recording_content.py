@@ -7,15 +7,18 @@ from tests.test_recordings import _USER, _task_with_recording, factory  # noqa: 
 from vts.db.repo import Repo
 
 
-async def test_set_task_content_writes_recording_and_task(factory):
+async def test_set_task_content_writes_the_recording_only(factory):
     async with factory() as s:
         task, rec = await _task_with_recording(s)
+        task.transcript_path = None  # the fixture's own seed; the setter must not refill it
         await Repo(s).set_task_content(
             task,
             transcript_path="/a/outputs/transcript.txt",
+            summary_path="/a/summary/final.md",
             redacted_path="/a/outputs/redacted_transcript.txt",
         )
-        assert task.transcript_path == "/a/outputs/transcript.txt"
+        assert (task.transcript_path, task.summary_path) == (None, None)
+        assert rec.summary_path == "/a/summary/final.md"
         assert rec.transcript_path == "/a/outputs/transcript.txt"
         assert rec.redacted_path == "/a/outputs/redacted_transcript.txt"
 
@@ -26,10 +29,10 @@ async def test_unset_fields_are_left_alone(factory):
         original = rec.transcript_path
         repo = Repo(s)
         await repo.set_task_content(task, summary_path="/s")
-        assert (task.summary_path, rec.summary_path) == ("/s", "/s")
+        assert rec.summary_path == "/s"
         await repo.set_task_content(task, summary_path=None)
-        assert rec.summary_path is None and task.summary_path is None
-        assert rec.transcript_path == original and task.transcript_path == original
+        assert rec.summary_path is None
+        assert rec.transcript_path == original
         assert rec.redacted_path is None
 
 
@@ -39,7 +42,7 @@ async def test_prompt_results_reach_the_recording(factory):
         entries = [{"source": "user", "id": "x", "name": "Memo", "path": "/p", "status": "completed"}]
         await Repo(s).set_task_prompt_results(task, entries)
         assert rec.prompt_results == entries
-        assert task.options["prompt_results"] == entries
+        assert "prompt_results" not in task.options
         # A copy: later mutation of the caller's dict must not leak in.
         entries[0]["status"] = "failed"
         assert rec.prompt_results[0]["status"] == "completed"
@@ -65,14 +68,6 @@ async def test_detected_language_is_normalised_on_the_recording(factory):
         assert task.options["detected_language_confidence"] == 0.9
 
 
-async def test_mirror_prompt_results_copies_task_options(factory):
-    async with factory() as s:
-        task, rec = await _task_with_recording(s)
-        task.options = {**task.options, "prompt_results": [{"id": "a", "status": "completed"}]}
-        await Repo(s).mirror_prompt_results(task)
-        assert rec.prompt_results == [{"id": "a", "status": "completed"}]
-
-
 async def test_setters_without_recording_do_not_raise(factory):
     async with factory() as s:
         repo = Repo(s)
@@ -86,8 +81,9 @@ async def test_setters_without_recording_do_not_raise(factory):
         await repo.set_task_content(task, transcript_path="/t", redacted_path="/r")
         await repo.set_task_prompt_results(task, [{"id": "x"}])
         await repo.set_detected_language(task, "russian", 0.5)
-        await repo.mirror_prompt_results(task)
-        assert task.transcript_path == "/t"
+        # Nothing to write to: the content is dropped, the runtime input kept.
+        assert task.transcript_path is None
+        assert "prompt_results" not in task.options
         assert task.options["detected_language"] == "russian"
         assert await repo.recording_for_task(task.id) is None
 
@@ -172,7 +168,9 @@ async def test_persist_content_and_prompt_result_reach_the_recording(factory):
         rec = await s.get(Recording, rec_id)
         assert (rec.summary_path, rec.redacted_path) == ("/a/summary/final.md", "/a/r.txt")
         assert rec.prompt_results[0]["name"] == "Memo"
-        assert (await s.get(Task, task_id)).summary_path == "/a/summary/final.md"
+        task = await s.get(Task, task_id)
+        assert task.summary_path is None
+        assert "prompt_results" not in task.options
     # A task deleted mid-run: quiet no-op.
     await ctx.persist_content(uuid.uuid4(), summary_path="/x")
 
@@ -193,8 +191,8 @@ async def test_summary_restart_clears_the_recording_too(factory):
         task = await s.get(Task, task.id, options=[selectinload(Task.steps)], populate_existing=True)
         await reset_task_for_summary_restart(repo, task)
         assert rec.summary_path is None and rec.redacted_path is None
-        assert rec.prompt_results == task.options["prompt_results"]
         assert rec.prompt_results[0]["status"] == "pending"
+        assert "prompt_results" not in task.options
 
 
 async def test_restart_final_with_prompts_empties_recording_results(factory):
@@ -257,3 +255,69 @@ async def test_source_title_discovery_keeps_a_custom_recording_title(factory):
     async with factory() as s:
         rec = await Repo(s).recording_for_task(task_id)
         assert rec.title == "Mine"
+
+
+async def test_persist_prompt_result_builds_on_the_recording_not_stale_task_options(factory):
+    """Prod tasks still carry an old `options["prompt_results"]`; nothing may resurrect it."""
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        task.options = {
+            **task.options,
+            "prompt_results": [{"source": "user", "id": "old", "name": "Old", "path": "/old", "status": "completed"}],
+        }
+        await s.commit()
+        task_id, rec_id = task.id, rec.id
+    ctx = _pipeline_ctx(factory)
+    await ctx.persist_prompt_result(task_id, "user", "p1", "Memo", "/a/summary/results/p1.md")
+    await ctx.persist_prompt_result(task_id, "user", "p2", "Todo", "/a/summary/results/p2.md")
+    async with factory() as s:
+        from vts.db.models import Recording
+        rec = await s.get(Recording, rec_id)
+        assert [e["id"] for e in rec.prompt_results] == ["p1", "p2"]
+
+
+async def test_a_pipeline_shaped_run_leaves_the_task_content_fields_empty(factory):
+    """Every writer a run goes through, in order: only the recording is written."""
+    from vts.db.models import Recording, Task, TaskStatus
+    async with factory() as s:
+        task = await Repo(s).create_task(
+            user_id=_USER, source_url="https://example.com/v",
+            options={"prompts": [{"source": "system", "id": "summary"}]}, artifact_dir="/a",
+        )
+        await s.commit()
+        task_id = task.id
+    ctx = _pipeline_ctx(factory)
+    await ctx.persist_detected_language(task_id, "russian", 0.8)
+    await ctx.persist_content(task_id, transcript_path="/a/outputs/transcript.txt")
+    await ctx.persist_content(task_id, redacted_path="/a/outputs/redacted_transcript.txt")
+    await ctx.persist_content(task_id, summary_path="/a/summary/final.md")
+    await ctx.persist_prompt_result(task_id, "system", "summary", "Summary", "/a/summary/final.md")
+    async with factory() as s:
+        repo = Repo(s)
+        task = await s.get(Task, task_id)
+        await repo.upsert_recording_for_task(task)
+        await repo.set_task_status(task, TaskStatus.completed)
+        await s.commit()
+    async with factory() as s:
+        task = await s.get(Task, task_id)
+        rec = await Repo(s).recording_for_task(task_id)
+        assert (task.transcript_path, task.summary_path) == (None, None)
+        assert "prompt_results" not in task.options
+        assert task.options["detected_language"] == "russian"
+        assert rec.transcript_path == "/a/outputs/transcript.txt"
+        assert rec.summary_path == "/a/summary/final.md"
+        assert rec.redacted_path == "/a/outputs/redacted_transcript.txt"
+        assert [e["id"] for e in rec.prompt_results] == ["summary"]
+        assert rec.language == "ru"
+        assert "prompt_results" not in (rec.meta or {})
+
+
+async def test_upsert_does_not_copy_content_from_the_task(factory):
+    async with factory() as s:
+        task, rec = await _task_with_recording(s)
+        await Repo(s).set_task_content(task, summary_path=None)
+        task.summary_path = "/stale/summary.md"
+        task.options = {**task.options, "prompt_results": [{"id": "stale"}]}
+        await Repo(s).upsert_recording_for_task(task)
+        assert rec.summary_path is None
+        assert rec.prompt_results == []

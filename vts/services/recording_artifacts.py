@@ -89,8 +89,7 @@ def recording_result_entries(recording: Any) -> list[dict[str, Any]]:
 def recording_result_path(recording: Any, source: str, ref: str) -> str | None:
     """The stored path of the result `(source, ref)`, or None.
 
-    Mirrors `vts.services.prompt_results.resolve_result_path` on the task side:
-    the system summary falls back to the recording's `summary_path` when no
+    The system summary falls back to the recording's `summary_path` when no
     entry carries it.
     """
     for entry in recording_result_entries(recording):

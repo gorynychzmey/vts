@@ -603,10 +603,14 @@ class Repo:
                 source_task_id=task.id,
                 artifact_dir=task.artifact_dir,
                 recorded_at=task.created_at,
+                # Created here only when the recording went missing (deleted,
+                # or a task older than the recording table): it holds no
+                # content yet, and that is what its state is judged from.
                 state=initial_state(
                     task.status,
-                    transcript_path=task.transcript_path,
-                    summary_path=task.summary_path,
+                    transcript_path=None,
+                    summary_path=None,
+                    prompt_results=[],
                     options=options,
                 ),
             )
@@ -618,21 +622,8 @@ class Repo:
         if not recording.title_is_custom:
             recording.title = recording_display_name(task.source_title, task.source_url)
         recording.source_url = task.source_url
-        recording.transcript_path = task.transcript_path
-        self._mark_listed(recording)
-        recording.summary_path = task.summary_path
-        # Snapshot the prompt results. They live in the TASK's options, which a
-        # recording does not carry — so without this a user prompt's result
-        # ("Memo") had no tab in the library, and the recording lost them
-        # entirely once its task was deleted. Refreshed on every upsert, so a
-        # later prompt run shows up rather than being hidden by a stale copy.
-        prompt_results = options.get("prompt_results")
-        meta = dict(recording.meta or {})
-        meta["prompt_results"] = [
-            dict(r) for r in prompt_results if isinstance(r, dict)
-        ] if isinstance(prompt_results, list) else []
-        # Reassigned, never mutated: JSON columns do not track in-place changes.
-        recording.meta = meta
+        # Content (transcript, summary, prompt results) is not copied: the
+        # pipeline writes it to the recording directly (vts-lzad).
         # Never overwrite a known length or language with nothing: the media may
         # already be archived by the time this runs again.
         if duration is not None:
@@ -1007,21 +998,23 @@ class Repo:
         return True
 
     async def set_task_prompt_results(self, task: Task, prompt_results: list[dict]) -> None:
-        new_options = dict(task.options or {})
-        new_options["prompt_results"] = prompt_results
-        task.options = new_options  # reassign so SQLAlchemy flushes the JSON column
+        """Replace the prompt-result index of the task's recording.
+
+        Copies the entries, so later changes to the caller's dicts do not leak
+        in, and reassigns the JSON column rather than mutating it.
+        """
         task.updated_at = utcnow()
         recording = await self.recording_for_task(task.id)
         if recording is not None:
-            recording.prompt_results = [dict(e) for e in prompt_results]
+            recording.prompt_results = [dict(e) for e in prompt_results if isinstance(e, dict)]
         await self.session.flush()
 
     # ------------------------------------------------------------------
     # Recording content (vts-lzad)
     #
-    # The recording owns its content fields; the task side is dual-written
-    # until stage 3. A task without a recording (deleted mid-run) writes only
-    # the task side: these setters never raise and never create a recording.
+    # The recording owns its content fields and is the only place they are
+    # written (stage 3). A task without a recording (deleted mid-run) has
+    # nowhere to put content: these setters never raise and never create one.
     # ------------------------------------------------------------------
 
     async def recording_for_task(self, task_id: uuid.UUID) -> Recording | None:
@@ -1054,27 +1047,25 @@ class Repo:
         summary_path: str | None | object = UNSET,
         redacted_path: str | None | object = UNSET,
     ) -> None:
-        """Write the given content paths to the recording and to the task.
+        """Write the given content paths to the task's recording.
 
-        Fields left at UNSET are untouched; an explicit None clears. The task
-        has no redacted column, so that one lands on the recording only.
+        Fields left at UNSET are untouched; an explicit None clears.
         """
         recording = await self.recording_for_task(task.id)
-        if transcript_path is not UNSET:
-            task.transcript_path = transcript_path
-            if recording is not None:
+        if recording is not None:
+            if transcript_path is not UNSET:
                 recording.transcript_path = transcript_path
                 self._mark_listed(recording)
-        if summary_path is not UNSET:
-            task.summary_path = summary_path
-            if recording is not None:
+            if summary_path is not UNSET:
                 recording.summary_path = summary_path
-        if redacted_path is not UNSET and recording is not None:
-            recording.redacted_path = redacted_path
+            if redacted_path is not UNSET:
+                recording.redacted_path = redacted_path
         task.updated_at = utcnow()
         await self.session.flush()
 
     async def set_detected_language(self, task: Task, language: str, confidence: float) -> None:
+        """The detection is the pipeline's runtime input (task options) and
+        the recording's language (normalised code)."""
         new_options = dict(task.options or {})
         new_options["detected_language"] = language
         new_options["detected_language_confidence"] = float(confidence)
@@ -1085,21 +1076,6 @@ class Repo:
             recording = await self.recording_for_task(task.id)
             if recording is not None:
                 recording.language = code
-        await self.session.flush()
-
-    async def mirror_prompt_results(self, task: Task) -> None:
-        """Copy `task.options["prompt_results"]` to the recording.
-
-        For callers of the pure helpers in vts.services.prompt_results, which
-        mutate task.options synchronously and cannot await.
-        """
-        recording = await self.recording_for_task(task.id)
-        if recording is None:
-            return
-        entries = (task.options or {}).get("prompt_results")
-        recording.prompt_results = [
-            dict(e) for e in entries if isinstance(e, dict)
-        ] if isinstance(entries, list) else []
         await self.session.flush()
 
     # ------------------------------------------------------------------

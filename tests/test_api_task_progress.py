@@ -150,10 +150,16 @@ def test_serialize_task_includes_completed_stats(tmp_path: Path) -> None:
         ],
     )
     task.status = TaskStatus.completed
-    task.transcript_path = str(transcript_path)
-    task.summary_path = str(summary_path)
+    # The content paths come from the task's recording (vts-lzad).
+    recording = SimpleNamespace(
+        artifact_dir=str(tmp_path),
+        transcript_path=str(transcript_path),
+        summary_path=str(summary_path),
+        redacted_path=None,
+        prompt_results=[],
+    )
 
-    payload = serialize_task(task)
+    payload = serialize_task(task, recording=recording)
 
     assert payload.stats.processing_seconds == 125
     assert payload.stats.transcript_chars == len(transcript_text)
@@ -232,13 +238,13 @@ def test_archive_task_artifacts_keeps_transcript_and_summary(tmp_path: Path) -> 
     # The recording shares this directory, so its player data must survive too.
     (outputs_dir / "transcript.json").write_text("{}", encoding="utf-8")
 
-    task = SimpleNamespace(
-        artifact_dir=str(tmp_path),
-        transcript_path=str(transcript_path),
-        summary_path=str(summary_path),
+    task = SimpleNamespace(artifact_dir=str(tmp_path))
+    # Stored on the recording; kept even though not at a recording-owned name.
+    recording = SimpleNamespace(
+        transcript_path=str(transcript_path), summary_path=str(summary_path)
     )
 
-    _archive_task_artifacts(task)
+    _archive_task_artifacts(task, recording)
 
     assert transcript_path.exists()
     assert summary_path.exists()

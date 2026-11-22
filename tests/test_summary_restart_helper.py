@@ -49,11 +49,12 @@ async def _seed(factory, art: Path) -> uuid.UUID:
             source_url="u",
             status=TaskStatus.completed,
             artifact_dir=str(art),
-            summary_path=str(art / "summary" / "final.md"),
             options={"prompts": [{"source": "system", "id": "summary"}]},
         )
         s.add(task)
         await s.flush()
+        await repo.upsert_recording_for_task(task)
+        await repo.set_task_content(task, summary_path=str(art / "summary" / "final.md"))
         for name in ("download", "summarize_windows", "summarize_final"):
             s.add(Step(task_id=task.id, name=name, status=StepStatus.completed))
         await s.commit()
@@ -84,7 +85,7 @@ async def test_reset_requeues_the_task_and_clears_its_artefacts(factory, tmp_pat
     async with factory() as s:
         row = await _get_with_steps(s, task_id)
         assert row.status == TaskStatus.queued
-        assert row.summary_path is None
+        assert (await Repo(s).recording_for_task(task_id)).summary_path is None
         by_name = {st.name: st.status for st in row.steps}
         assert by_name["summarize_final"] == StepStatus.pending
         assert by_name["summarize_windows"] == StepStatus.pending
@@ -137,4 +138,5 @@ async def test_a_failed_commit_leaves_the_files_intact(factory, tmp_path, monkey
     async with factory() as s:
         row = await s.get(Task, task_id)
         assert row.status == TaskStatus.completed
-        assert row.summary_path == str(art / "summary" / "final.md")
+        rec = await Repo(s).recording_for_task(task_id)
+        assert rec.summary_path == str(art / "summary" / "final.md")

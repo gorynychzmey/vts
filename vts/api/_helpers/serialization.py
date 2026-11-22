@@ -184,24 +184,25 @@ def _text_length_from_path(path_value: str | Path | None, *, prefer_json_text_fi
 
     return len(text_value.strip())
 
-def _content_fields(task: Task, recording: Recording | None) -> tuple[str | None, str | None, str | None]:
+def _content_fields(recording: Recording | None) -> tuple[str | None, str | None, str | None]:
     """(transcript_path, summary_path, redacted_path) a card shows.
 
-    The recording owns these (vts-lzad); the task's own fields are only the
-    fallback for a task that has no recording. `redacted_path` is reported
-    only when the file exists, as before.
+    The recording owns these (vts-lzad): a task without one (its recording was
+    deleted) shows no content. `redacted_path` is reported only when the file
+    exists, as before.
     """
-    if recording is not None:
-        transcript, summary = recording.transcript_path, recording.summary_path
-        redacted = _artifact_path(recording, "redacted")
-    else:
-        transcript, summary = task.transcript_path, task.summary_path
-        redacted = Path(task.artifact_dir) / "outputs" / "redacted_transcript.txt" if task.artifact_dir else None
-    return transcript, summary, str(redacted) if redacted is not None and redacted.exists() else None
+    if recording is None:
+        return None, None, None
+    redacted = _artifact_path(recording, "redacted")
+    return (
+        recording.transcript_path,
+        recording.summary_path,
+        str(redacted) if redacted is not None and redacted.exists() else None,
+    )
 
 
 def _task_stats_for_serialization(task: Task, recording: Recording | None = None) -> dict[str, int | None]:
-    transcript_path, summary_path, redacted_path = _content_fields(task, recording)
+    transcript_path, summary_path, redacted_path = _content_fields(recording)
     media_file = _find_media_file(task.artifact_dir)
     media_bytes: int | None = None
     media_seconds: int | None = None
@@ -303,11 +304,11 @@ def serialize_task(
     if summary_progress is not None:
         summary_current, summary_total = summary_progress.get(task.id, (0, 0))
     failure_code = classify_failure_code(task.error_message)
-    transcript_path, summary_path, redacted_path = _content_fields(task, recording)
-    options = task.options
-    if recording is not None:
-        # Output only: a new dict, so the task's own JSON column is untouched.
-        options = {**(task.options or {}), "prompt_results": recording_result_entries(recording)}
+    transcript_path, summary_path, redacted_path = _content_fields(recording)
+    # Output only: a new dict, so the task's own JSON column is untouched. The
+    # prompt results come from the recording; any key an old task row still
+    # carries is overridden, never shown.
+    options = {**(task.options or {}), "prompt_results": recording_result_entries(recording)}
     return TaskOut(
         id=task.id,
         source_url=task.source_url,
