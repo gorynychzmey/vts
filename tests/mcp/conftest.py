@@ -418,6 +418,9 @@ class FakeRepo:
     async def own_tag_ids(self, user_id: uuid.UUID, ids: Any) -> set[str]:
         return set()
 
+    async def tags_by_ids(self, user_id: uuid.UUID, ids: Any) -> list[Any]:
+        return []
+
     async def speaker_names_for_tasks(
         self, user_id: uuid.UUID, task_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[str]]:

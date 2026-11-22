@@ -210,7 +210,7 @@ async def test_list_tags_returns_names_with_counts(mcp_client, factory, corpus):
 
 # ---------------------------------------------------------------- tag_recording
 
-async def test_tag_recording_adds_and_removes_and_returns_the_tags_after(mcp_client, corpus):
+async def test_tag_recording_adds_and_removes_and_returns_the_tags_after(mcp_client, factory, corpus):
     _, alpha = corpus["alpha"]
     async with mcp_client as client:
         r = await client.call_tool(
@@ -221,6 +221,9 @@ async def test_tag_recording_adds_and_removes_and_returns_the_tags_after(mcp_cli
         # A second call sees the first one's result: it persisted.
         r2 = await client.call_tool("tag_recording", {"recording_id": str(alpha), "add": ["fresh"]})
         assert r2.data == ["Fresh", "Work"]
+    async with factory() as s:
+        # `remove` of a name nobody has creates nothing.
+        assert "never-had" not in [t.name for t, _ in await Repo(s).list_tags(USER_ID)]
 
 
 async def test_tag_recording_unknown_or_foreign_recording_is_not_found(mcp_client, factory, corpus):
@@ -249,6 +252,8 @@ async def test_tag_recording_rejects_an_invalid_name_and_changes_nothing(mcp_cli
     async with factory() as s:
         repo = Repo(s)
         assert "ok" not in [t.name for t, _ in await repo.list_tags(USER_ID)]
+        tags = (await repo.tags_for_recordings([alpha])).get(alpha, [])
+        assert [t.name for t in tags] == ["Home", "Work"]
 
 
 # --------------------------------------------------------------------- presets
@@ -309,3 +314,70 @@ async def test_a_preset_without_tags_reads_with_an_empty_list(mcp_client, factor
         result = await client.call_tool("list_presets", {})
     user_presets = [p for p in result.data if p.source == "user"]
     assert user_presets[0].options["tags"] == []
+
+
+# ------------------------------------------------- submit_video with a preset
+
+async def _submit_with_preset(factory, user, tmp_path, preset_tags, **kw):
+    async with factory() as s:
+        repo = Repo(s)
+        row = await repo.create_preset(USER_ID, "p", {"tags": preset_tags})
+        await s.commit()
+        ref = {"source": "user", "id": str(row.id)}
+    async with factory() as s:
+        repo = Repo(s)
+        result = await tools.submit_video(
+            url="https://example.com/v", user=user, repo=repo, bus=FakeBus(),
+            artifacts_root=tmp_path, preset=ref, **kw,
+        )
+        await s.commit()
+    async with factory() as s:
+        repo = Repo(s)
+        rec = await repo.recording_for_task(result.task_id)
+        return [t.name for t in (await repo.tags_for_recordings([rec.id])).get(rec.id, [])]
+
+
+async def _tag_ids(factory, *names):
+    async with factory() as s:
+        repo = Repo(s)
+        out = [str(t.id) for t in await repo.resolve_tags(USER_ID, list(names), create=True)]
+        await s.commit()
+        return out
+
+
+async def test_preset_tags_apply_when_tags_are_omitted(factory, user, tmp_path):
+    ids = await _tag_ids(factory, "Work", "Alpha")
+    assert await _submit_with_preset(factory, user, tmp_path, ids) == ["Alpha", "Work"]
+
+
+async def test_explicit_empty_tags_override_the_preset(factory, user, tmp_path):
+    ids = await _tag_ids(factory, "Work")
+    assert await _submit_with_preset(factory, user, tmp_path, ids, tags=[]) == []
+
+
+async def test_explicit_tags_win_over_the_preset(factory, user, tmp_path):
+    ids = await _tag_ids(factory, "Work")
+    assert await _submit_with_preset(factory, user, tmp_path, ids, tags=["Other"]) == ["Other"]
+
+
+async def test_a_preset_tag_deleted_meanwhile_is_skipped(factory, user, tmp_path):
+    ids = await _tag_ids(factory, "Work", "Gone")
+    async with factory() as s:
+        repo = Repo(s)
+        await repo.delete_tag(USER_ID, uuid.UUID(ids[1]))
+        await s.commit()
+    got = await _submit_with_preset(factory, user, tmp_path, [*ids, "junk"])
+    assert got == ["Work"]
+
+
+async def test_a_system_preset_adds_no_tags(factory, user, tmp_path):
+    async with factory() as s:
+        result = await tools.submit_video(
+            url="https://example.com/v", user=user, repo=Repo(s), bus=FakeBus(),
+            artifacts_root=tmp_path, preset={"source": "system", "id": "default"},
+        )
+        await s.commit()
+    async with factory() as s:
+        repo = Repo(s)
+        rec = await repo.recording_for_task(result.task_id)
+        assert (await repo.tags_for_recordings([rec.id])) == {}

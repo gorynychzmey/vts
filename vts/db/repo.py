@@ -2133,6 +2133,18 @@ class Repo:
         )
         return {str(i) for i in rows}
 
+    async def tags_by_ids(self, user_id: uuid.UUID, ids: Iterable[str]) -> list[Tag]:
+        """The user's tags among these ids (strings, as presets store them),
+        in the order given; unknown, foreign and malformed ids are skipped."""
+        own = await self.own_tag_ids(user_id, ids)
+        if not own:
+            return []
+        rows = await self.session.scalars(
+            select(Tag).where(Tag.user_id == user_id, Tag.id.in_([uuid.UUID(i) for i in own]))
+        )
+        by_id = {str(t.id): t for t in rows}
+        return [by_id[i] for i in dict.fromkeys(str(x) for x in ids) if i in by_id]
+
     async def tags_for_recordings(
         self, recording_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[Tag]]:

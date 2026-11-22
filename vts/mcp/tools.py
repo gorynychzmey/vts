@@ -45,7 +45,7 @@ from vts.services.recording_artifacts import (
     read_recording_transcript,
 )
 from vts.services.storage import task_dir
-from vts.services.tags import keep_own_tags, visible_preset_options
+from vts.services.tags import keep_own_tags, preset_tag_ids, visible_preset_options
 from vts.services.task_progress import summary_progress_for_task
 
 
@@ -68,6 +68,7 @@ class _RepoLike(Protocol):
     ) -> Any: ...
     async def recording_for_task(self, task_id: uuid.UUID) -> Any | None: ...
     async def set_recording_tags(self, recording: Any, names: list[str]) -> list[Any]: ...
+    async def tags_by_ids(self, user_id: uuid.UUID, ids: Any) -> list[Any]: ...
 
     async def get_preset(self, user_id: uuid.UUID, preset_id: uuid.UUID) -> Any | None: ...
     async def list_prompts(
@@ -208,6 +209,14 @@ async def submit_video(
         # wins outright, otherwise the preset's applies.
         if delivery is None:
             preset_delivery = list(base.get("delivery", []))
+        # Same field-level rule: explicit `tags` (even []) wins, otherwise a
+        # user preset's tags apply (ids still owned by the user, as names).
+        # System presets carry none.
+        if tags is None and user_preset_options is not None:
+            preset_tags = await repo.tags_by_ids(
+                uuid.UUID(user.id), preset_tag_ids(user_preset_options)
+            )
+            tag_names = [t.name for t in preset_tags]
     if norm and not transcript:
         raise HTTPException(status_code=422, detail="prompts require transcript")
     if diarize and not transcript:
