@@ -28,7 +28,6 @@ def _recording(**kw) -> Recording:
         summary_path=None,
         state=RecordingState.processing,
         meta={},
-        tags=[],
         created_at=now,
         updated_at=now,
     )

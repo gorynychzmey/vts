@@ -97,7 +97,7 @@ def _serialize(recording: Recording) -> RecordingOut:
         source_url=recording.source_url,
         duration_sec=recording.duration_sec,
         language=recording.language,
-        tags=list(recording.tags or []),
+        tags=[],  # filled in by the tags API (vts-qwcj)
         has_transcript=bool(transcript and Path(transcript).exists()),
         state=recording.state.value,
         has_redacted=bool(redacted and redacted.exists()),

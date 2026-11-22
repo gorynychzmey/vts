@@ -107,10 +107,10 @@ def _create_missing(conn: Any) -> int:
             text(
                 "INSERT INTO recordings (id, user_id, source_task_id, title, title_is_custom, "
                 "source_url, artifact_dir, transcript_path, summary_path, state, duration_sec, "
-                "language, tags, meta, recorded_at, created_at, updated_at) VALUES ("
+                "language, meta, recorded_at, created_at, updated_at) VALUES ("
                 ":id, :user_id, :task_id, :title, false, :source_url, :artifact_dir, "
                 ":transcript_path, :summary_path, :state, :duration, :language, "
-                "CAST(:tags AS json), CAST(:meta AS json), :recorded_at, :created_at, :now)"
+                "CAST(:meta AS json), :recorded_at, :created_at, :now)"
             ),
             {
                 "id": uuid.uuid4(),
@@ -126,7 +126,6 @@ def _create_missing(conn: Any) -> int:
                 "language": language_code(
                     options.get("language") or options.get("detected_language")
                 ),
-                "tags": "[]",
                 "meta": json.dumps(meta),
                 "recorded_at": task["created_at"],
                 # The task's own creation time, as create_task would have

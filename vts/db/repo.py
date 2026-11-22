@@ -22,8 +22,10 @@ from vts.db.models import (
     Preset,
     Prompt,
     Speaker,
+    RecordingTag,
     Step,
     StepStatus,
+    Tag,
     Task,
     TaskStatus,
     User,
@@ -33,6 +35,7 @@ from vts.db.models import (
 from vts.metrics.step_weights import StepDuration
 from vts.services import task_status
 from vts.services.asr_payload import decompose_raw_json
+from vts.services.tags import TagExists, dedupe_names, normalize_tag_name
 from vts.services.recording_meta import language_code, recording_display_name
 from vts.services.recording_state import initial_state, state_for_status
 from vts.services.delivery_status import RETRYABLE_STATUSES
@@ -1917,3 +1920,155 @@ class Repo:
             .distinct()
         )
         return list(await self.session.scalars(stmt))
+
+    # ------------------------------------------------------------------
+    # Tags (vts-qwcj)
+    # ------------------------------------------------------------------
+
+    async def list_tags(self, user_id: uuid.UUID) -> list[tuple[Tag, int]]:
+        """Every tag of the user with how many recordings carry it.
+
+        Counts all linked recordings, listed or not: a tag's count is about the
+        tag, and an unlisted recording still holds the link.
+        """
+        stmt = (
+            select(Tag, func.count(RecordingTag.recording_id))
+            .outerjoin(RecordingTag, RecordingTag.tag_id == Tag.id)
+            .where(Tag.user_id == user_id)
+            .group_by(Tag.id)
+            .order_by(Tag.name_key)
+        )
+        return [(tag, int(n)) for tag, n in (await self.session.execute(stmt)).all()]
+
+    async def create_tag(self, user_id: uuid.UUID, name: str) -> Tag:
+        name = normalize_tag_name(name)
+        key = name.casefold()
+        if await self._tag_by_key(user_id, key) is not None:
+            raise TagExists(name)
+        tag = Tag(user_id=user_id, name=name, name_key=key)
+        self.session.add(tag)
+        await self.session.flush()
+        return tag
+
+    async def rename_tag(self, user_id: uuid.UUID, tag_id: uuid.UUID, name: str) -> Tag | None:
+        tag = await self.session.scalar(
+            select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
+        )
+        if tag is None:
+            return None
+        name = normalize_tag_name(name)
+        key = name.casefold()
+        if key != tag.name_key and await self._tag_by_key(user_id, key) is not None:
+            raise TagExists(name)
+        tag.name = name
+        tag.name_key = key
+        await self.session.flush()
+        return tag
+
+    async def delete_tag(self, user_id: uuid.UUID, tag_id: uuid.UUID) -> int | None:
+        """Delete the tag; returns how many recordings it was unlinked from."""
+        tag = await self.session.scalar(
+            select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
+        )
+        if tag is None:
+            return None
+        unlinked = await self.session.scalar(
+            select(func.count()).select_from(RecordingTag).where(RecordingTag.tag_id == tag_id)
+        )
+        await self.session.execute(delete(Tag).where(Tag.id == tag_id))
+        await self.session.flush()
+        return int(unlinked or 0)
+
+    async def resolve_tags(
+        self, user_id: uuid.UUID, names: list[str], *, create: bool
+    ) -> list[Tag]:
+        """The user's tags for these names (by key), in the order given.
+
+        Unknown names are created when `create`, otherwise skipped.
+        """
+        wanted = dedupe_names(names)
+        if not wanted:
+            return []
+        keys = [n.casefold() for n in wanted]
+        if create:
+            # DO NOTHING rather than check-then-insert: two requests creating
+            # the same tag race, and one of them must not fail on the unique key.
+            await self.session.execute(
+                pg_insert(Tag)
+                .values([
+                    {"id": uuid.uuid4(), "user_id": user_id, "name": n,
+                     "name_key": n.casefold(), "created_at": datetime.now(timezone.utc)}
+                    for n in wanted
+                ])
+                .on_conflict_do_nothing(index_elements=["user_id", "name_key"])
+            )
+        rows = await self.session.scalars(
+            select(Tag).where(Tag.user_id == user_id, Tag.name_key.in_(keys))
+        )
+        by_key = {t.name_key: t for t in rows}
+        return [by_key[k] for k in keys if k in by_key]
+
+    async def set_recording_tags(self, recording: Recording, names: list[str]) -> list[Tag]:
+        """Replace the recording's tag set; names that do not exist are created."""
+        tags = await self.resolve_tags(recording.user_id, names, create=True)
+        wanted = {t.id for t in tags}
+        await self.session.execute(
+            delete(RecordingTag).where(
+                RecordingTag.recording_id == recording.id,
+                RecordingTag.tag_id.not_in(wanted) if wanted else True,
+            )
+        )
+        await self._link(recording.id, wanted)
+        return sorted(tags, key=lambda t: t.name_key)
+
+    async def change_recording_tags(
+        self, recording: Recording, add: list[str], remove: list[str]
+    ) -> list[Tag]:
+        """Add and remove tags without touching the others.
+
+        `add` creates missing tags; `remove` matches by key and ignores names
+        the user has no tag for.
+        """
+        added = await self.resolve_tags(recording.user_id, add, create=True)
+        await self._link(recording.id, {t.id for t in added})
+        removed = await self.resolve_tags(recording.user_id, remove, create=False)
+        removed_ids = {t.id for t in removed} - {t.id for t in added}
+        if removed_ids:
+            await self.session.execute(
+                delete(RecordingTag).where(
+                    RecordingTag.recording_id == recording.id,
+                    RecordingTag.tag_id.in_(removed_ids),
+                )
+            )
+        return (await self.tags_for_recordings([recording.id])).get(recording.id, [])
+
+    async def tags_for_recordings(
+        self, recording_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[Tag]]:
+        """One query; recordings without tags are absent from the result."""
+        if not recording_ids:
+            return {}
+        stmt = (
+            select(RecordingTag.recording_id, Tag)
+            .join(Tag, Tag.id == RecordingTag.tag_id)
+            .where(RecordingTag.recording_id.in_(recording_ids))
+            .order_by(Tag.name_key)
+        )
+        out: dict[uuid.UUID, list[Tag]] = {}
+        for rid, tag in (await self.session.execute(stmt)).all():
+            out.setdefault(rid, []).append(tag)
+        return out
+
+    async def _tag_by_key(self, user_id: uuid.UUID, key: str) -> Tag | None:
+        return await self.session.scalar(
+            select(Tag).where(Tag.user_id == user_id, Tag.name_key == key)
+        )
+
+    async def _link(self, recording_id: uuid.UUID, tag_ids: set[uuid.UUID]) -> None:
+        if not tag_ids:
+            return
+        await self.session.execute(
+            pg_insert(RecordingTag)
+            .values([{"recording_id": recording_id, "tag_id": t} for t in tag_ids])
+            .on_conflict_do_nothing()
+        )

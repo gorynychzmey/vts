@@ -511,7 +511,6 @@ class Recording(Base):
     # duration to state — better an absent value than a fabricated zero.
     duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
     language: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     meta: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -536,6 +535,42 @@ class Recording(Base):
             postgresql_where=text("source_task_id IS NOT NULL"),
         ),
     )
+
+
+class Tag(Base):
+    """A user's label for recordings (vts-qwcj).
+
+    `name` is what the user typed (trimmed, whitespace collapsed); `name_key` is
+    its casefolded form, computed in Python (see vts.services.tags) so that
+    "Бизнес-клуб" and "бизнес-клуб" are one tag. Unique per user on the key.
+    """
+
+    __tablename__ = "tags"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "name_key", name="uq_tags_user_key"),)
+
+
+class RecordingTag(Base):
+    """Link between a recording and a tag; both sides cascade (vts-qwcj)."""
+
+    __tablename__ = "recording_tags"
+
+    recording_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recordings.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    __table_args__ = (Index("ix_recording_tags_tag", "tag_id"),)
 
 
 class AsrSegment(Base):

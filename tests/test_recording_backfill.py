@@ -113,7 +113,6 @@ async def test_task_without_recording_gets_one(factory, tmp_path):
     assert rec.duration_sec == 42.0
     assert rec.recorded_at == created_at
     assert rec.meta == {"prompt_results": []}
-    assert rec.tags == []
     assert rec.prompt_results == []
     assert rec.redacted_path is None
 
