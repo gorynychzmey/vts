@@ -160,3 +160,14 @@ async def test_tag_combines_with_other_filters_and_cursors(client, corpus):
 async def test_bad_tag_match_is_422(client, path):
     r = await client.get(f"{path}?tag=x&tag_match=some")
     assert r.status_code == 422
+
+
+@pytest.mark.parametrize("fn", [_task_titles, _rec_titles])
+@pytest.mark.parametrize("blank", ["", "%20%20"])
+async def test_blank_tag_filters_like_no_tag(client, corpus, fn, blank):
+    everything = await fn(client, "")
+    assert len(everything) >= 3
+    assert await fn(client, f"tag={blank}") == everything
+    assert await fn(client, f"tag={blank}&tag_match=any") == everything
+    # A blank entry beside a real one drops out; the real one still filters.
+    assert await fn(client, f"tag={blank}&tag=work") == ["alpha", "beta"]

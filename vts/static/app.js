@@ -4137,6 +4137,7 @@ async function savePresetClicked() {
       });
     } catch (err) {
       console.error("Failed to save preset changes", err);
+      showTaskFormError(apiErrorDetail(err) || t("preset.save_failed"));
       return;
     }
     const keep = { source: preset.source, id: preset.id };
@@ -4158,6 +4159,7 @@ async function savePresetClicked() {
     });
   } catch (err) {
     console.error("Failed to create preset", err);
+    showTaskFormError(apiErrorDetail(err) || t("preset.save_failed"));
     return;
   }
   await loadPresets();
@@ -4285,8 +4287,8 @@ function tagNamesForIds(ids) {
 }
 
 /** Ids for `names`, creating the tags that do not exist yet. A 409 means the
- *  tag was created elsewhere since the cache was read: re-read the list and
- *  use the id found there. Any other failure is thrown to the caller. */
+ *  tag was created elsewhere since the cache was read: its body carries that
+ *  tag, which is used as it is. Any other failure is thrown to the caller. */
 async function tagIdsForNames(names) {
   const ids = [];
   for (const name of names) {
@@ -4303,10 +4305,12 @@ async function tagIdsForNames(names) {
           tagsCache = [...tagsCache, tag];
         }
       } catch (err) {
-        if (!String((err && err.message) || "").startsWith("409")) throw err;
-        await loadTags();
-        tag = findCachedTag(name);
-        if (!tag) throw err;
+        if (apiStatus(err) !== 409) throw err;
+        // The 409 body names the tag in the way; no second lookup by name.
+        const existing = apiErrorBody(err).tag;
+        if (!existing || !existing.id) throw err;
+        tag = { id: existing.id, name: existing.name || name, count: 0 };
+        tagsCache = [...tagsCache, tag];
       }
     }
     if (tag && tag.id && !ids.includes(String(tag.id))) ids.push(String(tag.id));
@@ -4775,6 +4779,19 @@ async function saveCardTags(taskEl, names) {
   return tagList(answer);
 }
 
+// The card editor's inline error, kept under the field so it dies with it.
+function showCardTagsError(host, text) {
+  let el = host.querySelector(".tag-row-error");
+  if (!el) {
+    if (!text) return;
+    el = document.createElement("p");
+    el.className = "tag-row-error hidden";
+    el.setAttribute("role", "alert");
+    host.appendChild(el);
+  }
+  showInlineError(el, text);
+}
+
 function enterTagsEdit(taskEl) {
   const row = taskEl.querySelector(".task-tags");
   const host = taskEl.querySelector(".task-tags-edit");
@@ -4793,6 +4810,7 @@ function enterTagsEdit(taskEl) {
   const save = async () => {
     if (closed || saving) return;
     saving = true;
+    showCardTagsError(host, "");
     field.commitPending();
     let tags;
     try {
@@ -4801,6 +4819,7 @@ function enterTagsEdit(taskEl) {
       // Keep the editor open so the user can retry or cancel.
       saving = false;
       console.error("saving tags failed", err);
+      showCardTagsError(host, apiErrorDetail(err) || t("tags.save_failed"));
       return;
     }
     finish();
@@ -8890,6 +8909,17 @@ function apiStatus(err) {
   return match ? Number(match[1]) : 0;
 }
 
+// The parsed JSON body of an API error, {} when it is not JSON.
+function apiErrorBody(err) {
+  const text = String((err && err.message) || "").replace(/^\d{3}:\s*/, "");
+  try {
+    const body = JSON.parse(text);
+    return body && typeof body === "object" ? body : {};
+  } catch {
+    return {};
+  }
+}
+
 // The server's `detail` for an error shown as it is (a 422 on a bad name).
 function apiErrorDetail(err) {
   const text = String((err && err.message) || "").replace(/^\d{3}:\s*/, "");
@@ -9143,6 +9173,8 @@ presetEditDefault?.addEventListener("change", () => {
   if (presetEditing) void applyPresetDefaultToggle();
 });
 
+const presetFormError = document.getElementById("preset-form-error");
+
 presetForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const editId = presetEditIdInput?.value || "";
@@ -9160,8 +9192,16 @@ presetForm?.addEventListener("submit", async (event) => {
   try {
     // Ids, not names, and always sent: PATCH replaces the options wholesale,
     // so a body without `tags` would wipe them (vts-qwcj).
-    if (presetTagField) presetTagField.commitPending();
-    options.tags = presetTagField ? await tagIdsForNames(presetTagField.getNames()) : [];
+    // Without the tag list the field could not show the preset's tags, so keep
+    // what it stores instead of writing [].
+    showInlineError(presetFormError, "");
+    if (editId && !tagsLoadedOk) {
+      const stored = presetEditing && presetEditing.options;
+      options.tags = stored && Array.isArray(stored.tags) ? stored.tags : [];
+    } else {
+      if (presetTagField) presetTagField.commitPending();
+      options.tags = presetTagField ? await tagIdsForNames(presetTagField.getNames()) : [];
+    }
     let resp;
     if (editId) {
       resp = await fetch(buildPath(`/api/presets/${encodeURIComponent(editId)}`), {
@@ -9176,7 +9216,11 @@ presetForm?.addEventListener("submit", async (event) => {
         body: JSON.stringify({ name, options }),
       });
     }
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null);
+      showInlineError(presetFormError, (body && typeof body.detail === "string" && body.detail) || t("preset.save_failed"));
+      return;
+    }
     // For an EXISTING preset the box is applied the moment it is ticked (see
     // applyPresetDefaultToggle), because a system preset's Save is disabled and
     // routing it through save made the box dead there. A brand-new preset has
@@ -9197,6 +9241,7 @@ presetForm?.addEventListener("submit", async (event) => {
     }
   } catch (err) {
     console.error("Failed to save preset", err);
+    showInlineError(presetFormError, apiErrorDetail(err) || t("preset.save_failed"));
     return;
   }
   resetPresetForm();

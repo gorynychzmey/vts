@@ -69,6 +69,7 @@ function setTags(names) {
 
 async function startServer() {
   const requests = [];
+  const state = { failPut: false };
   const initial = [{ id: "t-biz", name: "Бизнес-клуб" }];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://x");
@@ -97,6 +98,7 @@ async function startServer() {
       requests.push({ method: req.method, path: p, body });
       const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
       if (req.method === "PUT" && /^\/api\/(tasks|recordings)\/[^/]+\/tags$/.test(p)) {
+        if (state.failPut) { res.statusCode = 422; return json({ detail: "Bad tag name" }); }
         return json(setTags((body && body.names) || []));
       }
       if (req.method !== "GET") return json({ status: "ok" });
@@ -119,7 +121,7 @@ async function startServer() {
     });
   });
   await new Promise((r) => server.listen(0, r));
-  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
+  return { state, server, baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
 }
 
 const TASK_CARD = `#task-list [data-task-id="${TASK}"]`;
@@ -168,14 +170,16 @@ async function waitRequest(requests, from, pred, timeout = 4000) {
 
 export async function run() {
   const failures = [];
-  const { server, baseUrl, requests } = await startServer();
+  const { state, server, baseUrl, requests } = await startServer();
   const browser = await launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
     const errors = [];
     page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
     page.on("console", (m) => {
-      if (m.type() === "error" && !m.text().includes("EventSource")) errors.push("console.error: " + m.text());
+      // The failed save below is provoked on purpose.
+      if (m.type() === "error" && !m.text().includes("EventSource") && !m.text().includes("422 (")
+          && !m.text().includes("saving tags failed")) errors.push("console.error: " + m.text());
     });
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     const loaded = await page.waitForSelector(EMPTY_CARD, { timeout: 8000 }).then(() => true).catch(() => false);
@@ -299,6 +303,26 @@ export async function run() {
       }
     } else {
       failures.push("could not reopen the library card's tag editor for the Esc check");
+    }
+
+    // ---- a failed save says so inside the editor, which stays open ----
+    if (await openEditor(page, LIB_CARD)) {
+      state.failPut = true;
+      const inp = `${LIB_CARD} .task-tags-edit .tag-field-input`;
+      await page.type(inp, "Зета");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+      const msg = await page.waitForFunction((c) => {
+        const el = document.querySelector(`${c} .task-tags-edit .tag-row-error`);
+        return el && !el.classList.contains("hidden") && el.offsetParent !== null ? el.textContent : false;
+      }, LIB_CARD, { timeout: 3000 }).then((h) => h.jsonValue()).catch(() => null);
+      if (msg !== "Bad tag name") failures.push(`a failed card tag save should show the server's reason in the editor; got ${JSON.stringify(msg)}`);
+      if (!(await editorOpen(page, LIB_CARD))) failures.push("after a failed save the editor should stay open for a retry");
+      state.failPut = false;
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+    } else {
+      failures.push("could not reopen the library card's tag editor for the failed-save check");
     }
 
     // ---- mobile: a 64-character tag on a card, read-only and in the editor ----

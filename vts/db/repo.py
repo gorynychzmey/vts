@@ -2176,6 +2176,10 @@ class Repo:
         except IntegrityError as exc:
             raise TagExists(name) from exc
 
+    async def tag_by_name(self, user_id: uuid.UUID, name: str) -> Tag | None:
+        """The user's tag a name resolves to (trimmed, case-insensitive)."""
+        return await self._tag_by_key(user_id, normalize_tag_name(name).casefold())
+
     async def _tag_by_key(self, user_id: uuid.UUID, key: str) -> Tag | None:
         return await self.session.scalar(
             select(Tag).where(Tag.user_id == user_id, Tag.name_key == key)

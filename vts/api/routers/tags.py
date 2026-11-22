@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vts.api.deps import get_current_user, get_session_dep
@@ -39,15 +40,22 @@ async def create_tag(
     payload: TagNameIn,
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session_dep),
-) -> TagOut:
+) -> TagOut | JSONResponse:
     """Create a tag. Names are trimmed and compared case-insensitively;
     409 if the user already has one with the same name."""
+    repo = Repo(session)
     try:
-        tag = await Repo(session).create_tag(uuid.UUID(user.id), payload.name)
+        tag = await repo.create_tag(uuid.UUID(user.id), payload.name)
     except TagNameError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TagExists as exc:
-        raise HTTPException(status_code=409, detail=_EXISTS) from exc
+        # The body names the tag in the way, so a client can use it instead of
+        # looking it up again.
+        existing = await repo.tag_by_name(uuid.UUID(user.id), payload.name)
+        body: dict = {"detail": _EXISTS}
+        if existing is not None:
+            body["tag"] = {"id": str(existing.id), "name": existing.name}
+        return JSONResponse(status_code=409, content=body)
     await session.commit()
     return TagOut(id=tag.id, name=tag.name)
 

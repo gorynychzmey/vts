@@ -107,6 +107,7 @@ class RecordingInfo(BaseModel):
 class TagInfo(BaseModel):
     """One of the caller's tags and how many recordings carry it (0 = unused)."""
 
+    id: uuid.UUID
     name: str
     count: int = 0
 

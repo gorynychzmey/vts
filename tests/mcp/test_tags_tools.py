@@ -381,3 +381,27 @@ async def test_a_system_preset_adds_no_tags(factory, user, tmp_path):
         repo = Repo(s)
         rec = await repo.recording_for_task(result.task_id)
         assert (await repo.tags_for_recordings([rec.id])) == {}
+
+
+async def test_blank_tag_names_filter_like_no_tag(mcp_client, factory, user, corpus):
+    async with factory() as s:
+        everything = await tools.list_tasks(user=user, repo=Repo(s))
+        blank = await tools.list_tasks(user=user, repo=Repo(s), tags=["", "  "])
+        assert blank.total == everything.total and len(blank.tasks) == len(everything.tasks)
+        mixed = await tools.list_tasks(user=user, repo=Repo(s), tags=["", "work"])
+        assert {t.title for t in mixed.tasks} == {"alpha", "beta"}
+    async with mcp_client as client:
+        plain = await client.call_tool("list_recordings", {})
+        blank = await client.call_tool("list_recordings", {"tags": [" "]})
+        assert blank.data.total == plain.data.total
+        assert {i.title for i in blank.data.items} == {i.title for i in plain.data.items}
+
+
+async def test_list_tags_carries_the_id_a_preset_stores(mcp_client, factory, corpus):
+    async with mcp_client as client:
+        tags = (await client.call_tool("list_tags", {})).data
+        work = next(t for t in tags if t.name == "Work")
+        made = await client.call_tool(
+            "create_preset", {"name": "p", "options": {"tags": [str(work.id)]}}
+        )
+        assert made.data.options["tags"] == [str(work.id)]

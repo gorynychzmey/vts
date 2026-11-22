@@ -18,7 +18,7 @@
 //     /api/uploads/init (JSON array);
 //   * the preset dialog shows the preset's tags and saves them as IDS,
 //     creating a missing tag with POST /api/tags first — and on 409 (created
-//     meanwhile elsewhere) it re-reads the list and uses the existing id;
+//     meanwhile elsewhere) it uses the tag the 409 body names, no second lookup;
 //   * at 375px, the field with a 64-character chip and its suggestions open
 //     does not make the page scroll sideways.
 import fs from "node:fs";
@@ -57,7 +57,6 @@ async function startServer() {
     { id: "t-fam", name: "Семья", count: 1 },
   ];
   const late = { id: "t-old", name: "Старый", count: 0 };
-  let lateVisible = false;
   const presets = [
     { source: "system", id: "default", name: "Default", editable: false,
       options: { transcript: true, prompts: [], delivery: [], tags: [] } },
@@ -99,11 +98,12 @@ async function startServer() {
         res.end(JSON.stringify(value));
       };
       if (p === "/api/tags" && req.method === "GET") {
-        return json(200, lateVisible ? [...tags, late] : tags);
+        // The late tag never shows here: a client must take it from the 409.
+        return json(200, tags);
       }
       if (p === "/api/tags" && req.method === "POST") {
         const nm = body && body.name;
-        if (nm === late.name) { lateVisible = true; return json(409, { detail: "exists" }); }
+        if (nm === late.name) return json(409, { detail: "Tag already exists", tag: { id: late.id, name: late.name } });
         const made = { id: `t-new-${tags.length}`, name: nm, count: 0 };
         tags = [...tags, made];
         return json(200, { id: made.id, name: made.name });

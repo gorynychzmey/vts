@@ -39,7 +39,7 @@ from vts.services.diarization.merge import label_map, speaker_label_word
 from vts.services.subtitles import render_webvtt
 from vts.api._helpers.artifact_store import recording_label_language
 from vts.api._helpers.recordings import rename_recording
-from vts.api._helpers.task_input import tag_names_or_422
+from vts.api._helpers.task_input import tag_filter_or_none, tag_names_or_422
 from vts.services.recording_artifacts import (
     RecordingArtifactMissing,
     read_recording_result,
@@ -215,7 +215,7 @@ def register(mcp: FastMCP) -> None:
             filters = {
                 "q": q, "created_from": created_from, "created_to": created_to,
                 "task_ids": task_ids, "exclude_task_ids": exclude_ids,
-                "tags": tags or None, "tag_match": tag_match,
+                "tags": tag_filter_or_none(tags), "tag_match": tag_match,
             }
             items = await repo.list_recordings(
                 user_id,
@@ -247,12 +247,12 @@ def register(mcp: FastMCP) -> None:
         """List the caller's tags with how many recordings carry each, sorted
         by name. A tag no recording carries is listed with count 0. Use the
         names with `list_recordings(tags=...)`, `list_tasks(tags=...)` and
-        `tag_recording`."""
+        `tag_recording`. `id` is what a preset's `options.tags` holds."""
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
             rows = await Repo(session).list_tags(uuid.UUID(user.id))
-            return [TagInfo(name=tag.name, count=count) for tag, count in rows]
+            return [TagInfo(id=tag.id, name=tag.name, count=count) for tag, count in rows]
 
     @mcp.tool(name="tag_recording", annotations=UPDATE)
     async def _tag_recording(

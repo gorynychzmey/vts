@@ -32,7 +32,7 @@ from vts.api._helpers.recording_content import (
 )
 from vts.api._helpers.recordings import rename_recording
 from vts.api._helpers.serialization import load_recording_tags, tag_outs
-from vts.api._helpers.task_input import tag_names_or_422
+from vts.api._helpers.task_input import tag_filter_or_none, tag_names_or_422
 from vts.api.deps import get_current_user, get_session_dep, get_settings_dep
 from vts.api.schemas import (
     RecordingListOut,
@@ -156,7 +156,7 @@ async def list_recordings(
     filters = {
         "q": q, "created_from": created_from, "created_to": created_to,
         "task_ids": task_id or None,
-        "tags": tag or None, "tag_match": tag_match,
+        "tags": tag_filter_or_none(tag), "tag_match": tag_match,
     }
     items = await repo.list_recordings(
         user_id, limit=limit, offset=offset, before=before, after=after,

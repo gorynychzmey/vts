@@ -48,6 +48,13 @@ def tag_names_or_422(names: list[str] | None) -> list[str]:
     except TagNameError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+def tag_filter_or_none(names: list[str] | None) -> list[str] | None:
+    """Tag names for a list filter with blank entries dropped, or None when
+    nothing is left, so `?tag=` filters like no tag at all (vts-qwcj)."""
+    kept = [n for n in (names or []) if n and n.strip()]
+    return kept or None
+
+
 def tag_names_from_form(raw: str | None) -> list[str]:
     """The `tags` form field of a multipart upload: a JSON list of names,
     encoded like `prompts` and `delivery`."""

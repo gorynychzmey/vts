@@ -35,7 +35,8 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(name="create_preset", annotations=CREATE)
     async def _create_preset(name: str, options: dict) -> PresetInfo:
         """Create a user-defined preset. options is a pipeline-options dict
-        (language, audio_only, transcript, prompts). Returns the new preset's info."""
+        (language, audio_only, transcript, prompts, tags). `tags` is a list of
+        tag ids from `list_tags`. Returns the new preset's info."""
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)
@@ -47,7 +48,9 @@ def register(mcp: FastMCP) -> None:
     async def _update_preset(
         preset_id: uuid.UUID, name: str | None = None, options: dict | None = None
     ) -> PresetInfo:
-        """Update a user-defined preset's name and/or options."""
+        """Update a user-defined preset's name and/or options. `options` replaces
+        the stored options wholesale, so send every key to keep, `tags`
+        (tag ids from `list_tags`) included."""
         session_factory = get_db_session_factory()
         async with session_factory() as session:
             user, _settings = await mcp_authenticate(session)

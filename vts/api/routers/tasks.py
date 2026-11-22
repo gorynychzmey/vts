@@ -50,7 +50,7 @@ from vts.api._helpers.artifact_store import _archive_task_artifacts, _reset_fina
 from vts.api._helpers.recording_content import recording_for_task_or_404, recording_result
 from vts.api._helpers.recordings import artifacts_removable_for_task, delete_task_with_recording, rename_recording_for_task
 from vts.api._helpers.serialization import can_pause_task, can_restart_final_summary_task, can_restart_summary_task, can_resume_task, load_recording_tags, serialize_task, serialize_task_compact, tag_outs
-from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name, tag_names_from_form, tag_names_or_422
+from vts.api._helpers.task_input import _ALLOWED_UPLOAD_SUFFIXES, _enqueue_uploaded_task, _get_cached_queue_positions, _get_lane_positions, _normalize_delivery_json, _normalize_prompts_json, normalize_display_name, tag_filter_or_none, tag_names_from_form, tag_names_or_422
 from vts.api.deps import (
     get_current_user,
     get_redis,
@@ -307,7 +307,7 @@ async def list_tasks(
         "created_from": created_from,
         "created_to": created_to,
         "source_type": source_type,
-        "tags": tag or None,
+        "tags": tag_filter_or_none(tag),
         "tag_match": tag_match,
     }
     # tag_match alone narrows nothing, so it is not part of the "filtered" test.
@@ -410,7 +410,7 @@ async def count_tasks(
         created_from=created_from,
         created_to=created_to,
         source_type=source_type,
-        tags=tag or None,
+        tags=tag_filter_or_none(tag),
         tag_match=tag_match,
     )
     return JSONResponse({"total": total})

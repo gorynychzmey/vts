@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 
 from fastapi import HTTPException
 
-from vts.api._helpers.task_input import tag_names_or_422
+from vts.api._helpers.task_input import tag_filter_or_none, tag_names_or_422
 from vts.db.models import TaskStatus
 from vts.mcp.cursor import decode_cursor, encode_cursor
 from vts.mcp.schemas import (
@@ -421,7 +421,7 @@ async def list_tasks(
         source_type=source_type,
         task_ids=only_tasks,
         exclude_task_ids=exclude_tasks,
-        tags=tags or None,
+        tags=tag_filter_or_none(tags),
         tag_match=tag_match,
     )
     has_more = len(rows) > limit
@@ -468,7 +468,7 @@ async def list_tasks(
         source_type=source_type,
         task_ids=only_tasks,
         exclude_task_ids=exclude_tasks,
-        tags=tags or None,
+        tags=tag_filter_or_none(tags),
         tag_match=tag_match,
     )
     return TaskPage(

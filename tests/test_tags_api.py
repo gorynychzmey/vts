@@ -115,7 +115,12 @@ async def test_create_duplicate_key_is_409(client):
     assert (await client.post("/api/tags", json={"name": "Work"})).status_code == 201
     r = await client.post("/api/tags", json={"name": " WORK "})
     assert r.status_code == 409
-    assert r.json() == {"detail": "Tag already exists"}
+    first = (await client.get("/api/tags")).json()[0]
+    # The body names the tag in the way, so a client needs no second lookup.
+    assert r.json() == {
+        "detail": "Tag already exists",
+        "tag": {"id": first["id"], "name": "Work"},
+    }
 
 
 @pytest.mark.parametrize("name", ["", "   ", "x" * 65])
