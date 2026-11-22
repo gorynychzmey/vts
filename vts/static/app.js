@@ -49,6 +49,14 @@ const filterInputs = {
   to: document.getElementById("filter-to"),
 };
 
+// Tag filters (vts-qwcj), one per list. `field` is the tag field built with the
+// tag code further down (createTagField needs its constants); the state lives
+// up here because currentFilters() runs from bootstrap on.
+const tagFilters = {
+  tasks: { field: null, match: "all" },
+  library: { field: null, match: "all" },
+};
+
 // Delivery state (vts-j2kh). Declared up here, not next to the delivery code
 // far below: bootstrap's loadPresets() -> applyPresetOptions() reads it, and a
 // `const` declared later would be in its temporal dead zone at that point.
@@ -4498,8 +4506,12 @@ function createTagField({
     } else if (event.key === "Enter") {
       // Never submit the surrounding form from here.
       event.preventDefault();
-      if (active >= 0 && shown[active]) {
-        add(shown[active].name);
+      // A picker that only takes existing tags reads partial text as "the
+      // first match", since the text itself can never become a tag.
+      const pick = active >= 0 ? shown[active]
+        : (!allowCreate && normalizeTagName(input.value) && !findCachedTag(input.value) ? shown[0] : null);
+      if (pick) {
+        add(pick.name);
         input.value = "";
         openSuggestions();
       } else if (commitPending()) {
@@ -4578,6 +4590,17 @@ function createTagField({
       });
       return any;
     },
+    // A tag renamed (`to` a name) or deleted (`to` null) elsewhere. Returns
+    // whether the field held it; the caller decides whether that is a change.
+    replaceName(from, to) {
+      const i = names.findIndex((n) => tagKey(n) === tagKey(from));
+      if (i < 0) return false;
+      const elsewhere = to !== null && names.some((n, j) => j !== i && tagKey(n) === tagKey(to));
+      if (to === null || elsewhere) names.splice(i, 1);
+      else names[i] = to;
+      renderChips();
+      return true;
+    },
     removeNames(values) {
       const keys = new Set((Array.isArray(values) ? values : []).map(tagKey));
       const kept = names.filter((n) => !keys.has(tagKey(n)));
@@ -4625,6 +4648,92 @@ function resetFormTags() {
   if (!formTagField) return;
   presetTagContribution = presetTagNames(findPreset(selectedPresetRef));
   formTagField.setNames(presetTagContribution);
+}
+
+// ---- tag filters (task list and library) ----
+// The tag field limited to existing tags, plus an all/any choice that only
+// shows once two or more tags are chosen (with one they mean the same).
+
+function tagMatchSeg(scope) {
+  return document.getElementById(scope === "tasks" ? "filter-tags-match" : "library-tags-match");
+}
+
+function tagFilterNames(scope) {
+  const field = tagFilters[scope].field;
+  return field ? field.getNames() : [];
+}
+
+function syncTagMatch(scope) {
+  const seg = tagMatchSeg(scope);
+  if (!seg) return;
+  seg.classList.toggle("hidden", tagFilterNames(scope).length < 2);
+  seg.querySelectorAll("button[data-match]").forEach((btn) => {
+    const on = btn.dataset.match === tagFilters[scope].match;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+}
+
+// Sets the filter without firing its change (a restore or a reset).
+function setTagFilter(scope, names, match) {
+  const f = tagFilters[scope];
+  f.match = match === "any" ? "any" : "all";
+  if (f.field) f.field.setNames(names);
+  syncTagMatch(scope);
+}
+
+/** The tag filter as query params: one `tag` per chosen tag and, with two or
+ *  more, `tag_match`. Every request of that list sends it, like q and dates. */
+function appendTagParams(params, scope) {
+  const names = tagFilterNames(scope);
+  names.forEach((name) => params.append("tag", name));
+  if (names.length >= 2) params.set("tag_match", tagFilters[scope].match);
+  return params;
+}
+
+function buildTagFilter(scope, hostId, onChange) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const f = tagFilters[scope];
+  f.field = createTagField({
+    container: host,
+    allowCreate: false,
+    onChange: () => {
+      syncTagMatch(scope);
+      onChange();
+    },
+  });
+  // A filter picks from what exists, so it is labelled "Tags", not "Add a tag".
+  f.field.input.setAttribute("data-i18n-placeholder", "tags.label");
+  f.field.input.placeholder = t("tags.label");
+  tagMatchSeg(scope)?.querySelectorAll("button[data-match]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (f.match === btn.dataset.match) return;
+      f.match = btn.dataset.match;
+      syncTagMatch(scope);
+      onChange();
+    });
+  });
+  syncTagMatch(scope);
+}
+
+buildTagFilter("tasks", "filter-tags", () => onFilterChanged());
+buildTagFilter("library", "library-tags", () => reloadLibraryFiltered(0));
+
+// After the user's tags loaded: drop filter tags that no longer exist (deleted,
+// or another user's after a switch) and repaint the rest under their stored
+// spelling — chips restored before the list arrived painted as new. Silent:
+// the caller is about to load the lists anyway.
+function pruneTagFilters() {
+  if (!tagsLoadedOk) return;
+  for (const scope of ["tasks", "library"]) {
+    const f = tagFilters[scope];
+    if (!f.field) continue;
+    const kept = f.field.getNames().map(findCachedTag).filter(Boolean).map((tag) => tag.name);
+    setTagFilter(scope, kept, f.match);
+  }
+  saveFilters();
+  syncFilterChrome();
 }
 
 // ---- tags on cards ----
@@ -5823,6 +5932,13 @@ async function refreshAll() {
       state.taskPaging.pageSize = cfg.tasks_page_size;
     }
   } catch { /* predicates degrade to false; loadTasks still renders */ }
+  // Tags are per-user (vts-qwcj). Start from nothing, so a failed load for a
+  // new user never leaves the previous user's list looking loaded; and load
+  // them before the lists, whose tag filters are checked against them.
+  tagsCache = [];
+  tagsLoadedOk = false;
+  await loadTags();
+  pruneTagFilters();
   // Prompts, delivery and presets are PER-USER, and refreshAll() is what runs on
   // an impersonation change — so they have to reload here. They used to be
   // bootstrap-only: switching user (or dropping impersonation) reloaded the task
@@ -5854,10 +5970,8 @@ async function refreshAll() {
   if (document.getElementById("view-library")?.hidden === false) {
     await loadLibrary();
   }
-  // Tags are per-user too, and the preset applied below maps its tag ids to
-  // names through this list — so it loads first, and the previous user's
-  // chips go (vts-qwcj).
-  await loadTags();
+  // The preset applied below maps its tag ids to names through the tag list
+  // loaded above; the previous user's chips go (vts-qwcj).
   if (formTagField) formTagField.setNames([]);
   presetTagContribution = [];
   // After loadTasks(), matching bootstrap's order: loadPresets() applies the
@@ -8755,6 +8869,256 @@ document.getElementById("presets-close-btn")?.addEventListener("click", () => {
   presetsDialog?.close();
 });
 
+// ---------------------------------------------------------------------------
+// Manage tags (vts-qwcj): every tag with how many recordings carry it. Rename
+// inline, delete after a confirmation naming that number, create at the top.
+// A change reaches what is on screen without a reload: chips on loaded cards,
+// the new-task form and the tag filters follow a rename and drop a deleted tag.
+// ---------------------------------------------------------------------------
+
+const tagsDialog = document.getElementById("tags-dialog");
+const tagsListEl = document.getElementById("tags-list");
+const tagCreateForm = document.getElementById("tag-create-form");
+const tagCreateInput = document.getElementById("tag-create-input");
+const tagCreateError = document.getElementById("tag-create-error");
+
+const TAG_RENAME_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>';
+const TAG_DELETE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14" /><path d="M10 7V4.5h4V7" /><path d="M7 7l1 13h8l1-13" /></svg>';
+
+function apiStatus(err) {
+  const match = String((err && err.message) || "").match(/^(\d{3}):/);
+  return match ? Number(match[1]) : 0;
+}
+
+// The server's `detail` for an error shown as it is (a 422 on a bad name).
+function apiErrorDetail(err) {
+  const text = String((err && err.message) || "").replace(/^\d{3}:\s*/, "");
+  try {
+    const detail = JSON.parse(text).detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && detail[0] && typeof detail[0].msg === "string") return detail[0].msg;
+  } catch {
+    // not JSON: show the text
+  }
+  return text;
+}
+
+function showInlineError(el, text) {
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+}
+
+/** A tag was renamed (`newName`) or deleted (`newName` null): patch every
+ *  place that holds it. Cards hold ids, so they match by id; the form and the
+ *  filters hold names. A filter that lost a tag re-queries its list. */
+function applyTagChange(id, oldName, newName) {
+  const sameId = (tag) => String(tag.id) === String(id);
+  const patch = (tags) => (newName === null
+    ? tags.filter((tag) => !sameId(tag))
+    : tags.map((tag) => (sameId(tag) ? { ...tag, name: newName } : tag)));
+  document.querySelectorAll(".task").forEach((card) => {
+    const tags = card._runtime && card._runtime.tags;
+    if (Array.isArray(tags) && tags.some(sameId)) setCardTags(card, patch(tags));
+  });
+  libraryItems = libraryItems.map((item) => {
+    const tags = tagList(item.tags);
+    return tags.some(sameId) ? { ...item, tags: patch(tags) } : item;
+  });
+  if (formTagField) formTagField.replaceName(oldName, newName);
+  presetTagContribution = presetTagContribution
+    .map((name) => (tagKey(name) === tagKey(oldName) ? newName : name))
+    .filter((name) => name !== null);
+  for (const scope of ["tasks", "library"]) {
+    const field = tagFilters[scope].field;
+    if (!field || !field.replaceName(oldName, newName)) continue;
+    syncTagMatch(scope);
+    if (newName !== null) {
+      // Same tag, new name: the list is already right, only the saved names move.
+      if (scope === "tasks") saveFilters();
+    } else if (scope === "tasks") {
+      onFilterChanged();
+    } else {
+      reloadLibraryFiltered(0);
+    }
+  }
+}
+
+function tagRowButton(className, labelKey, icon) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `icon-btn ghost ${className}`;
+  btn.setAttribute("data-i18n-title", labelKey);
+  btn.setAttribute("data-i18n-aria-label", labelKey);
+  btn.innerHTML = icon;
+  return btn;
+}
+
+function buildTagRow(tag) {
+  const count = Number(tag.count) || 0;
+  const row = document.createElement("li");
+  row.className = count ? "tag-row" : "tag-row tag-row--unused";
+  row.dataset.tagId = String(tag.id);
+  const main = document.createElement("span");
+  main.className = "tag-row-main";
+  const nameEl = document.createElement("span");
+  nameEl.className = "tag-row-name";
+  nameEl.textContent = tag.name;
+  const countEl = document.createElement("span");
+  countEl.className = count ? "tag-row-count" : "tag-row-count hidden";
+  countEl.textContent = String(count);
+  main.append(nameEl, countEl);
+  const renameBtn = tagRowButton("tag-row-rename", "menu.rename", TAG_RENAME_ICON);
+  const deleteBtn = tagRowButton("tag-row-delete", "menu.delete", TAG_DELETE_ICON);
+  const error = document.createElement("p");
+  error.className = "tag-row-error hidden";
+  error.setAttribute("role", "alert");
+  row.append(main, renameBtn, deleteBtn, error);
+  renameBtn.addEventListener("click", () => startTagRename(row, tag));
+  deleteBtn.addEventListener("click", () => void deleteTagClicked(tag));
+  applyI18n(row);
+  return row;
+}
+
+function renderTagsManager() {
+  if (!tagsListEl) return;
+  tagsListEl.replaceChildren(...tagsCache.map(buildTagRow));
+}
+
+async function reloadTagsManager() {
+  await loadTags();
+  renderTagsManager();
+}
+
+// Enter saves, Esc cancels (the rename, not the dialog), leaving cancels. A
+// 409 keeps the input open with "already exists" under it.
+function startTagRename(row, tag) {
+  const existing = row.querySelector(".tag-row-input");
+  if (existing) {
+    existing.focus();
+    return;
+  }
+  const main = row.querySelector(".tag-row-main");
+  const error = row.querySelector(".tag-row-error");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "text-input tag-row-input";
+  input.maxLength = TAG_NAME_MAX;
+  input.autocomplete = "off";
+  input.value = tag.name;
+  input.setAttribute("aria-label", t("menu.rename"));
+  main.classList.add("hidden");
+  main.after(input);
+  row.classList.add("tag-row--editing");
+  let busy = false;
+  let closed = false;
+  const close = () => {
+    closed = true;
+    input.remove();
+    main.classList.remove("hidden");
+    row.classList.remove("tag-row--editing");
+    showInlineError(error, "");
+  };
+  input.addEventListener("keydown", async (event) => {
+    if (event.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!busy) close();
+      return;
+    }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const name = normalizeTagName(input.value);
+    if (busy || !name) return;
+    if (name === tag.name) {
+      close();
+      return;
+    }
+    busy = true;
+    let renamed;
+    try {
+      renamed = await api(`/api/tags/${encodeURIComponent(tag.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+    } catch (err) {
+      busy = false;
+      showInlineError(error, apiStatus(err) === 409 ? t("tags.exists") : apiErrorDetail(err));
+      input.focus();
+      return;
+    }
+    close();
+    const newName = (renamed && typeof renamed.name === "string" && renamed.name) || name;
+    // Patch the cache first: a chip repainted before the re-read must not
+    // read the new name as a tag that does not exist.
+    tagsCache = tagsCache.map((item) => (String(item.id) === String(tag.id) ? { ...item, name: newName } : item));
+    applyTagChange(tag.id, tag.name, newName);
+    await reloadTagsManager();
+  });
+  input.addEventListener("blur", () => {
+    if (!busy && !closed) close();
+  });
+  input.focus();
+  input.select();
+}
+
+async function deleteTagClicked(tag) {
+  const count = Number(tag.count) || 0;
+  if (!window.confirm(t("tags.delete.confirm", { name: tag.name, count }))) return;
+  try {
+    await api(`/api/tags/${encodeURIComponent(tag.id)}`, { method: "DELETE" });
+  } catch (err) {
+    // 404: already gone — the outcome the user asked for.
+    if (apiStatus(err) !== 404) {
+      window.alert(apiErrorDetail(err));
+      await reloadTagsManager();
+      return;
+    }
+  }
+  tagsCache = tagsCache.filter((item) => String(item.id) !== String(tag.id));
+  applyTagChange(tag.id, tag.name, null);
+  await reloadTagsManager();
+}
+
+tagCreateForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = normalizeTagName(tagCreateInput?.value);
+  if (!name) return;
+  try {
+    await api("/api/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+  } catch (err) {
+    showInlineError(tagCreateError, apiStatus(err) === 409 ? t("tags.exists") : apiErrorDetail(err));
+    return;
+  }
+  if (tagCreateInput) tagCreateInput.value = "";
+  showInlineError(tagCreateError, "");
+  await reloadTagsManager();
+});
+
+tagCreateInput?.addEventListener("input", () => showInlineError(tagCreateError, ""));
+
+document.getElementById("tags-btn")?.addEventListener("click", async () => {
+  if (!tagsDialog) return;
+  if (tagCreateInput) tagCreateInput.value = "";
+  showInlineError(tagCreateError, "");
+  await reloadTagsManager();
+  if (typeof tagsDialog.showModal === "function") {
+    tagsDialog.showModal();
+  } else {
+    tagsDialog.setAttribute("open", "");
+  }
+});
+
+document.getElementById("tags-close-btn")?.addEventListener("click", () => {
+  tagsDialog?.close();
+});
+
 document.getElementById("task-about-close-btn")?.addEventListener("click", () => {
   taskAboutDialog?.close();
 });
@@ -9067,6 +9431,7 @@ function updateLibraryCount(items) {
     // implying it searched everything.
     const filtered = Boolean(
       (libraryQ?.value || "").trim() || (libraryFrom?.value || "") || (libraryTo?.value || "")
+      || tagFilterNames("library").length
     );
     const shown = filtered ? items.length : (libraryPaging.total || items.length);
     libraryCount.textContent = String(shown);
@@ -9125,7 +9490,7 @@ function libraryFilterParams(params) {
   // Through the END of the "to" day: the input is a date, so a recording
   // made that afternoon must match rather than be cut off at midnight.
   if (to) params.set("created_to", `${to}T23:59:59Z`);
-  return params;
+  return appendTagParams(params, "library");
 }
 
 // A recording's position in the library's order. null for one without a
@@ -9393,7 +9758,7 @@ function applyLibraryFilter() {
   const from = (libraryFrom?.value || "").trim();
   const to = (libraryTo?.value || "").trim();
   if (libraryClear) {
-    libraryClear.classList.toggle("hidden", !needle && !from && !to);
+    libraryClear.classList.toggle("hidden", !needle && !from && !to && !tagFilterNames("library").length);
   }
   renderLibraryList(libraryItems);
 }
@@ -9435,6 +9800,7 @@ libraryClear?.addEventListener("click", () => {
   if (libraryQ) libraryQ.value = "";
   if (libraryFrom) libraryFrom.value = "";
   if (libraryTo) libraryTo.value = "";
+  setTagFilter("library", [], "all");
   if (libraryHits) libraryHits.hidden = true;
   reloadLibraryFiltered(0);
 });
@@ -11288,11 +11654,15 @@ function currentFilters() {
     source_type: filterInputs.type?.value || "",
     created_from: filterInputs.from?.value || "",
     created_to: filterInputs.to?.value || "",
+    tags: tagFilterNames("tasks"),
+    tag_match: tagFilters.tasks.match,
   };
 }
 
+// tag_match alone narrows nothing, so it does not count (the server agrees).
 function hasActiveFilters() {
-  return Object.values(currentFilters()).some((v) => v !== "");
+  const f = currentFilters();
+  return Boolean(f.q || f.source_type || f.created_from || f.created_to || f.tags.length);
 }
 
 /** Append the active filters to a task-list query.
@@ -11340,16 +11710,15 @@ function appendFilterParams(params) {
   if (f.source_type) params.set("source_type", f.source_type);
   if (f.created_from) params.set("created_from", `${f.created_from}T00:00:00`);
   if (f.created_to) params.set("created_to", `${f.created_to}T23:59:59`);
-  return params;
+  return appendTagParams(params, "tasks");
 }
 
 function saveFilters() {
   try {
-    const f = currentFilters();
-    if (Object.values(f).every((v) => v === "")) {
+    if (!hasActiveFilters()) {
       window.sessionStorage.removeItem(FILTERS_STORAGE_KEY);
     } else {
-      window.sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(f));
+      window.sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(currentFilters()));
     }
   } catch {
     // Private mode / storage disabled: filtering still works, it just does
@@ -11369,6 +11738,12 @@ function restoreFilters() {
     if (filterInputs.type) filterInputs.type.value = saved.source_type || "";
     if (filterInputs.from) filterInputs.from.value = saved.created_from || "";
     if (filterInputs.to) filterInputs.to.value = saved.created_to || "";
+    // Names only for now; pruneTagFilters() checks them once the tags load.
+    setTagFilter(
+      "tasks",
+      Array.isArray(saved.tags) ? saved.tags.filter((n) => typeof n === "string") : [],
+      saved.tag_match
+    );
     // Same reason as the clear button: a restored filter has to show up on the
     // segmented skin, and .value assignment fires no event.
     renderFilterTypeSegments();
@@ -11414,6 +11789,14 @@ function taskMatchesFilters(task) {
   }
   if (f.created_to && task.created_at) {
     if (new Date(task.created_at) > new Date(`${f.created_to}T23:59:59`)) return false;
+  }
+  if (f.tags.length) {
+    const have = new Set(tagList(task.tags).map((tag) => tagKey(tag.name)));
+    const want = f.tags.map(tagKey);
+    const hit = f.tags.length >= 2 && f.tag_match === "any"
+      ? want.some((key) => have.has(key))
+      : want.every((key) => have.has(key));
+    if (!hit) return false;
   }
   return true;
 }
@@ -11483,6 +11866,7 @@ document.getElementById("filter-clear")?.addEventListener("click", () => {
   if (filterInputs.type) filterInputs.type.value = "";
   if (filterInputs.from) filterInputs.from.value = "";
   if (filterInputs.to) filterInputs.to.value = "";
+  setTagFilter("tasks", [], "all");
   // Assigning .value does not fire `change`, so the segmented skin would keep
   // showing the cleared filter as active.
   renderFilterTypeSegments();

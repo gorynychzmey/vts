@@ -402,6 +402,14 @@ CAPABILITIES: list[Cap] = [
         "states": "a preset stores tag ids; saving it creates missing tags first",
     },
     {
+        "entity": "Tag",
+        "action": "Manage tags (rename, delete)",
+        "label": "tags.manage.open",
+        "endpoints": ["PATCH /api/tags/{tag_id}", "DELETE /api/tags/{tag_id}"],
+        "screen": "Header menu — “Manage tags” (`#tags-dialog`): name · count rows, inline rename, delete with confirmation, create field",
+        "states": "unused tags show no count; a rename to an existing name is a 409 shown inline; delete unlinks it from every recording",
+    },
+    {
         "entity": "Recording",
         "action": "Search the corpus",
         "label": "",

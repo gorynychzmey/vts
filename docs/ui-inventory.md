@@ -4,7 +4,7 @@
 
 Every user-facing capability in VTS: what it acts on, what you can do, which states it moves through, which endpoint serves it, and where it lives in the interface. Rows are derived from the FastAPI route table, `vts/static/index.html`, `vts/static/app.js`, `vts/static/i18n/en.js`, the `StrEnum`s in `vts/db/models.py`, and the Alembic migrations — nothing here is written from memory.
 
-**Counts:** 62 capabilities · 119 routes (89 in the OpenAPI schema, 30 hidden) · 43 MCP tools · 448 English UI strings.
+**Counts:** 63 capabilities · 119 routes (89 in the OpenAPI schema, 30 hidden) · 43 MCP tools · 453 English UI strings.
 
 ## Capabilities by entity
 
@@ -58,6 +58,7 @@ Every user-facing capability in VTS: what it acts on, what you can do, which sta
 | Action | Label (en) | States | Endpoint(s) | Screen |
 | --- | --- | --- | --- | --- |
 | Suggest and create tags | Tags | a preset stores tag ids; saving it creates missing tags first | `GET /api/tags`<br>`POST /api/tags` | Tag field — new-task form (`#task-tags-field`), preset editor (`#preset-tags-field`), card “Edit tags” |
+| Manage tags (rename, delete) | Manage tags | unused tags show no count; a rename to an existing name is a 409 shown inline; delete unlinks it from every recording | `PATCH /api/tags/{tag_id}`<br>`DELETE /api/tags/{tag_id}` | Header menu — “Manage tags” (`#tags-dialog`): name · count rows, inline rename, delete with confirmation, create field |
 
 ### Speaker (voice)
 
@@ -219,6 +220,7 @@ The web UI is a single page (`vts/static/index.html`): one New Task card, one Ta
 | --- | --- |
 | `#tokens-dialog` | API tokens |
 | `#prompts-dialog` | Manage prompts |
+| `#tags-dialog` | Manage tags |
 | `#presets-dialog` | Manage presets |
 | `#delivery-dialog` | Manage delivery |
 | `#share-dialog` | Share |
@@ -256,8 +258,6 @@ Routes not claimed by any capability above (each is a documentation gap):
 - `GET /api/recordings/{recording_id}/entries`
 - `GET /api/recordings/{recording_id}/media`
 - `GET /api/recordings/{recording_id}/speaker-previews/{speaker_label}/{index}/audio`
-- `DELETE /api/tags/{tag_id}`
-- `PATCH /api/tags/{tag_id}`
 - `GET /api/tasks/count`
 
 Frontend call sites with no matching route (would be a bug):

@@ -108,6 +108,13 @@
                   </svg>
                   <span data-i18n="prompts.manage.open">Manage prompts</span>
                 </button>
+                <button type="button" id="tags-btn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1 1 0 0 1 0 1.4l-7.3 7.3a1 1 0 0 1-1.4 0z" />
+                    <circle cx="8" cy="8" r="1.4" />
+                  </svg>
+                  <span data-i18n="tags.manage.open">Manage tags</span>
+                </button>
                 <button type="button" id="speaker-registry-btn">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="9" cy="8" r="3.2" />
@@ -575,6 +582,16 @@
                      aria-label="Created to" data-i18n-aria-label="filters.to" />
             </span>
           </span>
+          <!-- Tag filter (vts-qwcj): the tag field, limited to existing tags, and
+               an all/any choice that only means something with 2+ tags. -->
+          <div class="filter-tags-wrap">
+            <div class="filter-tags" id="filter-tags"></div>
+            <div class="segmented square tag-match-seg hidden" id="filter-tags-match" role="group"
+                 aria-label="Tags" data-i18n-aria-label="tags.label">
+              <button type="button" data-match="all" class="active" aria-pressed="true"><span data-i18n="tags.filter.all">all</span></button>
+              <button type="button" data-match="any" aria-pressed="false"><span data-i18n="tags.filter.any">any</span></button>
+            </div>
+          </div>
           <button type="button" id="filter-clear" class="icon-btn ghost hidden"
                   title="Clear filters" aria-label="Clear filters"
                   data-i18n-title="filters.clear" data-i18n-aria-label="filters.clear">
@@ -681,6 +698,16 @@
               <div class="filter-date-wrap">
                 <input type="date" id="library-to" class="filter-date"
                        aria-label="To date" data-i18n-aria-label="filters.to" />
+              </div>
+            </div>
+            <!-- Tag filter (vts-qwcj): the tag field, limited to existing tags, and
+                 an all/any choice that only means something with 2+ tags. -->
+            <div class="filter-tags-wrap">
+              <div class="filter-tags" id="library-tags"></div>
+              <div class="segmented square tag-match-seg hidden" id="library-tags-match" role="group"
+                   aria-label="Tags" data-i18n-aria-label="tags.label">
+                <button type="button" data-match="all" class="active" aria-pressed="true"><span data-i18n="tags.filter.all">all</span></button>
+                <button type="button" data-match="any" aria-pressed="false"><span data-i18n="tags.filter.any">any</span></button>
               </div>
             </div>
             <button type="button" id="library-clear" class="icon-btn ghost hidden"
@@ -1168,6 +1195,30 @@
           </div>
         </form>
       </div>
+    </dialog>
+
+    <!-- Manage tags (vts-qwcj): every tag with how many recordings carry it;
+         rename inline, delete after a confirmation naming that number. -->
+    <dialog id="tags-dialog" class="tokens-dialog tags-dialog">
+      <div class="tokens-dialog-header">
+        <h2 data-i18n="tags.manage.open">Manage tags</h2>
+        <button type="button" id="tags-close-btn" class="icon-btn ghost"
+                data-i18n-title="tokens.close" data-i18n-aria-label="tokens.close"
+                title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+      <form id="tag-create-form" class="tag-create-form">
+        <input type="text" id="tag-create-input" class="text-input" maxlength="64"
+               autocomplete="off" placeholder="Add a tag…" aria-label="Add a tag…"
+               data-i18n-placeholder="tags.placeholder" data-i18n-aria-label="tags.placeholder" />
+        <button type="submit" class="btn-text primary" data-i18n="speakers.registry.add">Add</button>
+      </form>
+      <p id="tag-create-error" class="tag-row-error hidden" role="alert"></p>
+      <ul id="tags-list" class="tags-list"></ul>
     </dialog>
 
     <dialog id="presets-dialog" class="tokens-dialog presets-dialog">

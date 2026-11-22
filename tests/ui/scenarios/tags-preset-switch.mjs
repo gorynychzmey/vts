@@ -26,8 +26,12 @@ const CT = {
   ".webmanifest": "application/manifest+json",
 };
 
-async function startServer({ tagsFail }) {
+// `switchable`: GET /api/tags answers until `server.switchUser()`, after which
+// it fails and preset P carries an id only the new user has — what a user
+// switch (refreshAll) looks like when the new user's tag list cannot load.
+async function startServer({ tagsFail, switchable = false }) {
   const requests = [];
+  let switched = false;
   const tags = [
     { id: "t-work", name: "Work", count: 1 },
     { id: "t-fam", name: "Family", count: 1 },
@@ -68,7 +72,10 @@ async function startServer({ tagsFail }) {
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify(value));
       };
-      if (p === "/api/tags" && req.method === "GET") return tagsFail ? json(500, { detail: "down" }) : json(200, tags);
+      if (p === "/api/tags" && req.method === "GET") return tagsFail || switched ? json(500, { detail: "down" }) : json(200, tags);
+      if (p === "/api/presets" && switched) {
+        return json(200, presets.map((x) => (x.id === "p" ? { ...x, options: { ...x.options, tags: ["t-other"] } } : x)));
+      }
       if (req.method !== "GET") return json(200, { status: "ok" });
       const table = {
         "/api/version": { version: "verify" },
@@ -84,7 +91,10 @@ async function startServer({ tagsFail }) {
     });
   });
   await new Promise((r) => server.listen(0, r));
-  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
+  return {
+    server, baseUrl: `http://127.0.0.1:${server.address().port}`, requests,
+    switchUser: () => { if (switchable) switched = true; },
+  };
 }
 
 const F = "#task-tags-field";
@@ -132,6 +142,7 @@ export async function run() {
   const browser = await launch();
   const ok = await startServer({ tagsFail: false });
   const down = await startServer({ tagsFail: true });
+  const swap = await startServer({ tagsFail: false, switchable: true });
   try {
     const errors = [];
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
@@ -187,11 +198,33 @@ export async function run() {
       }
     }
 
+    // A user switch whose GET /api/tags fails must not reuse the previous
+    // user's list: the new user's P carries "t-other", which the old list
+    // does not know, so trusting it would write [] (vts-qwcj).
+    const page3 = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    collectErrors(page3, errors);
+    await page3.goto(swap.baseUrl, { waitUntil: "domcontentloaded" });
+    await page3.waitForFunction(() => document.getElementById("preset-pill-label")?.textContent === "Dee", null, { timeout: 6000 }).catch(() => {});
+    swap.switchUser();
+    // refreshAll() is what an impersonation change runs.
+    await page3.evaluate(() => refreshAll());
+    await page3.waitForFunction(() => document.getElementById("preset-pill-label")?.textContent === "Dee", null, { timeout: 4000 }).catch(() => {});
+    await pickPreset(page3, "Pea");
+    const patch3 = await saveChanges(page3, swap.requests);
+    if (!patch3) failures.push("after a user switch, \"Save changes\" sent no PATCH");
+    else {
+      const sent = patch3.body && patch3.body.options && patch3.body.options.tags;
+      if (JSON.stringify(sent) !== JSON.stringify(["t-other"])) {
+        failures.push(`after a user switch with /api/tags down, "Save changes" wrote options.tags = ${JSON.stringify(sent)}, expected the stored ["t-other"]`);
+      }
+    }
+
     if (errors.length) failures.push("JS errors: " + JSON.stringify(errors));
   } finally {
     await browser.close();
     ok.server.close();
     down.server.close();
+    swap.server.close();
   }
   return failures;
 }

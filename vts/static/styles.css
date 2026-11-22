@@ -6189,3 +6189,108 @@ dialog:not([open]) {
 #preset-tags-block.hidden {
   display: none;
 }
+
+/* Tag filters (vts-qwcj): the picker grows like the search field, and the
+   all/any choice sits beside it. Both wrap as one unit on a phone. */
+.filter-tags-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.filter-tags {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* .segmented is display:flex, which a bare .hidden does not beat. */
+.tag-match-seg.hidden {
+  display: none;
+}
+
+/* Manage tags dialog. */
+.tag-create-form {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0 0 0.4rem;
+}
+
+.tag-create-form .text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tags-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.2rem;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.tag-row-main,
+.tag-row-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tag-row-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.tag-row-main.hidden,
+.tag-row-count.hidden,
+.tag-row-error.hidden {
+  display: none;
+}
+
+.tag-row-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.tag-row-count {
+  flex: 0 0 auto;
+  color: var(--ink-soft);
+  font-size: var(--fs-meta);
+}
+
+.tag-row-count::before {
+  content: "· ";
+}
+
+/* An unused tag: no number, and a muted colour. */
+.tag-row--unused .tag-row-name {
+  color: var(--ink-faint);
+}
+
+.tag-row-input {
+  padding: 0.3rem 0.5rem;
+}
+
+.tag-row-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--danger-ink);
+  font-size: var(--fs-meta);
+}
+
+#tag-create-error {
+  margin: 0 0 0.4rem;
+}
