@@ -25,7 +25,16 @@ _oauth_client_cache: dict[str, object] = {}
 
 def _get_oauth(settings: Settings):
     client_id, client_secret = client_credentials(settings)
-    key = f"{settings.auth_provider}:{client_id}:{client_secret}"
+    # Tenant / discovery URL are part of the key: they change which issuer the
+    # cached client talks to even when the credentials stay the same.
+    issuer = (
+        settings.entra_tenant_id
+        if settings.auth_provider == "entra"
+        else settings.oidc_discovery_url
+        if settings.auth_provider == "oidc"
+        else ""
+    )
+    key = f"{settings.auth_provider}:{issuer}:{client_id}:{client_secret}"
     if key not in _oauth_client_cache:
         _oauth_client_cache[key] = build_oauth_client(settings)
     return _oauth_client_cache[key]
@@ -81,11 +90,9 @@ async def auth_callback(request: Request):
         # internals to an unauthenticated caller is a needless leak (vts-1ec).
         logger.warning("OAuth exchange failed: %s", exc)
         raise HTTPException(status_code=400, detail="OAuth exchange failed") from exc
-    # authlib puts the verified ID-token claims in token["userinfo"]; fall back
-    # to claims carried on the token itself when that is empty.
-    email = email_from_claims(settings, token.get("userinfo") or {}) or email_from_claims(
-        settings, token
-    )
+    # authlib puts the verified ID-token claims in token["userinfo"]; the
+    # top-level token fields are OAuth response metadata, not identity claims.
+    email = email_from_claims(settings, token.get("userinfo") or {})
     if not email:
         raise HTTPException(status_code=400, detail="The identity provider did not return an email")
     if not is_email_allowed(

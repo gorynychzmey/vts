@@ -4,15 +4,16 @@ vts authenticates every request through a single resolver,
 [`resolve_user_from_request`](../vts/services/auth.py), which picks one of
 three branches depending on configuration and request shape:
 
-1. **Browser / web UI** — Google OAuth 2.0 (OIDC) → signed `vts_session`
-   cookie → server-side session record in Redis.
-2. **MCP clients** (claude.ai, ChatGPT, Claude Desktop) — same Google OAuth
-   client, FastMCP-managed bearer tokens. Token claims carry the email.
+1. **Browser / web UI** — OpenID Connect login through the configured
+   provider (Google, Microsoft Entra ID or a generic OIDC provider) → signed
+   `vts_session` cookie → server-side session record.
+2. **MCP clients** (claude.ai, ChatGPT, Claude Desktop) — same provider and
+   OAuth client, FastMCP-managed bearer tokens. Token claims carry the email.
 3. **Dev mode** — `VTS_OAUTH_ENABLED=false` + `X-Forwarded-User` header.
    No proxy CIDR check; intended only for local development.
 
-There is no separate web auth proxy in front of vts; Google is contacted
-directly by vts and by FastMCP. Authelia / oauth2-proxy / similar layers
+There is no separate web auth proxy in front of vts; the identity provider is
+contacted directly by vts and by FastMCP. Authelia / oauth2-proxy / similar layers
 are **not** part of the supported topology.
 
 ## Configuration
@@ -23,8 +24,18 @@ All keys take `VTS_` env overrides. Defaults match
 | YAML / setting | Env | Default | Notes |
 |----------------|-----|---------|-------|
 | `oauth_enabled` | `VTS_OAUTH_ENABLED` | `false` | Master switch. When `false`, X-Forwarded-User is the only path. |
-| `oauth_client_id` | `VTS_OAUTH_CLIENT_ID` | `null` | Google OAuth 2.0 Web client ID. |
-| `oauth_client_secret` | `VTS_OAUTH_CLIENT_SECRET` | `null` | Required when `oauth_enabled=true`. App fails to start without it. |
+| `auth_provider` | `VTS_AUTH_PROVIDER` | `google` | Login provider: `google`, `entra` or `oidc`. One per installation. |
+| `oauth_client_id` | `VTS_OAUTH_CLIENT_ID` | `null` | Google OAuth 2.0 Web client ID (`google` only). |
+| `oauth_client_secret` | `VTS_OAUTH_CLIENT_SECRET` | `null` | Google client secret (`google` only). |
+| `entra_tenant_id` | `VTS_ENTRA_TENANT_ID` | `null` | `entra`: directory (tenant) GUID or verified domain. `common` / `organizations` / `consumers` are rejected. |
+| `entra_client_id` | `VTS_ENTRA_CLIENT_ID` | `null` | `entra`: application (client) ID. |
+| `entra_client_secret` | `VTS_ENTRA_CLIENT_SECRET` | `null` | `entra`: client secret value. |
+| `entra_api_scope` | `VTS_ENTRA_API_SCOPE` | `null` | `entra`: the exposed API scope, e.g. `api://<client-id>/vts`. |
+| `oidc_discovery_url` | `VTS_OIDC_DISCOVERY_URL` | `null` | `oidc`: the provider's `.well-known/openid-configuration` URL. |
+| `oidc_client_id` | `VTS_OIDC_CLIENT_ID` | `null` | `oidc`: client ID. |
+| `oidc_client_secret` | `VTS_OIDC_CLIENT_SECRET` | `null` | `oidc`: client secret. |
+| `oidc_email_claim` | `VTS_OIDC_EMAIL_CLAIM` | `email` | `oidc`: ID-token claim that holds the user's email. |
+| `oidc_scopes` | `VTS_OIDC_SCOPES` | `openid email profile` | `oidc`: scopes requested at login. |
 | `oauth_allowed_domains` | `VTS_OAUTH_ALLOWED_DOMAINS` | `[]` | Right-hand side of `@`, case-insensitive. |
 | `oauth_allowed_emails` | `VTS_OAUTH_ALLOWED_EMAILS` | `[]` | Exact match, case-insensitive. |
 | `public_base_url` | `VTS_PUBLIC_BASE_URL` | `null` | e.g. `https://vts.example.com`. Used to build OAuth redirect URIs. |
@@ -36,6 +47,13 @@ All keys take `VTS_` env overrides. Defaults match
 | `mcp_enabled` | `VTS_MCP_ENABLED` | `true` | Mounts the FastMCP sub-app at `mcp_path`. |
 | `mcp_path` | `VTS_MCP_PATH` | `/mcp` | Where FastMCP is mounted. |
 
+When `oauth_enabled=true`, the app fails at startup if the chosen provider's
+settings (or `VTS_PUBLIC_BASE_URL`) are incomplete; the error names every
+missing variable. With `VTS_AUTH_PROVIDER` unset, behaviour is exactly the
+Google setup below. Switching provider does not migrate users: they are keyed
+by email, so a person keeps their data as long as the new provider reports the
+same address.
+
 Allow-list semantics: at least one of `oauth_allowed_domains` or
 `oauth_allowed_emails` must match. Both empty → access denied (fail-safe).
 The allow-list is **re-checked on every request**, not just at login,
@@ -46,7 +64,17 @@ accepted via [`_mcp_oauth_alias_promotion`](../vts/core/config.py) and map
 to the canonical `oauth_*` / `public_base_url` keys. Canonical keys win when
 both are set. Plan to remove the aliases in 1.2.x.
 
-## Google client setup
+## Redirect URIs
+
+Whatever the provider, register two redirect URIs with it:
+
+- `<VTS_PUBLIC_BASE_URL>/auth/callback` — web UI
+- `<VTS_PUBLIC_BASE_URL><mcp_path>/auth/callback` — MCP clients
+  (`/mcp/auth/callback` with the default `mcp_path`)
+
+`VTS_PUBLIC_BASE_URL` has no trailing slash, e.g. `https://vts.example.com`.
+
+## Google client setup (default provider)
 
 1. In [GCP Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials),
    create an **OAuth 2.0 Client ID** of type **Web application**.
@@ -62,19 +90,85 @@ both are set. Plan to remove the aliases in 1.2.x.
 One Google project + one client ID covers both the web UI and MCP — they
 share the OAuth allow-list and the same email-derived user identity.
 
+## Microsoft Entra ID setup
+
+Set `VTS_AUTH_PROVIDER=entra`. Tested against faked provider endpoints; a run
+against a live tenant has not been recorded yet.
+
+1. In the Entra admin center → **App registrations** → **New registration**.
+   Supported account types: **single tenant** (this directory only). vts
+   refuses `common`, `organizations` and `consumers` as tenant id, because
+   the email falls back to `preferred_username` / `upn`, which another
+   organization's admin could set to an allow-listed address.
+2. **Authentication** → add a **Web** platform with both redirect URIs from
+   [Redirect URIs](#redirect-uris).
+3. **Certificates & secrets** → new client secret; copy the **value** (not the
+   secret ID).
+4. **Expose an API** → set the Application ID URI (default
+   `api://<client-id>`) and add a scope, e.g. `vts`. The full scope string,
+   `api://<client-id>/vts`, goes into `VTS_ENTRA_API_SCOPE`; MCP access tokens
+   are issued for it.
+5. Configure vts:
+
+```bash
+VTS_OAUTH_ENABLED=true
+VTS_AUTH_PROVIDER=entra
+VTS_PUBLIC_BASE_URL=https://vts.example.com
+VTS_ENTRA_TENANT_ID=00000000-0000-0000-0000-000000000000
+VTS_ENTRA_CLIENT_ID=11111111-1111-1111-1111-111111111111
+VTS_ENTRA_CLIENT_SECRET=<secret value>
+VTS_ENTRA_API_SCOPE=api://11111111-1111-1111-1111-111111111111/vts
+VTS_OAUTH_ALLOWED_DOMAINS=example.com
+```
+
+**Which claim becomes the user:** the first non-empty of `email`,
+`preferred_username`, `upn` in the ID token, trimmed and lower-cased. Many
+Entra accounts have no `email` claim, so `preferred_username` (the sign-in
+name) is what usually identifies them. The allow-list is applied to that
+address.
+
+## Generic OIDC (Keycloak / Authentik)
+
+Set `VTS_AUTH_PROVIDER=oidc` for any provider with an OpenID Connect
+discovery document.
+
+1. Create a **confidential** client (authorization-code flow) at the provider
+   with both redirect URIs from [Redirect URIs](#redirect-uris).
+2. Make sure the ID token carries the user's email, in `email` or in a claim
+   you name with `VTS_OIDC_EMAIL_CLAIM`.
+3. Find the discovery URL: Keycloak
+   `https://idp.example.com/realms/<realm>/.well-known/openid-configuration`,
+   Authentik
+   `https://idp.example.com/application/o/<app-slug>/.well-known/openid-configuration`.
+
+```bash
+VTS_OAUTH_ENABLED=true
+VTS_AUTH_PROVIDER=oidc
+VTS_PUBLIC_BASE_URL=https://vts.example.com
+VTS_OIDC_DISCOVERY_URL=https://idp.example.com/realms/main/.well-known/openid-configuration
+VTS_OIDC_CLIENT_ID=vts
+VTS_OIDC_CLIENT_SECRET=<client secret>
+VTS_OIDC_EMAIL_CLAIM=email
+VTS_OIDC_SCOPES="openid email profile"
+VTS_OAUTH_ALLOWED_EMAILS=alice@example.com
+```
+
+The user is the value of the configured claim, trimmed and lower-cased; a
+missing or empty claim rejects the login with 400.
+
 ## Browser auth flow
 
 ```mermaid
 sequenceDiagram
   participant B as Browser
   participant V as vts (FastAPI)
-  participant G as Google
+  participant G as Identity provider
   participant R as Redis
 
   B->>V: GET /  (no cookie)
   V-->>B: 302 → /auth/login?next=/
   B->>V: GET /auth/login
-  V-->>B: 302 → accounts.google.com/...
+  V-->>B: 302 → provider authorization endpoint
   B->>G: OAuth consent
   G-->>B: 302 → /auth/callback?code=...
   B->>V: GET /auth/callback?code=...
@@ -102,14 +196,14 @@ Cookie shape:
 sequenceDiagram
   participant C as MCP client
   participant V as vts (FastMCP)
-  participant G as Google
+  participant G as Identity provider
 
   C->>V: POST /mcp/  (no token)
   V-->>C: 401 + WWW-Authenticate (OAuth metadata at host root)
   C->>V: GET /.well-known/oauth-authorization-server
   V-->>C: metadata pointing at /authorize, /token
   C->>V: GET /authorize?...
-  V-->>C: 302 → Google
+  V-->>C: 302 → identity provider
   C->>G: consent
   G-->>V: /mcp/auth/callback?code=...
   V->>G: exchange code
@@ -169,7 +263,7 @@ from the allow-list (takes effect on the next request).
   `/%5Cevil`) that some browsers normalise into cross-origin redirects.
 - **Fail-safe allow-list.** Empty `oauth_allowed_domains` *and* empty
   `oauth_allowed_emails` → all OAuth logins denied. There is no implicit
-  "anyone with a Google account" mode.
+  "anyone who can sign in at the provider" mode.
 
 ## Session secret persistence
 
@@ -196,7 +290,7 @@ Back up `session_secret` together with the rest of `vts.env`.
 not sliding. The cookie expires `N` days after the *most recent successful
 login*, regardless of activity in between. To shorten the exposure window
 for stolen cookies, lower this value; users will re-authenticate via
-Google more often. To eagerly invalidate a single session, call
+the identity provider more often. To eagerly invalidate a single session, call
 `POST /auth/logout` (revokes the sid in Redis).
 
 ## Admin impersonation
@@ -214,7 +308,7 @@ context by adding `?as_user=<email>` to any request. Notes:
 
 ## Dev mode
 
-For local development without a Google client:
+For local development without an identity-provider client:
 
 ```bash
 export VTS_OAUTH_ENABLED=false

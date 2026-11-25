@@ -53,7 +53,7 @@ flowchart LR
   LLM[llama.cpp / Ollama<br/>HTTP server]
   FS[(artifacts_root<br/>/srv/vts-data)]
 
-  User -- "Google OAuth → vts_session cookie" --> PWA
+  User -- "OIDC login → vts_session cookie" --> PWA
   PWA -- "POST /api/tasks (cookie)" --> API
   PWA <-- "GET /api/events (SSE)" --> API
   API -- "enqueue" --> R
@@ -295,11 +295,11 @@ Authentication is handled in-process by vts. All paths converge in
 [`resolve_user_from_request`](../vts/services/auth.py), which picks one of
 three branches:
 
-1. **Browser / web UI** — Google OAuth 2.0 → signed `vts_session` cookie
+1. **Browser / web UI** — OIDC login (Google, Entra ID or generic OIDC; see AUTH.md) → signed `vts_session` cookie
    (Starlette `SessionMiddleware`) → server-side sid record in Redis with
    matching TTL. Logout (`POST /auth/logout`) deletes the Redis record;
    the cookie alone is not enough to authenticate.
-2. **MCP clients** — same Google client; FastMCP-managed bearer tokens
+2. **MCP clients** — same provider and client; FastMCP-managed bearer tokens
    whose `email` claim is checked against the allow-list on every call.
 3. **Dev mode** (`oauth_enabled=false`) — trust `X-Forwarded-User` header.
    No proxy IP gating; for local development only.
@@ -404,8 +404,18 @@ The legacy `services.llama.*` YAML keys are still accepted as aliases for
 | YAML path | Env | Default |
 |-----------|-----|---------|
 | `oauth_enabled` | `VTS_OAUTH_ENABLED` | `false` |
+| `auth_provider` | `VTS_AUTH_PROVIDER` | `google` |
 | `oauth_client_id` | `VTS_OAUTH_CLIENT_ID` | `null` |
 | `oauth_client_secret` | `VTS_OAUTH_CLIENT_SECRET` | `null` |
+| `entra_tenant_id` | `VTS_ENTRA_TENANT_ID` | `null` |
+| `entra_client_id` | `VTS_ENTRA_CLIENT_ID` | `null` |
+| `entra_client_secret` | `VTS_ENTRA_CLIENT_SECRET` | `null` |
+| `entra_api_scope` | `VTS_ENTRA_API_SCOPE` | `null` |
+| `oidc_discovery_url` | `VTS_OIDC_DISCOVERY_URL` | `null` |
+| `oidc_client_id` | `VTS_OIDC_CLIENT_ID` | `null` |
+| `oidc_client_secret` | `VTS_OIDC_CLIENT_SECRET` | `null` |
+| `oidc_email_claim` | `VTS_OIDC_EMAIL_CLAIM` | `email` |
+| `oidc_scopes` | `VTS_OIDC_SCOPES` | `openid email profile` |
 | `oauth_allowed_domains` | `VTS_OAUTH_ALLOWED_DOMAINS` | `[]` |
 | `oauth_allowed_emails` | `VTS_OAUTH_ALLOWED_EMAILS` | `[]` |
 | `public_base_url` | `VTS_PUBLIC_BASE_URL` | `null` |
@@ -803,7 +813,7 @@ REST endpoints:
 Auth endpoints (active when `oauth_enabled=true`):
 
 - `GET  /auth/login`     — start OAuth flow
-- `GET  /auth/callback`  — Google redirects here; sets `vts_session` cookie
+- `GET  /auth/callback`  — the identity provider redirects here; sets `vts_session` cookie
 - `POST /auth/logout`    — revoke server-side sid; CSRF-gated by `Sec-Fetch-Site`
 
 MCP OAuth endpoints (mounted at host root per RFC 8414 / 9728):
@@ -811,7 +821,7 @@ MCP OAuth endpoints (mounted at host root per RFC 8414 / 9728):
 - `GET /.well-known/oauth-authorization-server`
 - `GET /.well-known/oauth-protected-resource`
 - `/authorize`, `/token`, `/register`, `/consent`
-- `GET /mcp/auth/callback` — FastMCP's Google redirect target (`mcp_path` configurable)
+- `GET /mcp/auth/callback` — FastMCP's provider redirect target (`mcp_path` configurable)
 
 MCP transport itself: `POST /mcp/` (FastMCP streamable-http).
 

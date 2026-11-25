@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy as sa
 from fastapi import HTTPException
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from vts.core.config import get_settings
 from vts.db.models import UserSession
@@ -49,7 +49,7 @@ def _fake_discovery(monkeypatch) -> None:
     monkeypatch.setattr(StarletteOAuth2App, "load_server_metadata", _meta)
 
 
-async def _login_and_callback(app, monkeypatch, token) -> int:
+async def _login_and_callback(app, monkeypatch, token) -> tuple[int, Response]:
     from authlib.integrations.starlette_client.apps import StarletteOAuth2App
 
     async def _fake(self, request):

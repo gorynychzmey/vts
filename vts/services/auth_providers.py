@@ -87,7 +87,8 @@ def client_credentials(settings: Settings) -> tuple[str, str]:
 def oauth_client_secret(settings: Settings) -> Any:
     """Client secret of the chosen provider (key material for MCP OAuth state)."""
     if getattr(settings, "auth_provider", "google") == "google":
-        # Legacy shape: callers holding only the Google fields keep working.
+        # getattr: duck-typed test settings objects may lack auth_provider; they
+        # carry only the Google fields.
         return settings.oauth_client_secret
     return client_credentials(settings)[1]
 

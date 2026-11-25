@@ -113,6 +113,10 @@ Set `/opt/vts/config/vts.env`:
 VTS_IMAGE=ghcr.io/OWNER/vts:<version>
 ```
 
+To enable login (Google, Microsoft Entra ID or a generic OIDC provider such as
+Keycloak or Authentik), follow [AUTH.md](AUTH.md); the provider's variables go
+into the same `vts.env`.
+
 If you need to rebuild and push images from a build host:
 
 ```bash
