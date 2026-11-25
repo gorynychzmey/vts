@@ -6,6 +6,7 @@ provider, so adding one means touching only this file.
 """
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from typing import Any
 
@@ -66,12 +67,23 @@ def validate_auth_settings(settings: Settings) -> None:
             # could mint a token for an allow-listed address.
             raise AuthConfigError(
                 f"VTS_ENTRA_TENANT_ID='{tenant}' accepts accounts from other "
-                "organizations; a specific tenant (GUID or verified domain) is required"
+                "organizations; a specific tenant (its GUID) is required"
             )
+        try:
+            uuid.UUID(tenant)
+        except ValueError:
+            # Tokens name the tenant by GUID in `iss`; a domain would never match.
+            raise AuthConfigError(
+                f"VTS_ENTRA_TENANT_ID='{tenant}' is not a GUID; tokens carry the "
+                "tenant GUID in their `iss` claim, so a domain name cannot be "
+                "verified. Copy the Tenant ID from the Entra admin center → Overview"
+            ) from None
         if not settings.entra_api_scope.strip().rpartition("/")[2].strip():
             raise AuthConfigError(
                 "VTS_ENTRA_API_SCOPE has an empty scope name; expected e.g. api://<client-id>/vts"
             )
+    if provider == "oidc" and _blank(settings.oidc_email_claim):
+        raise AuthConfigError("VTS_OIDC_EMAIL_CLAIM is empty; expected a claim name such as 'email'")
 
 
 def client_credentials(settings: Settings) -> tuple[str, str]:
@@ -123,6 +135,11 @@ def _clean(value: Any) -> str | None:
     return cleaned or None
 
 
+def _is_verified(claims: Mapping[str, Any]) -> bool:
+    value = claims.get("email_verified")
+    return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
 def email_from_claims(settings: Settings, claims: Mapping[str, Any]) -> str | None:
     """The user's email from ID-token / userinfo claims, or None when absent.
 
@@ -133,6 +150,9 @@ def email_from_claims(settings: Settings, claims: Mapping[str, Any]) -> str | No
     if provider == "entra":
         names: tuple[str, ...] = _ENTRA_EMAIL_CLAIMS
     elif provider == "oidc":
+        if not settings.oidc_trust_unverified_email and not _is_verified(claims):
+            # A generic IdP may let users type any address into their profile.
+            return None
         names = (settings.oidc_email_claim,)
     else:
         names = ("email",)
@@ -178,12 +198,24 @@ def build_mcp_auth_provider(settings: Settings, client_storage: Any) -> Any:
     if provider == "oidc":
         from fastmcp.server.auth.oidc_proxy import OIDCProxy
 
-        return OIDCProxy(
-            config_url=(settings.oidc_discovery_url or "").strip(),
-            client_id=client_id,
-            client_secret=client_secret,
-            **common,
-        )
+        config_url = (settings.oidc_discovery_url or "").strip()
+        try:
+            # verify_id_token: the identity (and email_verified) comes from the
+            # verified ID token, whose claims FastMCP hands to
+            # resolve_user_from_request; access tokens may be opaque.
+            # required_scopes: requested upstream and advertised to MCP clients.
+            return OIDCProxy(
+                config_url=config_url,
+                client_id=client_id,
+                client_secret=client_secret,
+                verify_id_token=True,
+                required_scopes=settings.oidc_scopes.split(),
+                **common,
+            )
+        except Exception as exc:  # discovery is fetched here, at startup
+            raise AuthConfigError(
+                f"could not load the OIDC discovery document {config_url}: {exc}"
+            ) from exc
     from fastmcp.server.auth.providers.google import GoogleProvider
 
     return GoogleProvider(

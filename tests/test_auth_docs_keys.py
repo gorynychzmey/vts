@@ -28,11 +28,16 @@ def test_doc_names_the_expected_variables() -> None:
         "VTS_OIDC_DISCOVERY_URL",
         "VTS_OIDC_EMAIL_CLAIM",
         "VTS_OIDC_SCOPES",
+        "VTS_OIDC_TRUST_UNVERIFIED_EMAIL",
     ]
 
 
 @pytest.mark.parametrize("env_name", _documented())
 def test_documented_variable_loads_into_settings(env_name: str, monkeypatch) -> None:
+    if env_name == "VTS_OIDC_TRUST_UNVERIFIED_EMAIL":  # the only boolean key
+        monkeypatch.setenv(env_name, "true")
+        assert Settings().oidc_trust_unverified_email is True
+        return
     value = "entra" if env_name == "VTS_AUTH_PROVIDER" else "sentinel-value"
     monkeypatch.setenv(env_name, value)
     settings = Settings()

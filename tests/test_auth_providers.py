@@ -15,6 +15,7 @@ from vts.services.auth_providers import (
 )
 
 BASE = "https://vts.example.com"
+TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47"
 
 
 def _s(**kw) -> Settings:
@@ -31,7 +32,7 @@ def _entra(**kw) -> Settings:
     kw.setdefault("entra_api_scope", "api://app-id/vts")
     base = {
         "auth_provider": "entra",
-        "entra_tenant_id": "tenant-1",
+        "entra_tenant_id": TENANT,
         "entra_client_id": "e-id",
         "entra_client_secret": "e-secret",
     }
@@ -154,7 +155,7 @@ def test_web_registration_entra() -> None:
     assert reg["name"] == "entra"
     assert reg["client_id"] == "e-id" and reg["client_secret"] == "e-secret"
     assert reg["server_metadata_url"] == (
-        "https://login.microsoftonline.com/tenant-1/v2.0/.well-known/openid-configuration"
+        f"https://login.microsoftonline.com/{TENANT}/v2.0/.well-known/openid-configuration"
     )
     assert reg["client_kwargs"] == {"scope": "openid email profile"}
 
@@ -197,14 +198,16 @@ def test_entra_without_any_address_is_none() -> None:
 
 def test_oidc_uses_configured_claim() -> None:
     s = _oidc(oidc_email_claim="mail")
-    assert email_from_claims(s, {"mail": "M@Corp.de", "email": "other@x.com"}) == "m@corp.de"
+    claims = {"mail": "M@Corp.de", "email": "other@x.com", "email_verified": True}
+    assert email_from_claims(s, claims) == "m@corp.de"
 
 
 def test_oidc_missing_or_empty_custom_claim_is_none_never_empty_string() -> None:
     s = _oidc(oidc_email_claim="mail")
-    assert email_from_claims(s, {"email": "other@x.com"}) is None
-    assert email_from_claims(s, {"mail": "   "}) is None
-    assert email_from_claims(s, {"mail": None}) is None
+    ok = {"email_verified": True}
+    assert email_from_claims(s, {"email": "other@x.com", **ok}) is None
+    assert email_from_claims(s, {"mail": "   ", **ok}) is None
+    assert email_from_claims(s, {"mail": None, **ok}) is None
 
 
 def test_non_string_claim_is_none() -> None:
@@ -254,7 +257,7 @@ def test_mcp_entra_splits_the_api_scope(monkeypatch) -> None:
     assert p.kwargs == {
         "client_id": "e-id",
         "client_secret": "e-secret",
-        "tenant_id": "tenant-1",
+        "tenant_id": TENANT,
         "required_scopes": ["vts"],
         "identifier_uri": "api://app-id",
         "base_url": BASE,
@@ -278,6 +281,8 @@ def test_mcp_oidc_arguments(monkeypatch) -> None:
         "config_url": "https://idp.example.com/.well-known/openid-configuration",
         "client_id": "o-id",
         "client_secret": "o-secret",
+        "verify_id_token": True,
+        "required_scopes": ["openid", "email", "profile"],
         "base_url": BASE,
         "redirect_path": "/mcp/auth/callback",
         "require_authorization_consent": "remember",
@@ -325,3 +330,101 @@ def test_oidc_proxy_signature_accepts_our_arguments(monkeypatch) -> None:
     _patch(monkeypatch, "fastmcp.server.auth.oidc_proxy", "OIDCProxy")
     kwargs = build_mcp_auth_provider(_oidc(), STORAGE).kwargs
     inspect.signature(OIDCProxy.__init__).bind(None, **kwargs)
+
+
+# --- fix wave (vts-sf93.1) ---------------------------------------------------------
+
+
+def test_oidc_verified_email_is_accepted() -> None:
+    assert email_from_claims(_oidc(), {"email": "A@x.com", "email_verified": True}) == "a@x.com"
+    assert email_from_claims(_oidc(), {"email": "a@x.com", "email_verified": "True"}) == "a@x.com"
+
+
+@pytest.mark.parametrize("verified", [False, "false", "", None, 1, "yes"])
+def test_oidc_unverified_email_is_rejected(verified) -> None:
+    assert email_from_claims(_oidc(), {"email": "a@x.com", "email_verified": verified}) is None
+
+
+def test_oidc_absent_email_verified_is_rejected() -> None:
+    assert email_from_claims(_oidc(), {"email": "a@x.com"}) is None
+
+
+def test_oidc_trust_flag_accepts_unverified_email() -> None:
+    s = _oidc(oidc_trust_unverified_email=True)
+    assert email_from_claims(s, {"email": "a@x.com"}) == "a@x.com"
+    assert email_from_claims(s, {"email": "a@x.com", "email_verified": False}) == "a@x.com"
+
+
+def test_trust_flag_env_name(monkeypatch) -> None:
+    monkeypatch.setenv("VTS_OIDC_TRUST_UNVERIFIED_EMAIL", "true")
+    assert Settings().oidc_trust_unverified_email is True
+    monkeypatch.delenv("VTS_OIDC_TRUST_UNVERIFIED_EMAIL")
+    assert Settings().oidc_trust_unverified_email is False
+
+
+def test_google_and_entra_ignore_email_verified() -> None:
+    assert email_from_claims(_google(), {"email": "a@x.com"}) == "a@x.com"
+    assert email_from_claims(_entra(), {"email": "a@x.com", "email_verified": False}) == "a@x.com"
+
+
+@pytest.mark.parametrize("tenant", ["contoso.onmicrosoft.com", "example.com", "tenant-1", "not-a-guid"])
+def test_entra_tenant_must_be_a_guid(tenant) -> None:
+    with pytest.raises(AuthConfigError, match="Tenant ID") as exc:
+        validate_auth_settings(_entra(entra_tenant_id=tenant))
+    assert "iss" in str(exc.value)
+
+
+def test_entra_guid_tenant_is_accepted_with_whitespace_and_case() -> None:
+    validate_auth_settings(_entra(entra_tenant_id=f"  {TENANT.upper()} "))
+
+
+def test_entra_multi_tenant_message_comes_before_guid_rule() -> None:
+    with pytest.raises(AuthConfigError, match="specific tenant"):
+        validate_auth_settings(_entra(entra_tenant_id="common"))
+
+
+@pytest.mark.parametrize("claim", ["", "   "])
+def test_blank_oidc_email_claim_is_rejected(claim) -> None:
+    with pytest.raises(AuthConfigError, match="VTS_OIDC_EMAIL_CLAIM"):
+        validate_auth_settings(_oidc(oidc_email_claim=claim))
+
+
+def test_mcp_oidc_requests_configured_scopes(monkeypatch) -> None:
+    _patch(monkeypatch, "fastmcp.server.auth.oidc_proxy", "OIDCProxy")
+    p = build_mcp_auth_provider(_oidc(oidc_scopes=" openid  mail groups "), STORAGE)
+    assert p.kwargs["required_scopes"] == ["openid", "mail", "groups"]
+    assert p.kwargs["verify_id_token"] is True
+
+
+def test_mcp_oidc_discovery_failure_is_a_config_error(monkeypatch) -> None:
+    import httpx
+
+    class _Unreachable:
+        def __init__(self, **kwargs) -> None:
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("fastmcp.server.auth.oidc_proxy.OIDCProxy", _Unreachable)
+    with pytest.raises(AuthConfigError, match="idp.example.com/.well-known/openid-configuration"):
+        build_mcp_auth_provider(_oidc(), STORAGE)
+
+
+def test_real_oidc_proxy_uses_id_token_claims(monkeypatch) -> None:
+    """With verify_id_token the claims FastMCP hands to resolve_user_from_request
+    come from the verified ID token (audience = our client id)."""
+    from fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
+
+    config = OIDCConfiguration(
+        issuer="https://idp.example.com",
+        authorization_endpoint="https://idp.example.com/auth",
+        token_endpoint="https://idp.example.com/token",
+        jwks_uri="https://idp.example.com/jwks",
+        response_types_supported=["code"],
+        subject_types_supported=["public"],
+        id_token_signing_alg_values_supported=["RS256"],
+    )
+    monkeypatch.setattr(OIDCProxy, "get_oidc_configuration", lambda self, *a, **k: config)
+    p = build_mcp_auth_provider(_oidc(), None)
+    assert type(p).__name__ == "OIDCProxy"
+    assert p._uses_alternate_verification() is True
+    assert p._token_validator.audience == "o-id"
+    assert p.required_scopes == ["openid", "email", "profile"]

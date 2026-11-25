@@ -334,6 +334,14 @@ class Settings(BaseSettings):
         default="openid email profile",
         validation_alias=AliasChoices("VTS_OIDC_SCOPES", "oidc_scopes"),
     )
+    # Accept an email the IdP has not marked email_verified (only when the IdP
+    # never lets users edit their own address).
+    oidc_trust_unverified_email: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VTS_OIDC_TRUST_UNVERIFIED_EMAIL", "oidc_trust_unverified_email"
+        ),
+    )
     session_secret: str | None = Field(
         default=None,
         validation_alias=AliasChoices(

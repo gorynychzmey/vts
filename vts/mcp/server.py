@@ -102,8 +102,8 @@ def build_mcp_server() -> FastMCP:
         # base_url stays host-only (no /mcp suffix): that's what the spec
         # calls the "resource server URL" and what well-known docs reference.
         # redirect_path is moved off /auth/callback (used by the web UI) to
-        # /mcp/auth/callback, which is what the Google client already has
-        # registered for MCP.
+        # /mcp/auth/callback, the second redirect URI registered with the
+        # login provider's client (docs/AUTH.md, Redirect URIs).
         # Persist OAuth state ourselves instead of letting FastMCP default it.
         #
         # Its default is a platformdirs path (/root/.local/share/fastmcp) that

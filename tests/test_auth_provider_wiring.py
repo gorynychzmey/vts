@@ -19,7 +19,7 @@ def _entra_env(monkeypatch, **extra) -> None:
     env = {
         "VTS_OAUTH_ENABLED": "true",
         "VTS_AUTH_PROVIDER": "entra",
-        "VTS_ENTRA_TENANT_ID": "tenant-1",
+        "VTS_ENTRA_TENANT_ID": "72f988bf-86f1-41af-91ab-2d7cd011db47",
         "VTS_ENTRA_CLIENT_ID": "e-id",
         "VTS_ENTRA_CLIENT_SECRET": "e-secret-e-secret",
         "VTS_ENTRA_API_SCOPE": "api://app-id/vts",
@@ -123,7 +123,7 @@ def _entra_settings(**kw):
     base = dict(
         oauth_enabled=True,
         auth_provider="entra",
-        entra_tenant_id="t",
+        entra_tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
         entra_client_id="i",
         entra_client_secret="s",
         entra_api_scope="api://a/vts",
@@ -172,6 +172,37 @@ async def test_bearer_without_provider_email_claim_is_401(monkeypatch) -> None:
     with pytest.raises(HTTPException) as exc:
         await resolve_user_from_request(_bearer_request(), _Sess(), _entra_settings())
     assert exc.value.status_code == 401
+
+
+def _oidc_settings(**kw):
+    from vts.core.config import Settings
+
+    base = dict(
+        oauth_enabled=True,
+        auth_provider="oidc",
+        oidc_discovery_url="https://idp.test/.well-known/openid-configuration",
+        oidc_client_id="i",
+        oidc_client_secret="s",
+        public_base_url="https://vts.test",
+        oauth_allowed_domains=["example.com"],
+    )
+    return Settings(**{**base, **kw})
+
+
+async def test_bearer_oidc_unverified_email_is_401(monkeypatch) -> None:
+    token = SimpleNamespace(claims={"email": "eve@example.com", "email_verified": False})
+    monkeypatch.setattr("vts.services.auth.get_access_token", lambda: token)
+    with pytest.raises(HTTPException) as exc:
+        await resolve_user_from_request(_bearer_request(), _Sess(), _oidc_settings())
+    assert exc.value.status_code == 401
+
+
+async def test_bearer_oidc_verified_email_resolves_the_user(monkeypatch) -> None:
+    token = SimpleNamespace(claims={"email": "Eve@Example.com", "email_verified": True})
+    monkeypatch.setattr("vts.services.auth.get_access_token", lambda: token)
+    monkeypatch.setattr("vts.services.auth.Repo", lambda _s: _Repo())
+    user = await resolve_user_from_request(_bearer_request(), _Sess(), _oidc_settings())
+    assert user.username == "eve@example.com"
 
 
 def test_build_mcp_server_entra_builds_azure_provider(monkeypatch, tmp_path) -> None:

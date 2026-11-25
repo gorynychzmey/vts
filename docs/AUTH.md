@@ -27,7 +27,7 @@ All keys take `VTS_` env overrides. Defaults match
 | `auth_provider` | `VTS_AUTH_PROVIDER` | `google` | Login provider: `google`, `entra` or `oidc`. One per installation. |
 | `oauth_client_id` | `VTS_OAUTH_CLIENT_ID` | `null` | Google OAuth 2.0 Web client ID (`google` only). |
 | `oauth_client_secret` | `VTS_OAUTH_CLIENT_SECRET` | `null` | Google client secret (`google` only). |
-| `entra_tenant_id` | `VTS_ENTRA_TENANT_ID` | `null` | `entra`: directory (tenant) GUID or verified domain. `common` / `organizations` / `consumers` are rejected. |
+| `entra_tenant_id` | `VTS_ENTRA_TENANT_ID` | `null` | `entra`: directory (tenant) ID — the GUID, not a domain name. `common` / `organizations` / `consumers` are rejected. |
 | `entra_client_id` | `VTS_ENTRA_CLIENT_ID` | `null` | `entra`: application (client) ID. |
 | `entra_client_secret` | `VTS_ENTRA_CLIENT_SECRET` | `null` | `entra`: client secret value. |
 | `entra_api_scope` | `VTS_ENTRA_API_SCOPE` | `null` | `entra`: the exposed API scope, e.g. `api://<client-id>/vts`. |
@@ -35,7 +35,8 @@ All keys take `VTS_` env overrides. Defaults match
 | `oidc_client_id` | `VTS_OIDC_CLIENT_ID` | `null` | `oidc`: client ID. |
 | `oidc_client_secret` | `VTS_OIDC_CLIENT_SECRET` | `null` | `oidc`: client secret. |
 | `oidc_email_claim` | `VTS_OIDC_EMAIL_CLAIM` | `email` | `oidc`: ID-token claim that holds the user's email. |
-| `oidc_scopes` | `VTS_OIDC_SCOPES` | `openid email profile` | `oidc`: scopes requested at login. |
+| `oidc_scopes` | `VTS_OIDC_SCOPES` | `openid email profile` | `oidc`: scopes requested at login (web and MCP). |
+| `oidc_trust_unverified_email` | `VTS_OIDC_TRUST_UNVERIFIED_EMAIL` | `false` | `oidc`: accept an email the provider has not marked `email_verified`. See [Generic OIDC](#generic-oidc-keycloak--authentik). |
 | `oauth_allowed_domains` | `VTS_OAUTH_ALLOWED_DOMAINS` | `[]` | Right-hand side of `@`, case-insensitive. |
 | `oauth_allowed_emails` | `VTS_OAUTH_ALLOWED_EMAILS` | `[]` | Exact match, case-insensitive. |
 | `public_base_url` | `VTS_PUBLIC_BASE_URL` | `null` | e.g. `https://vts.example.com`. Used to build OAuth redirect URIs. |
@@ -92,8 +93,9 @@ share the OAuth allow-list and the same email-derived user identity.
 
 ## Microsoft Entra ID setup
 
-Set `VTS_AUTH_PROVIDER=entra`. Tested against faked provider endpoints; a run
-against a live tenant has not been recorded yet.
+Set `VTS_AUTH_PROVIDER=entra`. **Tested against fakes only so far:** the
+automated tests use faked provider endpoints, and a run against a live tenant
+has not been recorded yet.
 
 1. In the Entra admin center → **App registrations** → **New registration**.
    Supported account types: **single tenant** (this directory only). vts
@@ -108,7 +110,17 @@ against a live tenant has not been recorded yet.
    `api://<client-id>`) and add a scope, e.g. `vts`. The full scope string,
    `api://<client-id>/vts`, goes into `VTS_ENTRA_API_SCOPE`; MCP access tokens
    are issued for it.
-5. Configure vts:
+5. **Manifest** → set `api.requestedAccessTokenVersion` to `2`
+   (`accessTokenAcceptedVersion` in the older manifest format). Otherwise
+   Entra issues v1 access tokens for the API, whose issuer
+   (`https://sts.windows.net/...`) fails the v2 issuer check and every MCP
+   call is rejected.
+6. **Token configuration** → **Add optional claim** → token type
+   **Access** → `email` (recommended; see below).
+7. Copy the **Tenant ID** from the Entra admin center → **Overview**. It must
+   be the GUID: tokens name the tenant by GUID in their `iss` claim, so vts
+   refuses a domain name such as `contoso.onmicrosoft.com` at startup.
+8. Configure vts:
 
 ```bash
 VTS_OAUTH_ENABLED=true
@@ -122,20 +134,32 @@ VTS_OAUTH_ALLOWED_DOMAINS=example.com
 ```
 
 **Which claim becomes the user:** the first non-empty of `email`,
-`preferred_username`, `upn` in the ID token, trimmed and lower-cased. Many
-Entra accounts have no `email` claim, so `preferred_username` (the sign-in
-name) is what usually identifies them. The allow-list is applied to that
-address.
+`preferred_username`, `upn`, trimmed and lower-cased. The allow-list is
+applied to that address. Where the claims come from differs by path:
+
+- **Web login** reads the ID token. Many Entra accounts have no `email`
+  claim, so `preferred_username` (the sign-in name) is what usually
+  identifies them.
+- **MCP** reads the v2 access token issued for `VTS_ENTRA_API_SCOPE`. It
+  carries `preferred_username`; `email` and `upn` appear only when added as
+  optional claims. Add the `email` optional claim to access tokens (step 6)
+  so web and MCP resolve the same person to the same address even where the
+  sign-in name differs from the mailbox.
 
 ## Generic OIDC (Keycloak / Authentik)
 
 Set `VTS_AUTH_PROVIDER=oidc` for any provider with an OpenID Connect
-discovery document.
+discovery document. **Tested against fakes only so far:** the automated tests
+use faked discovery and token endpoints; no run against a live Keycloak or
+Authentik has been recorded yet.
 
 1. Create a **confidential** client (authorization-code flow) at the provider
    with both redirect URIs from [Redirect URIs](#redirect-uris).
 2. Make sure the ID token carries the user's email, in `email` or in a claim
-   you name with `VTS_OIDC_EMAIL_CLAIM`.
+   you name with `VTS_OIDC_EMAIL_CLAIM`, **and** `email_verified: true`.
+   Disable user-editable email at the provider (in Keycloak: realm
+   **User profile** → `email` not editable by users), otherwise anyone could
+   set an allow-listed address on their own account.
 3. Find the discovery URL: Keycloak
    `https://idp.example.com/realms/<realm>/.well-known/openid-configuration`,
    Authentik
@@ -149,12 +173,28 @@ VTS_OIDC_DISCOVERY_URL=https://idp.example.com/realms/main/.well-known/openid-co
 VTS_OIDC_CLIENT_ID=vts
 VTS_OIDC_CLIENT_SECRET=<client secret>
 VTS_OIDC_EMAIL_CLAIM=email
-VTS_OIDC_SCOPES="openid email profile"
+VTS_OIDC_SCOPES=openid email profile
 VTS_OAUTH_ALLOWED_EMAILS=alice@example.com
 ```
 
-The user is the value of the configured claim, trimmed and lower-cased; a
-missing or empty claim rejects the login with 400.
+No quotes around `VTS_OIDC_SCOPES`: container env files (`podman --env-file`,
+`docker --env-file`) keep quotes literally, and the scope list would start
+with `"openid`.
+
+The user is the value of the configured claim, trimmed and lower-cased. The
+email is accepted only when the token says `email_verified` is `true`; a
+missing or empty claim, or an unverified email, rejects the web login with 400
+and an MCP call with 401. If your provider never sends `email_verified` and
+users cannot change their own address there, set
+`VTS_OIDC_TRUST_UNVERIFIED_EMAIL=true` to skip that check.
+
+MCP uses the same client: FastMCP requests `VTS_OIDC_SCOPES` and reads the
+identity from the verified **ID token** (audience = the client ID), so the
+access token may be opaque.
+
+The provider must be reachable when vts starts: the discovery document is
+fetched at boot to set up MCP, and an unreachable or invalid discovery URL
+stops startup with an error naming that URL.
 
 ## Browser auth flow
 
