@@ -270,7 +270,28 @@ how it is maintained. See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md),
 
 ## License
 
-[MIT](LICENSE) © Viktor Vostrikov
+VTS is free software, © 2026 Viktor Vostrikov, licensed under the
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+In short: you may run, study, modify and redistribute VTS, including on your
+own servers and inside your company, free of charge. If you distribute VTS or
+let others use a modified version over a network, you must make the
+corresponding source code available to them under the same license.
+
+Exceptions and history:
+
+- The delivery-plugin contract (`vts/delivery/contract.py`,
+  `vts/delivery/__init__.py`, published as the
+  [`vts-delivery-contract`](packages/vts-delivery-contract) package) is
+  licensed under the MIT License, so the contract itself places no license
+  requirements on delivery plugins.
+- Releases before 1.12.0 were published under the MIT License and remain
+  available under it.
+- A commercial license (without the AGPL obligations) is available on
+  request from the copyright holder.
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md),
+see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Third-party models
 

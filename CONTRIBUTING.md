@@ -5,7 +5,10 @@ contributions — bug reports, fixes, ideas — are welcome.
 
 ## Quick links
 
-- [LICENSE](LICENSE) — MIT.
+- [LICENSE](LICENSE) — AGPL-3.0-only (the delivery contract is MIT; see the
+  README's License section).
+- [CLA.md](CLA.md) — the Contributor License Agreement you sign once with
+  your first pull request.
 - [SECURITY.md](SECURITY.md) — how to report security issues (please don't
   open public issues for those).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the system fits together.

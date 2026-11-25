@@ -63,3 +63,10 @@ materially, so it may lag a trivial edit to the module.
 The module is not stored in this directory. It is force-included from
 `vts/delivery/contract.py` at build time, so there is exactly one copy and it
 cannot drift from the core that enforces it.
+
+## License
+
+MIT (see [LICENSE](LICENSE)), unlike VTS itself, which is AGPL-3.0-only. It
+covers `vts/delivery/contract.py` and `vts/delivery/__init__.py`, the two files
+this package ships, so importing the contract places no license requirements
+on a plugin.

@@ -1,6 +1,11 @@
 VTS Diarization Sidecar — Third-Party Attribution
 ==================================================
 
+The sidecar's own code (server.py, fetch_models.py) is part of VTS,
+Copyright (c) 2026 Viktor Vostrikov, licensed under the GNU Affero General
+Public License v3.0 only (/app/LICENSE). Source code:
+https://github.com/gorynychzmey/vts (docker/diarization/).
+
 This container bundles the pyannote speaker-diarization pipeline and its model
 weights. Attribution is provided here per the terms of the weights' license.
 

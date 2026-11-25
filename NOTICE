@@ -1,6 +1,12 @@
 VTS
 Copyright (c) 2026 Viktor Vostrikov
-Licensed under the MIT License (see LICENSE).
+Licensed under the GNU Affero General Public License v3.0 only (see LICENSE).
+Source code: https://github.com/gorynychzmey/vts
+
+Exceptions: vts/delivery/contract.py and vts/delivery/__init__.py (the
+vts-delivery-contract package) are licensed under the MIT License; see
+packages/vts-delivery-contract/LICENSE. Releases before 1.12.0 were published
+under the MIT License.
 
 This product includes or is distributed with third-party components. Their
 licenses are listed below; the full inventory and the obligations are in

@@ -209,8 +209,8 @@ operator needs a legal basis; the product documentation should say so.
 
 | Component | License | Notes | Risk |
 |---|---|---|---|
-| VTS (this repository) | MIT, (c) 2026 Viktor Vostrikov (`LICENSE`) | | none |
-| `packages/vts-delivery-contract` (1.4.0) | Effectively MIT (it force-includes `vts/delivery/contract.py` and `__init__.py` from this repository) | **`pyproject.toml` declares no `license` field and ships no license file**, so the built wheel carries no license metadata | low (see actions; matters for relicensing, section 8) |
+| VTS (this repository) | AGPL-3.0-only from 1.12.0, (c) 2026 Viktor Vostrikov (`LICENSE`); earlier releases MIT | Decision 2026-11-25 (bd `vts-sf93.7`); external contributions under `CLA.md` | none |
+| `packages/vts-delivery-contract` (1.4.1) | MIT (`packages/vts-delivery-contract/LICENSE`; the force-included `vts/delivery/contract.py` and `__init__.py` carry `SPDX-License-Identifier: MIT`) | Kept permissive so plugins are not pulled into the AGPL | none |
 
 ---
 
@@ -271,7 +271,7 @@ Each item must be resolved (or consciously accepted) before selling.
 | 5 | **Diarization weights come from an unofficial mirror**; byte identity with the official gated release is unverified | low | Accept the gated conditions once with a vendor Hugging Face account, compare the official sha256 values with those pinned in `fetch_models.py`, and record the result. Point `docker/diarization/NOTICE` at the official repository (keep the mirror as the download location if desired) |
 | 6 | **CC-BY-4.0 attribution** for the diarization weights is present in the sidecar image but not visible to end users or in product docs | low | Keep `docker/diarization/NOTICE`; add the component credits (WeSpeaker, VBx/BUT Speech@FIT, pyannote segmentation) to it; reproduce the attribution in the top-level `NOTICE` (done) and in the product's "About / licenses" page or documentation |
 | 7 | **Font license texts not shipped**; IBM Plex Mono subsets may conflict with the Reserved Font Name "Plex" | low | Add `vts/static/fonts/OFL-Manrope.txt` and `OFL-IBMPlexMono.txt` (copyright line + OFL-1.1). For Plex, prefer IBM's own unmodified split `woff2` files from the [IBM Plex release](https://github.com/IBM/plex), or accept the Google Fonts subsets as the common industry practice |
-| 8 | **Delivery contract package has no license metadata** | low | Add `license = "MIT"` (or Apache-2.0) and `license-files` to `packages/vts-delivery-contract/pyproject.toml`. Keep it permissive regardless of the main app's future license, so third-party plugins are not pulled into AGPL/BSL terms |
+| 8 | **Delivery contract package has no license metadata** **Done (1.4.1):** `license = "MIT"` + `LICENSE`, SPDX headers in both files. | low | Add `license = "MIT"` (or Apache-2.0) and `license-files` to `packages/vts-delivery-contract/pyproject.toml`. Keep it permissive regardless of the main app's future license, so third-party plugins are not pulled into AGPL/BSL terms |
 | 9 | **Referenced third-party images are unpinned** (`whisper-asr-webservice:latest`, `llama.cpp:server`, `ollama:latest`) and were not inspected | low | If the vendor delivers them: pin by digest, inspect licenses (ffmpeg build, CUDA/ROCm EULAs) and add them to the source offer. Otherwise document that the operator pulls them |
 | 10 | **LLM/embedding/ASR models are operator-supplied** | low | State in the contract which party supplies the models. If the vendor pre-installs a model, check its card (not every Qwen size is Apache-2.0) and ship its license/NOTICE |
 | 11 | **yt-dlp terms-of-service exposure** | medium (hosted) / low (on-prem) | Position URL ingestion as an optional, disable-able feature; operator-responsibility clause in the contract (section 6) |

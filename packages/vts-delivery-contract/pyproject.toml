@@ -1,9 +1,13 @@
 [project]
 name = "vts-delivery-contract"
-version = "1.4.0"
+version = "1.4.1"
 description = "The VTS delivery-adapter contract: what a delivery plugin must implement"
 readme = "README.md"
 requires-python = ">=3.12"
+# MIT on purpose, unlike the AGPL-licensed VTS itself: plugins import this
+# package, and a copyleft contract would pull every plugin into the AGPL.
+license = "MIT"
+license-files = ["LICENSE"]
 # Deliberately none: a plugin author installs this to get the contract, and
 # nothing else. Adding a dependency here would push it into every plugin.
 dependencies = []
