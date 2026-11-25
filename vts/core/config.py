@@ -292,6 +292,48 @@ class Settings(BaseSettings):
             "oauth_allowed_domains",
         ),
     )
+    # Pluggable login provider (vts-sf93.1). One provider per installation;
+    # "google" keeps the VTS_OAUTH_CLIENT_* settings above.
+    auth_provider: Literal["google", "entra", "oidc"] = Field(
+        default="google",
+        validation_alias=AliasChoices("VTS_AUTH_PROVIDER", "auth_provider"),
+    )
+    entra_tenant_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_ENTRA_TENANT_ID", "entra_tenant_id"),
+    )
+    entra_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_ENTRA_CLIENT_ID", "entra_client_id"),
+    )
+    entra_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_ENTRA_CLIENT_SECRET", "entra_client_secret"),
+    )
+    entra_api_scope: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_ENTRA_API_SCOPE", "entra_api_scope"),
+    )
+    oidc_discovery_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_OIDC_DISCOVERY_URL", "oidc_discovery_url"),
+    )
+    oidc_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_OIDC_CLIENT_ID", "oidc_client_id"),
+    )
+    oidc_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("VTS_OIDC_CLIENT_SECRET", "oidc_client_secret"),
+    )
+    oidc_email_claim: str = Field(
+        default="email",
+        validation_alias=AliasChoices("VTS_OIDC_EMAIL_CLAIM", "oidc_email_claim"),
+    )
+    oidc_scopes: str = Field(
+        default="openid email profile",
+        validation_alias=AliasChoices("VTS_OIDC_SCOPES", "oidc_scopes"),
+    )
     session_secret: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
