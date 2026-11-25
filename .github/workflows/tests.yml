@@ -19,7 +19,7 @@ jobs:
       # created unprivileged in the "Provision test database" step below, so CI
       # has the same privilege shape as production (vts-e1p).
       postgres:
-        image: tensorchord/vchord-postgres:pg17-v1.1.1
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: docker.io/tensorchord/vchord-postgres:pg17-v1.1.1
+    image: docker.io/pgvector/pgvector:pg17
     # The cluster superuser is `postgres`; the application role (`vts`) is
     # created unprivileged by docker-entrypoint-initdb.d/10-app-role.sh. This
     # mirrors production, where `vts` is not a superuser — keeping the app role
@@ -90,9 +90,10 @@ services:
     restart: unless-stopped
 
   redis:
-    # Drop-in compatible alternatives: valkey/valkey:8, eqalpha/keydb:latest.
-    # Override via REDIS_IMAGE in .env (e.g. REDIS_IMAGE=valkey/valkey:8).
-    image: ${REDIS_IMAGE:-redis:8}
+    # Valkey (BSD-3-Clause) by default: Redis 8 is RSALv2/SSPLv1/AGPLv3 (see
+    # docs/licenses/THIRD_PARTY.md). Valkey keeps the `redis-server` binary name.
+    # Override via REDIS_IMAGE in .env (e.g. REDIS_IMAGE=redis:7.2).
+    image: ${REDIS_IMAGE:-valkey/valkey:8}
     command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
     volumes:
       - redis_data:/data

@@ -59,13 +59,12 @@ run_tests_in_container() {
   "${runtime}" network create "${pg_network}" >/dev/null 2>&1 || true
 
   echo "Starting Postgres container ${pg_container}"
-  # VectorChord image (pgvector-carrying), matching prod, docker-compose.yml,
-  # and .github/workflows/tests.yml. Plain postgres:16 lacks the `vector` extension,
-  # so the speaker-registry tests (Vector columns, CREATE EXTENSION vector) fail here
+  # pgvector image, matching docker-compose.yml and .github/workflows/tests.yml.
+  # Plain postgres:16 lacks the `vector` extension, so the speaker-registry tests (Vector columns, CREATE EXTENSION vector) fail here
   # while passing everywhere else — the exact dev/CI/prod split this must avoid.
   "${runtime}" run -d --rm --name "${pg_container}" --network "${pg_network}" \
     -e POSTGRES_USER=vts -e POSTGRES_PASSWORD=vts -e POSTGRES_DB=vts_test \
-    tensorchord/vchord-postgres:pg17-v1.1.1 >/dev/null
+    pgvector/pgvector:pg17 >/dev/null
 
   # Wait for the DATABASE, not just the server. `pg_isready` answers "ready"
   # while the entrypoint is still running initdb: the official image starts a

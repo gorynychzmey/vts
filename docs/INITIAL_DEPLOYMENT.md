@@ -71,9 +71,10 @@ CONTAINER_ENGINE=podman ./scripts/setup_postgres.sh
 `scripts/setup_postgres.sh` is idempotent and creates/updates role/database (defaults: `vts` / `vts`),
 and installs the `vector` extension.
 
-The Postgres image must ship pgvector — the deployment uses
-`tensorchord/vchord-postgres`, which bundles both `vector` and `vchord`. A stock
-`postgres:17` image does not have it and the extension step will fail.
+The Postgres image must ship pgvector 0.7 or newer (`halfvec` is used) — e.g.
+`pgvector/pgvector:pg17`, the default in `docker-compose.yml`. Any image that
+bundles pgvector works (VectorChord images do too; VTS needs only `vector`). A
+stock `postgres:17` image does not have it and the extension step will fail.
 
 **The `vector` extension must be created by a superuser.** Migration
 `0014_pgvector_extension` runs `CREATE EXTENSION IF NOT EXISTS vector`, but it
@@ -258,8 +259,8 @@ psql -h <db-host> -U vts -d vts -c '\dx'   # expect: vector
 
 Two related prerequisites:
 
-- The Postgres image must ship pgvector (`tensorchord/vchord-postgres`); a
-  stock `postgres:17` cannot install it at all.
+- The Postgres image must ship pgvector ≥ 0.7 (e.g. `pgvector/pgvector:pg17`);
+  a stock `postgres:17` cannot install it at all.
 - The diarization sidecar must be `diar-build-1.1.0`+ (see section 6).
 
 Fresh installs are not affected: `scripts/setup_postgres.sh` already creates the
