@@ -1,0 +1,102 @@
+VTS
+Copyright (c) 2026 Viktor Vostrikov
+Licensed under the MIT License (see LICENSE).
+
+This product includes or is distributed with third-party components. Their
+licenses are listed below; the full inventory and the obligations are in
+docs/licenses/THIRD_PARTY.md. License texts of Python packages are installed
+alongside each package (site-packages/<name>-<version>.dist-info/), and texts
+of Debian packages in /usr/share/doc/<package>/copyright inside each image.
+
+-------------------------------------------------------------------------------
+Model weights (diarization image)
+-------------------------------------------------------------------------------
+
+pyannote speaker-diarization-community-1
+  Original work: https://huggingface.co/pyannote/speaker-diarization-community-1
+  Obtained from: https://huggingface.co/pyannote-community/speaker-diarization-community-1
+  License: Creative Commons Attribution 4.0 International (CC-BY-4.0)
+           https://creativecommons.org/licenses/by/4.0/
+  Redistributed unmodified. Components and credits:
+  - segmentation model: A. Plaquet and H. Bredin (2023), pyannote.audio
+  - speaker embedding: WeSpeaker ResNet34 trained on VoxCeleb,
+    H. Wang et al., "Wespeaker" (ICASSP 2023); CC-BY-4.0 per the VoxCeleb
+    dataset license
+  - PLDA / VBx clustering parameters: BUT Speech@FIT; F. Landini et al. (2022)
+  See docker/diarization/NOTICE (shipped in the image as /app/NOTICE).
+
+-------------------------------------------------------------------------------
+Software in the container images
+-------------------------------------------------------------------------------
+
+FFmpeg (Debian package; invoked as a separate program in the vts image and
+loaded as shared libraries in the diarization image)
+  https://ffmpeg.org/   License: GNU GPL version 2 or later (Debian's build
+  enables GPL components such as libx264 and libx265)
+
+Debian GNU/Linux base system (glibc, bash, coreutils, libsndfile, g++, ...)
+  https://www.debian.org/   Licenses: various, including GPL-2.0, GPL-3.0,
+  LGPL-2.1 and permissive licenses
+
+CPython   https://www.python.org/   License: PSF License Version 2
+
+Source code of the GPL- and LGPL-licensed Debian packages in a VTS container
+image is available from https://snapshot.debian.org/ for the exact package
+versions listed by `dpkg -l` inside that image.
+
+PyTorch (torch, torchaudio, torchcodec)
+  https://pytorch.org/   License: BSD-3-Clause / BSD-2-Clause; torch bundles
+  third-party code whose licenses ship in its dist-info/licenses directory
+  Copyright (c) Meta Platforms, Inc. and affiliates, and contributors
+
+pyannote.audio, pyannote.core, pyannote.database, pyannote.metrics,
+pyannote.pipeline
+  https://github.com/pyannote/pyannote-audio   License: MIT
+  Copyright (c) CNRS
+
+-------------------------------------------------------------------------------
+Python packages (vts image)
+-------------------------------------------------------------------------------
+
+Apache License 2.0 (each package's NOTICE, if any, is in its dist-info):
+  asyncpg, fastmcp, python-multipart, tokenizers, huggingface_hub, requests,
+  multidict, yarl, frozenlist, aiosignal, propcache, opentelemetry-api,
+  cyclopts, aiofile, caio, hf-xet, jsonschema-path, pathable,
+  py-key-value-aio; cryptography (Apache-2.0 OR BSD-3-Clause, bundles
+  OpenSSL under Apache-2.0)
+
+Mozilla Public License 2.0 (unmodified; source at https://pypi.org/):
+  certifi, pywebpush, py-vapid, tqdm (MPL-2.0 AND MIT)
+
+Unlicense: yt-dlp, email-validator
+
+MIT, BSD, ISC, PSF and similar permissive licenses: all other packages,
+including fastapi, uvicorn, starlette, sqlalchemy, alembic, pgvector, httpx,
+pydantic, PyYAML, redis, authlib, itsdangerous, jsonschema, mcp, anyio,
+aiohttp, rich, urllib3, websockets.
+
+-------------------------------------------------------------------------------
+Fonts (vts/static/fonts)
+-------------------------------------------------------------------------------
+
+Manrope
+  Copyright 2018 The Manrope Project Authors
+  (https://github.com/googlefonts/manrope)
+  License: SIL Open Font License 1.1 (https://openfontlicense.org/)
+
+IBM Plex Mono
+  Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
+  (https://github.com/IBM/plex)
+  License: SIL Open Font License 1.1 (https://openfontlicense.org/)
+
+-------------------------------------------------------------------------------
+Services run alongside VTS (separate programs, own licenses)
+-------------------------------------------------------------------------------
+
+PostgreSQL (PostgreSQL License), pgvector (PostgreSQL License), VectorChord
+(AGPL-3.0 or Elastic License 2.0; present in the default Postgres image,
+not used by VTS), Redis server
+(Redis 8: RSALv2 / SSPLv1 / AGPLv3, at the licensee's choice) or Valkey
+(BSD-3-Clause), whisper-asr-webservice (MIT), whisper.cpp (MIT), llama.cpp
+(MIT), Ollama (MIT). Model weights used by these services (Whisper, bge-m3,
+the LLM) are supplied by the operator under their own licenses.
