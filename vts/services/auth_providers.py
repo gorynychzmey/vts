@@ -13,6 +13,7 @@ from vts.core.config import Settings
 
 GOOGLE_OIDC_METADATA = "https://accounts.google.com/.well-known/openid-configuration"
 _ENTRA_METADATA = "https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration"
+_MULTI_TENANT = frozenset({"common", "organizations", "consumers"})
 _ENTRA_EMAIL_CLAIMS = ("email", "preferred_username", "upn")
 
 # Required settings per provider: (Settings field, environment variable).
@@ -58,6 +59,19 @@ def validate_auth_settings(settings: Settings) -> None:
             f"login is enabled with provider '{provider}' but these settings are "
             f"missing: {', '.join(missing)}"
         )
+    if provider == "entra":
+        tenant = (settings.entra_tenant_id or "").strip().lower()
+        if tenant in _MULTI_TENANT:
+            # With the preferred_username/upn email fallback, any tenant's admin
+            # could mint a token for an allow-listed address.
+            raise AuthConfigError(
+                f"VTS_ENTRA_TENANT_ID='{tenant}' accepts accounts from other "
+                "organizations; a specific tenant (GUID or verified domain) is required"
+            )
+        if not settings.entra_api_scope.strip().rpartition("/")[2].strip():
+            raise AuthConfigError(
+                "VTS_ENTRA_API_SCOPE has an empty scope name; expected e.g. api://<client-id>/vts"
+            )
 
 
 def _credentials(settings: Settings) -> tuple[str, str]:
@@ -142,6 +156,7 @@ def build_mcp_auth_provider(settings: Settings, client_storage: Any) -> Any:
         # "api://<id>/vts" -> identifier "api://<id>", scope name "vts".
         api_scope = (settings.entra_api_scope or "").strip()
         identifier, _, scope_name = api_scope.rpartition("/")
+        scope_name = scope_name.strip()
         extra: dict[str, Any] = {"identifier_uri": identifier} if identifier else {}
         return AzureProvider(
             client_id=client_id,

@@ -303,3 +303,25 @@ def test_real_azure_provider_accepts_our_arguments() -> None:
 def test_real_google_provider_accepts_our_arguments() -> None:
     p = build_mcp_auth_provider(_google(), None)
     assert type(p).__name__ == "GoogleProvider"
+
+
+@pytest.mark.parametrize("tenant", ["common", "organizations", "consumers", " Common ", "ORGANIZATIONS"])
+def test_entra_multi_tenant_values_are_rejected(tenant) -> None:
+    with pytest.raises(AuthConfigError, match="specific tenant"):
+        validate_auth_settings(_entra(entra_tenant_id=tenant))
+
+
+@pytest.mark.parametrize("scope", ["api://id/", "/", "api://id/  "])
+def test_entra_api_scope_with_empty_name_is_rejected(scope) -> None:
+    with pytest.raises(AuthConfigError, match="VTS_ENTRA_API_SCOPE"):
+        validate_auth_settings(_entra(entra_api_scope=scope))
+
+
+def test_oidc_proxy_signature_accepts_our_arguments(monkeypatch) -> None:
+    import inspect
+
+    from fastmcp.server.auth.oidc_proxy import OIDCProxy
+
+    _patch(monkeypatch, "fastmcp.server.auth.oidc_proxy", "OIDCProxy")
+    kwargs = build_mcp_auth_provider(_oidc(), STORAGE).kwargs
+    inspect.signature(OIDCProxy.__init__).bind(None, **kwargs)
