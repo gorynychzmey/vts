@@ -23,6 +23,7 @@ from vts.api._helpers.pages_assets import STATIC_DIR
 from vts.api.deps import get_current_user, get_settings_dep
 from vts.api.schemas import TextSliceOut
 from vts.core.session_secret import resolve_session_secret
+from vts.services.auth_providers import validate_auth_settings
 from vts.core.config import Settings
 from vts.core.logging import configure_logging
 from vts.db.models import Task
@@ -288,11 +289,9 @@ def create_app() -> FastAPI:
     settings = get_settings_dep()
 
     if settings.oauth_enabled:
-        if not settings.oauth_client_secret:
-            raise RuntimeError(
-                "oauth_enabled=True but oauth_client_secret is missing — "
-                "set VTS_OAUTH_CLIENT_SECRET"
-            )
+        # Misconfiguration of the chosen login provider fails here, at boot,
+        # naming every missing variable (AuthConfigError is a RuntimeError).
+        validate_auth_settings(settings)
         session_secret = resolve_session_secret(
             env_secret=settings.session_secret,
             secret_file=settings.session_secret_file,

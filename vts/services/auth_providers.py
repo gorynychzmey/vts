@@ -74,7 +74,7 @@ def validate_auth_settings(settings: Settings) -> None:
             )
 
 
-def _credentials(settings: Settings) -> tuple[str, str]:
+def client_credentials(settings: Settings) -> tuple[str, str]:
     """(client_id, client_secret) of the chosen provider; callers validate first."""
     provider = settings.auth_provider
     if provider == "entra":
@@ -84,11 +84,19 @@ def _credentials(settings: Settings) -> tuple[str, str]:
     return settings.oauth_client_id or "", settings.oauth_client_secret or ""
 
 
+def oauth_client_secret(settings: Settings) -> Any:
+    """Client secret of the chosen provider (key material for MCP OAuth state)."""
+    if getattr(settings, "auth_provider", "google") == "google":
+        # Legacy shape: callers holding only the Google fields keep working.
+        return settings.oauth_client_secret
+    return client_credentials(settings)[1]
+
+
 def web_oidc_registration(settings: Settings) -> dict[str, Any]:
     """Keyword arguments for authlib's ``OAuth.register`` for the web login."""
     validate_auth_settings(settings)
     provider = settings.auth_provider
-    client_id, client_secret = _credentials(settings)
+    client_id, client_secret = client_credentials(settings)
     if provider == "entra":
         metadata = _ENTRA_METADATA.format(tenant=(settings.entra_tenant_id or "").strip())
         scope = "openid email profile"
@@ -142,7 +150,7 @@ def build_mcp_auth_provider(settings: Settings, client_storage: Any) -> Any:
     """
     validate_auth_settings(settings)
     provider = settings.auth_provider
-    client_id, client_secret = _credentials(settings)
+    client_id, client_secret = client_credentials(settings)
     # base_url stays host-only (no mcp_path suffix) — see build_mcp_server.
     common: dict[str, Any] = {
         "base_url": (settings.public_base_url or "").rstrip("/"),

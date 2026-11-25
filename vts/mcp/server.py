@@ -8,6 +8,7 @@ from fastmcp import FastMCP
 
 from vts.core.config import get_settings
 from vts.mcp.tools_registry import apps, delivery, presets, prompts, recordings, search, tasks
+from vts.services.auth_providers import oauth_client_secret
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _persistent_oauth_storage(settings: Any) -> Any:
         # Same two-step derivation FastMCP uses, so the fingerprint and the key
         # match what it would have produced for this client secret.
         jwt_key = derive_jwt_key(
-            high_entropy_material=settings.oauth_client_secret,
+            high_entropy_material=oauth_client_secret(settings),
             salt="fastmcp-jwt-signing-key",
         )
         encryption_key = derive_jwt_key(
@@ -88,18 +89,9 @@ def build_mcp_server() -> FastMCP:
     settings = get_settings()
     auth_provider = None
     if settings.oauth_enabled:
-        from fastmcp.server.auth.providers.google import GoogleProvider
+        from vts.services.auth_providers import build_mcp_auth_provider, validate_auth_settings
 
-        if not settings.oauth_client_id or not settings.oauth_client_secret:
-            raise RuntimeError(
-                "oauth_enabled but client_id/client_secret missing — "
-                "set VTS_OAUTH_CLIENT_ID and VTS_OAUTH_CLIENT_SECRET"
-            )
-        if not settings.public_base_url:
-            raise RuntimeError(
-                "oauth_enabled but public_base_url missing — "
-                "set VTS_PUBLIC_BASE_URL (e.g. https://vts.example.com)"
-            )
+        validate_auth_settings(settings)
         # FastMCP's auth provider publishes /.well-known/oauth-* metadata
         # whose URLs are anchored to issuer_url's host (RFC 8414/9728: metadata
         # MUST live at the host root, not under a subpath). When the MCP app
@@ -127,15 +119,7 @@ def build_mcp_server() -> FastMCP:
         # existing store stays readable and nobody is logged out by the switch.
         client_storage = _persistent_oauth_storage(settings)
 
-        auth_provider = GoogleProvider(
-            client_id=settings.oauth_client_id,
-            client_secret=settings.oauth_client_secret,
-            base_url=settings.public_base_url.rstrip("/"),
-            redirect_path=f"{settings.mcp_path.rstrip('/')}/auth/callback",
-            required_scopes=["openid", "email"],
-            require_authorization_consent="remember",
-            client_storage=client_storage,
-        )
+        auth_provider = build_mcp_auth_provider(settings, client_storage)
     mcp = FastMCP(name="vts", auth=auth_provider)
 
     # Tool bodies live in vts/mcp/tools_registry/, one module per domain.

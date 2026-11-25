@@ -83,7 +83,9 @@ async def resolve_user_from_request(
         token = get_access_token()
         if token is None:
             raise HTTPException(status_code=401, detail="Invalid bearer token")
-        email = (token.claims or {}).get("email", "")
+        from vts.services.auth_providers import email_from_claims  # local: keep import graph flat
+
+        email = email_from_claims(settings, token.claims or {})
         if not email:
             raise HTTPException(status_code=401, detail="Bearer token has no email claim")
         from vts.mcp.allowlist import is_email_allowed  # local to avoid circular import

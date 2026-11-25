@@ -13,6 +13,7 @@ from vts.db.repo import Repo
 from vts.db.session import get_db_session_factory
 from vts.mcp.allowlist import is_email_allowed
 from vts.services import session_store
+from vts.services.auth_providers import client_credentials, email_from_claims
 from vts.services.web_oauth import build_oauth_client
 
 
@@ -23,7 +24,8 @@ _oauth_client_cache: dict[str, object] = {}
 
 
 def _get_oauth(settings: Settings):
-    key = f"{settings.oauth_client_id}:{settings.oauth_client_secret}"
+    client_id, client_secret = client_credentials(settings)
+    key = f"{settings.auth_provider}:{client_id}:{client_secret}"
     if key not in _oauth_client_cache:
         _oauth_client_cache[key] = build_oauth_client(settings)
     return _oauth_client_cache[key]
@@ -60,8 +62,8 @@ async def auth_login(request: Request):
     request.session["next_after_login"] = next_path
     oauth = _get_oauth(settings)
     redirect_uri = f"{settings.public_base_url}/auth/callback"
-    google = oauth.create_client("google")
-    return await google.authorize_redirect(request, redirect_uri)
+    client = oauth.create_client(settings.auth_provider)
+    return await client.authorize_redirect(request, redirect_uri)
 
 
 @router.get("/auth/callback", include_in_schema=False)
@@ -70,19 +72,22 @@ async def auth_callback(request: Request):
     if not settings.oauth_enabled:
         raise HTTPException(status_code=404, detail="OAuth not enabled")
     oauth = _get_oauth(settings)
-    google = oauth.create_client("google")
+    client = oauth.create_client(settings.auth_provider)
     try:
-        token = await google.authorize_access_token(request)
+        token = await client.authorize_access_token(request)
     except Exception as exc:
         # Log the reason, return a generic one: authlib's text is usually
         # harmless ("mismatching_state", "invalid_grant"), but echoing library
         # internals to an unauthenticated caller is a needless leak (vts-1ec).
         logger.warning("OAuth exchange failed: %s", exc)
         raise HTTPException(status_code=400, detail="OAuth exchange failed") from exc
-    userinfo = token.get("userinfo") or {}
-    email = (userinfo.get("email") or "").strip().lower()
+    # authlib puts the verified ID-token claims in token["userinfo"]; fall back
+    # to claims carried on the token itself when that is empty.
+    email = email_from_claims(settings, token.get("userinfo") or {}) or email_from_claims(
+        settings, token
+    )
     if not email:
-        raise HTTPException(status_code=400, detail="Google did not return an email claim")
+        raise HTTPException(status_code=400, detail="The identity provider did not return an email")
     if not is_email_allowed(
         email,
         allowed_emails=settings.oauth_allowed_emails,
