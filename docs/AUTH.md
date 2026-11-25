@@ -192,6 +192,13 @@ MCP uses the same client: FastMCP requests `VTS_OIDC_SCOPES` and reads the
 identity from the verified **ID token** (audience = the client ID), so the
 access token may be opaque.
 
+Two consequences for MCP clients: every request re-verifies that ID token, so
+the provider's ID-token lifetime should be at least the access-token lifetime
+and its refresh grant should return a new `id_token` (Keycloak's defaults do);
+otherwise MCP calls answer 401 until the client re-authorises. And every scope
+in `VTS_OIDC_SCOPES` must actually be granted — drop the ones your provider
+does not issue.
+
 The provider must be reachable when vts starts: the discovery document is
 fetched at boot to set up MCP, and an unreachable or invalid discovery URL
 stops startup with an error naming that URL.
