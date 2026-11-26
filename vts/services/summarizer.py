@@ -620,7 +620,12 @@ def _build_chat_payload(
         "stream": True,
     }
     if thinking is not None:
+        # LiteLLM routes read the `thinking` object. Ollama's /v1 ignores it
+        # (and its native `think` field) and honours only the standard OpenAI
+        # `reasoning_effort`, so disabling sends both.
         payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
+        if not thinking:
+            payload["reasoning_effort"] = "none"
     if top_p is not None:
         payload["top_p"] = top_p
     if min_p is not None:

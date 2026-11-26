@@ -83,9 +83,20 @@ services:
     url: http://ollama:11434/v1
     model: qwen3.5:9b
     tokenizer_path: /path/to/tokenizer.json   # HF tokenizer.json for the model
+    thinking: false   # required for reasoning models (Qwen3 and later)
 summary:
   n_ctx: 32768  # match what your Ollama model was launched with
 ```
+
+**Reasoning models need `thinking: false`.** Without it a Qwen3-family model
+reasons before every answer: the short warm-up request is spent entirely on
+reasoning and summaries take several times longer. vts disables reasoning by
+sending the standard OpenAI field `reasoning_effort: "none"`, which is the only
+switch Ollama's `/v1` honours (its native `think` option is ignored there).
+
+**Context size.** Ollama's `/v1` ignores a per-request `num_ctx`, so set the
+window on the server (`OLLAMA_CONTEXT_LENGTH=32768` in its environment, or a
+Modelfile with `PARAMETER num_ctx`) and use the same value for `summary.n_ctx`.
 
 After starting the stack, pull the model:
 
