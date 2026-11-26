@@ -31,9 +31,8 @@ Transcript and speaker data is marked as untrusted content in tool annotations.
 Mutating tools use the same names as their server-side MCP counterparts and are
 annotated as create/update or consequential destructive operations. The same
 name does not promise the same parameters: these tools are thin wrappers over
-the HTTP endpoints, so each one offers what its endpoint accepts. `submit_video`
-takes no `preset` for that reason, while the server-side tool of that name
-does. Destructive
+the HTTP endpoints, so each one offers what its endpoint accepts. Since 1.13.3
+`POST /api/tasks` accepts a `preset`, so `submit_video` takes one too. Destructive
 operations are never disguised as reads, so the browser/agent can require user
 confirmation before execution.
 

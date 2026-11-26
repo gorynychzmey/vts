@@ -349,6 +349,16 @@ HTTP routes do.
 tuple of names sorted by name (contract 1.4, additive: an adapter declaring an
 older minor still loads, and it is empty when the recording is untagged).
 
+**Presets on submit.** `POST /api/tasks` takes `preset: {source: "system"|"user", id}`.
+The preset fills every option the body does not send (`language`, `audio_only`,
+`transcript`, `diarize`, `prompts`, `delivery`, and for a user preset `tags`);
+an option sent in the body wins, even when its value is the default. The merged
+options are validated again, so a preset that turns the transcript off and a body
+that asks for prompts is a `422`. An unknown preset is a `404`. Delivery taken from
+a preset is not checked against loaded adapters at submit time: a missing plugin
+parks the delivery instead of failing the task. The server-side MCP `submit_video`
+takes the same `preset`, but there "sent" means "not the default value".
+
 User presets store tag **ids** in `options.tags`, so renaming a tag does not
 break a preset. Ids that are not one of your existing tags are dropped when
 the preset is saved and skipped when it is read; system presets always have

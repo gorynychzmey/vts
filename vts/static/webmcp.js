@@ -166,13 +166,7 @@
         diarize: { type: "boolean", default: false }, prompts: { type: "array", items: { type: "object" } },
         delivery: { type: "array", items: { type: "object" } },
         tags: { type: "array", items: { type: "string" }, description: "Tag names to put on the recording; created when missing." },
-        // No `preset` here, deliberately (vts-a2ww). POST /api/tasks has never
-        // understood one: the web form resolves a preset into these very
-        // fields and posts the expanded values. Advertising it meant pydantic
-        // dropped the key in silence and the agent reported a success that did
-        // not happen. The server-side MCP submit_video DOES take a preset and
-        // expands it itself — so adding it back is an API change to the
-        // endpoint, not a line in this schema.
+        preset: { type: "object", description: "A preset ref {source: \"system\"|\"user\", id}. It fills the options not given here; given options win." },
       }, required: ["url"], additionalProperties: false },
       execute(input, options) { return jsonRequest("/api/tasks", "POST", input, options?.signal); },
     },

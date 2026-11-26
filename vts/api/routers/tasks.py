@@ -84,6 +84,68 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Task options a preset can supply. Tags and delivery are handled separately:
+# tags are names on the recording, and inherited delivery skips validation.
+_PRESET_FIELDS = ("language", "audio_only", "transcript", "diarize", "prompts")
+
+
+async def _apply_preset(
+    request: TaskCreateRequest, repo: Repo, user_id: uuid.UUID
+) -> tuple[TaskCreateRequest, bool]:
+    """The request with its preset expanded (vts-xv26).
+
+    Same expansion as the MCP `submit_video`, with one difference on purpose:
+    "the caller set it" means the field was SENT (`model_fields_set`), not that
+    its value differs from the default. MCP has only plain keyword arguments
+    and cannot tell an explicit `diarize=False` from an omitted one; here
+    an explicit default would otherwise silently lose to the preset.
+
+    Returns the merged request, validated again — the schema validator ran on
+    the request as sent, before the preset could turn the transcript off —
+    and whether its delivery came from the preset.
+    """
+    from pydantic import ValidationError
+
+    from vts.services.preset_expand import expand_preset_options, resolve_preset
+    from vts.services.preset_registry import list_system_presets
+    from vts.services.tags import preset_tag_ids
+
+    assert request.preset is not None
+    source, ref_id = request.preset.source, request.preset.id
+    user_options: dict | None = None
+    if source == "user":
+        try:
+            preset_id = uuid.UUID(ref_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Preset not found") from None
+        row = await repo.get_preset(user_id, preset_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        user_options = row.options
+    resolved = resolve_preset(source, ref_id, list_system_presets(), user_options)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Unknown system preset")
+    valid_prompt_ids = {str(p.id) for p in await repo.list_prompts(user_id)}
+    base = expand_preset_options(resolved, valid_prompt_ids)
+
+    sent = request.model_fields_set
+    merged = request.model_dump(exclude={"preset"})
+    for field in _PRESET_FIELDS:
+        if field not in sent:
+            merged[field] = base[field]
+    delivery_from_preset = "delivery" not in sent
+    if delivery_from_preset:
+        merged["delivery"] = base["delivery"]
+    if "tags" not in sent and user_options is not None:
+        # A user preset holds tag ids; only those still the user's own apply.
+        tags = await repo.tags_by_ids(user_id, preset_tag_ids(user_options))
+        merged["tags"] = [t.name for t in tags]
+    try:
+        return TaskCreateRequest(**merged), delivery_from_preset
+    except ValidationError as exc:
+        detail = "; ".join(str(e.get("msg", "")).removeprefix("Value error, ") for e in exc.errors())
+        raise HTTPException(status_code=422, detail=detail) from None
+
 
 @router.post("/api/tasks", response_model=TaskOut)
 async def create_task(
@@ -100,19 +162,27 @@ async def create_task(
 
     repo = Repo(session)
     effective_user_id = uuid.UUID(user.id)
+    delivery_from_preset = False
+    if request.preset is not None:
+        request, delivery_from_preset = await _apply_preset(request, repo, effective_user_id)
     tag_names = tag_names_or_422(request.tags)
     options = request.model_dump()
     options.pop("url", None)
     # Tags belong to the recording, not to the task's options.
     options.pop("tags", None)
-    # Explicit submit: an unknown target or an unavailable adapter is an
-    # error the caller should see now, before any work is done.
-    try:
-        options["delivery"] = await validate_delivery_refs(
-            repo, effective_user_id, options.get("delivery")
-        )
-    except DeliveryValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    options.pop("preset", None)
+    if not delivery_from_preset:
+        # Explicit submit: an unknown target or an unavailable adapter is an
+        # error the caller should see now, before any work is done. Delivery
+        # inherited from a preset is not gated that way, as on the MCP path: a
+        # temporarily missing plugin parks the delivery instead of failing the
+        # task.
+        try:
+            options["delivery"] = await validate_delivery_refs(
+                repo, effective_user_id, options.get("delivery")
+            )
+        except DeliveryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     task_id = uuid.uuid4()
     artifact = task_dir(settings.artifacts_root, user.username, task_id)

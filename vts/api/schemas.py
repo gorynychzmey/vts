@@ -350,6 +350,10 @@ class TaskCreateRequest(BaseModel):
     # Tag names for the recording created with the task; missing ones are
     # created (vts-qwcj).
     tags: list[str] = Field(default_factory=list)
+    # A preset to take the options from (vts-xv26). It fills only the fields
+    # the request does not set; an explicitly sent field wins even when it
+    # equals the default. Expanded by the endpoint, never stored on the task.
+    preset: PresetRef | None = None
 
     @model_validator(mode="after")
     def validate_stage_dependencies(self) -> "TaskCreateRequest":
