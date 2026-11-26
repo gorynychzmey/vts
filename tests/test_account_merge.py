@@ -513,3 +513,42 @@ def test_every_unique_key_without_user_id_has_been_cleared_for_merging():
         ("transcript_chunks", ("recording_id", "chunk_index")),
         ("user_sessions", ("sid_hash",)),
     }
+
+
+def _user_owned_tables_with_composite_pk(metadata: sa.MetaData) -> set[str]:
+    user_id = metadata.tables["users"].c.id
+    return {
+        table.name
+        for table in metadata.tables.values()
+        if any(fk.column is user_id for column in table.columns for fk in column.foreign_keys)
+        and len(table.primary_key.columns) != 1
+    }
+
+
+def test_every_user_owned_table_has_a_single_column_primary_key():
+    """A tripwire for vts-1qjq.
+
+    `_drop_colliding_rows()` deletes the absorbed account's colliding rows by
+    the FIRST column of the primary key. With a one-column key that is the
+    whole key. With a composite key, say (task_id, idx), the DELETE would take
+    every row sharing the first column, not just the colliding ones: silent
+    data loss inside an operation that must lose nothing.
+
+    Today every table with a foreign key to users.id has a one-column key.
+    Add a composite one and this test fails: then make the delete match the
+    whole key (`sa.tuple_(*pk_columns).in_(...)`) before relaxing it.
+    """
+    assert _user_owned_tables_with_composite_pk(Base.metadata) == set()
+
+
+def test_the_composite_key_tripwire_can_fire():
+    """The check above must see a composite key, or its green means nothing."""
+    metadata = sa.MetaData()
+    sa.Table("users", metadata, sa.Column("id", sa.Integer, primary_key=True))
+    sa.Table(
+        "rows",
+        metadata,
+        sa.Column("user_id", sa.ForeignKey("users.id"), primary_key=True),
+        sa.Column("idx", sa.Integer, primary_key=True),
+    )
+    assert _user_owned_tables_with_composite_pk(metadata) == {"rows"}
