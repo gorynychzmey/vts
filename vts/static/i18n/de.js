@@ -1,7 +1,8 @@
 window.__VTS_I18N = window.__VTS_I18N || {};
 window.__VTS_I18N.de = {
-"header.title": "Video transkribieren und zusammenfassen",
-"header.subtitle": "URL in die Warteschlange stellen, Pipeline beobachten und Transkript-/Summary-Artefakte prüfen.",
+"app.name": "Ohrchiv",
+"header.title": "Ohrchiv",
+"header.subtitle": "Videos transkribieren und zusammenfassen: URL in die Warteschlange stellen, Pipeline beobachten, Transkript und Zusammenfassung prüfen.",
 "header.version": "Version:",
 "header.menu": "Menü",
 "theme.system": "Design: System",

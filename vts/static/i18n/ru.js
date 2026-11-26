@@ -1,5 +1,6 @@
 window.__VTS_I18N = window.__VTS_I18N || {};
 window.__VTS_I18N.ru = {
+"app.name": "vts",
 "header.title": "Транскрибация и суммаризация видео",
 "header.subtitle": "Поставьте URL в очередь, следите за пайплайном и проверяйте артефакты транскрипта и сводки.",
 "header.version": "Версия:",

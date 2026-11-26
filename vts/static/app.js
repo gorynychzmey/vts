@@ -349,6 +349,9 @@ function applyI18n(root = document) {
 
 function applyI18nToPage() {
   document.documentElement.lang = state.locale;
+  // The tab title is not a [data-i18n] node; it carries the product name, which
+  // differs per locale while the rename is rolled out (de: Ohrchiv).
+  document.title = t("app.name");
   applyI18n(document);
 }
 

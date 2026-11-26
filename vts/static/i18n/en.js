@@ -1,5 +1,6 @@
 window.__VTS_I18N = window.__VTS_I18N || {};
 window.__VTS_I18N.en = {
+"app.name": "vts",
 "header.title": "Video Transcribe & Summarize",
 "header.subtitle": "Queue URL, monitor pipeline, inspect transcript and summary artifacts.",
 "header.version": "Version:",
